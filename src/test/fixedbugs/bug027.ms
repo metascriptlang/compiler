@@ -22,36 +22,36 @@ import { RaiserValueKind } from "../../raiser/value";
 
 test "bug027: numeric === produces Bool kind" {
 	const r = evalSourceFull("const a = 1; const b = 1; return a === b;");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 1;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 1;
 }
 
 test "bug027: numeric !== produces Bool kind" {
 	const r = evalSourceFull("const a = 1; const b = 2; return a !== b;");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 1;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 1;
 }
 
 test "bug027: relational > produces Bool kind" {
 	const r = evalSourceFull("const a = 3; const b = 2; return a > b;");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 1;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 1;
 }
 
 test "bug027: string === produces Bool kind" {
 	const r = evalSourceFull("const s = \"a\"; const t = \"a\"; return s === t;");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 1;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 1;
 }
 
 test "bug027: string !== produces Bool kind" {
 	const r = evalSourceFull("const s = \"a\"; const t = \"b\"; return s !== t;");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 1;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 1;
 }
 
 test "bug027: unary ! produces Bool kind" {
 	const r = evalSourceFull("const a = 1; return !(a === 1);");
-	assert r.lastResult.kind === RaiserValueKind.Bool;
-	assert r.lastResult.intVal === 0;
+	assert r.lastResult.kind == RaiserValueKind.Bool;
+	assert r.lastResult.intVal == 0;
 }

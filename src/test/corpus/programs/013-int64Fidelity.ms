@@ -29,33 +29,33 @@ function check(label: string, ok: boolean): void {
 function main(): void {
 	// Stage 1 — the literal itself. No toString involved: if the AST kept the
 	// digits, the difference is exactly 1.
-	check("litAbove2p53", opaque(9007199254740993) - opaque(9007199254740992) === 1);
-	check("litAtInt64Max", opaque(9223372036854775807) - opaque(9223372036854775806) === 1);
-	check("litNegative", opaque(-9007199254740993) + opaque(9007199254740992) === -1);
+	check("litAbove2p53", opaque(9007199254740993) - opaque(9007199254740992) == 1);
+	check("litAtInt64Max", opaque(9223372036854775807) - opaque(9223372036854775806) == 1);
+	check("litNegative", opaque(-9007199254740993) + opaque(9007199254740992) == -1);
 	// INT64_MIN reaches the AST as a positive magnitude that does not itself fit
 	// int64, then a unary minus. Summing with INT64_MAX is exactly -1 and cannot
 	// overflow, unlike the tempting max-minus-min.
-	check("litInt64Min", opaque(-9223372036854775808) + opaque(9223372036854775807) === -1);
+	check("litInt64Min", opaque(-9223372036854775808) + opaque(9223372036854775807) == -1);
 
 	// Stage 2 — runtime arithmetic. Built from values a double CAN hold, so this
 	// isolates the arithmetic from the literal path.
 	let x: int64 = 4503599627370496;
 	x = x * 2 + 1;
-	check("arithExact", x - opaque(9007199254740992) === 1);
+	check("arithExact", x - opaque(9007199254740992) == 1);
 
 	// String → int64 is the inverse of stage 3 and is exact on C (strtoll), so a
 	// value can survive a full text round trip.
-	check("parseIntExact", opaque("9007199254740993".parseInt()) - opaque(9007199254740992) === 1);
-	check("parseIntMax", opaque("9223372036854775807".parseInt()) - opaque(9223372036854775806) === 1);
+	check("parseIntExact", opaque("9007199254740993".parseInt()) - opaque(9007199254740992) == 1);
+	check("parseIntMax", opaque("9223372036854775807".parseInt()) - opaque(9223372036854775806) == 1);
 
 	// Stage 3 — int64 → string. x is exactly 2^53+1 by the check above.
-	check("computedToString", x.toString() === "9007199254740993");
-	check("computedConcat", ("v=" + x) === "v=9007199254740993");
-	check("maxToString", opaque(9223372036854775807).toString() === "9223372036854775807");
-	check("negToString", opaque(-9007199254740993).toString() === "-9007199254740993");
-	check("minToString", opaque(-9223372036854775808).toString() === "-9223372036854775808");
+	check("computedToString", x.toString() == "9007199254740993");
+	check("computedConcat", ("v=" + x) == "v=9007199254740993");
+	check("maxToString", opaque(9223372036854775807).toString() == "9223372036854775807");
+	check("negToString", opaque(-9007199254740993).toString() == "-9007199254740993");
+	check("minToString", opaque(-9223372036854775808).toString() == "-9223372036854775808");
 
-	if (failures === 0) {
+	if (failures == 0) {
 		console.log("int64-fidelity all-ok");
 	} else {
 		console.log("int64-fidelity failures=" + failures.toString());

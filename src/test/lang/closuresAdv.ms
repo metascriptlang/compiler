@@ -43,7 +43,7 @@ function compose(f: NumFn, g: NumFn): NumFn {
 }
 
 function makeOp(op: string): FnFactory {
-	if (op === "add") {
+	if (op == "add") {
 		return (base: number): NumFn => {
 			return (x: number): number => base + x;
 		};
@@ -80,7 +80,7 @@ function makeRangeCheck(lo: number, hi: number): BoolFn {
 }
 
 function makeModCheck(divisor: number): BoolFn {
-	return (n: number): boolean => n % divisor === 0;
+	return (n: number): boolean => n % divisor == 0;
 }
 
 function countWhere(arr: number[], pred: BoolFn): number {
@@ -176,17 +176,17 @@ function computeWithHelper(x: number): number {
 test "basic closure — capture immutable param" {
 	const add3 = makeAdder(3);
 	const add100 = makeAdder(100);
-	assert add3(7) === 10;
-	assert add100(1) === 101;
-	assert add3(0) === 3;
+	assert add3(7) == 10;
+	assert add100(1) == 101;
+	assert add3(0) == 3;
 }
 
 test "string capture closure" {
 	const hello = makeGreeter("hello");
 	const hi = makeGreeter("hi");
-	assert hello("world") === "hello world";
-	assert hi("there") === "hi there";
-	assert hello("alice") === "hello alice";
+	assert hello("world") == "hello world";
+	assert hi("there") == "hi there";
+	assert hello("alice") == "hello alice";
 }
 
 test "closure returning closure (nested factory)" {
@@ -194,44 +194,44 @@ test "closure returning closure (nested factory)" {
 	const mulFactory = makeOp("mul");
 	const add5 = addFactory(5);
 	const mul3 = mulFactory(3);
-	assert add5(10) === 15;
-	assert mul3(4) === 12;
-	assert add5(0) === 5;
+	assert add5(10) == 15;
+	assert mul3(4) == 12;
+	assert add5(0) == 5;
 }
 
 test "multi-type capture (string + number)" {
 	const fmt1 = makeFormatter("abc", 6);
-	assert fmt1(0) === "abc...";
+	assert fmt1(0) == "abc...";
 
 	const fmt2 = makeFormatter("x", 4);
-	assert fmt2(0) === "x...";
+	assert fmt2(0) == "x...";
 
 	const fmt3 = makeFormatter("hello", 5);
-	assert fmt3(0) === "hello";
+	assert fmt3(0) == "hello";
 }
 
 test "mutable counter — shared env" {
 	const cp = makeCounterPair();
-	assert cp.read(0) === 0;
-	assert cp.inc(5) === 5;
-	assert cp.inc(3) === 8;
-	assert cp.read(0) === 8;
-	assert cp.inc(2) === 10;
+	assert cp.read(0) == 0;
+	assert cp.inc(5) == 5;
+	assert cp.inc(3) == 8;
+	assert cp.read(0) == 8;
+	assert cp.inc(2) == 10;
 }
 
 test "compose chain" {
 	const mul2ThenAdd1 = compose(add1, mul2);
-	assert mul2ThenAdd1(5) === 11;
+	assert mul2ThenAdd1(5) == 11;
 
 	const add1ThenMul2 = compose(mul2, add1);
-	assert add1ThenMul2(3) === 8;
-	assert add1ThenMul2(5) === 12;
+	assert add1ThenMul2(3) == 8;
+	assert add1ThenMul2(5) == 12;
 
 	const doubleThenSquare = compose(square, mul2);
-	assert doubleThenSquare(3) === 36;
+	assert doubleThenSquare(3) == 36;
 
 	const triple = compose(add1, compose(mul2, add1));
-	assert triple(4) === 11;
+	assert triple(4) == 11;
 }
 
 test "predicate closures — range and mod" {
@@ -240,9 +240,9 @@ test "predicate closures — range and mod" {
 	const isEven = makeModCheck(2);
 	const divBy3 = makeModCheck(3);
 
-	assert countWhere(nums, inRange) === 5;
-	assert countWhere(nums, isEven) === 5;
-	assert countWhere(nums, divBy3) === 3;
+	assert countWhere(nums, inRange) == 5;
+	assert countWhere(nums, isEven) == 5;
+	assert countWhere(nums, divBy3) == 3;
 
 	assert inRange(5);
 	assert inRange(3);
@@ -255,47 +255,47 @@ test "filter with closures" {
 	const isEven = makeModCheck(2);
 
 	const evens = filterNums([1, 2, 3, 4, 5, 6], isEven);
-	assert evens.length === 3;
-	assert evens[0] === 2;
+	assert evens.length == 3;
+	assert evens[0] == 2;
 
 	const inBounds = filterNums([5, 10, 15, 20, 25], inRange);
-	assert inBounds.length === 3;
-	assert inBounds[0] === 10;
-	assert inBounds[2] === 20;
+	assert inBounds.length == 3;
+	assert inBounds[0] == 10;
+	assert inBounds[2] == 20;
 }
 
 test "closure as callback — map pattern" {
 	const addTen = makeAdder(10);
 	const mapped = applyAll([1, 2, 3], addTen);
-	assert mapped.length === 3;
-	assert mapped[0] === 11;
-	assert mapped[1] === 12;
-	assert mapped[2] === 13;
+	assert mapped.length == 3;
+	assert mapped[0] == 11;
+	assert mapped[1] == 12;
+	assert mapped[2] == 13;
 }
 
 test "factory pattern — scaler" {
 	const times3 = makeScaler(3);
 	const times5 = makeScaler(5);
-	assert times3(4) === 12;
-	assert times5(4) === 20;
-	assert times3(times5(2)) === 30;
+	assert times3(4) == 12;
+	assert times5(4) == 20;
+	assert times3(times5(2)) == 30;
 }
 
 test "loop closures — for..of capture" {
 	const muls = makeMultipliers([2, 3, 5]);
-	assert muls.length === 3;
-	assert muls[0](10) === 20;
-	assert muls[1](10) === 30;
-	assert muls[2](10) === 50;
+	assert muls.length == 3;
+	assert muls[0](10) == 20;
+	assert muls[1](10) == 30;
+	assert muls[2](10) == 50;
 }
 
 test "closure in interface field" {
 	const t1 = makeTransform("plus10", 10);
 	const t2 = makeTransform("plus20", 20);
 
-	assert t1.name === "plus10";
-	assert t1.apply(5) === 15;
-	assert t2.apply(5) === 25;
+	assert t1.name == "plus10";
+	assert t1.apply(5) == 15;
+	assert t2.apply(5) == 25;
 }
 
 test "transform pipeline" {
@@ -304,13 +304,13 @@ test "transform pipeline" {
 	pipeline.push((x: number): number => x * 2);
 	pipeline.push((x: number): number => x - 5);
 
-	assert applyPipeline(pipeline, 3) === 21;
-	assert applyPipeline(pipeline, 0) === 15;
+	assert applyPipeline(pipeline, 3) == 21;
+	assert applyPipeline(pipeline, 0) == 15;
 }
 
 test "immediate closure invocation" {
-	assert computeWithHelper(3) === 27;
-	assert computeWithHelper(0) === 3;
+	assert computeWithHelper(3) == 27;
+	assert computeWithHelper(0) == 3;
 }
 
 test "boolean capture — validator" {
@@ -326,12 +326,12 @@ test "boolean capture — validator" {
 }
 
 test "manual reduce" {
-	assert reduceSum([1, 2, 3, 4]) === 10;
-	assert reduceProduct([1, 2, 3, 4]) === 24;
-	assert reduceSum([]) === 0;
+	assert reduceSum([1, 2, 3, 4]) == 10;
+	assert reduceProduct([1, 2, 3, 4]) == 24;
+	assert reduceSum([]) == 0;
 }
 
 test "top-level helper composition" {
-	assert square(2) + cube(2) === 12;
-	assert square(3) + cube(3) === 36;
+	assert square(2) + cube(2) == 12;
+	assert square(3) + cube(3) == 36;
 }

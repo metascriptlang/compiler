@@ -39,13 +39,13 @@ function rtIfaceField(props: { when: boolean; fb: RtVN }): string {
 }
 
 test "bare interface local truthiness is a null check" {
-	assert rtIfaceLocal() === "li", "iface local";
+	assert rtIfaceLocal() == "li", "iface local";
 }
 
 test "class param truthiness is a null check" {
-	assert rtClassParam(new RtBox(7)) === 7, "class param";
+	assert rtClassParam(new RtBox(7)) == 7, "class param";
 }
 
 test "interface field read from anon props truthiness" {
-	assert rtIfaceField({ when: true, fb: rtMk("span") }) === "span", "iface field";
+	assert rtIfaceField({ when: true, fb: rtMk("span") }) == "span", "iface field";
 }

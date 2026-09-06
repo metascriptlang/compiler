@@ -29,8 +29,8 @@ function main(): void {
 	walkTree(p, 1.0);
 	walkTree(w, 1.0);
 	let ok = true;
-	if (!(p.depth === 1.0 && p.children[0].depth === 2.0)) { ok = false; }
-	if (!(w.level === 10.0 && w.kids[0].level === 20.0)) { ok = false; }
+	if (!(p.depth == 1.0 && p.children[0].depth == 2.0)) { ok = false; }
+	if (!(w.level == 10.0 && w.kids[0].level == 20.0)) { ok = false; }
 	if (ok) {
 		console.log("generic-ext-protocol PASS");
 	} else {

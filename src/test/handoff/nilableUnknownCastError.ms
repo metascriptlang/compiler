@@ -18,20 +18,20 @@ test "unknown|null cast to fat value type is diagnosed (not slipped to codegen)"
 	// f(): unknown | null  ->  cast to a fat value struct: no void* repr, must error.
 	const src = "function f(): unknown | null { return null; }\ntype P = { x: number, y: number };\nfunction main(): void { const bad = f() as P; }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
 }
 
 test "bare unknown cast to fat value type still diagnosed (no regression)" {
 	const src = "function g(): unknown { return null as unknown; }\ntype P = { x: number, y: number };\nfunction main(): void { const bad = g() as P; }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
 }
 
 test "unknown|null cast to a Ref type is allowed (pointer, no over-fire)" {
 	const src = "class Box { n: number; }\nfunction f(): unknown | null { return null; }\nfunction main(): void { const ok = f() as Box; }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }

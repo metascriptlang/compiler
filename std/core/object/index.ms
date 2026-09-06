@@ -31,10 +31,10 @@ export macro objectKeysOf(t: Node): Node {
 	// encoder applies before reading typExprFieldNames. Macro bodies are not
 	// deeply type-checked, which is what allows walking the type-AST fields.
 	let tt = t.nodeType;
-	if (tt.kind === NodeKind.TypeGeneric) {
+	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
-	if (tt.kind !== NodeKind.TypeObject) {
+	if (tt.kind != NodeKind.TypeObject) {
 		error("Object.keys: expected an object type (interface/struct/class) — primitives and arrays have no field shape", t);
 	}
 	const names: Node[] = [];
@@ -55,10 +55,10 @@ export macro objectKeysOf(t: Node): Node {
 
 export macro objectValuesOf(t: Node): Node {
 	let tt = t.nodeType;
-	if (tt.kind === NodeKind.TypeGeneric) {
+	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
-	if (tt.kind !== NodeKind.TypeObject) {
+	if (tt.kind != NodeKind.TypeObject) {
 		error("Object.values: expected an object type (interface/struct/class) — primitives and arrays have no field shape", t);
 	}
 	const fields = tt.typExprFieldNames;
@@ -68,11 +68,11 @@ export macro objectValuesOf(t: Node): Node {
 	let mixed = false;
 	let i = 0;
 	while (i < fields.length) {
-		if (types[i].kind !== NodeKind.Identifier) {
+		if (types[i].kind != NodeKind.Identifier) {
 			mixed = true;
-		} else if (uniform === "") {
+		} else if (uniform == "") {
 			uniform = types[i].name;
-		} else if (uniform !== types[i].name) {
+		} else if (uniform != types[i].name) {
 			mixed = true;
 		}
 		vals.push({

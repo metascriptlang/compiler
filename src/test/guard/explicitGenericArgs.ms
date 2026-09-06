@@ -22,7 +22,7 @@ function tagged<T, E>(t: T): Result<T, E> {
 }
 
 function expect(actual: string, want: string, name: string): int32 {
-    if (actual !== want) {
+    if (actual != want) {
         console.log(`GUARD-FAIL ${name}: got ${actual}, want ${want}`);
         return 1;
     }
@@ -53,9 +53,9 @@ function main(): int32 {
     const f: Vec<int32> = [1, 2, 3];
     rc += expect(`${f.length}`, "3", "noExplicitBaseline");
 
-    if (rc === 0) { console.log("GUARD-OK explicitGenericArgs"); }
+    if (rc == 0) { console.log("GUARD-OK explicitGenericArgs"); }
     return rc;
 }
 
 const rc = main();
-if (rc !== 0) { process.exit(rc); }
+if (rc != 0) { process.exit(rc); }

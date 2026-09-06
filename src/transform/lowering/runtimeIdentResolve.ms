@@ -17,7 +17,7 @@ import { makeSymbolState } from "../../checker/symbol";
 let _ctx: TransformContext = null as unknown as TransformContext;
 
 export function resolveRuntimeIdents(program: Node, ctx: TransformContext): Node {
-	if (ctx.checkerCtx === null) return program;
+	if (ctx.checkerCtx == null) return program;
 	_ctx = ctx;
 	walkNode(program, bindSynthesizedIdent);
 	_ctx = null as unknown as TransformContext;
@@ -25,11 +25,11 @@ export function resolveRuntimeIdents(program: Node, ctx: TransformContext): Node
 }
 
 function bindSynthesizedIdent(node: Node): Node {
-	if (node.kind !== NodeKind.Identifier) return node;
-	if (node.resolvedSym !== null) return node;
+	if (node.kind != NodeKind.Identifier) return node;
+	if (node.resolvedSym != null) return node;
 	const d = node.data as IdentifierData;
 	const info = lookupRuntimeExport(d.name);
-	if (info === null) return node;
+	if (info == null) return node;
 	node.resolvedSym = runtimeSymOf(info);
 	return node;
 }
@@ -40,8 +40,8 @@ function bindSynthesizedIdent(node: Node): Node {
 function runtimeSymOf(info: ExportedSymInfo): Symbol {
 	const sym = makeSymbolState(info.name, info.kind, info.symType, false, SymbolState.Shaped);
 	sym.modulePath = info.definingModule;
-	if (info.originalName !== "") sym.originalName = info.originalName;
-	if (info.nativeName !== "") sym.nativeName = info.nativeName;
+	if (info.originalName != "") sym.originalName = info.originalName;
+	if (info.nativeName != "") sym.nativeName = info.nativeName;
 	return sym;
 }
 
@@ -51,8 +51,8 @@ function runtimeSymOf(info: ExportedSymInfo): Symbol {
 // silently binding to an unrelated module's export.
 function lookupRuntimeExport(name: string): ExportedSymInfo {
 	const hits = _ctx.checkerCtx.exportRegistry.nameIndex.get(name);
-	if (hits === null || hits.length === 0) return null as unknown as ExportedSymInfo;
-	if (hits.length === 1) return hits[0];
+	if (hits == null || hits.length == 0) return null as unknown as ExportedSymInfo;
+	if (hits.length == 1) return hits[0];
 	for (const info of hits) {
 		if (info.definingModule.indexOf("std/core/") >= 0) return info;
 	}

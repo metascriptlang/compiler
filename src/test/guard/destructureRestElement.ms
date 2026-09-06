@@ -27,33 +27,33 @@ const src: int32[] = [3, 4, 5, 6];
 function main(): void {
 	// (1) basic: values + length
 	const [a, b, ...rest] = src;
-	if (a + b !== 7) { throw "GUARD RED: leading elems wrong"; }
-	if (rest.length !== 2) { throw "GUARD RED: rest length wrong"; }
-	if (rest[0] !== 5 || rest[1] !== 6) { throw "GUARD RED: rest contents wrong"; }
+	if (a + b != 7) { throw "GUARD RED: leading elems wrong"; }
+	if (rest.length != 2) { throw "GUARD RED: rest length wrong"; }
+	if (rest[0] != 5 || rest[1] != 6) { throw "GUARD RED: rest contents wrong"; }
 
 	// (2) rest alone
 	const [...all] = src;
-	if (all.length !== 4) { throw "GUARD RED: whole-rest length wrong"; }
+	if (all.length != 4) { throw "GUARD RED: whole-rest length wrong"; }
 
 	// (3) rest in a closure — env field must carry the Array type
 	const fn = (): int32 => { const [x, ...r] = src; return x + r.length; };
-	if (fn() !== 6) { throw "GUARD RED: closure rest capture wrong"; }
+	if (fn() != 6) { throw "GUARD RED: closure rest capture wrong"; }
 
 	// (4) for-of destructured rest
 	const rows: int32[][] = [[10, 20, 30]];
 	for (const [h, ...tail] of rows) {
-		if (h !== 10) { throw "GUARD RED: for-of head wrong"; }
-		if (tail.length !== 2 || tail[1] !== 30) { throw "GUARD RED: for-of rest wrong"; }
+		if (h != 10) { throw "GUARD RED: for-of head wrong"; }
+		if (tail.length != 2 || tail[1] != 30) { throw "GUARD RED: for-of rest wrong"; }
 	}
 
 	// (5) string-element array
 	const words: string[] = ["a", "b", "c"];
 	const [w, ...ws] = words;
-	if (w + ws.length.toString() !== "a2") { throw "GUARD RED: string rest wrong"; }
+	if (w + ws.length.toString() != "a2") { throw "GUARD RED: string rest wrong"; }
 
 	// (6) rest.toString() must not fold to "<object>" (typing regression sentinel)
 	const [, , ...r2] = src;
-	if (r2.length.toString() !== "2") { throw "GUARD RED: rest toString folded to <object>"; }
+	if (r2.length.toString() != "2") { throw "GUARD RED: rest toString folded to <object>"; }
 
 	console.log("destructureRestElement ok");
 }

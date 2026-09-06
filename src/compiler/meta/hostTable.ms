@@ -228,8 +228,8 @@ function _setSpawnStateErr(
 	_spawnStderr = stderr;
 	_spawnExitCode = exitCode;
 	_spawnSignal = signal;
-	_spawnOk = kind === ProcessErrorKind.SpawnFailed ? 0 : 1;
-	_spawnPipeOk = kind === ProcessErrorKind.PipeError ? 0 : 1;
+	_spawnOk = kind == ProcessErrorKind.SpawnFailed ? 0 : 1;
+	_spawnPipeOk = kind == ProcessErrorKind.PipeError ? 0 : 1;
 }
 
 function _bridgeMsProcessSpawnSync(args: RaiserValue[]): RaiserValue {
@@ -270,7 +270,7 @@ function _bridgeMsProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull === null) return raiserNil();
+	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
 	const h = heapAllocArray(heap);
 	for (const a of argv) {
@@ -289,9 +289,9 @@ function _bridgeMsProcessUnsetEnv(args: RaiserValue[]): RaiserValue {
 
 function _unboxStringArrayArg(v: RaiserValue): string[] {
 	const out: string[] = [];
-	if (v.kind !== RaiserValueKind.Array) return out;
+	if (v.kind != RaiserValueKind.Array) return out;
 	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull === null) return out;
+	if (heapOrNull == null) return out;
 	const heap: RaiserArrayHeap = heapOrNull;
 	const n = heapArrayLen(heap, v.intVal);
 	let i = 0;
@@ -466,9 +466,9 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // copy — mutations through it stick.
 
 function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
-	if (v.kind !== RaiserValueKind.Object) return false;
+	if (v.kind != RaiserValueKind.Object) return false;
 	const kindField = heapObjectGetField(objHeap, v.intVal, "kind");
-	return kindField.kind === RaiserValueKind.Int || kindField.kind === RaiserValueKind.Float;
+	return kindField.kind == RaiserValueKind.Int || kindField.kind == RaiserValueKind.Float;
 }
 
 function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, arrHandle: number, out: RaiserValue[]): void {
@@ -477,7 +477,7 @@ function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHea
 		const el = heapArrayGet(arrHeap, arrHandle, j);
 		if (_isNodeShaped(objHeap, el)) {
 			out.push(el);
-		} else if (el.kind === RaiserValueKind.Array) {
+		} else if (el.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, el.intVal, out);
 		}
 	}
@@ -487,7 +487,7 @@ function _nodeChildSlots(h: number): RaiserValue[] {
 	const out: RaiserValue[] = [];
 	const objHeapOrNull = activeHostObjectHeap();
 	const arrHeapOrNull = activeHostArrayHeap();
-	if (objHeapOrNull === null || arrHeapOrNull === null) return out;
+	if (objHeapOrNull == null || arrHeapOrNull == null) return out;
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const n = heapObjectFieldCount(objHeap, h);
@@ -497,7 +497,7 @@ function _nodeChildSlots(h: number): RaiserValue[] {
 		const v = heapObjectFieldValueAt(objHeap, h, i);
 		if (_isNodeShaped(objHeap, v)) {
 			out.push(v);
-		} else if (v.kind === RaiserValueKind.Array) {
+		} else if (v.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, v.intVal, out);
 		}
 	}
@@ -505,12 +505,12 @@ function _nodeChildSlots(h: number): RaiserValue[] {
 }
 
 function _bridgeMsNodeChildCount(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxInt(0);
 	return boxInt(_nodeChildSlots(args[0].intVal).length);
 }
 
 function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
-	if (args.length < 2 || args[0].kind !== RaiserValueKind.Object) return raiserNil();
+	if (args.length < 2 || args[0].kind != RaiserValueKind.Object) return raiserNil();
 	const slots = _nodeChildSlots(args[0].intVal);
 	const i = unboxInt(args[1]);
 	if (i < 0 || i >= slots.length) return raiserNil();
@@ -563,7 +563,7 @@ function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
 function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 	const bytes = unboxString(args[0]).asBytes();
 	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull === null) return raiserNil();
+	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
 	const handle = heapAllocArray(heap);
 	let i = 0;
@@ -576,7 +576,7 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull === null) return raiserNil();
+	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
 	const handle = args[0].intVal;
 	const len = heapArrayLen(heap, handle);
@@ -595,7 +595,7 @@ function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
 function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
 	const parts = unboxString(args[0]).split(unboxString(args[1]));
 	const arrHeapOrNull = activeHostArrayHeap();
-	if (arrHeapOrNull === null) return raiserNil();
+	if (arrHeapOrNull == null) return raiserNil();
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const h = heapAllocArray(arrHeap);
 	for (let i = 0; i < parts.length; i = i + 1) {
@@ -610,10 +610,10 @@ function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
 // beyond, which no caller in the compiler's messages relies on.
 function _bridgeMsStringFromValue(args: RaiserValue[]): RaiserValue {
 	const v = args[0];
-	if (v.kind === RaiserValueKind.String) return v;
-	if (v.kind === RaiserValueKind.Int) return boxString(unboxInt(v).toString());
-	if (v.kind === RaiserValueKind.Float) return boxString(unboxFloat(v).toString());
-	if (v.kind === RaiserValueKind.Bool) return boxString(unboxBool(v) ? "true" : "false");
+	if (v.kind == RaiserValueKind.String) return v;
+	if (v.kind == RaiserValueKind.Int) return boxString(unboxInt(v).toString());
+	if (v.kind == RaiserValueKind.Float) return boxString(unboxFloat(v).toString());
+	if (v.kind == RaiserValueKind.Bool) return boxString(unboxBool(v) ? "true" : "false");
 	return boxString("");
 }
 
@@ -630,34 +630,34 @@ function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 // a value that prints "8" and then compares as 0. One static type, one register
 // kind; ask isFloatLiteral first, exactly as Nim asks the node kind.
 function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxBool(false);
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxBool(false);
 	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull === null) return boxBool(false);
+	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
 	const v = heapObjectGetField(objHeap, args[0].intVal, "value");
-	return boxBool(v.kind === RaiserValueKind.Float);
+	return boxBool(v.kind == RaiserValueKind.Float);
 }
 
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxInt(0);
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxInt(0);
 	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull === null) return boxInt(0);
+	if (objHeapOrNull == null) return boxInt(0);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
 	return boxInt(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
 }
 
 function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxFloat(0.0);
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxFloat(0.0);
 	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull === null) return boxFloat(0.0);
+	if (objHeapOrNull == null) return boxFloat(0.0);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
 	return boxFloat(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
 }
 
 function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind !== RaiserValueKind.Object) return boxString("");
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxString("");
 	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull === null) return boxString("");
+	if (objHeapOrNull == null) return boxString("");
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
 	return boxString(unboxString(heapObjectGetField(objHeap, args[0].intVal, "value")));
 }
@@ -810,17 +810,17 @@ import { lookupHostFn, _resetHostRegistryForTests } from "../../raiser/hostRegis
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msFsExists") !== null;
-	assert lookupHostFn("msFsIsFile") !== null;
-	assert lookupHostFn("msFsIsDir") !== null;
+	assert lookupHostFn("msFsExists") != null;
+	assert lookupHostFn("msFsIsFile") != null;
+	assert lookupHostFn("msFsIsDir") != null;
 }
 
 test "ensureHostTableLoaded registers process accessors" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msProcessCwd") !== null;
-	assert lookupHostFn("msProcessPlatform") !== null;
-	assert lookupHostFn("msProcessGetEnv") !== null;
+	assert lookupHostFn("msProcessCwd") != null;
+	assert lookupHostFn("msProcessPlatform") != null;
+	assert lookupHostFn("msProcessGetEnv") != null;
 }
 
 test "ensureHostTableLoaded is idempotent" {
@@ -836,11 +836,11 @@ test "bridgeMsFsExists returns 1 for present file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsExists");
-	assert fn !== null;
+	assert fn != null;
 	// README.md is in the project root, where tests run from.
 	const result = fn([raiserString("README.md")]);
-	assert result.kind === RaiserValueKind.Int;
-	assert result.intVal === 1;
+	assert result.kind == RaiserValueKind.Int;
+	assert result.intVal == 1;
 }
 
 test "bridgeMsFsExists returns 0 for missing file" {
@@ -848,8 +848,8 @@ test "bridgeMsFsExists returns 0 for missing file" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsExists");
 	const result = fn([raiserString("/tmp/__definitely_does_not_exist_xyz123__")]);
-	assert result.kind === RaiserValueKind.Int;
-	assert result.intVal === 0;
+	assert result.kind == RaiserValueKind.Int;
+	assert result.intVal == 0;
 }
 
 test "bridgeMsProcessCwd returns non-empty string" {
@@ -857,7 +857,7 @@ test "bridgeMsProcessCwd returns non-empty string" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessCwd");
 	const result = fn([]);
-	assert result.kind === RaiserValueKind.String;
+	assert result.kind == RaiserValueKind.String;
 	assert result.strVal.length > 0;
 }
 
@@ -866,7 +866,7 @@ test "bridgeMsProcessPlatform returns known platform" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessPlatform");
 	const result = fn([]);
-	assert result.kind === RaiserValueKind.String;
+	assert result.kind == RaiserValueKind.String;
 	// Platform is one of darwin/linux/windows in practice.
 	assert result.strVal.length > 0;
 }
@@ -876,8 +876,8 @@ test "bridgeMsProcessGetEnv missing var returns empty" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessGetEnv");
 	const result = fn([raiserString("__NEVER_SET_VAR_QWXTY__")]);
-	assert result.kind === RaiserValueKind.String;
-	assert result.strVal === "";
+	assert result.kind == RaiserValueKind.String;
+	assert result.strVal == "";
 }
 
 // --- Phase 7 bridges: errno-poll pattern ---
@@ -888,10 +888,10 @@ test "bridgeMsFsReadFile present file + errno 0" {
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
 	const r = read([raiserString("README.md")]);
-	assert r.kind === RaiserValueKind.String;
+	assert r.kind == RaiserValueKind.String;
 	assert r.strVal.length > 0;
 	const e = errno([]);
-	assert e.intVal === 0;
+	assert e.intVal == 0;
 }
 
 test "bridgeMsFsReadFile missing file + non-zero errno" {
@@ -900,9 +900,9 @@ test "bridgeMsFsReadFile missing file + non-zero errno" {
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
 	const r = read([raiserString("/tmp/__missing_xyz__")]);
-	assert r.strVal === "";
+	assert r.strVal == "";
 	const e = errno([]);
-	assert e.intVal !== 0;
+	assert e.intVal != 0;
 }
 
 test "bridgeMsFsReadDirEntries returns newline-separated entries" {
@@ -910,7 +910,7 @@ test "bridgeMsFsReadDirEntries returns newline-separated entries" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsReadDirEntries");
 	const r = fn([raiserString(".")]);
-	assert r.kind === RaiserValueKind.String;
+	assert r.kind == RaiserValueKind.String;
 	assert r.strVal.length > 0;
 }
 
@@ -920,17 +920,17 @@ test "bridgeMsProcessSpawnSync registered" {
 	// Just verify registration. Actual subprocess invocation is brittle inside
 	// the test harness — covered by end-to-end @comptime smoke tests in
 	// src/compiler/meta/comptime.ms where the bridge is exercised via the VM.
-	assert lookupHostFn("msProcessSpawnSync") !== null;
+	assert lookupHostFn("msProcessSpawnSync") != null;
 }
 
 test "bridgeMsProcSpawnGet* state slots registered" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msProcSpawnGetOk") !== null;
-	assert lookupHostFn("msProcSpawnGetPipeOk") !== null;
-	assert lookupHostFn("msProcSpawnGetExitCode") !== null;
-	assert lookupHostFn("msProcSpawnGetSignal") !== null;
-	assert lookupHostFn("msProcSpawnGetStderr") !== null;
+	assert lookupHostFn("msProcSpawnGetOk") != null;
+	assert lookupHostFn("msProcSpawnGetPipeOk") != null;
+	assert lookupHostFn("msProcSpawnGetExitCode") != null;
+	assert lookupHostFn("msProcSpawnGetSignal") != null;
+	assert lookupHostFn("msProcSpawnGetStderr") != null;
 }
 
 // --- Audit-driven regression tests ---
@@ -942,10 +942,10 @@ test "I4 regression: msFsReadDirEntries missing path sets errno" {
 	const readDirFn = lookupHostFn("msFsReadDirEntries");
 	const errno = lookupHostFn("msFsLastErrno");
 	const r = readDirFn([raiserString("/tmp/__never_exists_qpqp__")]);
-	assert r.kind === RaiserValueKind.String;
-	assert r.strVal === "";
+	assert r.kind == RaiserValueKind.String;
+	assert r.strVal == "";
 	// Bug pre-fix: errno would be 0 here, masking failure
-	assert errno([]).intVal !== 0;
+	assert errno([]).intVal != 0;
 }
 
 test "I4 regression: msFsReadDirEntries on file (not dir) sets errno" {
@@ -955,7 +955,7 @@ test "I4 regression: msFsReadDirEntries on file (not dir) sets errno" {
 	const readDirFn = lookupHostFn("msFsReadDirEntries");
 	const errno = lookupHostFn("msFsLastErrno");
 	readDirFn([raiserString("README.md")]);  // path exists but is a file
-	assert errno([]).intVal !== 0;
+	assert errno([]).intVal != 0;
 }
 
 test "I5 regression: bridge state reset clears errno" {
@@ -964,9 +964,9 @@ test "I5 regression: bridge state reset clears errno" {
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
 	read([raiserString("/tmp/__missing_yyy__")]);
-	assert errno([]).intVal !== 0;
+	assert errno([]).intVal != 0;
 	_resetBridgeStateForTests();
-	assert errno([]).intVal === 0;
+	assert errno([]).intVal == 0;
 }
 
 test "errno cleared after successful read following failed read" {
@@ -976,9 +976,9 @@ test "errno cleared after successful read following failed read" {
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
 	read([raiserString("/tmp/__missing_first__")]);
-	assert errno([]).intVal !== 0;
+	assert errno([]).intVal != 0;
 	read([raiserString("README.md")]);  // success — should clear errno
-	assert errno([]).intVal === 0;
+	assert errno([]).intVal == 0;
 }
 
 test "spawn state preserved across getter calls" {
@@ -991,9 +991,9 @@ test "spawn state preserved across getter calls" {
 	const exitFn = lookupHostFn("msProcSpawnGetExitCode");
 	const stderrFn = lookupHostFn("msProcSpawnGetStderr");
 	// Initial state after reset
-	assert okFn([]).intVal === 0;
-	assert exitFn([]).intVal === 0;
-	assert stderrFn([]).strVal === "";
+	assert okFn([]).intVal == 0;
+	assert exitFn([]).intVal == 0;
+	assert stderrFn([]).strVal == "";
 }
 
 // --- .rms closure guard ---
@@ -1022,14 +1022,14 @@ function scanRmsExternNames(src: string): string[] {
 
 function nameListed(list: string[], name: string): boolean {
 	for (const x of list) {
-		if (x === name) return true;
+		if (x == name) return true;
 	}
 	return false;
 }
 
 test "rms extern closure: declared externs are bridged, intercepted, or listed dead" {
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const rmsFiles = [
 		join(stdPath, "core/string/index.rms"),
 		join(stdPath, "core/array/index.rms"),
@@ -1057,7 +1057,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		if (!r.ok) continue;
 		for (const name of scanRmsExternNames(r.value)) {
 			checked = checked + 1;
-			const covered = lookupHostFn(name) !== null
+			const covered = lookupHostFn(name) != null
 				|| nameListed(intercepted, name)
 				|| nameListed(knownDead, name);
 			assert covered, `${f}: ${name}`;

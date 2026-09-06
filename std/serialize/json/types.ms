@@ -29,11 +29,11 @@ export type JsonValue = Ref<JsonValueData>;
 // ===== Tests =====
 
 test "JsonKind values" {
-	assert JsonKind.Null === 0;
-	assert JsonKind.Bool === 1;
-	assert JsonKind.Number === 2;
-	assert JsonKind.String === 3;
-	assert JsonKind.Array === 4;
-	assert JsonKind.Object === 5;
-	assert JsonKind.Int === 6;
+	assert JsonKind.Null == 0;
+	assert JsonKind.Bool == 1;
+	assert JsonKind.Number == 2;
+	assert JsonKind.String == 3;
+	assert JsonKind.Array == 4;
+	assert JsonKind.Object == 5;
+	assert JsonKind.Int == 6;
 }

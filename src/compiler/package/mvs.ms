@@ -37,7 +37,7 @@ export type LoadDepsFn = (name: string, version: string) => DepEntry[];
 
 // Check if a version string is a git source (starts with "git:").
 function isGitSource(version: string): boolean {
-	return version.length >= 4 && version.slice(0, 4) === "git:";
+	return version.length >= 4 && version.slice(0, 4) == "git:";
 }
 
 // Resolve the build list from root deps using MVS.
@@ -81,7 +81,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 			let found = false;
 			let gi = 0;
 			while (gi < gitNames.length) {
-				if (gitNames[gi] === name) { found = true; }
+				if (gitNames[gi] == name) { found = true; }
 				gi = gi + 1;
 			}
 			if (!found) {
@@ -95,14 +95,14 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 		let existingIdx = -1;
 		let ei = 0;
 		while (ei < reqNames.length) {
-			if (reqNames[ei] === name) { existingIdx = ei; }
+			if (reqNames[ei] == name) { existingIdx = ei; }
 			ei = ei + 1;
 		}
 
 		if (existingIdx >= 0) {
 			// Already have this package — keep the higher version
 			const cmp = compareVersionStrings(ver, reqVersions[existingIdx]);
-			if (cmp === -2) continue; // invalid version string — skip silently (validated at extractDeps time)
+			if (cmp == -2) continue; // invalid version string — skip silently (validated at extractDeps time)
 			if (cmp <= 0) continue;   // existing is same or higher, skip
 			reqVersions[existingIdx] = ver;
 		} else {
@@ -115,7 +115,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 		let alreadyVisited = false;
 		let mi = 0;
 		while (mi < visited.length) {
-			if (visited[mi] === memoKey) { alreadyVisited = true; }
+			if (visited[mi] == memoKey) { alreadyVisited = true; }
 			mi = mi + 1;
 		}
 		if (alreadyVisited) continue;
@@ -150,7 +150,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 export function findInBuildList(list: BuildListEntry[], name: string): string {
 	let i = 0;
 	while (i < list.length) {
-		if (list[i].name === name) return list[i].version;
+		if (list[i].name == name) return list[i].version;
 		i = i + 1;
 	}
 	return "";
@@ -169,15 +169,15 @@ function emptyLoader(name: string, version: string): DepEntry[] {
 test "mvs empty root" {
 	const root: DepEntry[] = [];
 	const list = mvsResolve(root, emptyLoader);
-	assert list.length === 0;
+	assert list.length == 0;
 }
 
 test "mvs single dep" {
 	const root: DepEntry[] = [{ name: "foo", version: "1.0.0" }];
 	const list = mvsResolve(root, emptyLoader);
-	assert list.length === 1;
-	assert list[0].name === "foo";
-	assert list[0].version === "1.0.0";
+	assert list.length == 1;
+	assert list[0].name == "foo";
+	assert list[0].version == "1.0.0";
 }
 
 test "mvs two independent deps" {
@@ -186,14 +186,14 @@ test "mvs two independent deps" {
 		{ name: "bar", version: "2.0.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
-	assert list.length === 2;
-	assert findInBuildList(list, "foo") === "1.0.0";
-	assert findInBuildList(list, "bar") === "2.0.0";
+	assert list.length == 2;
+	assert findInBuildList(list, "foo") == "1.0.0";
+	assert findInBuildList(list, "bar") == "2.0.0";
 }
 
 function diamondLoader(name: string, version: string): DepEntry[] {
 	const _v = version;
-	if (name === "bar") {
+	if (name == "bar") {
 		const deps: DepEntry[] = [{ name: "foo", version: "1.2.0" }];
 		return deps;
 	}
@@ -203,11 +203,11 @@ function diamondLoader(name: string, version: string): DepEntry[] {
 
 function transitiveLoader(name: string, version: string): DepEntry[] {
 	const _v = version;
-	if (name === "A") {
+	if (name == "A") {
 		const d: DepEntry[] = [{ name: "B", version: "1.0.0" }];
 		return d;
 	}
-	if (name === "C") {
+	if (name == "C") {
 		const d: DepEntry[] = [{ name: "B", version: "2.0.0" }];
 		return d;
 	}
@@ -221,8 +221,8 @@ test "mvs diamond picks max" {
 		{ name: "bar", version: "1.0.0" },
 	];
 	const list = mvsResolve(root, diamondLoader);
-	assert findInBuildList(list, "foo") === "1.2.0";
-	assert findInBuildList(list, "bar") === "1.0.0";
+	assert findInBuildList(list, "foo") == "1.2.0";
+	assert findInBuildList(list, "bar") == "1.0.0";
 }
 
 test "mvs transitive bump" {
@@ -231,7 +231,7 @@ test "mvs transitive bump" {
 		{ name: "C", version: "1.0.0" },
 	];
 	const list = mvsResolve(root, transitiveLoader);
-	assert findInBuildList(list, "B") === "2.0.0";
+	assert findInBuildList(list, "B") == "2.0.0";
 }
 
 test "mvs git source pass-through" {
@@ -240,9 +240,9 @@ test "mvs git source pass-through" {
 		{ name: "my-fork", version: "git:github.com/me/foo@v1.0.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
-	assert list.length === 2;
-	assert findInBuildList(list, "foo") === "1.0.0";
-	assert findInBuildList(list, "my-fork") === "git:github.com/me/foo@v1.0.0";
+	assert list.length == 2;
+	assert findInBuildList(list, "foo") == "1.0.0";
+	assert findInBuildList(list, "my-fork") == "git:github.com/me/foo@v1.0.0";
 }
 
 test "mvs git source not merged with registry" {
@@ -252,34 +252,34 @@ test "mvs git source not merged with registry" {
 		{ name: "my-fork", version: "git:github.com/acme/foo@v2.0.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
-	assert findInBuildList(list, "foo") === "1.0.0";
-	assert findInBuildList(list, "my-fork") === "git:github.com/acme/foo@v2.0.0";
+	assert findInBuildList(list, "foo") == "1.0.0";
+	assert findInBuildList(list, "my-fork") == "git:github.com/acme/foo@v2.0.0";
 }
 
 // Hoisted test loaders — must be at module scope for the self-hosted compiler
 // (function declarations inside test blocks are not visible to C codegen).
 function chainLoader(name: string, version: string): DepEntry[] {
 	const _v = version;
-	if (name === "A") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
-	if (name === "B") { const d: DepEntry[] = [{ name: "C", version: "1.0.0" }]; return d; }
-	if (name === "C") { const d: DepEntry[] = [{ name: "D", version: "1.0.0" }]; return d; }
+	if (name == "A") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
+	if (name == "B") { const d: DepEntry[] = [{ name: "C", version: "1.0.0" }]; return d; }
+	if (name == "C") { const d: DepEntry[] = [{ name: "D", version: "1.0.0" }]; return d; }
 	const e: DepEntry[] = [];
 	return e;
 }
 
 function cycleLoader(name: string, version: string): DepEntry[] {
 	const _v = version;
-	if (name === "A") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
-	if (name === "B") { const d: DepEntry[] = [{ name: "A", version: "1.0.0" }]; return d; }
+	if (name == "A") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
+	if (name == "B") { const d: DepEntry[] = [{ name: "A", version: "1.0.0" }]; return d; }
 	const e: DepEntry[] = [];
 	return e;
 }
 
 function escalatingLoader(name: string, version: string): DepEntry[] {
-	if (name === "A" && version === "1.0.0") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
-	if (name === "B" && version === "1.0.0") { const d: DepEntry[] = [{ name: "A", version: "2.0.0" }]; return d; }
-	if (name === "A" && version === "2.0.0") { const d: DepEntry[] = [{ name: "B", version: "2.0.0" }]; return d; }
-	if (name === "B" && version === "2.0.0") { const d: DepEntry[] = [{ name: "A", version: "2.0.0" }]; return d; }
+	if (name == "A" && version == "1.0.0") { const d: DepEntry[] = [{ name: "B", version: "1.0.0" }]; return d; }
+	if (name == "B" && version == "1.0.0") { const d: DepEntry[] = [{ name: "A", version: "2.0.0" }]; return d; }
+	if (name == "A" && version == "2.0.0") { const d: DepEntry[] = [{ name: "B", version: "2.0.0" }]; return d; }
+	if (name == "B" && version == "2.0.0") { const d: DepEntry[] = [{ name: "A", version: "2.0.0" }]; return d; }
 	const e: DepEntry[] = [];
 	return e;
 }
@@ -287,8 +287,8 @@ function escalatingLoader(name: string, version: string): DepEntry[] {
 test "mvs deep chain" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
 	const list = mvsResolve(root, chainLoader);
-	assert list.length === 4;
-	assert findInBuildList(list, "D") === "1.0.0";
+	assert list.length == 4;
+	assert findInBuildList(list, "D") == "1.0.0";
 }
 
 test "mvs duplicate root deps deduped" {
@@ -297,21 +297,21 @@ test "mvs duplicate root deps deduped" {
 		{ name: "foo", version: "1.2.0" },
 	];
 	const list = mvsResolve(root, emptyLoader);
-	assert list.length === 1;
-	assert findInBuildList(list, "foo") === "1.2.0";
+	assert list.length == 1;
+	assert findInBuildList(list, "foo") == "1.2.0";
 }
 
 test "mvs cycle does not infinite loop" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
 	const list = mvsResolve(root, cycleLoader);
-	assert list.length === 2;
-	assert findInBuildList(list, "A") === "1.0.0";
-	assert findInBuildList(list, "B") === "1.0.0";
+	assert list.length == 2;
+	assert findInBuildList(list, "A") == "1.0.0";
+	assert findInBuildList(list, "B") == "1.0.0";
 }
 
 test "mvs version-escalating cycle terminates" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
 	const list = mvsResolve(root, escalatingLoader);
-	assert findInBuildList(list, "A") === "2.0.0";
-	assert findInBuildList(list, "B") === "2.0.0";
+	assert findInBuildList(list, "A") == "2.0.0";
+	assert findInBuildList(list, "B") == "2.0.0";
 }

@@ -70,10 +70,10 @@ function bug033_makeFns(): (() => int32)[] {
 
 test "bug033: closure array prints correct per-iteration captures" {
 	const fns = bug033_makeFns();
-	assert fns.length === 3;
-	assert fns[0]() === 0;
-	assert fns[1]() === 1;
-	assert fns[2]() === 2;
+	assert fns.length == 3;
+	assert fns[0]() == 0;
+	assert fns[1]() == 1;
+	assert fns[2]() == 2;
 }
 
 test "bug033: scope-exit cleanup on closure array runs without crash" {
@@ -86,5 +86,5 @@ test "bug033: scope-exit cleanup on closure array runs without crash" {
 		// `fns` falls out of scope each iteration — triggers
 		// msArrayClosureDestroy(fns_). Pre-fix: msArrayRefDestroy → crash.
 	}
-	assert iter === 50;
+	assert iter == 50;
 }

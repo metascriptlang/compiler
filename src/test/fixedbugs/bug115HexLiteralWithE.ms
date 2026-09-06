@@ -13,13 +13,13 @@
 
 test "bug115: hex literal with e is an integer" {
 	const a = 0xe0 | 1;
-	assert a === 225;
+	assert a == 225;
 	const b = 0xE0 | 1;
-	assert b === 225;
+	assert b == 225;
 	const c = 0xbeef & 0xffff;
-	assert c === 48879;
+	assert c == 48879;
 	const d: int32 = 0xffee;
-	assert d === 65518;
-	assert 0xe0 === 224;
-	assert 0xE1 === 225;
+	assert d == 65518;
+	assert 0xe0 == 224;
+	assert 0xE1 == 225;
 }

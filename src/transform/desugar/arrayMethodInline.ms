@@ -28,14 +28,14 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 // ===== Detection =====
 
 function getArrayMethodName(node: Node | null): string {
-	if (node === null) return "";
-	if (node.kind !== NodeKind.CallExpr) return "";
+	if (node == null) return "";
+	if (node.kind != NodeKind.CallExpr) return "";
 	const cd = node.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.MemberExpr) return "";
+	if (cd.callee.kind != NodeKind.MemberExpr) return "";
 	const md = cd.callee.data as MemberExprData;
-	if (md.property === "map" && cd.arguments.length === 1) return "map";
-	if (md.property === "filter" && cd.arguments.length === 1) return "filter";
-	if (md.property === "reduce" && cd.arguments.length === 2) return "reduce";
+	if (md.property == "map" && cd.arguments.length == 1) return "map";
+	if (md.property == "filter" && cd.arguments.length == 1) return "filter";
+	if (md.property == "reduce" && cd.arguments.length == 2) return "reduce";
 	return "";
 }
 
@@ -144,24 +144,24 @@ function buildReduce(arrExpr: Node, callbackExpr: Node, initExpr: Node, arrSym: 
 
 function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 	// ReturnStmt: return arr.map(fn) → loop stmts + return $result
-	if (stmt.kind === NodeKind.ReturnStmt) {
+	if (stmt.kind == NodeKind.ReturnStmt) {
 		const d = stmt.data as ReturnStmtData;
 		const method = getArrayMethodName(d.argument);
-		if (method !== "") {
+		if (method != "") {
 			const cd = d.argument.data as CallExprData;
 			const arrExpr = (cd.callee.data as MemberExprData).object;
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
-			if (method === "map") {
-				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
+			if (method == "map") {
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
 				const resSym = freshTempSym(ctx, "mRes", noneType());
 				const iSym = freshTempSym(ctx, "mI", int32Type());
 				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeReturn(makeIdentResolved(resSym, loc), loc));
 				return loopStmts;
 			}
-			if (method === "filter") {
-				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
+			if (method == "filter") {
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
 				const resSym = freshTempSym(ctx, "fRes", noneType());
 				const iSym = freshTempSym(ctx, "fI", int32Type());
 				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
@@ -170,8 +170,8 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
-			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : noneType());
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType != null ? initExpr.nodeType : noneType());
 			const iSym = freshTempSym(ctx, "rI", int32Type());
 			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
 			loopStmts.push(makeReturn(makeIdentResolved(accSym, loc), loc));
@@ -179,24 +179,24 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 		}
 	}
 	// VariableDecl: const x = arr.map(fn) → loop stmts + const x = $result
-	if (stmt.kind === NodeKind.VariableDecl) {
+	if (stmt.kind == NodeKind.VariableDecl) {
 		const d = stmt.data as VariableDeclData;
 		const method = getArrayMethodName(d.initializer);
-		if (method !== "") {
+		if (method != "") {
 			const cd = d.initializer.data as CallExprData;
 			const arrExpr = (cd.callee.data as MemberExprData).object;
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
-			if (method === "map") {
-				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
+			if (method == "map") {
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
 				const resSym = freshTempSym(ctx, "mRes", noneType());
 				const iSym = freshTempSym(ctx, "mI", int32Type());
 				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
 				loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(resSym, loc), d.declKind, loc));
 				return loopStmts;
 			}
-			if (method === "filter") {
-				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
+			if (method == "filter") {
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
 				const resSym = freshTempSym(ctx, "fRes", noneType());
 				const iSym = freshTempSym(ctx, "fI", int32Type());
 				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
@@ -205,8 +205,8 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : noneType());
-			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : noneType());
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType != null ? arrExpr.nodeType : noneType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType != null ? initExpr.nodeType : noneType());
 			const iSym = freshTempSym(ctx, "rI", int32Type());
 			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
 			loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(accSym, loc), d.declKind, loc));
@@ -224,22 +224,22 @@ export function lowerArrayMethodInline(program: Node, ctx: TransformContext): No
 }
 
 // ===== Tests =====
-test "return map expands to 5 stmts" { assert stmtCountAfter("return arr.map(fn);", lowerArrayMethodInline) === 5; }
+test "return map expands to 5 stmts" { assert stmtCountAfter("return arr.map(fn);", lowerArrayMethodInline) == 5; }
 
-test "return filter expands to 5 stmts" { assert stmtCountAfter("return arr.filter(fn);", lowerArrayMethodInline) === 5; }
+test "return filter expands to 5 stmts" { assert stmtCountAfter("return arr.filter(fn);", lowerArrayMethodInline) == 5; }
 
-test "return reduce expands to 5 stmts" { assert stmtCountAfter("return arr.reduce(fn, 0);", lowerArrayMethodInline) === 5; }
+test "return reduce expands to 5 stmts" { assert stmtCountAfter("return arr.reduce(fn, 0);", lowerArrayMethodInline) == 5; }
 
-test "const map expands to 5 stmts" { assert stmtCountAfter("const x = arr.map(fn);", lowerArrayMethodInline) === 5; }
+test "const map expands to 5 stmts" { assert stmtCountAfter("const x = arr.map(fn);", lowerArrayMethodInline) == 5; }
 
-test "first stmt is VarDecl" { assert firstStmtKindAfter("return arr.map(fn);", lowerArrayMethodInline) === NodeKind.VariableDecl; }
+test "first stmt is VarDecl" { assert firstStmtKindAfter("return arr.map(fn);", lowerArrayMethodInline) == NodeKind.VariableDecl; }
 
-test "non-map method unchanged" { assert stmtCountAfter("return arr.push(1);", lowerArrayMethodInline) === 1; }
+test "non-map method unchanged" { assert stmtCountAfter("return arr.push(1);", lowerArrayMethodInline) == 1; }
 
-test "plain call unchanged" { assert stmtCountAfter("return f();", lowerArrayMethodInline) === 1; }
+test "plain call unchanged" { assert stmtCountAfter("return f();", lowerArrayMethodInline) == 1; }
 
-test "non-method return unchanged" { assert stmtCountAfter("return x;", lowerArrayMethodInline) === 1; }
+test "non-method return unchanged" { assert stmtCountAfter("return x;", lowerArrayMethodInline) == 1; }
 
-test "wrong arg count for map unchanged" { assert stmtCountAfter("return arr.map(fn, extra);", lowerArrayMethodInline) === 1; }
+test "wrong arg count for map unchanged" { assert stmtCountAfter("return arr.map(fn, extra);", lowerArrayMethodInline) == 1; }
 
-test "wrong arg count for reduce unchanged" { assert stmtCountAfter("return arr.reduce(fn);", lowerArrayMethodInline) === 1; }
+test "wrong arg count for reduce unchanged" { assert stmtCountAfter("return arr.reduce(fn);", lowerArrayMethodInline) == 1; }

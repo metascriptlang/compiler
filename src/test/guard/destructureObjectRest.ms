@@ -30,18 +30,18 @@ function main(): void {
 
 	// (1) basic: leading field + rest carries BOTH remaining fields with types
 	const { id, ...rest } = row;
-	if (id !== 7) { throw "GUARD RED: leading field wrong"; }
-	if (rest.qty !== 3) { throw "GUARD RED: rest numeric field wrong"; }
-	if (rest.label !== "widget") { throw "GUARD RED: rest string field wrong"; }
+	if (id != 7) { throw "GUARD RED: leading field wrong"; }
+	if (rest.qty != 3) { throw "GUARD RED: rest numeric field wrong"; }
+	if (rest.label != "widget") { throw "GUARD RED: rest string field wrong"; }
 
 	// (2) rename + rest — takenKeys must key off propKey, not the alias
 	const { id: renamed, ...rest2 } = row;
-	if (renamed !== 7) { throw "GUARD RED: renamed field wrong"; }
-	if (rest2.qty + rest2.label.length !== 9) { throw "GUARD RED: rest after rename wrong"; }
+	if (renamed != 7) { throw "GUARD RED: renamed field wrong"; }
+	if (rest2.qty + rest2.label.length != 9) { throw "GUARD RED: rest after rename wrong"; }
 
 	// (3) rest inside a closure — the lifted env field must keep the anon struct
 	const fn = (): int32 => { const { id: i2, ...r } = row; return i2 + r.qty; };
-	if (fn() !== 10) { throw "GUARD RED: closure rest capture wrong"; }
+	if (fn() != 10) { throw "GUARD RED: closure rest capture wrong"; }
 
 	const rows: Row[] = [
 		{ id: 1, qty: 10, label: "a" },
@@ -51,15 +51,15 @@ function main(): void {
 	// (4) for-of with object rest
 	let sum = 0;
 	for (const { id: rid, ...r } of rows) {
-		if (r.label.length !== 1) { throw "GUARD RED: for-of rest string wrong"; }
+		if (r.label.length != 1) { throw "GUARD RED: for-of rest string wrong"; }
 		sum = sum + rid + r.qty;
 	}
-	if (sum !== 33) { throw "GUARD RED: for-of rest totals wrong"; }
+	if (sum != 33) { throw "GUARD RED: for-of rest totals wrong"; }
 
 	// (5) for-of with a PLAIN object pattern — no rest involved
 	let plain = 0;
 	for (const { id: pid, qty } of rows) { plain = plain + pid + qty; }
-	if (plain !== 33) { throw "GUARD RED: for-of plain object pattern wrong"; }
+	if (plain != 33) { throw "GUARD RED: for-of plain object pattern wrong"; }
 
 	console.log("destructureObjectRest ok");
 }

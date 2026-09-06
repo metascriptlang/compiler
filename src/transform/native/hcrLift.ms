@@ -33,7 +33,7 @@ interface HcrGlobal {
 // ===== Main Entry Point =====
 
 export function liftHcrState(program: Node, ctx: TransformContext): Node {
-	if (program === null || program.kind !== NodeKind.Program) return program;
+	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
 	// Pass 1: Collect globals, replace VariableDecl with assignment ExprStmt
@@ -42,14 +42,14 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const stmt = pd.programStmts[i];
 		const g = extractGlobal(stmt);
-		if (g !== null) {
+		if (g != null) {
 			globals.push(g);
 			// Convert initializer to assignment statement (stays in ModuleInit)
-			if (g.initNode !== null) {
+			if (g.initNode != null) {
 				const lhs = makeIdent(g.name, stmt.location);
-				if (g.declType !== null) lhs.nodeType = g.declType;
+				if (g.declType != null) lhs.nodeType = g.declType;
 				const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
-				if (g.declType !== null) assign.nodeType = g.declType;
+				if (g.declType != null) assign.nodeType = g.declType;
 				kept.push(makeExprStmt(assign, stmt.location));
 			}
 		} else {
@@ -58,7 +58,7 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	}
 
 	// No globals → nothing to lift
-	if (globals.length === 0) {
+	if (globals.length == 0) {
 		pd.programStmts = kept;
 		return program;
 	}
@@ -132,25 +132,25 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 // Unwraps ExportDecl and DecoratedDecl wrappers.
 
 function extractGlobal(stmt: Node): HcrGlobal {
-	if (stmt === null) return null as unknown as HcrGlobal;
+	if (stmt == null) return null as unknown as HcrGlobal;
 
 	// Direct VariableDecl
-	if (stmt.kind === NodeKind.VariableDecl) {
+	if (stmt.kind == NodeKind.VariableDecl) {
 		return varDeclToGlobal(stmt);
 	}
 
 	// export const x = ...
-	if (stmt.kind === NodeKind.ExportDecl) {
+	if (stmt.kind == NodeKind.ExportDecl) {
 		const ed = stmt.data as ExportDeclData;
-		if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.VariableDecl) {
+		if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
 			return varDeclToGlobal(ed.exportedDecl);
 		}
 	}
 
 	// @decorator const x = ...
-	if (stmt.kind === NodeKind.DecoratedDecl) {
+	if (stmt.kind == NodeKind.DecoratedDecl) {
 		const dd = stmt.data as DecoratedDeclData;
-		if (dd.decoratedNode !== null && dd.decoratedNode.kind === NodeKind.VariableDecl) {
+		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.VariableDecl) {
 			return varDeclToGlobal(dd.decoratedNode);
 		}
 	}
@@ -164,7 +164,7 @@ function varDeclToGlobal(node: Node): HcrGlobal {
 	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) {
 		return null as unknown as HcrGlobal;
 	}
-	const t = node.nodeType !== null ? node.nodeType : null as unknown as Type;
+	const t = node.nodeType != null ? node.nodeType : null as unknown as Type;
 	return { name: d.declName, declType: t, initNode: d.initializer };
 }
 
@@ -174,7 +174,7 @@ function varDeclToGlobal(node: Node): HcrGlobal {
 
 function rewriteGlobalRefs(node: Node, globalNames: string[], gsPtrType: Type, loc: SourceLocation): Node {
 	return walkNode(node, (n: Node): Node => {
-		if (n.kind !== NodeKind.Identifier) return n;
+		if (n.kind != NodeKind.Identifier) return n;
 		const d = n.data as IdentifierData;
 		if (!isGlobalName(d.name, globalNames)) return n;
 
@@ -183,7 +183,7 @@ function rewriteGlobalRefs(node: Node, globalNames: string[], gsPtrType: Type, l
 		const deref = makeHiddenDeref(gsIdent, loc);
 		const member = makeMember(deref, d.name, loc);
 		// Preserve original type
-		if (n.nodeType !== null) {
+		if (n.nodeType != null) {
 			member.nodeType = n.nodeType;
 		}
 		return member;
@@ -192,7 +192,7 @@ function rewriteGlobalRefs(node: Node, globalNames: string[], gsPtrType: Type, l
 
 function isGlobalName(name: string, globalNames: string[]): boolean {
 	for (let i = 0; i < globalNames.length; i += 1) {
-		if (globalNames[i] === name) return true;
+		if (globalNames[i] == name) return true;
 	}
 	return false;
 }
@@ -210,7 +210,7 @@ function makeEmitStmt(code: string, loc: SourceLocation): Node {
 // Minimal mapping for GlobalState struct fields.
 
 function typeToCStr(t: Type): string {
-	if (t === null) return "void*";
+	if (t == null) return "void*";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "double",
 		TypeKind.String => "msString",
@@ -225,14 +225,14 @@ function typeToCStr(t: Type): string {
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Float32 => "float",
 		TypeKind.Struct => {
-			if (t.typeName !== null && t.typeName.length > 0) {
+			if (t.typeName != null && t.typeName.length > 0) {
 				return t.typeName;
 			} else {
 				return "void*";
 			}
 		},
 		TypeKind.Array => {
-			if (t.typeReturn !== null) {
+			if (t.typeReturn != null) {
 				return match (t.typeReturn.kind) {
 					TypeKind.Number | TypeKind.Float64 => "msNumberArray",
 					TypeKind.String => "msStringArray",
@@ -244,7 +244,7 @@ function typeToCStr(t: Type): string {
 			}
 		},
 		TypeKind.Ref => {
-			if (t.typeName !== null && t.typeName.length > 0) {
+			if (t.typeName != null && t.typeName.length > 0) {
 				return t.typeName + "*";
 			} else {
 				return "void*";

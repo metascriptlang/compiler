@@ -17,14 +17,14 @@ function mkNum(i: int32): Num {
 }
 
 function describe(e: Entry): string {
-	if (e.kind === "tag") {
+	if (e.kind == "tag") {
 		return "tag:" + e.label;
 	}
 	return "num:" + e.label;
 }
 
 function pick(i: int32): Entry {
-	if (i % 2 === 0) {
+	if (i % 2 == 0) {
 		const t: Tag = mkTag(i);
 		return t;
 	}
@@ -45,7 +45,7 @@ function main(): void {
 	let nums = 0;
 	for (let i = 0; i < 50000; i += 1) {
 		const e = pick(i);
-		if (e.kind === "tag") {
+		if (e.kind == "tag") {
 			tags += 1;
 		} else {
 			nums += 1;

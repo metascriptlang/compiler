@@ -28,7 +28,7 @@ const MAX_COMPRESSED: number = 50 * 1024 * 1024;       // 50 MB
 
 // Server version regex requires plain semver without leading "v".
 function stripVPrefix(v: string): string {
-	if (v.length > 0 && (v.charAt(0) === "v" || v.charAt(0) === "V")) {
+	if (v.length > 0 && (v.charAt(0) == "v" || v.charAt(0) == "V")) {
 		return v.slice(1, v.length);
 	}
 	return v;
@@ -101,11 +101,11 @@ function jsonEscape(s: string): string {
 	while (i < s.length) {
 		const ch = s.charAt(i);
 		const code = s.charCodeAt(i);
-		if (ch === "\\") { out = out + "\\\\"; }
-		else if (ch === "\"") { out = out + "\\\""; }
-		else if (ch === "\n") { out = out + "\\n"; }
-		else if (ch === "\r") { out = out + "\\r"; }
-		else if (ch === "\t") { out = out + "\\t"; }
+		if (ch == "\\") { out = out + "\\\\"; }
+		else if (ch == "\"") { out = out + "\\\""; }
+		else if (ch == "\n") { out = out + "\\n"; }
+		else if (ch == "\r") { out = out + "\\r"; }
+		else if (ch == "\t") { out = out + "\\t"; }
 		else if (code < 32) {
 			// Other control chars → \u00XX
 			out = out + "\\u00" + hexByte(code);
@@ -140,7 +140,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	let dryRun = false;
 	let k = 0;
 	while (k < args.length) {
-		if (args[k] === "--dry-run") dryRun = true;
+		if (args[k] == "--dry-run") dryRun = true;
 		k = k + 1;
 	}
 
@@ -161,7 +161,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 		console.log("  package: { name: \"my-lib\", version: \"1.0.0\" },");
 		return false;
 	}
-	if (cfg.package.version === "") {
+	if (cfg.package.version == "") {
 		console.log(`${errStyle("error")}: ${cyan("package.version")} is required for publishing`);
 		return false;
 	}
@@ -171,7 +171,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 
 	// --- Check token (unless --dry-run) ---
 	const token = loadToken();
-	if (!dryRun && token === "") {
+	if (!dryRun && token == "") {
 		console.log(`${errStyle("error")}: not logged in`);
 		console.log(`run ${cyan("msc login")} first to authenticate`);
 		return false;
@@ -185,7 +185,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 		}
 		return false;
 	}
-	if (walk.files.length === 0) {
+	if (walk.files.length == 0) {
 		console.log(`${errStyle("error")}: no files selected for publishing`);
 		console.log(`check ${cyan("package.files")} and ${cyan("package.ignore")} in build.ms`);
 		return false;
@@ -314,21 +314,21 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	const resp = postR.value;
 
 	// --- Parse response ---
-	if (resp.status === 201) {
+	if (resp.status == 201) {
 		const publishedVer = extractJsonField(resp.body, "version");
 		const tarUrl = extractJsonField(resp.body, "archiveUrl");
 		const srvIntegrity = extractJsonField(resp.body, "integrity");
-		const showVer = publishedVer !== "" ? publishedVer : version;
+		const showVer = publishedVer != "" ? publishedVer : version;
 		console.log("");
 		console.log(`${green("+ published")} ${cyan(name)}@${cyan(showVer)}`);
-		if (tarUrl !== "") console.log(`  url:       ${dim(tarUrl)}`);
-		if (srvIntegrity !== "") console.log(`  integrity: ${dim(srvIntegrity)}`);
+		if (tarUrl != "") console.log(`  url:       ${dim(tarUrl)}`);
+		if (srvIntegrity != "") console.log(`  integrity: ${dim(srvIntegrity)}`);
 		return true;
 	}
 
 	// Error path — surface whatever the server said.
 	const serverError = extractJsonField(resp.body, "error");
-	const hint = serverError !== "" ? serverError : resp.body;
+	const hint = serverError != "" ? serverError : resp.body;
 	match (resp.status) {
 		401 => {
 			console.log(`${errStyle("error")}: token rejected by registry (expired or revoked)`);
@@ -347,33 +347,33 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 // ===== Tests =====
 
 test "stripVPrefix" {
-	assert stripVPrefix("v1.2.3") === "1.2.3";
-	assert stripVPrefix("V1.2.3") === "1.2.3";
-	assert stripVPrefix("1.2.3") === "1.2.3";
-	assert stripVPrefix("") === "";
+	assert stripVPrefix("v1.2.3") == "1.2.3";
+	assert stripVPrefix("V1.2.3") == "1.2.3";
+	assert stripVPrefix("1.2.3") == "1.2.3";
+	assert stripVPrefix("") == "";
 }
 
 test "humanSize formatting" {
-	assert humanSize(0) === "0 B";
-	assert humanSize(500) === "500 B";
-	assert humanSize(1024) === "1.0 KB";
-	assert humanSize(1536) === "1.5 KB";
-	assert humanSize(1024 * 1024) === "1.0 MB";
-	assert humanSize(10 * 1024 * 1024) === "10.0 MB";
+	assert humanSize(0) == "0 B";
+	assert humanSize(500) == "500 B";
+	assert humanSize(1024) == "1.0 KB";
+	assert humanSize(1536) == "1.5 KB";
+	assert humanSize(1024 * 1024) == "1.0 MB";
+	assert humanSize(10 * 1024 * 1024) == "10.0 MB";
 }
 
 test "hexByte" {
-	assert hexByte(0) === "00";
-	assert hexByte(15) === "0f";
-	assert hexByte(16) === "10";
-	assert hexByte(255) === "ff";
+	assert hexByte(0) == "00";
+	assert hexByte(15) == "0f";
+	assert hexByte(16) == "10";
+	assert hexByte(255) == "ff";
 }
 
 test "jsonEscape basic" {
-	assert jsonEscape("hello") === "\"hello\"";
-	assert jsonEscape("a\"b") === "\"a\\\"b\"";
-	assert jsonEscape("line1\nline2") === "\"line1\\nline2\"";
-	assert jsonEscape("back\\slash") === "\"back\\\\slash\"";
+	assert jsonEscape("hello") == "\"hello\"";
+	assert jsonEscape("a\"b") == "\"a\\\"b\"";
+	assert jsonEscape("line1\nline2") == "\"line1\\nline2\"";
+	assert jsonEscape("back\\slash") == "\"back\\\\slash\"";
 }
 
 test "buildMetadataJson minimal" {
@@ -391,7 +391,7 @@ test "buildMetadataJson minimal" {
 		valid: true,
 	};
 	const js = buildMetadataJson(pkg, "1.0.0");
-	assert js === "{\"name\":\"cool-json\",\"version\":\"1.0.0\"}";
+	assert js == "{\"name\":\"cool-json\",\"version\":\"1.0.0\"}";
 }
 
 test "buildMetadataJson with optionals" {
@@ -409,7 +409,7 @@ test "buildMetadataJson with optionals" {
 		valid: true,
 	};
 	const js = buildMetadataJson(pkg, "0.1.0");
-	assert js === "{\"name\":\"x\",\"version\":\"0.1.0\",\"description\":\"A thing\",\"license\":\"MIT\",\"keywords\":[\"a\",\"b\"]}";
+	assert js == "{\"name\":\"x\",\"version\":\"0.1.0\",\"description\":\"A thing\",\"license\":\"MIT\",\"keywords\":[\"a\",\"b\"]}";
 }
 
 test "buildManifestJson" {
@@ -427,5 +427,5 @@ test "buildManifestJson" {
 		valid: true,
 	};
 	const manifest = buildManifestJson(pkg, "1.0.0");
-	assert manifest === "{\"name\":\"x\",\"version\":\"1.0.0\"}";
+	assert manifest == "{\"name\":\"x\",\"version\":\"1.0.0\"}";
 }

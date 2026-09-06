@@ -85,14 +85,14 @@ export interface StateCollector {
 // Collect name→Type from VarDecl nodes in the body.
 // Reference parity (captureVar): env fields always carry their original type.
 function collectDeclTypes(node: Node, names: string[], types: Type[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			const t = node.nodeType !== null ? node.nodeType
-				: (d.initializer !== null ? d.initializer.nodeType : null);
-			if (t !== null) {
+			const t = node.nodeType != null ? node.nodeType
+				: (d.initializer != null ? d.initializer.nodeType : null);
+			if (t != null) {
 				names.push(d.declName);
 				types.push(t);
 			}
@@ -117,16 +117,16 @@ function collectDeclTypes(node: Node, names: string[], types: Type[]): void {
 function lookupDeclType(names: string[], types: Type[], name: string): Type {
 	let i = 0;
 	while (i < names.length) {
-		if (names[i] === name) return types[i];
+		if (names[i] == name) return types[i];
 		i = i + 1;
 	}
 	return null as unknown as Type;
 }
 
 function buildIterResultType(returnNodeType: Type | null): Type | null {
-	if (returnNodeType === null || !isIterator(returnNodeType)) return null;
+	if (returnNodeType == null || !isIterator(returnNodeType)) return null;
 	const yieldType = getIteratorYieldType(returnNodeType);
-	if (yieldType === null) return null;
+	if (yieldType == null) return null;
 	return createIteratorResult(yieldType);
 }
 
@@ -136,7 +136,7 @@ function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultT
 		[value, makeBool(done, loc)],
 		loc,
 	);
-	if (resultType !== null) obj.nodeType = resultType;
+	if (resultType != null) obj.nodeType = resultType;
 	return obj;
 }
 
@@ -163,15 +163,15 @@ function makeStateGoto(stateNum: number, loc: SourceLocation): Node {
 // Descends Block/If/Try only — nested loops and switch own their own
 // break/continue scope.
 function rewriteOrRecurse(stmt: Node, top: LoopFrame, loc: SourceLocation): Node {
-	if (stmt === null) return stmt;
-	if (stmt.kind === NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc);
-	if (stmt.kind === NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc);
+	if (stmt == null) return stmt;
+	if (stmt.kind == NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc);
+	if (stmt.kind == NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc);
 	rewriteLoopExits(stmt, top, loc);
 	return stmt;
 }
 
 function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
@@ -202,14 +202,14 @@ export function allocState(sc: StateCollector): number {
 }
 
 function isGeneratorFlag(flags: string): boolean {
-	if (flags === "generator" || flags === "async_generator") return true;
+	if (flags == "generator" || flags == "async_generator") return true;
 	return flags.indexOf("generator") >= 0;
 }
 
 // ===== Yield Detection =====
 
 export function containsYield(node: Node | null): boolean {
-	if (node === null) return false;
+	if (node == null) return false;
 	return match (node.kind) {
 		NodeKind.YieldExpr => true,
 		// Stop at nested function boundaries
@@ -223,7 +223,7 @@ export function containsYield(node: Node | null): boolean {
 		},
 		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; return containsYield(d.expr); },
 		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; return containsYield(d.argument); },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return d.initializer !== null && containsYield(d.initializer); },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return d.initializer != null && containsYield(d.initializer); },
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			return containsYield(d.condition) || containsYield(d.consequent) || containsYield(d.alternate);
@@ -297,18 +297,18 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 		// break/continue inside a while-with-yield: rewrite to state transition
 		// (see LoopFrame). No active frame → enclosing while has no yield,
 		// natural C semantics apply, leave as-is.
-		if (stmt.kind === NodeKind.BreakStmt && sc.loopStack.length > 0) {
+		if (stmt.kind == NodeKind.BreakStmt && sc.loopStack.length > 0) {
 			// Direct break: post-break stmts are dead, no need for trailing continue.
 			const top = sc.loopStack[sc.loopStack.length - 1];
 			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
 			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc));
 			return;
-		} else if (stmt.kind === NodeKind.ContinueStmt && sc.loopStack.length > 0) {
+		} else if (stmt.kind == NodeKind.ContinueStmt && sc.loopStack.length > 0) {
 			const top = sc.loopStack[sc.loopStack.length - 1];
 			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
 			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc));
 			return;
-		} else if (stmt.kind === NodeKind.ReturnStmt && sc.finallyStack.length > 0) {
+		} else if (stmt.kind == NodeKind.ReturnStmt && sc.finallyStack.length > 0) {
 			// finallyPath port: a bare return inside a SPLIT try runs every
 			// enclosing finally before leaving. The return itself is left in
 			// its incoming shape (async consumers pre-rewrite returns into
@@ -325,9 +325,9 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			}
 			sc.items[currentState].stmts.push(stmt);
 			i += 1;
-		} else if (stmt.kind === NodeKind.ExprStmt) {
+		} else if (stmt.kind == NodeKind.ExprStmt) {
 			const ed = stmt.data as ExprStmtData;
-			if (ed.expr.kind === NodeKind.YieldExpr) {
+			if (ed.expr.kind == NodeKind.YieldExpr) {
 				// yield expr; → emit return { value: expr, done: false }, transition
 				const yd = ed.expr.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
@@ -341,9 +341,9 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				sc.items[currentState].stmts.push(stmt);
 				i += 1;
 			}
-		} else if (stmt.kind === NodeKind.VariableDecl) {
+		} else if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (vd.initializer !== null && vd.initializer.kind === NodeKind.YieldExpr) {
+			if (vd.initializer != null && vd.initializer.kind == NodeKind.YieldExpr) {
 				// const x = yield expr; → yield, then assign on resume
 				const yd = vd.initializer.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
@@ -355,7 +355,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 					currentState = nextSt;
 				}
 				i += 1;
-			} else if (vd.initializer !== null) {
+			} else if (vd.initializer != null) {
 				// VariableDecl with yield somewhere in initializer — treat as normal for V1
 				// Convert to assignment since var is lifted
 				const assignStmt = makeExprStmt(
@@ -368,7 +368,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				// No initializer — just skip, var is already lifted
 				i += 1;
 			}
-		} else if (stmt.kind === NodeKind.WhileStmt) {
+		} else if (stmt.kind == NodeKind.WhileStmt) {
 			// Flush current state to a new condition state so pre-loop stmts
 			// don't re-execute on back-edge. Same pattern as reference closureiters.
 			const condState = allocState(sc);
@@ -377,12 +377,12 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			splitWhile(stmt, sc, condState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
-		} else if (stmt.kind === NodeKind.IfStmt) {
+		} else if (stmt.kind == NodeKind.IfStmt) {
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
 			splitIf(stmt, sc, currentState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
-		} else if (stmt.kind === NodeKind.BlockStmt) {
+		} else if (stmt.kind == NodeKind.BlockStmt) {
 			// Unwrap block: forOfLower wraps lowered while loops in BlockStmt.
 			const bd = stmt.data as BlockStmtData;
 			const merged: Node[] = [];
@@ -391,9 +391,9 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			while (ri < stmts.length) { merged.push(stmts[ri]); ri = ri + 1; }
 			splitStmts(merged, sc, currentState, exitState, loc, resultType);
 			return;
-		} else if (stmt.kind === NodeKind.TryCatchStmt) {
+		} else if (stmt.kind == NodeKind.TryCatchStmt) {
 			const td = stmt.data as TryCatchStmtData;
-			const hasFinally = td.finallyBody !== null && !isEmptyBlock(td.finallyBody);
+			const hasFinally = td.finallyBody != null && !isEmptyBlock(td.finallyBody);
 			// finallyPath port: try-with-finally containing a yield splits with
 			// the finally inlined at each exit (splitTryFinally). A yield inside
 			// the finally body itself stays a loud V1 gap (it would need its own
@@ -408,7 +408,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				splitTryFinally(stmt, sc, currentState, afterSt, loc, resultType);
 				currentState = afterSt;
 				i += 1;
-			} else if (td.catchBody === null) {
+			} else if (td.catchBody == null) {
 				sc.items[currentState].stmts.push(stmt);
 				i += 1;
 			} else {
@@ -424,7 +424,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 		}
 	}
 	// Final state transitions to exit
-	if (currentState !== exitState) {
+	if (currentState != exitState) {
 		sc.items[currentState].stmts.push(makeStateAssign(exitState, loc));
 	}
 }
@@ -489,8 +489,8 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	// $curExc carries the caught exception; its type must be the exception type
 	// (DRC-owned) even when the handler never reads the catch var — otherwise the
 	// env field falls back to void* and the exception leaks (no destructor hook).
-	if (node.nodeType !== null) sc.excType = node.nodeType;
-	if (td.catchName !== "") {
+	if (node.nodeType != null) sc.excType = node.nodeType;
+	if (td.catchName != "") {
 		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType);
 	}
 	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
@@ -514,7 +514,7 @@ function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, finStmt
 	for (const s of finStmts) sc.items[finReraiseIdx].stmts.push(s);
 	sc.items[finReraiseIdx].stmts.push(makeStateAssign(-1, loc));
 	const curExcRef = makeIdent("$curExc", loc);
-	if (sc.excType !== null) curExcRef.nodeType = sc.excType;
+	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	sc.items[finReraiseIdx].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
 }
 
@@ -538,17 +538,17 @@ function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, finStmt
 function splitTryFinally(node: Node, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
 	const td = node.data as TryCatchStmtData;
 	const finStmts = extractBodyStmts(td.finallyBody);
-	if (node.nodeType !== null) sc.excType = node.nodeType;
+	if (node.nodeType != null) sc.excType = node.nodeType;
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
 	sc.finallyStack.push({ stmts: finStmts, loopDepth: sc.loopStack.length });
 
-	if (td.catchBody === null) {
+	if (td.catchBody == null) {
 		const finReraise = allocState(sc);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s !== finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
 		}
 		appendReraiseFinally(sc, finReraise, finStmts, loc);
 		appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
@@ -560,7 +560,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		const catchSt = allocState(sc);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s !== catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+			if (s != catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
 		}
 		const finNormal = appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
 		const catchExit = allocState(sc);
@@ -570,7 +570,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		// in the catch range — catchSt itself, catchExit's entry read included —
 		// runs the finally then re-raises.
 		for (let s = catchSt; s < sc.items.length; s += 1) {
-			if (s !== finReraise && s !== finNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && s != finNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
 		}
 		appendReraiseFinally(sc, finReraise, finStmts, loc);
 		appendNormalFinally(sc, catchExit, finStmts, afterSt, loc);
@@ -581,12 +581,12 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
 // stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
 function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		if (d.name === oldName) {
+		if (d.name == oldName) {
 			d.name = newName;
-			if (typ !== null) node.nodeType = typ;
+			if (typ != null) node.nodeType = typ;
 			node.resolvedSym = null;
 		}
 		return;
@@ -609,7 +609,7 @@ export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	// $excCaught, which the store's move already nulled (reference closureiters
 	// wrapIntoTryExcept re-raises :curExc). Typed so the raise-arg sink fires.
 	const curExcRef = makeIdent("$curExc", loc);
-	if (sc.excType !== null) curExcRef.nodeType = sc.excType;
+	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc));
 	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -640,7 +640,7 @@ export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 	// unresolved-type gate. DRC corner (documented, same as an untyped env
 	// field): a ref exception rethrown through a catch-less finally has no
 	// destructor hook on this holder and leaks on the error path.
-	curExcDecl.nodeType = sc.excType !== null ? sc.excType : createPtr(createPrimitive(TypeKind.Void));
+	curExcDecl.nodeType = sc.excType != null ? sc.excType : createPtr(createPrimitive(TypeKind.Void));
 	return curExcDecl;
 }
 
@@ -652,7 +652,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 	const id = node.data as IfStmtData;
 
 	const thenStart = allocState(sc);
-	const hasElse = id.alternate.kind !== NodeKind.NullLiteral && id.alternate.kind !== NodeKind.BlockStmt || (id.alternate.kind === NodeKind.BlockStmt && (id.alternate.data as BlockStmtData).statements.length > 0);
+	const hasElse = id.alternate.kind != NodeKind.NullLiteral && id.alternate.kind != NodeKind.BlockStmt || (id.alternate.kind == NodeKind.BlockStmt && (id.alternate.data as BlockStmtData).statements.length > 0);
 
 	if (hasElse && containsYield(id.alternate)) {
 		const elseStart = allocState(sc);
@@ -701,7 +701,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | null): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
-		if (stmt.kind === NodeKind.ReturnStmt) {
+		if (stmt.kind == NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
 			// Replace with block: { $state = -1; return { value: val, done: true }; }
 			const block = makeBlock([
@@ -720,15 +720,15 @@ function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | n
 export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
-		if (stmt.kind === NodeKind.VariableDecl) {
+		if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (nameSetContains(liftedNames, vd.declName) && vd.initializer !== null) {
+			if (nameSetContains(liftedNames, vd.declName) && vd.initializer != null) {
 				// Convert: const/let x = init → x = init (assignment)
 				// Preserve the VarDecl's resolvedSym on the LHS Identifier so downstream
 				// passes (lambdaLifting capture resolution, codegen) identify this as the
 				// original local binding — not a fall-through to an outer/global with the
 				// same name. Critical for shadow-safe rewriting of async state machines.
-				const lhs = (stmt.resolvedSym !== null)
+				const lhs = (stmt.resolvedSym != null)
 					? makeIdentResolved(stmt.resolvedSym, loc)
 					: makeIdent(vd.declName, loc);
 				stmts[i] = makeExprStmt(makeAssign(lhs, vd.initializer, loc), loc);
@@ -812,12 +812,12 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		funcExprFlags: "",
 		funcExprReturnType: "",
 	}, syntheticToken(loc));
-	if (nextFnType !== null) nextFn.nodeType = nextFnType;
+	if (nextFnType != null) nextFn.nodeType = nextFnType;
 
 	// 10. Build iterator object: { next: function() { ... } }
 	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
 	const iterObj = makeObjectLiteral(["next"], [nextFn], loc);
-	if (returnNodeType !== null && isIterator(returnNodeType)) {
+	if (returnNodeType != null && isIterator(returnNodeType)) {
 		iterObj.nodeType = returnNodeType;
 	}
 
@@ -833,7 +833,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		// Reference parity: captureVar always adds field with original type.
 		const decl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
 		const dt = lookupDeclType(dtNames, dtTypes, localName);
-		if (dt !== null) decl.nodeType = dt;
+		if (dt != null) decl.nodeType = dt;
 		newBodyStmts.push(decl);
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
@@ -859,11 +859,11 @@ function walkGenerators(node: Node): void {
 			if (isGeneratorFlag(d.fnFlags)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
 				// Generic templates have unresolved type params that produce void in C.
-				const fnType = node.resolvedSym !== null ? node.resolvedSym.symbolType : null;
-				if (fnType !== null && hasGenericParams(fnType)) {
+				const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
+				if (fnType != null && hasGenericParams(fnType)) {
 					// Keep generator flag so monomorphized instances still get lowered
 				} else {
-					const retType = fnType !== null ? fnType.typeReturn : null;
+					const retType = fnType != null ? fnType.typeReturn : null;
 					d.fnBody = transformGeneratorFn(
 						d.params, d.fnParamTypes, d.fnBody,
 						d.fnFlags, d.fnReturnType, retType, node.location,
@@ -890,7 +890,7 @@ function walkGenerators(node: Node): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer !== null) walkCheckFuncExpr(d.initializer);
+			if (d.initializer != null) walkCheckFuncExpr(d.initializer);
 		},
 		_ => {},
 	};
@@ -898,13 +898,13 @@ function walkGenerators(node: Node): void {
 
 // Check FunctionExpr for generator flag
 function walkCheckFuncExpr(node: Node): void {
-	if (node.kind === NodeKind.FunctionExpr) {
+	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		walkGenerators(d.funcExprBody);
 		if (isGeneratorFlag(d.funcExprFlags)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
-				d.funcExprFlags, d.funcExprReturnType, node.nodeType !== null ? node.nodeType.typeReturn : null, node.location,
+				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, node.location,
 			);
 			d.funcExprFlags = "";
 		}
@@ -919,27 +919,27 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-generator passthrough" { assert firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl; }
+test "non-generator passthrough" { assert firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) == NodeKind.FunctionDecl; }
 
-test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerGenerator) === 1; }
+test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerGenerator) == 1; }
 
 test "generator still one stmt" {
 	// function* gen() { yield 1; } → function gen() { ... } — still 1 top-level stmt
-	assert stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1;
+	assert stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) == 1;
 }
 
-test "generator flag removed" { assert firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl; }
+test "generator flag removed" { assert firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) == NodeKind.FunctionDecl; }
 
-test "try finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } finally { x = 2; } }", lowerGenerator) === 1; }
+test "try finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } finally { x = 2; } }", lowerGenerator) == 1; }
 
-test "try catch finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } catch (e) { y = 3; } finally { x = 2; } }", lowerGenerator) === 1; }
+test "try catch finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } catch (e) { y = 3; } finally { x = 2; } }", lowerGenerator) == 1; }
 
-test "yield in finally stays passthrough" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) === 1; }
+test "yield in finally stays passthrough" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) == 1; }
 
-test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1; }
+test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) == 1; }
 
-test "yield with locals" { assert stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1; }
+test "yield with locals" { assert stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) == 1; }
 
-test "while yield loop" { assert stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1; }
+test "while yield loop" { assert stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) == 1; }
 
-test "regular function unchanged" { assert stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1; }
+test "regular function unchanged" { assert stmtCountAfter("function f() { while (true) {} }", lowerGenerator) == 1; }

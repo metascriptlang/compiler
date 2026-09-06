@@ -63,7 +63,7 @@ test "member read returned through a cast increfs for the caller" {
 	assert c.ok, "compile failed: " + (c.ok ? "" : c.error);
 	const body = fnBody(c.value, "fromField__");
 	assert body.length > 0, "fromField not emitted";
-	assert countIncrefs(body) === 1, "fromField increfs: " + countIncrefs(body).toString();
+	assert countIncrefs(body) == 1, "fromField increfs: " + countIncrefs(body).toString();
 }
 
 test "owned call result returned through a cast stays a bare transfer" {
@@ -71,7 +71,7 @@ test "owned call result returned through a cast stays a bare transfer" {
 	assert c.ok, "compile failed";
 	const body = fnBody(c.value, "fromCall__");
 	assert body.length > 0, "fromCall not emitted";
-	assert countIncrefs(body) === 0, "fromCall increfs: " + countIncrefs(body).toString();
+	assert countIncrefs(body) == 0, "fromCall increfs: " + countIncrefs(body).toString();
 }
 
 test "param returned through a cast keeps exactly one incref" {
@@ -79,5 +79,5 @@ test "param returned through a cast keeps exactly one incref" {
 	assert c.ok, "compile failed";
 	const body = fnBody(c.value, "fromParam__");
 	assert body.length > 0, "fromParam not emitted";
-	assert countIncrefs(body) === 1, "fromParam increfs: " + countIncrefs(body).toString();
+	assert countIncrefs(body) == 1, "fromParam increfs: " + countIncrefs(body).toString();
 }

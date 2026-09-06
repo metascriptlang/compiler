@@ -21,20 +21,20 @@ interface Cmd {
 // If a group contains a BreakParent or HardLine, it must break — and its parent group too.
 // Returns true if the subtree forces a break.
 function propagateBreaks(doc: Doc): boolean {
-	if (doc === null) return false;
-	if (doc.kind === DocKind.BreakParent || doc.kind === DocKind.HardLine) return true;
-	if (doc.kind === DocKind.Group || doc.kind === DocKind.Indent || doc.kind === DocKind.LineSuffix) {
+	if (doc == null) return false;
+	if (doc.kind == DocKind.BreakParent || doc.kind == DocKind.HardLine) return true;
+	if (doc.kind == DocKind.Group || doc.kind == DocKind.Indent || doc.kind == DocKind.LineSuffix) {
 		const d = doc.data as { children: Doc[] };
 		let hasBreak = false;
 		for (const child of d.children) {
 			if (propagateBreaks(child)) hasBreak = true;
 		}
-		if (hasBreak && doc.kind === DocKind.Group) {
+		if (hasBreak && doc.kind == DocKind.Group) {
 			doc.shouldBreak = true;
 		}
 		return hasBreak;
 	}
-	if (doc.kind === DocKind.IfBreak) {
+	if (doc.kind == DocKind.IfBreak) {
 		const d = doc.data as { broken: Doc, flat: Doc };
 		propagateBreaks(d.flat);
 		propagateBreaks(d.broken);
@@ -48,7 +48,7 @@ function flushSuffixes(lineSuffixes: Doc[]): string {
 	for (const ls of lineSuffixes) {
 		const lsChildren = (ls.data as { children: Doc[] }).children;
 		for (const lsc of lsChildren) {
-			if (lsc.kind === DocKind.Text) {
+			if (lsc.kind == DocKind.Text) {
 				out = out + (lsc.data as { text: string }).text;
 			}
 		}
@@ -89,16 +89,16 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 		stack.length = stack.length - 1;
 		const doc = cmd.doc;
 
-		if (doc === null) continue;
+		if (doc == null) continue;
 
-		if (doc.kind === DocKind.Nil || doc.kind === DocKind.BreakParent) {
+		if (doc.kind == DocKind.Nil || doc.kind == DocKind.BreakParent) {
 			continue;
 		}
-		if (doc.kind === DocKind.Text) {
+		if (doc.kind == DocKind.Text) {
 			remaining = remaining - (doc.data as { text: string }).text.length;
 			continue;
 		}
-		if (doc.kind === DocKind.Group) {
+		if (doc.kind == DocKind.Group) {
 			// A group with shouldBreak can never fit flat — fail immediately
 			if (doc.shouldBreak) return false;
 			const d = doc.data as { children: Doc[] };
@@ -109,7 +109,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 			}
 			continue;
 		}
-		if (doc.kind === DocKind.Indent) {
+		if (doc.kind == DocKind.Indent) {
 			const d = doc.data as { children: Doc[] };
 			let j = d.children.length - 1;
 			while (j >= 0) {
@@ -118,9 +118,9 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 			}
 			continue;
 		}
-		if (doc.kind === DocKind.Line) {
+		if (doc.kind == DocKind.Line) {
 			const d = doc.data as { isSoft: boolean };
-			if (cmd.mode === MODE_BREAK) {
+			if (cmd.mode == MODE_BREAK) {
 				return true; // Line break in break mode — rest doesn't matter, fits
 			}
 			if (!d.isSoft) {
@@ -128,19 +128,19 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 			}
 			continue;
 		}
-		if (doc.kind === DocKind.HardLine) {
+		if (doc.kind == DocKind.HardLine) {
 			return true; // Hard line always fits (forces break)
 		}
-		if (doc.kind === DocKind.IfBreak) {
+		if (doc.kind == DocKind.IfBreak) {
 			const d = doc.data as { broken: Doc, flat: Doc };
-			if (cmd.mode === MODE_BREAK) {
+			if (cmd.mode == MODE_BREAK) {
 				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.broken });
 			} else {
 				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.flat });
 			}
 			continue;
 		}
-		if (doc.kind === DocKind.LineSuffix) {
+		if (doc.kind == DocKind.LineSuffix) {
 			continue; // Line suffixes don't contribute to width measurement
 		}
 	}
@@ -153,21 +153,21 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 		restIdx = restIdx - 1;
 		const doc = cmd.doc;
 
-		if (doc === null || doc.kind === DocKind.Nil || doc.kind === DocKind.BreakParent) continue;
-		if (doc.kind === DocKind.Text) {
+		if (doc == null || doc.kind == DocKind.Nil || doc.kind == DocKind.BreakParent) continue;
+		if (doc.kind == DocKind.Text) {
 			remaining = remaining - (doc.data as { text: string }).text.length;
 			continue;
 		}
-		if (doc.kind === DocKind.HardLine) return true;
-		if (doc.kind === DocKind.Line) {
-			if (cmd.mode === MODE_BREAK) return true;
+		if (doc.kind == DocKind.HardLine) return true;
+		if (doc.kind == DocKind.Line) {
+			if (cmd.mode == MODE_BREAK) return true;
 			if (!(doc.data as { isSoft: boolean }).isSoft) remaining = remaining - 1;
 			continue;
 		}
 		// Stop rest-of-line scan at compound docs in break mode —
 		// they will produce newlines, so content after them is irrelevant.
-		if (cmd.mode === MODE_BREAK) return true;
-		if (doc.kind === DocKind.IfBreak) {
+		if (cmd.mode == MODE_BREAK) return true;
+		if (doc.kind == DocKind.IfBreak) {
 			remaining = remaining - getFlatWidth((doc.data as { broken: Doc, flat: Doc }).flat);
 			continue;
 		}
@@ -178,7 +178,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 
 // Calculate flat width of a doc (used by fits rest-of-line fallback)
 function getFlatWidth(doc: Doc): int32 {
-	if (doc === null) return 0;
+	if (doc == null) return 0;
 	return match (doc.kind) {
 		DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => 0,
 		DocKind.Text => (doc.data as { text: string }).text.length,
@@ -213,16 +213,16 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 		stack.length = stack.length - 1;
 		const d = cmd.doc;
 
-		if (d === null || d.kind === DocKind.Nil || d.kind === DocKind.BreakParent) continue;
+		if (d == null || d.kind == DocKind.Nil || d.kind == DocKind.BreakParent) continue;
 
-		if (d.kind === DocKind.Text) {
+		if (d.kind == DocKind.Text) {
 			const text = (d.data as { text: string }).text;
 			result = result + text;
 			column = column + text.length;
 			continue;
 		}
 
-		if (d.kind === DocKind.Group) {
+		if (d.kind == DocKind.Group) {
 			const children = (d.data as { children: Doc[] }).children;
 			let childMode: int32;
 			if (d.shouldBreak) {
@@ -245,7 +245,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			continue;
 		}
 
-		if (d.kind === DocKind.Indent) {
+		if (d.kind == DocKind.Indent) {
 			const children = (d.data as { children: Doc[] }).children;
 			let j = children.length - 1;
 			while (j >= 0) {
@@ -255,8 +255,8 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			continue;
 		}
 
-		if (d.kind === DocKind.Line) {
-			if (cmd.mode === MODE_BREAK) {
+		if (d.kind == DocKind.Line) {
+			if (cmd.mode == MODE_BREAK) {
 				if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
 				const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
 				result = result + "\n" + indentStr;
@@ -271,7 +271,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			continue;
 		}
 
-		if (d.kind === DocKind.HardLine) {
+		if (d.kind == DocKind.HardLine) {
 			if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
 			const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
 			result = result + "\n" + indentStr;
@@ -279,12 +279,12 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			continue;
 		}
 
-		if (d.kind === DocKind.IfBreak) {
+		if (d.kind == DocKind.IfBreak) {
 			const ifData = d.data as { broken: Doc, flat: Doc };
 			// Check specific group's mode if groupId is set, otherwise use current mode
-			let isBroken = cmd.mode === MODE_BREAK;
+			let isBroken = cmd.mode == MODE_BREAK;
 			if (d.groupId > 0 && d.groupId < groupModes.length) {
-				isBroken = groupModes[d.groupId] === MODE_BREAK;
+				isBroken = groupModes[d.groupId] == MODE_BREAK;
 			}
 			if (isBroken) {
 				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: ifData.broken });
@@ -294,12 +294,12 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			continue;
 		}
 
-		if (d.kind === DocKind.LineSuffix) {
+		if (d.kind == DocKind.LineSuffix) {
 			lineSuffixes.push(d);
 			continue;
 		}
 
-		if (d.kind === DocKind.Fill) {
+		if (d.kind == DocKind.Fill) {
 			// Fill: pack items with separators, wrapping per-pair.
 			// children alternate: [item, sep, item, sep, item]
 			// Must push in reverse so they process left-to-right.
@@ -307,7 +307,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			// which depends on the current column — a chicken-and-egg problem.
 			// Solution: push remaining items as a nested Fill, process first pair now.
 			const parts = (d.data as { children: Doc[] }).children;
-			if (parts.length === 0) { continue; }
+			if (parts.length == 0) { continue; }
 
 			// Push remaining pairs as a new Fill (processed after current pair)
 			if (parts.length > 2) {
@@ -350,7 +350,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 	if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
 
 	// Ensure trailing newline
-	if (result.length > 0 && result[result.length - 1] !== "\n") {
+	if (result.length > 0 && result[result.length - 1] != "\n") {
 		result = result + "\n";
 	}
 	return result;

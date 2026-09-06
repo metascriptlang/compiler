@@ -24,7 +24,7 @@ import { monoTypeKey } from "../monomorphize/registry";
 function stripRestParamPrefix(params: string[]): boolean {
 	const last = params.length - 1;
 	if (last < 0) return false;
-	if (params[last].length > 3 && params[last].slice(0, 3) === "...") {
+	if (params[last].length > 3 && params[last].slice(0, 3) == "...") {
 		params[last] = params[last].slice(3, params[last].length);
 		return true;
 	}
@@ -38,9 +38,9 @@ function findTopLevelKeyword(text: string, keyword: string): number {
 	let depth = 0;
 	for (let i = 0; i <= text.length - keyword.length; i += 1) {
 		const c = text.charAt(i);
-		if (c === "(" || c === "[" || c === "{" || c === "<") depth += 1;
-		if (c === ")" || c === "]" || c === "}" || c === ">") depth -= 1;
-		if (depth === 0 && text.slice(i, i + keyword.length) === keyword) return i;
+		if (c == "(" || c == "[" || c == "{" || c == "<") depth += 1;
+		if (c == ")" || c == "]" || c == "}" || c == ">") depth -= 1;
+		if (depth == 0 && text.slice(i, i + keyword.length) == keyword) return i;
 	}
 	return -1;
 }
@@ -50,9 +50,9 @@ function findTopLevelChar(text: string, ch: string): number {
 	let depth = 0;
 	for (let i = 0; i < text.length; i += 1) {
 		const c = text.charAt(i);
-		if (c === "(" || c === "[" || c === "{" || c === "<") depth += 1;
-		if (c === ")" || c === "]" || c === "}" || c === ">") depth -= 1;
-		if (depth === 0 && c === ch) return i;
+		if (c == "(" || c == "[" || c == "{" || c == "<") depth += 1;
+		if (c == ")" || c == "]" || c == "}" || c == ">") depth -= 1;
+		if (depth == 0 && c == ch) return i;
 	}
 	return -1;
 }
@@ -63,10 +63,10 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	let closeIdx = -1;
 	for (let i = 0; i < text.length; i += 1) {
 		const c = text.charAt(i);
-		if (c === "(") depth += 1;
-		if (c === ")") {
+		if (c == "(") depth += 1;
+		if (c == ")") {
 			depth -= 1;
-			if (depth === 0) { closeIdx = i; break; }
+			if (depth == 0) { closeIdx = i; break; }
 		}
 	}
 	if (closeIdx < 0) return inferredType();
@@ -74,13 +74,13 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	const paramsStr = text.slice(1, closeIdx).trim();
 	const afterParen = text.slice(closeIdx + 1, text.length).trim();
 	if (afterParen.length < 2) return inferredType();
-	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return inferredType();
+	if (afterParen.charAt(0) != "=" || afterParen.charAt(1) != ">") return inferredType();
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
-	const returnType = (retStr !== "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
+	const returnType = (retStr != "") ? resolveReturnAnnotation(retStr, ctx, line, col) : voidType();
 
 	// Standard reference parity: procedure type literals default to closure calling convention
-	if (paramsStr === "") return createClosureType([], [], returnType);
+	if (paramsStr == "") return createClosureType([], [], returnType);
 
 	const paramParts = splitTopLevel(paramsStr, ",");
 	const paramTypes: Type[] = [];
@@ -103,16 +103,16 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 // Used by field-merging paths (interface/struct extends, type alias intersection).
 function unwrapToStruct(t: Type): Type {
 	let s = t;
-	if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
-	if (s.kind === TypeKind.GenericInstance && s.typeReturn !== null) {
+	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	if (s.kind == TypeKind.GenericInstance && s.typeReturn != null) {
 		s = s.typeReturn;
-		if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
+		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
 	}
 	return s;
 }
 
 function isLiteralTypeKind(k: TypeKind): boolean {
-	return k === TypeKind.StringLiteral || k === TypeKind.BooleanLiteral || k === TypeKind.EnumLiteral;
+	return k == TypeKind.StringLiteral || k == TypeKind.BooleanLiteral || k == TypeKind.EnumLiteral;
 }
 
 // TS branded primitive: one primitive base + object operand(s) whose fields are
@@ -123,20 +123,20 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 	const pairs: string[] = [];
 	for (const op of operandTypes) {
 		const s = unwrapToStruct(op);
-		if (s.kind === TypeKind.Struct) {
-			if (s.typeNames === null || s.typeNames.length === 0) return null;
+		if (s.kind == TypeKind.Struct) {
+			if (s.typeNames == null || s.typeNames.length == 0) return null;
 			for (let fi = 0; fi < s.typeNames.length; fi += 1) {
 				const ft = s.typeChildren[fi];
-				if (ft === null || !isLiteralTypeKind(ft.kind)) return null;
+				if (ft == null || !isLiteralTypeKind(ft.kind)) return null;
 				pairs.push(s.typeNames[fi] + ":" + typeDisplayName(ft));
 			}
 		} else {
-			if (base !== null) return null;
-			if (!(isNumeric(s) || s.kind === TypeKind.String || s.kind === TypeKind.Boolean || s.kind === TypeKind.Char)) return null;
+			if (base != null) return null;
+			if (!(isNumeric(s) || s.kind == TypeKind.String || s.kind == TypeKind.Boolean || s.kind == TypeKind.Char)) return null;
 			base = op;
 		}
 	}
-	if (base === null || pairs.length === 0) return null;
+	if (base == null || pairs.length == 0) return null;
 	for (let i = 1; i < pairs.length; i += 1) {
 		const p = pairs[i];
 		let j = i - 1;
@@ -145,7 +145,7 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 	}
 	let brandKey = "";
 	for (const pr of pairs) {
-		brandKey = brandKey.length === 0 ? pr : brandKey + "&" + pr;
+		brandKey = brandKey.length == 0 ? pr : brandKey + "&" + pr;
 	}
 	return createBrandDistinct(brandKey, base);
 }
@@ -155,12 +155,12 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 // into error message so user sees which parent / intersection operand introduced
 // the colliding field.
 function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32): void {
-	if (operandStruct.typeNames === null || operandStruct.typeChildren === null) return;
+	if (operandStruct.typeNames == null || operandStruct.typeChildren == null) return;
 	for (let pi = 0; pi < operandStruct.typeNames.length; pi += 1) {
 		const fname = operandStruct.typeNames[pi];
 		let collided = false;
 		for (const existingName of accumNames) {
-			if (existingName === fname) {
+			if (existingName == fname) {
 				addError(ctx, "field '" + fname + "' from '" + operandLabel + "' collides with previously merged field", line, col);
 				collided = true;
 				break;
@@ -179,13 +179,13 @@ function appendStructFields(operandStruct: Type, operandLabel: string, accumName
 let inferScope: string[] = [];
 
 function inferScopeHas(name: string): boolean {
-	for (const n of inferScope) { if (n === name) return true; }
+	for (const n of inferScope) { if (n == name) return true; }
 	return false;
 }
 
 function collectInferParamNames(t: Type | null, acc: string[]): void {
-	if (t === null) return;
-	if (t.kind === TypeKind.GenericParam) { acc.push(t.typeName); return; }
+	if (t == null) return;
+	if (t.kind == TypeKind.GenericParam) { acc.push(t.typeName); return; }
 	for (const c of t.typeChildren) collectInferParamNames(c, acc);
 	collectInferParamNames(t.typeReturn, acc);
 }
@@ -195,15 +195,15 @@ function collectInferParamNames(t: Type | null, acc: string[]): void {
 // itself), so the key has to be the line, not the position.
 function warnOncePerLine(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	for (const e of ctx.errors) {
-		if (e.line === line && e.message === msg) return;
+		if (e.line == line && e.message == msg) return;
 	}
 	addWarning(ctx, msg, line, col);
 }
 
 export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	const t = resolveAnnotation(text, ctx, line, col);
-	if (t.kind === TypeKind.Span) {
-		const elem = t.typeReturn !== null ? typeDisplayName(t.typeReturn) : "T";
+	if (t.kind == TypeKind.Span) {
+		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
 	}
 	return t;
@@ -211,12 +211,12 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
-	if (trimmed === "") return inferredType();
+	if (trimmed == "") return inferredType();
 	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
 	// `(T | null)`, `(A & B)`, etc. — needed when `(...)` surrounds the type before an array
 	// suffix `[]` strips down to the parenthesised form. Without this, splitTopLevel("|") sees
 	// `|` inside parens (depth > 0) and skips union detection.
-	while (trimmed.length >= 2 && trimmed.charAt(0) === "(" && trimmed.charAt(trimmed.length - 1) === ")") {
+	while (trimmed.length >= 2 && trimmed.charAt(0) == "(" && trimmed.charAt(trimmed.length - 1) == ")") {
 		// Verify the outer parens match (depth returns to 0 only at the final char) AND that
 		// this isn't a function type form `(params) => ret` (those reach the `=>` branch below).
 		let depth = 0;
@@ -224,13 +224,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		let isFnForm = false;
 		for (let i = 0; i < trimmed.length; i += 1) {
 			const c = trimmed.charAt(i);
-			if (c === "(") depth = depth + 1;
-			if (c === ")") {
+			if (c == "(") depth = depth + 1;
+			if (c == ")") {
 				depth = depth - 1;
-				if (depth === 0 && i < trimmed.length - 1) {
+				if (depth == 0 && i < trimmed.length - 1) {
 					closesAtEnd = false;
 					const after = trimmed.slice(i + 1, trimmed.length).trim();
-					if (after.length >= 2 && after.charAt(0) === "=" && after.charAt(1) === ">") isFnForm = true;
+					if (after.length >= 2 && after.charAt(0) == "=" && after.charAt(1) == ">") isFnForm = true;
 					break;
 				}
 			}
@@ -240,26 +240,26 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	}
 
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
-	if (trimmed.length > 6 && trimmed.slice(0, 6) === "infer ") {
+	if (trimmed.length > 6 && trimmed.slice(0, 6) == "infer ") {
 		const inferName = trimmed.slice(6, trimmed.length).trim();
-		if (inferName !== "") return createGenericParam(inferName);
+		if (inferName != "") return createGenericParam(inferName);
 	}
 
 	// Function type: (params) => returnType
-	if (trimmed.length > 0 && trimmed.charAt(0) === "(") {
+	if (trimmed.length > 0 && trimmed.charAt(0) == "(") {
 		let fnDepth = 0;
 		let fnCloseIdx = -1;
 		for (let i = 0; i < trimmed.length; i += 1) {
 			const c = trimmed.charAt(i);
-			if (c === "(") fnDepth += 1;
-			if (c === ")") {
+			if (c == "(") fnDepth += 1;
+			if (c == ")") {
 				fnDepth -= 1;
-				if (fnDepth === 0) { fnCloseIdx = i; break; }
+				if (fnDepth == 0) { fnCloseIdx = i; break; }
 			}
 		}
 		if (fnCloseIdx >= 0) {
 			const afterClose = trimmed.slice(fnCloseIdx + 1, trimmed.length).trim();
-			if (afterClose.length >= 2 && afterClose.charAt(0) === "=" && afterClose.charAt(1) === ">") {
+			if (afterClose.length >= 2 && afterClose.charAt(0) == "=" && afterClose.charAt(1) == ">") {
 				return resolveFunctionType(trimmed, ctx, line, col);
 			}
 		}
@@ -313,11 +313,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		let allObjectLike = true;
 		for (const ip of intersectionParts) {
 			const part = ip.trim();
-			if (part.length === 0) continue;
+			if (part.length == 0) continue;
 			const opType = resolveAnnotation(part, ctx, line, col);
 			operandTypes.push(opType);
 			operandLabels.push(part);
-			if (unwrapToStruct(opType).kind !== TypeKind.Struct) {
+			if (unwrapToStruct(opType).kind != TypeKind.Struct) {
 				allObjectLike = false;
 			}
 		}
@@ -331,7 +331,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		}
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
-			if (brand !== null) return brand;
+			if (brand != null) return brand;
 		}
 		// Erasure tier (non-brand mix): first operand wins. S2 (TSGAP item 5)
 		// replaces this silent collapse with a hard error.
@@ -356,11 +356,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		// collapses them to bare pointer at emit time (the null pointer IS the sentinel),
 		// while the type checker keeps the union so flow narrowing can distinguish
 		// `Foo` from `Foo | null`.
-		if (members.length === 2) {
-			if (isMaybeWrappable(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
+		if (members.length == 2) {
+			if (isMaybeWrappable(members[0]) && members[1] != null && members[1].kind == TypeKind.Null) {
 				return createMaybeType(members[0]);
 			}
-			if (members[0] !== null && members[0].kind === TypeKind.Null && isMaybeWrappable(members[1])) {
+			if (members[0] != null && members[0].kind == TypeKind.Null && isMaybeWrappable(members[1])) {
 				return createMaybeType(members[1]);
 			}
 		}
@@ -373,8 +373,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			let sawNull = false;
 			const nonNull: Type[] = [];
 			for (const m of members) {
-				if (m !== null && m.kind === TypeKind.Null) { sawNull = true; }
-				else if (m !== null) { nonNull.push(m); }
+				if (m != null && m.kind == TypeKind.Null) { sawNull = true; }
+				else if (m != null) { nonNull.push(m); }
 			}
 			if (sawNull && nonNull.length >= 2) {
 				let allPrim = true;
@@ -388,28 +388,28 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	}
 
 	// String literal type: "north" → StringLiteral("north") (TypeScript parity)
-	if (trimmed.length >= 2 && trimmed.charAt(0) === "\"" && trimmed.charAt(trimmed.length - 1) === "\"") {
+	if (trimmed.length >= 2 && trimmed.charAt(0) == "\"" && trimmed.charAt(trimmed.length - 1) == "\"") {
 		return createStringLiteral(trimmed.slice(1, trimmed.length - 1));
 	}
 
 	// Boolean literal type: `true` / `false` → BooleanLiteral (TypeScript parity)
 	// Required for discriminated union narrowing on boolean discriminants
 	// (e.g. `type Result<T,E> = { ok: true, value: T } | { ok: false, error: E }`).
-	if (trimmed === "true") return createBooleanLiteral(true);
-	if (trimmed === "false") return createBooleanLiteral(false);
+	if (trimmed == "true") return createBooleanLiteral(true);
+	if (trimmed == "false") return createBooleanLiteral(false);
 
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
 	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>.
 	// Ordered `Map` is the target (not HashMap) because JS object literals preserve
 	// insertion order — the semantic match for `{ [key: K]: V }` sugar.
-	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
+	if (trimmed.charAt(0) == "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
-		if (inner === "") return createStruct("", [], [], true);
+		if (inner == "") return createStruct("", [], [], true);
 
 		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V> (ordered).
 		// After normalization, both syntaxes produce identical Type structs.
 		// See docs/PACKAGE.md and the index signature impl plan.
-		if (inner.charAt(0) === "[") {
+		if (inner.charAt(0) == "[") {
 			// Find the BALANCED closing `]` — the key type may contain its own
 			// brackets (e.g. `{ [key: number[]]: V }`), so a naive findChar("]")
 			// would stop at the wrong bracket.
@@ -418,10 +418,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			let bi = 0;
 			while (bi < inner.length) {
 				const c = inner.charAt(bi);
-				if (c === "[") { bracketDepth = bracketDepth + 1; }
-				else if (c === "]") {
+				if (c == "[") { bracketDepth = bracketDepth + 1; }
+				else if (c == "]") {
 					bracketDepth = bracketDepth - 1;
-					if (bracketDepth === 0) { closeBracket = bi; bi = inner.length; }
+					if (bracketDepth == 0) { closeBracket = bi; bi = inner.length; }
 				}
 				bi = bi + 1;
 			}
@@ -433,12 +433,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 					// Everything after `]` should be `: V` (with optional trailing ;)
 					let afterBracket = inner.slice(closeBracket + 1, inner.length).trim();
 					// Strip trailing semicolon(s)
-					while (afterBracket.length > 0 && afterBracket.charAt(afterBracket.length - 1) === ";") {
+					while (afterBracket.length > 0 && afterBracket.charAt(afterBracket.length - 1) == ";") {
 						afterBracket = afterBracket.slice(0, afterBracket.length - 1).trim();
 					}
-					if (afterBracket.length > 0 && afterBracket.charAt(0) === ":") {
+					if (afterBracket.length > 0 && afterBracket.charAt(0) == ":") {
 						const valueType = afterBracket.slice(1, afterBracket.length).trim();
-						if (keyType !== "" && valueType !== "") {
+						if (keyType != "" && valueType != "") {
 							// Rewrite to Map<K, V> (ordered) and recurse — reuses all generic resolution.
 							const mapAnnotation = "Map<" + keyType + ", " + valueType + ">";
 							return resolveAnnotation(mapAnnotation, ctx, line, col);
@@ -455,7 +455,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const types: Type[] = [];
 		for (const f of fields) {
 			const field = f.trim();
-			if (field !== "") {
+			if (field != "") {
 				const colonIdx = findChar(field, ":");
 				if (colonIdx > 0) {
 					let fname = field.slice(0, colonIdx).trim();
@@ -476,16 +476,16 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 
 	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
 	// This is checked BEFORE array suffixes because those forms have a base type before the `[`.
-	if (trimmed.charAt(0) === "[" && trimmed.endsWith("]")) {
+	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]")) {
 		const tupleInner = trimmed.slice(1, trimmed.length - 1).trim();
-		if (tupleInner !== "") {
+		if (tupleInner != "") {
 			const elements = splitTopLevel(tupleInner, ",");
 			// Single element with no comma is ambiguous with `[N]` size, but standalone
 			// `[N]` isn't valid TS — we treat it as a 1-element tuple. `[T]` works.
 			const tupleTypes: Type[] = [];
 			for (const e of elements) {
 				const t = e.trim();
-				if (t !== "") tupleTypes.push(resolveAnnotation(t, ctx, line, col));
+				if (t != "") tupleTypes.push(resolveAnnotation(t, ctx, line, col));
 			}
 			if (tupleTypes.length > 0) return createTuple(tupleTypes);
 		}
@@ -505,7 +505,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		if (openBracket > 0) {
 			const inner = trimmed.slice(0, openBracket).trim();
 			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
-			if (sizeStr === "" || sizeStr === " ") {
+			if (sizeStr == "" || sizeStr == " ") {
 				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
 			const size = parseIntStr(sizeStr) as int32;
@@ -520,48 +520,48 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 		const args = splitTopLevel(argsText, ",");
 
-		if (baseName === "Result" && args.length === 2) {
+		if (baseName == "Result" && args.length == 2) {
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
-		if (baseName === "Promise" && args.length === 1) {
+		if (baseName == "Promise" && args.length == 1) {
 			return createPromise(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Iterator" && args.length === 1) {
+		if (baseName == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Array" && args.length === 1) {
+		if (baseName == "Array" && args.length == 1) {
 			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
 		}
-		if (baseName === "Vec" && args.length === 1) {
+		if (baseName == "Vec" && args.length == 1) {
 			return createArray(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Span" && args.length === 1) {
+		if (baseName == "Span" && args.length == 1) {
 			return createSpan(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Borrow" && args.length === 1) {
+		if (baseName == "Borrow" && args.length == 1) {
 			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Ptr" && args.length === 1) {
+		if (baseName == "Ptr" && args.length == 1) {
 			return createPtr(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Cursor" && args.length === 1) {
+		if (baseName == "Cursor" && args.length == 1) {
 			return createCursor(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Ref" && args.length === 1) {
+		if (baseName == "Ref" && args.length == 1) {
 			return createRef(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Arc" && args.length === 1) {
+		if (baseName == "Arc" && args.length == 1) {
 			return createArc(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Locked" && args.length === 1) {
+		if (baseName == "Locked" && args.length == 1) {
 			return createLocked(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName === "Var" && args.length === 1) {
+		if (baseName == "Var" && args.length == 1) {
 			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericParams = getGenericDecl(baseName);
-		if (genericParams !== "") {
+		if (genericParams != "") {
 			// Check if ALL args are generic params of the enclosing function.
 			// If so, preserve as generic type (don't instantiate).
 			// e.g. inside set<K,V>(this m: HashMap<K,V>), HashMap<K,V> stays generic.
@@ -570,18 +570,18 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			for (const arg of args) {
 				const resolved = resolveAnnotation(arg.trim(), ctx, line, col);
 				resolvedArgs.push(resolved);
-				if (resolved.kind !== TypeKind.GenericParam) allGenericParams = false;
+				if (resolved.kind != TypeKind.GenericParam) allGenericParams = false;
 			}
 			if (allGenericParams && resolvedArgs.length > 0) {
 				// Return GenericInstance with GenericParam type args.
 				// This preserves hasGenericParams for unification + enables structural matching.
 				const baseSym = lookupSymbol(ctx.table, baseName);
-				if (baseSym !== null) {
+				if (baseSym != null) {
 					markUsed(baseSym);
 					ensureShaped(baseSym, ctx);
-					const isRefBase = baseSym.symbolType.kind === TypeKind.Ref;
+					const isRefBase = baseSym.symbolType.kind == TypeKind.Ref;
 					let baseType = baseSym.symbolType;
-					if (isRefBase && baseType.typeReturn !== null) baseType = baseType.typeReturn;
+					if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
 					gi1.typeName = baseName;
 					instantiateGenericBody(gi1, genericParams);
@@ -596,12 +596,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			recordGenericTypeInstantiation(baseName, genericParams, args, ctx);
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
-			if (baseSym2 !== null) {
+			if (baseSym2 != null) {
 				markUsed(baseSym2);
 				ensureShaped(baseSym2, ctx);
-				const isRefBase2 = baseSym2.symbolType.kind === TypeKind.Ref;
+				const isRefBase2 = baseSym2.symbolType.kind == TypeKind.Ref;
 				let baseType2 = baseSym2.symbolType;
-				if (isRefBase2 && baseType2.typeReturn !== null) baseType2 = baseType2.typeReturn;
+				if (isRefBase2 && baseType2.typeReturn != null) baseType2 = baseType2.typeReturn;
 				const resolvedArgs: Type[] = [];
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
@@ -618,7 +618,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 						const constraintType = resolveAnnotation(constraintName, ctx, line, col);
 						if (!isUnresolvedType(constraintType)
 								&& !isUnresolvedType(resolvedArgs[ci])
-								&& resolvedArgs[ci].kind !== TypeKind.GenericParam
+								&& resolvedArgs[ci].kind != TypeKind.GenericParam
 								&& !isAssignableCheck(resolvedArgs[ci], constraintType)) {
 							const paramName = paramStr.slice(0, colonPos).trim();
 							addError(ctx, `Type '${typeDisplayName(resolvedArgs[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
@@ -637,7 +637,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		}
 		// Non-generic: look up base type
 		const baseSym = lookupSymbol(ctx.table, baseName);
-		if (baseSym !== null) {
+		if (baseSym != null) {
 			markUsed(baseSym);
 			// Demand-driven resolution: ensure the base symbol is shaped before using its type
 			ensureShaped(baseSym, ctx);
@@ -657,21 +657,21 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	if (!hasCompoundToken && trimmed.indexOf(".") >= 0) {
 		let lastDot = -1;
 		for (let i = 0; i < trimmed.length; i += 1) {
-			if (trimmed.charAt(i) === ".") lastDot = i;
+			if (trimmed.charAt(i) == ".") lastDot = i;
 		}
 		if (lastDot > 0 && lastDot < trimmed.length - 1) {
 			const enumName = trimmed.slice(0, lastDot).trim();
 			const memberName = trimmed.slice(lastDot + 1, trimmed.length).trim();
-			if (enumName !== "" && memberName !== "") {
+			if (enumName != "" && memberName != "") {
 				const enumSym = lookupSymbol(ctx.table, enumName);
-				if (enumSym !== null && enumSym.symbolType !== null && enumSym.symbolType.kind === TypeKind.Enum) {
+				if (enumSym != null && enumSym.symbolType != null && enumSym.symbolType.kind == TypeKind.Enum) {
 					markUsed(enumSym);
 					ensureShaped(enumSym, ctx);
 					const enumType = enumSym.symbolType;
 					// Verify member exists
 					let found = false;
 					for (const m of enumType.typeNames) {
-						if (m === memberName) { found = true; break; }
+						if (m == memberName) { found = true; break; }
 					}
 					if (found) return createEnumLiteral(enumType, memberName);
 					if (line > 0) {
@@ -718,7 +718,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"cstring" => cstringType(),
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
-			if (sym !== null) {
+			if (sym != null) {
 				markUsed(sym);
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
@@ -739,10 +739,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 // When line > 0, a located diagnostic is emitted. When line === 0 (inference-time),
 // no error — the caller doesn't have source location.
 function isValidTypeIdentifier(name: string): boolean {
-	if (name.length === 0) return false;
+	if (name.length == 0) return false;
 	const ch0 = name.charAt(0);
 	// String literals, quoted names, numbers — not type identifiers
-	if (ch0 === "\"" || ch0 === "'" || (ch0 >= "0" && ch0 <= "9")) return false;
+	if (ch0 == "\"" || ch0 == "'" || (ch0 >= "0" && ch0 <= "9")) return false;
 	// Names with dashes or spaces — string literal union members (parser strips quotes)
 	if (name.indexOf("-") >= 0 || name.indexOf(" ") >= 0) return false;
 	return true;
@@ -751,7 +751,7 @@ function isValidTypeIdentifier(name: string): boolean {
 function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, col: int32, mangledName: string): Type {
 	if (line > 0 && isValidTypeIdentifier(name)
 			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
-			&& name !== "unknown" && name !== "never") {
+			&& name != "unknown" && name != "never") {
 		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
@@ -771,12 +771,12 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 // This is purely additive: records symbol positions for LSP hover/goto-def.
 
 export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			const sym = lookupSymbol(ctx.table, d.name);
-			if (sym !== null) {
+			if (sym != null) {
 				sgRecordSym(ctx, node.location.line, node.location.column,
 					node.location.column + d.name.length,
 					sym, sym.symbolType, sym.symbolKind, d.name, "", false);
@@ -821,8 +821,8 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 				resolveTypeExpr(ft, ctx);
 			}
 			// Index signature (for LSP symbol recording): walk key and value types too
-			if (d.typExprIndexKey !== null) { resolveTypeExpr(d.typExprIndexKey, ctx); }
-			if (d.typExprIndexValue !== null) { resolveTypeExpr(d.typExprIndexValue, ctx); }
+			if (d.typExprIndexKey != null) { resolveTypeExpr(d.typExprIndexKey, ctx); }
+			if (d.typExprIndexValue != null) { resolveTypeExpr(d.typExprIndexValue, ctx); }
 		},
 		NodeKind.MemberExpr => {
 			// Tier 1: enum literal type position — `K.A` produces a MemberExpr.
@@ -830,10 +830,10 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 			// can offer hover/goto-def for both the enum and its specific member.
 			const md = node.data as MemberExprData;
 			resolveTypeExpr(md.object, ctx);
-			if (md.object !== null && md.object.kind === NodeKind.Identifier) {
+			if (md.object != null && md.object.kind == NodeKind.Identifier) {
 				const enumName = (md.object.data as IdentifierData).name;
 				const enumSym = lookupSymbol(ctx.table, enumName);
-				if (enumSym !== null && enumSym.symbolType !== null && enumSym.symbolType.kind === TypeKind.Enum) {
+				if (enumSym != null && enumSym.symbolType != null && enumSym.symbolType.kind == TypeKind.Enum) {
 					// Record the member position. The dot is 1 column wide.
 					const memberCol = md.object.location.column + enumName.length + 1;
 					const memberSym = makeSymbol(md.property, SymbolKind.EnumMember, enumSym.symbolType, false);
@@ -857,9 +857,9 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 // Resolve all TypeExpr nodes in a type annotation array (params, fields).
 // Null-safe: skips null arrays and null entries.
 export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerContext): void {
-	if (exprs === null) return;
+	if (exprs == null) return;
 	for (const te of exprs) {
-		if (te === null) continue;
+		if (te == null) continue;
 		resolveTypeExpr(te, ctx);
 	}
 }
@@ -867,7 +867,7 @@ export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerCont
 // ===== Demand-Driven Shaping (Implementation parity) =====
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
-	if (sym.state === SymbolState.Shaped || sym.state === SymbolState.Checked) {
+	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checked) {
 		// A primary can reach Shaped BEFORE later overloads are appended to it:
 		// one scope shared by several modules (the prelude context) resolves
 		// `set` when the FIRST module declaring it is resolved, and every later
@@ -880,11 +880,11 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		drainOverloads(sym, ctx);
 		return;
 	}
-	if (sym.state === SymbolState.Shaping) {
+	if (sym.state == SymbolState.Shaping) {
 		// Type aliases allow circular references (e.g. DocData refs Doc, Doc refs DocData).
 		// Standard reference implementation handles this via multi-pass type sections. We silently return —
 		// callers must handle sym.symbolType still being Unknown.
-		if (sym.symbolKind !== SymbolKind.TypeAlias) {
+		if (sym.symbolKind != SymbolKind.TypeAlias) {
 			addError(ctx, `Circular dependency detected while resolving '${sym.name}'`, sym.location.line, sym.location.column);
 		}
 		return;
@@ -892,7 +892,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 
 	sym.state = SymbolState.Shaping;
 	const node = sym.declNode;
-	if (node !== null) {
+	if (node != null) {
 		match (node.kind) {
 			NodeKind.FunctionDecl => resolveFunction(ctx, node),
 			NodeKind.InterfaceDecl => resolveInterface(ctx, node),
@@ -907,12 +907,12 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	}
 	sym.state = SymbolState.Shaped;
 
-	if (node !== null && sym.modulePath !== ""
-		&& (node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.StructDecl
-			|| node.kind === NodeKind.ClassDecl || node.kind === NodeKind.TypeAliasDecl)) {
+	if (node != null && sym.modulePath != ""
+		&& (node.kind == NodeKind.InterfaceDecl || node.kind == NodeKind.StructDecl
+			|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.TypeAliasDecl)) {
 		let st = sym.symbolType;
-		if (st !== null && st.kind === TypeKind.Ref && st.typeReturn !== null) st = st.typeReturn;
-		if (st !== null && st.kind === TypeKind.Struct && st.typeNames !== null && st.typeNames.length > 0) {
+		if (st != null && st.kind == TypeKind.Ref && st.typeReturn != null) st = st.typeReturn;
+		if (st != null && st.kind == TypeKind.Struct && st.typeNames != null && st.typeNames.length > 0) {
 			recordGlobalTypeShape(sym.name, st.typeNames.join(","), sym.modulePath);
 		}
 	}
@@ -925,7 +925,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 // early-return above can run it too — see the comment there.
 function drainOverloads(sym: Symbol, ctx: CheckerContext): void {
 	for (const ov of sym.overloads) {
-		if (ov.state === SymbolState.Hollow) ensureShaped(ov, ctx);
+		if (ov.state == SymbolState.Hollow) ensureShaped(ov, ctx);
 	}
 }
 
@@ -948,7 +948,7 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + "_";
 		const trimmed = args[i].trim();
-		const resolved = trimmed !== "" ? resolveAnnotation(trimmed, ctx, 0, 0) : inferredType();
+		const resolved = trimmed != "" ? resolveAnnotation(trimmed, ctx, 0, 0) : inferredType();
 		const canonical = !isUnresolvedType(resolved) ? monoTypeKey(resolved) : trimmed;
 		key = key + canonical;
 	}
@@ -959,7 +959,7 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 // Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
 function findGenericParamIdx(rawType: string, paramNames: string[]): number {
 	for (let i = 0; i < paramNames.length; i += 1) {
-		if (paramNames[i].trim() === rawType) return i;
+		if (paramNames[i].trim() == rawType) return i;
 	}
 	return -1;
 }
@@ -973,7 +973,7 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 		if (i >= args.length) break;
 		const pname = paramNames[i].trim();
 		const arg = args[i].trim();
-		if (pname === "") continue;
+		if (pname == "") continue;
 		// Replace whole-identifier occurrences of pname with arg
 		let buf = "";
 		let pos = 0;
@@ -982,12 +982,12 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 			let matched = false;
 			if (pos + pname.length <= result.length) {
 				const slice = result.slice(pos, pos + pname.length);
-				if (slice === pname) {
+				if (slice == pname) {
 					// Check boundaries: char before and after must not be alphanumeric/underscore
 					const before = pos > 0 ? result.charAt(pos - 1) : " ";
 					const after = pos + pname.length < result.length ? result.charAt(pos + pname.length) : " ";
-					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before === "_";
-					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after === "_";
+					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before == "_";
+					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after == "_";
 					if (!isWordBefore && !isWordAfter) {
 						buf = buf + arg;
 						pos = pos + pname.length;
@@ -1017,7 +1017,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 	const fieldNamesStr = getGenericDeclFieldNames(baseName);
 	const fieldTypesStr = getGenericDeclFieldTypes(baseName);
 
-	if (fieldNamesStr === "") {
+	if (fieldNamesStr == "") {
 		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
 		return;
 	}
@@ -1027,7 +1027,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 	const fnParts = splitTopLevel(fieldNamesStr, "|");
 	const ftParts = splitTopLevel(fieldTypesStr, "|");
 
-	if (fnParts.length === 0) {
+	if (fnParts.length == 0) {
 		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
 		return;
 	}
@@ -1055,7 +1055,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
-		if (i < typeStrs.length && typeStrs[i] !== "") {
+		if (i < typeStrs.length && typeStrs[i] != "") {
 			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
 		} else {
 			types.push(inferredType());
@@ -1092,20 +1092,20 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): void 
 // their annotations here so member and symbol types are real before codegen.
 export function resolveAttachedStatics(ctx: CheckerContext, sym: Symbol): void {
 	for (const sf of sym.staticFields) {
-		if (sf.state === SymbolState.Shaped || sf.state === SymbolState.Checked) continue;
+		if (sf.state == SymbolState.Shaped || sf.state == SymbolState.Checked) continue;
 		const member = sf.declNode;
-		if (member === null) continue;
+		if (member == null) continue;
 		const pd = member.data as PropertyDeclData;
-		const staticType = pd.propType !== ""
+		const staticType = pd.propType != ""
 			? resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column)
 			: createPrimitive(TypeKind.Float64);
 		member.nodeType = staticType;
 		sf.symbolType = staticType;
 		sf.state = SymbolState.Shaped;
-		if (pd.propInitializer !== null
-				&& (pd.propInitializer.nodeType === null
-					|| pd.propInitializer.nodeType.kind === TypeKind.None
-					|| pd.propInitializer.nodeType.kind === TypeKind.Inferred)) {
+		if (pd.propInitializer != null
+				&& (pd.propInitializer.nodeType == null
+					|| pd.propInitializer.nodeType.kind == TypeKind.None
+					|| pd.propInitializer.nodeType.kind == TypeKind.Inferred)) {
 			pd.propInitializer.nodeType = staticType;
 		}
 	}
@@ -1115,28 +1115,28 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		const name = getDeclName(stmt);
-		if (name !== "") {
+		if (name != "") {
 			const sym = lookupSymbol(ctx.table, name);
-			if (sym !== null) {
+			if (sym != null) {
 				ensureShaped(sym, ctx);
 				if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
 			}
-		} else if (stmt.kind === NodeKind.ExportDecl) {
+		} else if (stmt.kind == NodeKind.ExportDecl) {
 			const d = stmt.data as ExportDeclData;
 			const innerName = getDeclName(d.exportedDecl);
-			if (innerName !== "") {
+			if (innerName != "") {
 				const sym = lookupSymbol(ctx.table, innerName);
-				if (sym !== null) {
+				if (sym != null) {
 					ensureShaped(sym, ctx);
 					if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
 				}
 			}
-		} else if (stmt.kind === NodeKind.DecoratedDecl) {
+		} else if (stmt.kind == NodeKind.DecoratedDecl) {
 			const dd = stmt.data as DecoratedDeclData;
 			const innerName = getDeclName(dd.decoratedNode);
-			if (innerName !== "") {
+			if (innerName != "") {
 				const sym = lookupSymbol(ctx.table, innerName);
-				if (sym !== null) {
+				if (sym != null) {
 					ensureShaped(sym, ctx);
 					if (sym.staticFields.length > 0) resolveAttachedStatics(ctx, sym);
 				}
@@ -1159,16 +1159,16 @@ function findPredicateInfix(text: string): int32 {
 	const idxSp = findChar(text, " ");
 	if (idxSp <= 0) return -1;
 	if (idxSp + 3 >= text.length) return -1;
-	if (text.charAt(idxSp + 1) !== "i") return -1;
-	if (text.charAt(idxSp + 2) !== "s") return -1;
-	if (text.charAt(idxSp + 3) !== " ") return -1;
+	if (text.charAt(idxSp + 1) != "i") return -1;
+	if (text.charAt(idxSp + 2) != "s") return -1;
+	if (text.charAt(idxSp + 3) != " ") return -1;
 	// Prefix must be a bare identifier (letters/digits/underscore).
 	let i: int32 = 0;
 	while (i < idxSp) {
 		const c = text.charAt(i);
 		const isLetter = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
 		const isDigit = c >= "0" && c <= "9";
-		const isUnder = c === "_";
+		const isUnder = c == "_";
 		if (!isLetter && !isDigit && !isUnder) return -1;
 		i = i + 1;
 	}
@@ -1179,9 +1179,9 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
 	let sym = node.resolvedSym;
-	if (sym === null) {
+	if (sym == null) {
 		sym = lookupSymbol(ctx.table, d.fnName);
-		if (sym === null) return;
+		if (sym == null) return;
 		node.resolvedSym = sym;
 	}
 
@@ -1203,12 +1203,12 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
-	if (d.fnFlags !== "" && (d.fnFlags.indexOf("out:") >= 0 || d.fnFlags.indexOf("ref:") >= 0)) {
+	if (d.fnFlags != "" && (d.fnFlags.indexOf("out:") >= 0 || d.fnFlags.indexOf("ref:") >= 0)) {
 		const flagParts = splitTopLevel(d.fnFlags, "|");
 		for (const fp of flagParts) {
 			const trimFp = fp.trim();
-			if ((trimFp.length > 4 && trimFp.slice(0, 4) === "out:") ||
-				(trimFp.length > 4 && trimFp.slice(0, 4) === "ref:")) {
+			if ((trimFp.length > 4 && trimFp.slice(0, 4) == "out:") ||
+				(trimFp.length > 4 && trimFp.slice(0, 4) == "ref:")) {
 				const idxStr = trimFp.slice(4, trimFp.length);
 				const idxParts = splitTopLevel(idxStr, ",");
 				for (const ip of idxParts) {
@@ -1221,7 +1221,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const retLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
+	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
 	// (see captureOptionalType in parser/util.ms). Split once, resolve the
 	// target type, set the function's actual return type to `boolean`, and
@@ -1229,13 +1229,13 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// narrowType reads this to narrow callers in conditions.
 	let returnType: Type;
 	let predicateSentinel: Type | null = null;
-	if (d.fnReturnType !== "") {
+	if (d.fnReturnType != "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct
 		// sentinel marker ("asserts:" prefix on typeName).
 		let predSource = d.fnReturnType;
 		let isAssertion = false;
-		if (predSource.length > 8 && predSource.slice(0, 8) === "asserts ") {
+		if (predSource.length > 8 && predSource.slice(0, 8) == "asserts ") {
 			predSource = predSource.slice(8, predSource.length);
 			isAssertion = true;
 		}
@@ -1262,15 +1262,15 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
 	const fnType = createFunction(paramTypes, d.params, returnType);
-	if (predicateSentinel !== null) {
+	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
 	}
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
-	if (d.fnDefaults !== null) {
+	if (d.fnDefaults != null) {
 		for (const def of d.fnDefaults) {
-			if (def !== null) defCount = defCount + 1;
+			if (def != null) defCount = defCount + 1;
 		}
 	}
 	// Rest-ness is the type-level Varargs marker that createFunction installed.
@@ -1296,17 +1296,17 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				overload.declNode = node;
 				overload.state = SymbolState.Shaped;
 				// Copy defaults to overload sym for cross-module availability
-				if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
+				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
 				// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
 				const extTypeName2 = getExtTypeName(d.fnFlags);
-				if (extTypeName2 !== "" && ctx.extensionRegistry !== null) {
+				if (extTypeName2 != "" && ctx.extensionRegistry != null) {
 					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
-					if (ext2 !== null) {
+					if (ext2 != null) {
 						// Reference parity: sym is the single source of truth for the type.
 						// Only set fnType as fallback when sym is not available.
-						if (ext2.sym === null) {
+						if (ext2.sym == null) {
 							ext2.fnType = fnType;
 							ext2.sym = overload;
 						}
@@ -1320,17 +1320,17 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	sym.symbolType = fnType;
 	node.nodeType = fnType;
 	// Copy defaults to primary sym for cross-module availability
-	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
+	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
 	// Reference parity: sym is the single source of truth for the type.
 	// Only set fnType as fallback when sym is not available. Never store the same Type
 	// in both fnType and sym.symbolType — that causes double-decref on ExtensionMethod destruction.
 	const extTypeName = getExtTypeName(d.fnFlags);
-	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
+	if (extTypeName != "" && ctx.extensionRegistry != null) {
 		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
-		if (ext !== null) {
-			if (ext.sym === null) {
+		if (ext != null) {
+			if (ext.sym == null) {
 				ext.fnType = fnType;
 				ext.sym = sym;
 			}
@@ -1344,21 +1344,21 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
 	for (const v of visited) {
-		if (v === currentName) return "";
+		if (v == currentName) return "";
 	}
 	visited.push(currentName);
 	const sym = lookupSymbol(ctx.table, currentName);
-	if (sym === null || sym.declNode === null) return "";
-	if (sym.declNode.kind !== NodeKind.InterfaceDecl) return "";
+	if (sym == null || sym.declNode == null) return "";
+	if (sym.declNode.kind != NodeKind.InterfaceDecl) return "";
 	const pd = sym.declNode.data as InterfaceDeclData;
 	for (const parentExpr of pd.interfaceExtends) {
 		const bare = parentExpr.indexOf("<") >= 0
 			? parentExpr.slice(0, parentExpr.indexOf("<"))
 			: parentExpr;
 		const parentName = bare.trim();
-		if (parentName === targetName) return currentName + "' extends '" + targetName;
+		if (parentName == targetName) return currentName + "' extends '" + targetName;
 		const chain = interfaceCycleChain(ctx, parentName, targetName, visited);
-		if (chain !== "") return currentName + "' extends '" + chain;
+		if (chain != "") return currentName + "' extends '" + chain;
 	}
 	return "";
 }
@@ -1366,7 +1366,7 @@ function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetNam
 export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
-	if (sym === null) return;
+	if (sym == null) return;
 	node.resolvedSym = sym;
 
 	// Set state to Shaped immediately to allow circular references in fields
@@ -1375,13 +1375,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = getGenericDecl(d.interfaceName);
-	const hasGenerics = genericStr !== "";
+	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
 			const trimGp = gp.trim();
-			if (trimGp !== "") {
+			if (trimGp != "") {
 				defineGenericParam(ctx, trimGp);
 			}
 		}
@@ -1399,13 +1399,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		const bareParentName = parentExpr.indexOf("<") >= 0
 			? parentExpr.slice(0, parentExpr.indexOf("<"))
 			: parentExpr;
-		if (bareParentName.trim() === d.interfaceName) {
+		if (bareParentName.trim() == d.interfaceName) {
 			addError(ctx, "'" + d.interfaceName + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
 			parentTypes.push(errorType());
 			continue;
 		}
 		const cycleChain = interfaceCycleChain(ctx, bareParentName.trim(), d.interfaceName, []);
-		if (cycleChain !== "") {
+		if (cycleChain != "") {
 			addError(ctx, "'" + d.interfaceName + "' has a cyclic extends chain ('" + d.interfaceName + "' extends '" + cycleChain + "')", node.location.line, node.location.column);
 			parentTypes.push(errorType());
 			continue;
@@ -1427,13 +1427,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
 		const parentExpr = d.interfaceExtends[xi];
 		const pt = parentTypes[xi];
-		if (pt !== null && pt.kind === TypeKind.Error) continue;
-		if (pt === null || isUnresolvedType(pt)) {
+		if (pt != null && pt.kind == TypeKind.Error) continue;
+		if (pt == null || isUnresolvedType(pt)) {
 			addError(ctx, "cannot resolve parent type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;
 		}
 		const parentStruct = unwrapToStruct(pt);
-		if (parentStruct.kind !== TypeKind.Struct) {
+		if (parentStruct.kind != TypeKind.Struct) {
 			addError(ctx, "cannot extend non-object type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;
 		}
@@ -1444,7 +1444,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		const fname = d.interfaceFields[oi];
 		let collided = false;
 		for (const existingName of mergedNames) {
-			if (existingName === fname) {
+			if (existingName == fname) {
 				addError(ctx, "field '" + fname + "' redefines inherited field", node.location.line, node.location.column);
 				collided = true;
 				break;
@@ -1462,7 +1462,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// NOTE: only checks own fields (inherited fields can't reference child by name — they were resolved in parent's scope).
 	for (let fi = 0; fi < mergedTypes.length; fi += 1) {
 		const ft = mergedTypes[fi];
-		if (ft !== null && isStructType(ft) && ft.typeName === d.interfaceName) {
+		if (ft != null && isStructType(ft) && ft.typeName == d.interfaceName) {
 			mergedTypes[fi] = createRef(ft);
 			const fieldName = fi < mergedNames.length ? mergedNames[fi] : "?";
 			addError(ctx, "self-referential value field '" + fieldName + "' in '" + d.interfaceName + "' — a struct cannot contain itself by value (infinite size); use an interface/class (reference type), Ptr<" + d.interfaceName + ">, or an index into an owning array", node.location.line, 0);
@@ -1474,11 +1474,11 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let wi = 0; wi < d.interfaceFields.length; wi += 1) {
 		if (wi >= fieldTypes.length) break;
 		const wft = fieldTypes[wi];
-		if (wft !== null && wft.kind === TypeKind.Ref && wft.typeReturn !== null
-			&& wft.typeReturn.typeName === d.interfaceName) {
+		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
+			&& wft.typeReturn.typeName == d.interfaceName) {
 			let wLine = node.location.line;
 			let wCol = node.location.column;
-			if (node.paramLocations !== null && wi < node.paramLocations.length) {
+			if (node.paramLocations != null && wi < node.paramLocations.length) {
 				wLine = node.paramLocations[wi].line;
 				wCol = node.paramLocations[wi].column;
 			}
@@ -1489,7 +1489,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while sym still references them)
 	// For interface (Ref<Struct>), update the inner struct. For struct (plain Struct), update directly.
-	const target = sym.symbolType.kind === TypeKind.Ref ? unwrapRef(sym.symbolType) : sym.symbolType;
+	const target = sym.symbolType.kind == TypeKind.Ref ? unwrapRef(sym.symbolType) : sym.symbolType;
 	target.kind = TypeKind.Struct;
 	target.typeName = d.interfaceName;
 	target.typeNames = mergedNames;
@@ -1505,7 +1505,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		fieldSym.state = SymbolState.Shaped;
 		let fieldLine = node.location.line;
 		let fieldCol = node.location.column;
-		if (node.paramLocations !== null && ri < node.paramLocations.length) {
+		if (node.paramLocations != null && ri < node.paramLocations.length) {
 			const fl = node.paramLocations[ri];
 			fieldLine = fl.line;
 			fieldCol = fl.column;
@@ -1517,21 +1517,21 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
 	const sym = lookupSymbol(ctx.table, d.aliasName);
-	if (sym === null) return;
+	if (sym == null) return;
 	node.resolvedSym = sym;
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
 
-	if (d.aliasType === "" && d.discriminantName === "") {
+	if (d.aliasType == "" && d.discriminantName == "") {
 		return;
 	}
 
 	// Discriminated union: resolve structured variant data instead of aliasType text
-	if (d.discriminantName !== "") {
+	if (d.discriminantName != "") {
 		// Tier 3: open generic param scope for `type MyData<T, E> = match (...) { ... }`
 		// so variant field annotations (e.g. `value: T`) can resolve T as a GenericParam
 		// instead of Unknown. Without this, instantiated generic match-types lose their
 		// type parameters and field access returns Unknown.
-		const hasGenericAliasDU = d.aliasGenericParams !== null && d.aliasGenericParams !== "";
+		const hasGenericAliasDU = d.aliasGenericParams != null && d.aliasGenericParams != "";
 		if (hasGenericAliasDU) {
 			openScope(ctx.table, ScopeKind.Block);
 			const paramList = splitTopLevel(d.aliasGenericParams, ",");
@@ -1543,7 +1543,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		if (hasGenericAliasDU) {
 			closeScope(ctx.table);
 		}
-		if (resolved !== null) {
+		if (resolved != null) {
 			assignType(sym.symbolType, resolved);
 			node.nodeType = sym.symbolType;
 		}
@@ -1552,7 +1552,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 
 	// Tier 3: generic type alias — define generic param symbols in a nested scope
 	// so the body can reference them (e.g. type Box<T> = { value: T }).
-	const hasGenericAlias = d.aliasGenericParams !== null && d.aliasGenericParams !== "";
+	const hasGenericAlias = d.aliasGenericParams != null && d.aliasGenericParams != "";
 	if (hasGenericAlias) {
 		openScope(ctx.table, ScopeKind.Block);
 		const paramList = splitTopLevel(d.aliasGenericParams, ",");
@@ -1569,11 +1569,11 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	}
 
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
-	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
+	if (resolved.kind == TypeKind.Union && resolved.typeName == "") {
 		resolved.typeName = d.aliasName;
 	}
 	// Tier 3: for generic aliases, stamp the typeName so instantiation can reference the alias
-	if (hasGenericAlias && resolved.typeName === "") {
+	if (hasGenericAlias && resolved.typeName == "") {
 		resolved.typeName = d.aliasName;
 	}
 	// TypeScript-parity auto-detection of boolean-discriminator DUs:
@@ -1582,11 +1582,11 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	// DUs (`{ kind: "circle" } | { kind: "square" }`) are handled by the existing
 	// `findSharedStringDiscriminant` path used directly by checkExprPass — those
 	// tests rely on the un-stamped Union shape, so don't auto-stamp them here.
-	if (resolved.kind === TypeKind.Union
-		&& (resolved.typeNames === null || resolved.typeNames.length === 0)
-		&& resolved.typeExtra === null) {
+	if (resolved.kind == TypeKind.Union
+		&& (resolved.typeNames == null || resolved.typeNames.length == 0)
+		&& resolved.typeExtra == null) {
 		const boolDisc = findSharedBooleanDiscriminant(resolved);
-		if (boolDisc !== "") {
+		if (boolDisc != "") {
 			resolved.typeNames = [boolDisc];
 			resolved.typeExtra = booleanType();
 		} else {
@@ -1595,10 +1595,10 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 			// contract: typeExtra = enum type, typeNames = [disc, key0, key1...]
 			// in typeChildren order (findVariantByDiscriminant reads keys there).
 			const enumDisc = findSharedEnumDiscriminant(resolved);
-			const enumType = enumDisc !== "" ? enumDiscriminantTypeOf(resolved, enumDisc) : null;
-			if (enumType !== null) {
+			const enumType = enumDisc != "" ? enumDiscriminantTypeOf(resolved, enumDisc) : null;
+			if (enumType != null) {
 				const keys = collectEnumDiscriminantValues(resolved, enumDisc);
-				if (keys.length === resolved.typeChildren.length) {
+				if (keys.length == resolved.typeChildren.length) {
 					const names: string[] = [enumDisc];
 					for (const k of keys) names.push(k);
 					resolved.typeNames = names;
@@ -1611,8 +1611,8 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		const distType = createDistinct(resolved);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
-	} else if (!hasGenericAlias && resolved.sym !== null
-		&& (resolved.kind === TypeKind.Struct || resolved.kind === TypeKind.Enum)) {
+	} else if (!hasGenericAlias && resolved.sym != null
+		&& (resolved.kind == TypeKind.Struct || resolved.kind == TypeKind.Enum)) {
 		const wrap = emptyType();
 		wrap.kind = TypeKind.Alias;
 		wrap.typeName = d.aliasName;
@@ -1635,8 +1635,8 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	// Boolean disc is the natural fit for two-variant unions like
 	// `type Result<T,E> = match (ok: boolean) { true => {...}, false => {...} }`.
 	const discType = resolveAnnotation(d.discriminantType, ctx, 0, 0);
-	const isBooleanDisc = discType.kind === TypeKind.Boolean;
-	if (discType.kind !== TypeKind.Enum && !isBooleanDisc) {
+	const isBooleanDisc = discType.kind == TypeKind.Boolean;
+	if (discType.kind != TypeKind.Enum && !isBooleanDisc) {
 		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum or boolean", 0, 0);
 		return null;
 	}
@@ -1644,7 +1644,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	if (isBooleanDisc) {
 		// Boolean disc requires exactly the keys "true" and "false".
 		for (const key of d.variantKeys) {
-			if (key !== "true" && key !== "false") {
+			if (key != "true" && key != "false") {
 				addError(ctx, "Variant key '" + key + "' must be 'true' or 'false' for boolean discriminator", 0, 0);
 			}
 		}
@@ -1653,9 +1653,9 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		for (const key of d.variantKeys) {
 			const memberName = bareAfterDelim(key, ".");
 			let found = false;
-			if (discType.typeNames !== null) {
+			if (discType.typeNames != null) {
 				for (const m of discType.typeNames) {
-					if (m === memberName) {
+					if (m == memberName) {
 						found = true;
 					}
 				}
@@ -1678,9 +1678,9 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		const resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
-		if (resolved !== null && resolved.kind === TypeKind.Struct && vi < d.variantKeys.length) {
+		if (resolved != null && resolved.kind == TypeKind.Struct && vi < d.variantKeys.length) {
 			if (isBooleanDisc) {
-				const discValue = d.variantKeys[vi] === "true";
+				const discValue = d.variantKeys[vi] == "true";
 				const discFieldType = createBooleanLiteral(discValue);
 				const newNames: string[] = [d.discriminantName];
 				for (const n of resolved.typeNames) newNames.push(n);
@@ -1712,14 +1712,14 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 
 function resolveVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.declType !== "") {
+	if (d.declType != "") {
 		// Annotated module var: bind the type in Pass 2. Pass 3 checks bodies in
 		// SOURCE ORDER, so a function body above the declaration would otherwise
 		// see Unknown — silent miscompile (method lowering misses, raw `->name` C)
 		// instead of the 3-pass order-independence the checker guarantees.
 		// Mirrors resolveExtern below; Shaping machinery handles forward aliases.
 		const sym = lookupSymbol(ctx.table, d.declName);
-		if (sym !== null && isUnresolvedType(sym.symbolType)) {
+		if (sym != null && isUnresolvedType(sym.symbolType)) {
 			sym.symbolType = resolveAnnotation(d.declType, ctx, node.location.line, node.location.column);
 		}
 		return;
@@ -1727,9 +1727,9 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 	// No annotation: for const object literals, infer struct type from field names.
 	// This gives cross-module exports a meaningful type (not unknown) for LSP hover/completion.
 	// Full inference happens in Pass 3; this is a lightweight early approximation.
-	if (d.declKind === DeclKind.Const && d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
+	if (d.declKind == DeclKind.Const && d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
 		const sym = lookupSymbol(ctx.table, d.declName);
-		if (sym !== null && isUnresolvedType(sym.symbolType)) {
+		if (sym != null && isUnresolvedType(sym.symbolType)) {
 			const objData = d.initializer.data as ObjectLiteralData;
 			const fieldNames: string[] = [];
 			const fieldTypes: Type[] = [];
@@ -1737,7 +1737,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 				fieldNames.push(objData.keys[fi]);
 				// Values are literals — resolve their types if annotated (e.g., 0x0001 as uint32)
 				const valNode = objData.properties[fi];
-				if (valNode !== null && valNode.kind === NodeKind.TypeAssertion) {
+				if (valNode != null && valNode.kind == NodeKind.TypeAssertion) {
 					const ta = valNode.data as TypeAssertionData;
 					const resolved = resolveAnnotation(ta.asType, ctx, node.location.line, node.location.column);
 					fieldTypes.push(resolved);
@@ -1755,11 +1755,11 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 export function resolveExtern(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExternDeclData;
 	const sym = lookupSymbol(ctx.table, d.externName);
-	if (sym === null) return;
+	if (sym == null) return;
 	node.resolvedSym = sym;
 
 	// Resolve type annotation if present
-	if (d.externType !== "") {
+	if (d.externType != "") {
 		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(resolved)) {
 			sym.symbolType = resolved;
@@ -1775,7 +1775,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
-	if (cd.ctorDefaults !== null && cd.ctorDefaults.length > 0) {
+	if (cd.ctorDefaults != null && cd.ctorDefaults.length > 0) {
 		sym.defaultParams = cd.ctorDefaults;
 	}
 }
@@ -1783,7 +1783,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
-	if (sym === null) return;
+	if (sym == null) return;
 	node.resolvedSym = sym;
 
 	// Set state to Shaped immediately to allow circular references in methods/properties
@@ -1791,13 +1791,13 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 
 	// Check for generic params (e.g., class Container<T> — parser stores in side-channel)
 	const genericStr = getGenericDecl(d.className);
-	const hasGenerics = genericStr !== "";
+	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
 			const trimGp = gp.trim();
-			if (trimGp !== "") {
+			if (trimGp != "") {
 				defineGenericParam(ctx, trimGp);
 			}
 		}
@@ -1812,14 +1812,14 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	for (let mi = 0; mi < d.classBody.length; mi += 1) {
 		let member = d.classBody[mi];
 		// Unwrap DecoratedDecl to get the inner declaration
-		if (member.kind === NodeKind.DecoratedDecl) {
+		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
-			if (dd.decoratedNode === null) {
+			if (dd.decoratedNode == null) {
 				continue;
 			}
 			member = dd.decoratedNode;
 		}
-		if (member.kind === NodeKind.MethodDecl) {
+		if (member.kind == NodeKind.MethodDecl) {
 			// Reference parity: methods are NOT struct fields — resolve their types
 			// and update the extension's fnType, but don't add to struct.
 			const md = member.data as MethodDeclData;
@@ -1835,7 +1835,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -1844,49 +1844,49 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			stripRestParamPrefix(md.methodParams);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			// DecoratedDecl wraps MethodDecl — resolvedSym is on the inner node
-			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.classBody[mi].resolvedSym;
-			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
+			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.classBody[mi].resolvedSym;
+			if (methodSym != null && methodSym.symbolType != null && methodSym.symbolType.typeName != "") {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}
 			member.nodeType = fnType;
 			// Update the method symbol's type with resolved params/return
-			if (methodSym !== null && methodSym.symbolType !== null) {
+			if (methodSym != null && methodSym.symbolType != null) {
 				assignType(methodSym.symbolType, fnType);
 			}
-		} else if (member.kind === NodeKind.PropertyDecl) {
+		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
 				// Resolve static property type and update the staticFields symbol
 				let staticType = inferredType();
-				if (pd.propType !== "") {
+				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 				}
 				member.nodeType = staticType;
 				// Find matching staticFields entry and set its type
 				for (const sf of sym.staticFields) {
-					if (sf.name === d.className + "." + pd.propName) {
+					if (sf.name == d.className + "." + pd.propName) {
 						sf.symbolType = staticType;
 						sf.state = SymbolState.Shaped;
 					}
 				}
 			} else {
 				memberNames.push(pd.propName);
-				if (pd.propType !== "") {
+				if (pd.propType != "") {
 					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 					member.nodeType = propType;
 					memberTypes.push(propType);
 					// Same owning self-ref hazard as interface fields (resolveInterface).
-					if (propType.kind === TypeKind.Ref && propType.typeReturn !== null
-						&& propType.typeReturn.typeName === d.className) {
+					if (propType.kind == TypeKind.Ref && propType.typeReturn != null
+						&& propType.typeReturn.typeName == d.className) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
 				} else {
 					memberTypes.push(inferredType());
 				}
 			}
-		} else if (member.kind === NodeKind.ConstructorDecl) {
+		} else if (member.kind == NodeKind.ConstructorDecl) {
 			resolveConstructorType(member, sym, ctx);
 		}
 	}
@@ -1910,7 +1910,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	let mergedNames = memberNames;
 	let mergedTypes = memberTypes;
 	let didMergeParent = false;
-	if (inner.typeExtra !== null && inner.typeExtra.kind === TypeKind.TypeReference) {
+	if (inner.typeExtra != null && inner.typeExtra.kind == TypeKind.TypeReference) {
 		const parentExpr = inner.typeExtra.typeName;
 		// B6: ensure parent fully Shaped before reading its fields. lookupSymbol
 		// gets the bare-name symbol; for "Bar<T>" form, resolveAnnotation handles
@@ -1919,7 +1919,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			? parentExpr.slice(0, parentExpr.indexOf("<"))
 			: parentExpr;
 		// Phase 8: detect direct self-cycle (`class A extends A`) — error.
-		if (bareParentName.trim() === d.className) {
+		if (bareParentName.trim() == d.className) {
 			addError(ctx, "'" + d.className + "' cannot extend itself (cyclic inheritance)", node.location.line, node.location.column);
 			inner.typeNames = memberNames;
 			inner.typeChildren = memberTypes;
@@ -1939,8 +1939,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		// downstream instead of a clean "cyclic inheritance" diagnostic.
 		let cycleProbe = bareParentName.trim();
 		let cycleSteps: int32 = 0;
-		while (cycleProbe !== "" && cycleSteps < 64) {
-			if (cycleProbe === d.className) {
+		while (cycleProbe != "" && cycleSteps < 64) {
+			if (cycleProbe == d.className) {
 				addError(ctx, "'" + d.className + "' cyclic inheritance — '" + d.className + "' indirectly extends itself via '" + bareParentName + "'", node.location.line, node.location.column);
 				inner.typeNames = memberNames;
 				inner.typeChildren = memberTypes;
@@ -1949,15 +1949,15 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				return;
 			}
 			const probeSym = lookupSymbol(ctx.table, cycleProbe);
-			if (probeSym === null || probeSym.declNode === null || probeSym.declNode.kind !== NodeKind.ClassDecl) break;
+			if (probeSym == null || probeSym.declNode == null || probeSym.declNode.kind != NodeKind.ClassDecl) break;
 			const probeData = probeSym.declNode.data as ClassDeclData;
 			const nextParent = probeData.classExtends;
-			if (nextParent === "") break;
+			if (nextParent == "") break;
 			cycleProbe = nextParent.indexOf("<") >= 0 ? nextParent.slice(0, nextParent.indexOf("<")).trim() : nextParent.trim();
 			cycleSteps = (cycleSteps + 1) as int32;
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
-		if (parentSym !== null) ensureShaped(parentSym, ctx);
+		if (parentSym != null) ensureShaped(parentSym, ctx);
 		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
 		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(parentType)) {
@@ -1967,11 +1967,11 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			// Nim tfFinal rule (types.nim:436-438): a CBase-typed field may point at
 			// a subclass that closes a back-edge, so any class that IS extended can
 			// form a cycle regardless of its own declared fields.
-			if (parentStruct.kind === TypeKind.Struct) {
+			if (parentStruct.kind == TypeKind.Struct) {
 				parentStruct.typeFlags = (parentStruct.typeFlags | TypeFlag.OpenClass) as int32;
 			}
 			// B8: only struct/class parents allowed.
-			if (parentStruct.kind !== TypeKind.Struct) {
+			if (parentStruct.kind != TypeKind.Struct) {
 				addError(ctx, "class can only extend another class — '" + parentExpr + "' is not a class type", node.location.line, node.location.column);
 			} else {
 				const newNames: string[] = [];
@@ -1981,7 +1981,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					const fname = memberNames[oi];
 					let collided = false;
 					for (const existingName of newNames) {
-						if (existingName === fname) {
+						if (existingName == fname) {
 							addError(ctx, "field '" + fname + "' redefines inherited field", node.location.line, node.location.column);
 							collided = true;
 							break;
@@ -2012,18 +2012,18 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 export function resolveActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const sym = lookupSymbol(ctx.table, d.actorName);
-	if (sym === null) return;
+	if (sym == null) return;
 	node.resolvedSym = sym;
 	sym.state = SymbolState.Shaped;
 
 	const genericStr = getGenericDecl(d.actorName);
-	const hasGenerics = genericStr !== "";
+	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
 			const trimGp = gp.trim();
-			if (trimGp !== "") {
+			if (trimGp != "") {
 				defineGenericParam(ctx, trimGp);
 			}
 		}
@@ -2034,12 +2034,12 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 	const memberTypes: Type[] = [];
 	for (let mi = 0; mi < d.actorBody.length; mi += 1) {
 		let member = d.actorBody[mi];
-		if (member.kind === NodeKind.DecoratedDecl) {
+		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
-			if (dd.decoratedNode === null) continue;
+			if (dd.decoratedNode == null) continue;
 			member = dd.decoratedNode;
 		}
-		if (member.kind === NodeKind.MethodDecl) {
+		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
 			const methodGenericNames = extractGenericNames(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
@@ -2051,25 +2051,25 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
+			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			stripRestParamPrefix(md.methodParams);
-			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
-			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
+			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
+			if (methodSym != null && methodSym.symbolType != null && methodSym.symbolType.typeName != "") {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}
 			member.nodeType = fnType;
-			if (methodSym !== null && methodSym.symbolType !== null) {
+			if (methodSym != null && methodSym.symbolType != null) {
 				assignType(methodSym.symbolType, fnType);
 			}
-		} else if (member.kind === NodeKind.PropertyDecl) {
+		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
-			if (pd.propType !== "") {
+			if (pd.propType != "") {
 				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
@@ -2077,7 +2077,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			} else {
 				memberTypes.push(inferredType());
 			}
-		} else if (member.kind === NodeKind.ConstructorDecl) {
+		} else if (member.kind == NodeKind.ConstructorDecl) {
 			resolveConstructorType(member, sym, ctx);
 		}
 	}
@@ -2118,89 +2118,89 @@ function resolveWith(text: string): Type {
 	return resolveAnnotation(text, ctx, 0, 0);
 }
 
-test "number" { assert resolveWith("number").kind === TypeKind.Number; }
+test "number" { assert resolveWith("number").kind == TypeKind.Number; }
 
-test "string" { assert resolveWith("string").kind === TypeKind.String; }
+test "string" { assert resolveWith("string").kind == TypeKind.String; }
 
-test "boolean" { assert resolveWith("boolean").kind === TypeKind.Boolean; }
+test "boolean" { assert resolveWith("boolean").kind == TypeKind.Boolean; }
 
-test "void" { assert resolveWith("void").kind === TypeKind.Void; }
+test "void" { assert resolveWith("void").kind == TypeKind.Void; }
 
-test "null" { assert resolveWith("null").kind === TypeKind.Null; }
+test "null" { assert resolveWith("null").kind == TypeKind.Null; }
 
-test "never" { assert resolveWith("never").kind === TypeKind.Never; }
+test "never" { assert resolveWith("never").kind == TypeKind.Never; }
 
-test "int32" { assert resolveWith("int32").kind === TypeKind.Int32; }
+test "int32" { assert resolveWith("int32").kind == TypeKind.Int32; }
 
-test "float64" { assert resolveWith("float64").kind === TypeKind.Float64; }
+test "float64" { assert resolveWith("float64").kind == TypeKind.Float64; }
 
-test "unknown name" { assert resolveWith("Foo").kind === TypeKind.Inferred; }
+test "unknown name" { assert resolveWith("Foo").kind == TypeKind.Inferred; }
 
-test "empty" { assert resolveWith("").kind === TypeKind.Inferred; }
+test "empty" { assert resolveWith("").kind == TypeKind.Inferred; }
 
 test "number[]" {
 	const t = resolveWith("number[]");
-	assert t.kind === TypeKind.Ref;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
-	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.Number;
+	assert t.kind == TypeKind.Ref;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+	assert t.typeReturn.typeReturn != null && t.typeReturn.typeReturn.kind == TypeKind.Number;
 }
 
 test "string[]" {
 	const t = resolveWith("string[]");
-	assert t.kind === TypeKind.Ref;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
-	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.String;
+	assert t.kind == TypeKind.Ref;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+	assert t.typeReturn.typeReturn != null && t.typeReturn.typeReturn.kind == TypeKind.String;
 }
 
 test "Result<number, string>" {
 	const t = resolveWith("Result<number, string>");
 	assert isResult(t);
 	const ok = getResultOkType(t);
-	assert ok !== null && ok.kind === TypeKind.Number;
+	assert ok != null && ok.kind == TypeKind.Number;
 	const err = getResultErrType(t);
-	assert err !== null && err.kind === TypeKind.String;
+	assert err != null && err.kind == TypeKind.String;
 }
 
 test "Array<boolean>" {
 	const t = resolveWith("Array<boolean>");
-	assert t.kind === TypeKind.Ref;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
-	assert t.typeReturn.typeReturn !== null && t.typeReturn.typeReturn.kind === TypeKind.Boolean;
+	assert t.kind == TypeKind.Ref;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+	assert t.typeReturn.typeReturn != null && t.typeReturn.typeReturn.kind == TypeKind.Boolean;
 }
 
 test "Vec<number> resolves to value array kind" {
 	const t = resolveWith("Vec<number>");
-	assert t.kind === TypeKind.Array;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
+	assert t.kind == TypeKind.Array;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Number;
 }
 
 test "number[4]" {
 	const t = resolveWith("number[4]");
-	assert t.kind === TypeKind.SizedArray;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Number;
-	assert t.typeFlags === 4;
+	assert t.kind == TypeKind.SizedArray;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Number;
+	assert t.typeFlags == 4;
 }
 
 test "Span<boolean>" {
 	const t = resolveWith("Span<boolean>");
-	assert t.kind === TypeKind.Span;
-	assert t.typeReturn !== null && t.typeReturn.kind === TypeKind.Boolean;
+	assert t.kind == TypeKind.Span;
+	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Boolean;
 }
 
 test "string | number" {
 	const t = resolveWith("string | number");
-	assert t.kind === TypeKind.Union;
-	assert t.typeChildren.length === 2;
-	assert t.typeChildren[0].kind === TypeKind.String;
-	assert t.typeChildren[1].kind === TypeKind.Number;
+	assert t.kind == TypeKind.Union;
+	assert t.typeChildren.length == 2;
+	assert t.typeChildren[0].kind == TypeKind.String;
+	assert t.typeChildren[1].kind == TypeKind.Number;
 }
 
 test "known symbol" {
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createStruct("MyType", [], [], true), false));
 	const t = resolveAnnotation("MyType", ctx, 0, 0);
-	assert t.kind === TypeKind.Struct;
-	assert t.typeName === "MyType";
+	assert t.kind == TypeKind.Struct;
+	assert t.typeName == "MyType";
 }
 
 test "function gets Function type" {
@@ -2214,11 +2214,11 @@ test "function gets Function type" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "foo");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Function;
-	assert sym.symbolType.typeChildren.length === 2;
-	assert sym.symbolType.typeNames[0] === "a";
-	assert sym.symbolType.typeNames[1] === "b";
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Function;
+	assert sym.symbolType.typeChildren.length == 2;
+	assert sym.symbolType.typeNames[0] == "a";
+	assert sym.symbolType.typeNames[1] == "b";
 }
 
 test "function with typed params" {
@@ -2231,12 +2231,12 @@ test "function with typed params" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "add");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Function;
-	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
-	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Function;
+	assert sym.symbolType.typeChildren[0].kind == TypeKind.Number;
+	assert sym.symbolType.typeChildren[1].kind == TypeKind.Number;
 	const ret1 = sym.symbolType.typeReturn;
-	assert ret1 !== null && ret1.kind === TypeKind.Number;
+	assert ret1 != null && ret1.kind == TypeKind.Number;
 }
 
 test "decorated function gets resolved" {
@@ -2250,10 +2250,10 @@ test "decorated function gets resolved" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "floor");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Function;
 	const ret = sym.symbolType.typeReturn;
-	assert ret !== null && ret.kind === TypeKind.Number;
+	assert ret != null && ret.kind == TypeKind.Number;
 }
 
 test "Box<number> records instantiation" {
@@ -2264,14 +2264,14 @@ test "Box<number> records instantiation" {
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	// No symbol "Box" in scope → inferredType()
-	assert t.kind === TypeKind.Inferred;
+	assert t.kind == TypeKind.Inferred;
 	// Check instantiation was recorded (happens before symbol lookup)
-	assert getGenericTypeInstCount() === 1;
-	assert getGenericTypeInstBaseName(0) === "Box";
-	assert getGenericTypeInstTypeArgKey(0) === "number";
-	assert getGenericTypeInstMangledName(0) === "Box__number";
-	assert getGenericTypeInstFieldNames(0) === "value";
-	assert getGenericTypeInstFieldTypes(0) === "number";
+	assert getGenericTypeInstCount() == 1;
+	assert getGenericTypeInstBaseName(0) == "Box";
+	assert getGenericTypeInstTypeArgKey(0) == "number";
+	assert getGenericTypeInstMangledName(0) == "Box__number";
+	assert getGenericTypeInstFieldNames(0) == "value";
+	assert getGenericTypeInstFieldTypes(0) == "number";
 }
 
 test "Pair<string, number> records instantiation" {
@@ -2281,11 +2281,11 @@ test "Pair<string, number> records instantiation" {
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
-	assert t.kind === TypeKind.Inferred;
+	assert t.kind == TypeKind.Inferred;
 	const idx = findGenericTypeInstIdx("Pair", "string_number");
 	assert idx >= 0;
-	assert getGenericTypeInstFieldNames(idx) === "first|second";
-	assert getGenericTypeInstFieldTypes(idx) === "string|number";
+	assert getGenericTypeInstFieldNames(idx) == "first|second";
+	assert getGenericTypeInstFieldTypes(idx) == "string|number";
 }
 
 test "dedup instantiation" {
@@ -2296,7 +2296,7 @@ test "dedup instantiation" {
 	const ctx = createContext();
 	resolveAnnotation("Box<number>", ctx, 0, 0);
 	resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert getGenericTypeInstCount() === 1;
+	assert getGenericTypeInstCount() == 1;
 }
 
 test "non-generic base falls through" {
@@ -2307,8 +2307,8 @@ test "non-generic base falls through" {
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createStruct("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx, 0, 0);
 	// Non-generic: returns base type (Foo)
-	assert t.kind === TypeKind.Struct;
-	assert t.typeName === "Foo";
+	assert t.kind == TypeKind.Struct;
+	assert t.typeName == "Foo";
 }
 
 test "generic class Container<T> records instantiation" {
@@ -2319,10 +2319,10 @@ test "generic class Container<T> records instantiation" {
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
 	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
-	assert t.kind === TypeKind.Inferred;
-	assert getGenericTypeInstCount() === 1;
-	assert getGenericTypeInstFieldNames(0) === "item|count";
-	assert getGenericTypeInstFieldTypes(0) === "string|number";
+	assert t.kind == TypeKind.Inferred;
+	assert getGenericTypeInstCount() == 1;
+	assert getGenericTypeInstFieldNames(0) == "item|count";
+	assert getGenericTypeInstFieldTypes(0) == "string|number";
 }
 
 test "constraint stored on GenericParam typeExtra" {
@@ -2331,11 +2331,11 @@ test "constraint stored on GenericParam typeExtra" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "T:number");
 	const sym = lookupSymbol(ctx.table, "T");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.GenericParam;
-	assert sym.symbolType.typeName === "T";
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.GenericParam;
+	assert sym.symbolType.typeName == "T";
 	const ext = sym.symbolType.typeExtra;
-	assert ext !== null && ext.kind === TypeKind.Number;
+	assert ext != null && ext.kind == TypeKind.Number;
 	closeScope(ctx.table);
 }
 
@@ -2344,9 +2344,9 @@ test "no constraint leaves typeExtra null" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "U");
 	const sym = lookupSymbol(ctx.table, "U");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.GenericParam;
-	assert sym.symbolType.typeName === "U";
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.GenericParam;
+	assert sym.symbolType.typeName == "U";
 	closeScope(ctx.table);
 }
 
@@ -2358,7 +2358,7 @@ test "constrained interface Box<T extends number>" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert t.kind === TypeKind.Inferred;
+	assert t.kind == TypeKind.Inferred;
 }
 
 test "fnDefaults on FunctionDeclData" {
@@ -2366,66 +2366,66 @@ test "fnDefaults on FunctionDeclData" {
 	const defNode = createNodeAt(NodeKind.NumberLiteral, { value: 42, isFloat: false, intVal: 42 as int64 }, zl);
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [null, defNode], nameLocation: zl }, zl);
 	const d = fnNode.data as FunctionDeclData;
-	assert d.fnDefaults.length === 2;
-	assert d.fnDefaults[0] === null;
-	assert d.fnDefaults[1] !== null;
-	assert d.fnDefaults[1].kind === NodeKind.NumberLiteral;
+	assert d.fnDefaults.length == 2;
+	assert d.fnDefaults[0] == null;
+	assert d.fnDefaults[1] != null;
+	assert d.fnDefaults[1].kind == NodeKind.NumberLiteral;
 }
 
 // ===== Nullable Pointer Resolution Tests =====
 
 test "Ref<number> | null stays Union(Ref, Null)" {
 	const t = resolveWith("Ref<number> | null");
-	assert t.kind === TypeKind.Union;
-	assert t.typeChildren.length === 2;
-	assert t.typeChildren[0].kind === TypeKind.Ref;
+	assert t.kind == TypeKind.Union;
+	assert t.typeChildren.length == 2;
+	assert t.typeChildren[0].kind == TypeKind.Ref;
 	const inner0 = t.typeChildren[0].typeReturn;
-	assert inner0 !== null && inner0.kind === TypeKind.Number;
-	assert t.typeChildren[1].kind === TypeKind.Null;
+	assert inner0 != null && inner0.kind == TypeKind.Number;
+	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
 test "null | Ref<string> stays Union(Null, Ref)" {
 	const t = resolveWith("null | Ref<string>");
-	assert t.kind === TypeKind.Union;
-	assert t.typeChildren.length === 2;
-	assert t.typeChildren[0].kind === TypeKind.Null;
-	assert t.typeChildren[1].kind === TypeKind.Ref;
+	assert t.kind == TypeKind.Union;
+	assert t.typeChildren.length == 2;
+	assert t.typeChildren[0].kind == TypeKind.Null;
+	assert t.typeChildren[1].kind == TypeKind.Ref;
 	const inner1 = t.typeChildren[1].typeReturn;
-	assert inner1 !== null && inner1.kind === TypeKind.String;
+	assert inner1 != null && inner1.kind == TypeKind.String;
 }
 
 test "Ptr<number> | null stays Union(Ptr, Null)" {
 	const t = resolveWith("Ptr<number> | null");
-	assert t.kind === TypeKind.Union;
-	assert t.typeChildren.length === 2;
-	assert t.typeChildren[0].kind === TypeKind.Ptr;
+	assert t.kind == TypeKind.Union;
+	assert t.typeChildren.length == 2;
+	assert t.typeChildren[0].kind == TypeKind.Ptr;
 	const inner0 = t.typeChildren[0].typeReturn;
-	assert inner0 !== null && inner0.kind === TypeKind.Number;
-	assert t.typeChildren[1].kind === TypeKind.Null;
+	assert inner0 != null && inner0.kind == TypeKind.Number;
+	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
 test "null | Ptr<boolean> stays Union(Null, Ptr)" {
 	const t = resolveWith("null | Ptr<boolean>");
-	assert t.kind === TypeKind.Union;
-	assert t.typeChildren.length === 2;
-	assert t.typeChildren[0].kind === TypeKind.Null;
-	assert t.typeChildren[1].kind === TypeKind.Ptr;
+	assert t.kind == TypeKind.Union;
+	assert t.typeChildren.length == 2;
+	assert t.typeChildren[0].kind == TypeKind.Null;
+	assert t.typeChildren[1].kind == TypeKind.Ptr;
 	const inner1 = t.typeChildren[1].typeReturn;
-	assert inner1 !== null && inner1.kind === TypeKind.Boolean;
+	assert inner1 != null && inner1.kind == TypeKind.Boolean;
 }
 
 test "string | null wraps as Maybe<string>" {
 	// Per LANG.md §6: non-pointer T | null wraps in Maybe<T> with `{ value, present }`.
 	// Pointers (Ref/Ptr) stay as Union (NULL is the natural sentinel).
 	const t = resolveWith("string | null");
-	assert t.kind === TypeKind.Struct;
-	assert (t.typeFlags & TypeFlag.IsMaybe) !== 0;
+	assert t.kind == TypeKind.Struct;
+	assert (t.typeFlags & TypeFlag.IsMaybe) != 0;
 }
 
 test "number | null wraps as Maybe<number>" {
 	const t = resolveWith("number | null");
-	assert t.kind === TypeKind.Struct;
-	assert (t.typeFlags & TypeFlag.IsMaybe) !== 0;
+	assert t.kind == TypeKind.Struct;
+	assert (t.typeFlags & TypeFlag.IsMaybe) != 0;
 }
 
 // An overload appended AFTER its primary was already shaped must still get
@@ -2449,20 +2449,20 @@ test "an overload appended after the primary is shaped still gets shaped" {
 
 	// Primary resolves on its own, before the second declaration exists.
 	ensureShaped(firstSym, ctx);
-	assert firstSym.state === SymbolState.Shaped;
+	assert firstSym.state == SymbolState.Shaped;
 
 	const lateSym = makeSymbol("ovlLate", SymbolKind.Function, noneType(), false);
 	const lateNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "ovlLate", params: ["s"], fnParamTypes: ["string"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "string", fnDefaults: [], nameLocation: zl }, zl);
 	lateNode.resolvedSym = lateSym;
 	lateSym.declNode = lateNode;
 	defineSymbol(ctx.table, lateSym);
-	assert firstSym.overloads.length === 1;
-	assert lateSym.state === SymbolState.Hollow;
+	assert firstSym.overloads.length == 1;
+	assert lateSym.state == SymbolState.Hollow;
 
 	// Second demand on the same NAME must drain the newcomer.
 	ensureShaped(firstSym, ctx);
-	assert lateSym.state === SymbolState.Shaped, "late overload was left Hollow";
-	assert lateSym.symbolType.kind === TypeKind.Function, "late overload has no function type";
-	assert lateSym.symbolType.typeChildren.length === 1;
-	assert lateSym.symbolType.typeChildren[0].kind === TypeKind.String;
+	assert lateSym.state == SymbolState.Shaped, "late overload was left Hollow";
+	assert lateSym.symbolType.kind == TypeKind.Function, "late overload has no function type";
+	assert lateSym.symbolType.typeChildren.length == 1;
+	assert lateSym.symbolType.typeChildren[0].kind == TypeKind.String;
 }

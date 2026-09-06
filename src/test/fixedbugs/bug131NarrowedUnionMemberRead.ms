@@ -38,36 +38,36 @@ function b131pick(circle: boolean): B131Shape {
 
 test "bug131: member read on a narrowed local" {
 	const s = b131pick(false);
-	if (s.kind === "square") {
-		assert s.w === 5.0;
+	if (s.kind == "square") {
+		assert s.w == 5.0;
 	}
 }
 
 test "bug131: member read in the else branch" {
 	const s = b131pick(true);
-	if (s.kind === "square") {
+	if (s.kind == "square") {
 		assert false;
 	} else {
-		assert s.r === 3.0;
+		assert s.r == 3.0;
 	}
 }
 
 test "bug131: several reads off the same narrowed local" {
 	const s = b131pick(false);
-	if (s.kind === "square") {
-		assert s.w + s.w === 10.0;
+	if (s.kind == "square") {
+		assert s.w + s.w == 10.0;
 	}
 }
 
 test "bug131: narrowed local member read still works on parameters" {
 	const s = b131pick(false);
 	const viaParam = (x: B131Shape): float64 => {
-		if (x.kind === "square") {
+		if (x.kind == "square") {
 			return x.w;
 		}
 		return 0.0;
 	};
-	if (s.kind === "square") {
-		assert s.w === viaParam(s);
+	if (s.kind == "square") {
+		assert s.w == viaParam(s);
 	}
 }

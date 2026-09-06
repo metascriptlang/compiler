@@ -48,7 +48,7 @@ export function registerName(pid: int64, name: string): boolean {
 		msActorNameRegistryInit();
 		registryInitialized = true;
 	}
-	return msActorRegisterName(pid, name) === 1;
+	return msActorRegisterName(pid, name) == 1;
 }
 
 // Look up pid by registered name. Returns 0 if not found.

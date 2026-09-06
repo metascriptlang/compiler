@@ -31,21 +31,21 @@ enum Shade { Dark, Light }
 
 test "enum reverse index on enum-typed operand" {
 	const s: Shade = Shade.Light;
-	assert Shade[s] === "Light";
-	assert Shade[Shade.Dark] === "Dark";
+	assert Shade[s] == "Light";
+	assert Shade[Shade.Dark] == "Dark";
 }
 
 test "enum reverse index on int32 operand" {
 	const i: int32 = 1;
-	assert Shade[i] === "Light";
+	assert Shade[i] == "Light";
 }
 
 test "enum reverse index out of range" {
 	const i: int32 = 9;
-	assert Shade[i] === "<unknown>";
+	assert Shade[i] == "<unknown>";
 }
 
 test "toString on enum reached only through an imported field type" {
 	const it: Item = makeItem();
-	assert it.grade.toString() === "Good";
+	assert it.grade.toString() == "Good";
 }

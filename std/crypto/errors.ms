@@ -57,5 +57,5 @@ export function keyDerivationFailed(algorithm: string, reason: string): CryptoEr
 }
 
 export function isRetryable(e: CryptoError): boolean {
-	return e.kind === CryptoErrorKind.RandomFailed;
+	return e.kind == CryptoErrorKind.RandomFailed;
 }

@@ -24,7 +24,7 @@ function main(): void {
 	const asF: float64 = (1234n) as float64;
 	console.log(acc);
 	console.log(asI64 > 0);
-	console.log(asF === 1234.0);
+	console.log(asF == 1234.0);
 	console.log("GUARD-OK");
 }
 main();

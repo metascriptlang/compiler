@@ -33,11 +33,11 @@ function main(): void {
 	// The carrier is read twice by the lowering (present + value) but the operand
 	// itself must be evaluated once.
 	console.log("eff=" + effect());
-	ok = check("singleEval", calls === 1) && ok;
+	ok = check("singleEval", calls == 1) && ok;
 
 	// Narrowing and equality keep working off the same carrier.
-	if (s1 !== null) { ok = check("narrowRead", s1.length === 2) && ok; }
-	ok = check("equality", s0 === null && s1 !== null) && ok;
+	if (s1 != null) { ok = check("narrowRead", s1.length == 2) && ok; }
+	ok = check("equality", s0 == null && s1 != null) && ok;
 
 	if (!ok) { console.log("nullable stringify FAILED"); return; }
 	console.log("nullable stringify ok");

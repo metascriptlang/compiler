@@ -45,7 +45,7 @@ function main(): void {
 	const cp = copyFile(f1, f2);
 	console.log("copy=" + (cp.ok ? "ok" : "fail"));
 	const rc = readFile(f2);
-	console.log("copyEq=" + (rc.ok && rc.value === r2.value ? "y" : "n"));
+	console.log("copyEq=" + (rc.ok && rc.value == r2.value ? "y" : "n"));
 
 	const f3 = dir + "/lines.txt";
 	const wl = writeLines(f3, ["alpha", "beta", "gamma"]);
@@ -74,7 +74,7 @@ function main(): void {
 
 	const miss = readFile(dir + "/nope.txt");
 	if (miss.ok) { console.log("missRead=unexpected"); return; }
-	console.log("missKind=" + (miss.error.kind === IoErrorKind.NotFound ? "notFound" : "other"));
+	console.log("missKind=" + (miss.error.kind == IoErrorKind.NotFound ? "notFound" : "other"));
 
 	const fin = removeAll(dir);
 	console.log("cleanup=" + (fin.ok ? "ok" : "fail"));

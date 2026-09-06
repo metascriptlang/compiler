@@ -37,11 +37,11 @@ export function lowerStringOps(program: Node, ctx: TransformContext): Node {
 // ===== Rewriter =====
 
 function rewriteStringOp(node: Node): Node {
-	if (node.kind !== NodeKind.BinaryExpr) return node;
+	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 
 	// String indexed assignment: s[i] = ch → msStringSetChar call
-	if (d.operator === "=" && d.left.kind === NodeKind.ArrayAccess) {
+	if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess) {
 		const ad = d.left.data as ArrayAccessData;
 		if (isStringTyped(ad.array)) {
 			return rewriteStringIndexAssign(ad.array, ad.index, d.right, node);
@@ -51,9 +51,9 @@ function rewriteStringOp(node: Node): Node {
 	// String self-append: x = x + y → msStringAppend(&x, y)
 	// Reference parity: standard compiler recognizes this pattern and rewrites to in-place append.
 	// Avoids O(n) allocation per concat — uses amortized O(1) append with capacity growth.
-	if (d.operator === "=" && d.right.kind === NodeKind.BinaryExpr) {
+	if (d.operator == "=" && d.right.kind == NodeKind.BinaryExpr) {
 		const rd = d.right.data as BinaryExprData;
-		if (rd.operator === "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
+		if (rd.operator == "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
 			const loc = node.location;
 			const addrOf = makeHiddenAddr(d.left, loc);
 			const code = asAsciiCharCode(rd.right);
@@ -73,13 +73,13 @@ function rewriteStringOp(node: Node): Node {
 	// `x = x + a + b + c` and `x = `${x}${a}${b}`` into `x = msStringConcatArr(N, x, ...)`
 	// or the 2-part coerced form `x = msStringConcat(x, p)`. Detect those shapes
 	// AFTER flattening so the fast path still fires for chains and templates.
-	if (d.operator === "=" && isStringTyped(d.left) && d.right.kind === NodeKind.CallExpr) {
+	if (d.operator == "=" && isStringTyped(d.left) && d.right.kind == NodeKind.CallExpr) {
 		const cd = d.right.data as CallExprData;
-		if (cd.callee.kind === NodeKind.Identifier) {
+		if (cd.callee.kind == NodeKind.Identifier) {
 			const calleeName = (cd.callee.data as IdentifierData).name;
 			const loc = node.location;
 			// msStringConcat(x, p) — 2-part with self-first → msStringAppend(&x, p)
-			if (calleeName === "msStringConcat" && cd.arguments.length === 2
+			if (calleeName == "msStringConcat" && cd.arguments.length == 2
 					&& isSameIdent(d.left, cd.arguments[0])) {
 				const addrOf = makeHiddenAddr(d.left, loc);
 				const code = asAsciiCharCode(cd.arguments[1]);
@@ -96,7 +96,7 @@ function rewriteStringOp(node: Node): Node {
 
 			// msStringConcatArr(count, x, a, b, ...) — N-part with self-first
 			// → msStringAppendArr(&x, N-1, a, b, ...)
-			if (calleeName === "msStringConcatArr" && cd.arguments.length >= 3
+			if (calleeName == "msStringConcatArr" && cd.arguments.length >= 3
 					&& isSameIdent(d.left, cd.arguments[1])) {
 				const newCount = cd.arguments.length - 2;
 				const addrOf = makeHiddenAddr(d.left, loc);
@@ -125,7 +125,7 @@ function rewriteStringOp(node: Node): Node {
 	// String concatenation: s + t → msStringConcat(s, t)
 	// Note: 3+ chains already handled by stringConcatFlatten (runs earlier)
 	// Coerce non-string operands (number/boolean) to string
-	if (d.operator === "+") {
+	if (d.operator == "+") {
 		const left = coercePartToString(d.left, loc);
 		const right = coercePartToString(d.right, loc);
 		const result = makeCall(makeIdent("msStringConcat", loc), [left, right], loc);
@@ -137,7 +137,7 @@ function rewriteStringOp(node: Node): Node {
 	// Reference parity: semantic analysis resolves &= to an append call with a hidden address.
 	// We do the same rewrite here so DRC sees a normal call (no special-casing)
 	// and codegen emits a normal call (no special-casing).
-	if (d.operator === "+=" && isStringTyped(d.left)) {
+	if (d.operator == "+=" && isStringTyped(d.left)) {
 		const addrOf = makeHiddenAddr(d.left, loc);
 		const code = asAsciiCharCode(d.right);
 		if (code >= 0) {
@@ -171,38 +171,38 @@ function rewriteStringIndexAssign(arr: Node, idx: Node, val: Node, original: Nod
 
 // Coerce non-string operands in string concat context
 function coercePartToString(node: Node, loc: SourceLocation): Node {
-	if (node.kind === NodeKind.StringLiteral) return node;
-	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
-	if (node.nodeType !== null) {
+	if (node.kind == NodeKind.StringLiteral) return node;
+	if (node.nodeType != null && node.nodeType.kind == TypeKind.String) return node;
+	if (node.nodeType != null) {
 		if (isWideInteger(node.nodeType)) {
-			const fn = node.nodeType.kind === TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
+			const fn = node.nodeType.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
 			return makeCall(makeIdent(fn, loc), [node], loc);
 		}
 		if (isNumeric(node.nodeType)) {
 			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 		}
-		if (node.nodeType.kind === TypeKind.Boolean) {
+		if (node.nodeType.kind == TypeKind.Boolean) {
 			return makeCall(makeIdent("msBoolToString", loc), [node], loc);
 		}
 	}
-	if (node.kind === NodeKind.NumberLiteral) {
+	if (node.kind == NodeKind.NumberLiteral) {
 		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 	}
 	return node;
 }
 
 function asAsciiCharCode(node: Node): int32 {
-	if (node.kind !== NodeKind.StringLiteral) return -1;
+	if (node.kind != NodeKind.StringLiteral) return -1;
 	const d = node.data as StringLiteralData;
-	if (d.value.length !== 1) return -1;
+	if (d.value.length != 1) return -1;
 	const code = d.value.charCodeAt(0);
 	if (code >= 128) return -1;
 	return code as int32;
 }
 
 function isStringTyped(node: Node): boolean {
-	if (node === null) return false;
-	if (node.nodeType === null) return false;
+	if (node == null) return false;
+	if (node.nodeType == null) return false;
 	return isStringLike(node.nodeType);
 }
 
@@ -217,39 +217,39 @@ function isStringTyped(node: Node): boolean {
 // so `arr[0].buf` on both sides compares as equal even when one side has
 // the hidden node and the other has been freshly synthesized.
 function isSameIdent(a: Node, b: Node): boolean {
-	while (a !== null && (a.kind === NodeKind.HiddenDeref || a.kind === NodeKind.HiddenAddr)) {
+	while (a != null && (a.kind == NodeKind.HiddenDeref || a.kind == NodeKind.HiddenAddr)) {
 		a = (a.data as HiddenDerefData).expr;
 	}
-	while (b !== null && (b.kind === NodeKind.HiddenDeref || b.kind === NodeKind.HiddenAddr)) {
+	while (b != null && (b.kind == NodeKind.HiddenDeref || b.kind == NodeKind.HiddenAddr)) {
 		b = (b.data as HiddenDerefData).expr;
 	}
-	if (a === null || b === null) return false;
-	if (a.kind !== b.kind) return false;
-	if (a.kind === NodeKind.Identifier) {
-		return (a.data as IdentifierData).name === (b.data as IdentifierData).name;
+	if (a == null || b == null) return false;
+	if (a.kind != b.kind) return false;
+	if (a.kind == NodeKind.Identifier) {
+		return (a.data as IdentifierData).name == (b.data as IdentifierData).name;
 	}
-	if (a.kind === NodeKind.MemberExpr) {
+	if (a.kind == NodeKind.MemberExpr) {
 		const ad = a.data as MemberExprData;
 		const bd = b.data as MemberExprData;
-		return ad.property === bd.property && isSameIdent(ad.object, bd.object);
+		return ad.property == bd.property && isSameIdent(ad.object, bd.object);
 	}
-	if (a.kind === NodeKind.ArrayAccess) {
+	if (a.kind == NodeKind.ArrayAccess) {
 		const ad = a.data as ArrayAccessData;
 		const bd = b.data as ArrayAccessData;
 		return isSameIdent(ad.array, bd.array) && isSameIdent(ad.index, bd.index);
 	}
-	if (a.kind === NodeKind.NumberLiteral) {
+	if (a.kind == NodeKind.NumberLiteral) {
 		const ad = a.data as NumberLiteralData;
 		const bd = b.data as NumberLiteralData;
-		return ad.value === bd.value;
+		return ad.value == bd.value;
 	}
 	return false;
 }
 
 function isEmptyStringLiteral(node: Node): boolean {
-	if (node.kind !== NodeKind.StringLiteral) return false;
+	if (node.kind != NodeKind.StringLiteral) return false;
 	const d = node.data as StringLiteralData;
-	return d.value === "";
+	return d.value == "";
 }
 
 import { createNode } from "../../ast/node";
@@ -257,5 +257,5 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeNumberLit(val: number, loc: SourceLocation): Node {
 	const tok = createToken(TokenKind.Number, val.toString(), loc.line);
-	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0, intVal: val as int64 }, tok);
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 != 0, intVal: val as int64 }, tok);
 }

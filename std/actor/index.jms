@@ -54,7 +54,7 @@ export function registerName(pid: int64, name: string): boolean {
 
 export function whereis(name: string): int64 {
 	const pid = _names.get(name);
-	if (pid === null || pid === undefined) return 0;
+	if (pid == null || pid == undefined) return 0;
 	return pid;
 }
 

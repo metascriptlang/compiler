@@ -40,8 +40,8 @@ function main(): void {
 	showN("code0", s.charCodeAt(0));
 	showN("codeSpace", s.charCodeAt(6));
 
-	showB("eq", "abc" === "abc");
-	showB("ne", "abc" === "abd");
+	showB("eq", "abc" == "abc");
+	showB("ne", "abc" == "abd");
 	showB("lt", "apple" < "banana");
 	showB("gt", "banana" > "apple");
 	showB("le", "abc" <= "abc");

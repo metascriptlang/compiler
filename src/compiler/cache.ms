@@ -62,8 +62,8 @@ function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): vo
 		i = i + 1;
 	}
 	for (const e of entries) {
-		if (e.length === 0) continue;
-		if (e.charAt(e.length - 1) === "/") {
+		if (e.length == 0) continue;
+		if (e.charAt(e.length - 1) == "/") {
 			const name = e.slice(0, e.length - 1);
 			collectFilesSorted(join(dir, name), `${prefix}${name}/`, outPaths);
 		} else {
@@ -88,10 +88,10 @@ function stampTreeInto(acc: string, dir: string, prefix: string): string {
 // Memoized; initCache computes it once on the main thread so parallel compile
 // workers only ever read the settled value.
 export function toolchainStamp(): string {
-	if (_toolchainStamp !== "") return _toolchainStamp;
+	if (_toolchainStamp != "") return _toolchainStamp;
 	let acc = hashFile(resolveArgv0(argv[0]));
 	const root = resolveRuntimeDir();
-	if (root !== "") {
+	if (root != "") {
 		acc = stampTreeInto(acc, join(root, "runtime"), "runtime/");
 		acc = stampTreeInto(acc, join(root, "vendor"), "vendor/");
 	}
@@ -108,7 +108,7 @@ let _forceRebuild = false;
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
 export function initCache(mode: number, forceRebuild: boolean): void {
 	const envDir = env.get("MSC_CACHE_DIR");
-	if (envDir !== "") {
+	if (envDir != "") {
 		_cacheDir = envDir;
 	} else {
 		const modeDir = mode >= 1 ? "release" : "debug";
@@ -121,14 +121,14 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 }
 
 function getCacheDir(): string {
-	if (_cacheDir !== "") return _cacheDir;
+	if (_cacheDir != "") return _cacheDir;
 	// Reference parity (--nimcache): isolate the build cache per lane/config.
 	// Concurrent builds sharing one cache dir are CORRECT since fp-keying, but
 	// the project/link metadata is last-writer-wins — separate dirs (e.g. the
 	// SAN lane using an ASan driver) avoid pointless re-links. Env-based so
 	// runners can set it without new CLI surface.
 	const envDir = env.get("MSC_CACHE_DIR");
-	if (envDir !== "") {
+	if (envDir != "") {
 		_cacheDir = envDir;
 	} else {
 		_cacheDir = "out/debug/.cache";
@@ -203,9 +203,9 @@ function ensureLocalSchema(): void {
 	if (exists(marker)) return;
 	const entries = readDir(getCacheDir());
 	for (const e of entries) {
-		if (e.length === 0) continue;
-		if (e === ".schema-fpkey") continue;
-		if (e.charAt(e.length - 1) === "/") continue;
+		if (e.length == 0) continue;
+		if (e == ".schema-fpkey") continue;
+		if (e.charAt(e.length - 1) == "/") continue;
 		remove(`${getCacheDir()}/${e}`);
 	}
 	writeFile(marker, "v1");
@@ -241,17 +241,17 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 // Return the shared global cache root (~/.metascript/cache), or "" if disabled
 // (opt-out) or HOME unknown.
 function globalCacheRoot(): string {
-	if (env.get("MSC_NO_GLOBAL_CACHE") !== "") return "";
+	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
 	const home = env.get("HOME");
-	const base = home !== "" ? home : env.get("USERPROFILE");
-	if (base === "") return "";
+	const base = home != "" ? home : env.get("USERPROFILE");
+	if (base == "") return "";
 	return `${base}/.metascript/cache`;
 }
 
 // Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
 function globalObjectsDir(): string {
 	const root = globalCacheRoot();
-	if (root === "") return "";
+	if (root == "") return "";
 	return `${root}/objects`;
 }
 
@@ -263,7 +263,7 @@ function fingerprintKey(fp: string): string {
 // Path for an entry in the global cache. Empty string means "cache disabled".
 function globalOPath(fp: string): string {
 	const dir = globalObjectsDir();
-	if (dir === "") return "";
+	if (dir == "") return "";
 	return `${dir}/${fingerprintKey(fp)}.o`;
 }
 
@@ -274,7 +274,7 @@ function globalOPath(fp: string): string {
 // caller-side remove-on-miss race produced).
 function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 	const src = globalOPath(fp);
-	if (src === "" || !exists(src)) return false;
+	if (src == "" || !exists(src)) return false;
 	// Size sanity: any real .o is >100 bytes. Truncated or empty = corrupt.
 	const size = fileSize(src);
 	if (size < 100) {
@@ -286,7 +286,7 @@ function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 	const copied = copyFile(src, tmp);
 	if (!copied.ok) return false;
 	// Verify size on the tmp copy before publishing it over the final path.
-	if (fileSize(tmp) !== size) {
+	if (fileSize(tmp) != size) {
 		remove(tmp);
 		return false;
 	}
@@ -306,7 +306,7 @@ function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
 // Best-effort: failures don't propagate; local cache still works.
 function populateGlobal(oFile: string, fp: string): void {
 	const dir = globalObjectsDir();
-	if (dir === "") return;
+	if (dir == "") return;
 	const dst = `${dir}/${fingerprintKey(fp)}.o`;
 	// If already populated by another process, skip.
 	if (exists(dst)) return;
@@ -329,13 +329,13 @@ function wipeStampedDirOnMarker(dir: string, markerValue: string): void {
 	const marker = `${dir}/.version`;
 	const stored = try readFile(marker) catch "";
 	const entries = readDir(dir);
-	if (stored !== markerValue) {
+	if (stored != markerValue) {
 		// Mismatch — wipe entries and any orphan tmp files. Preserve .version
 		// itself so we don't need a second write; it will be overwritten below.
 		for (const e of entries) {
-			if (e.length === 0) continue;
-			if (e === ".version") continue;
-			if (e.charAt(e.length - 1) === "/") continue;
+			if (e.length == 0) continue;
+			if (e == ".version") continue;
+			if (e.charAt(e.length - 1) == "/") continue;
 			remove(`${dir}/${e}`);
 		}
 		writeFile(marker, markerValue);
@@ -343,7 +343,7 @@ function wipeStampedDirOnMarker(dir: string, markerValue: string): void {
 	}
 	// Version matches — still sweep orphan .tmp.<ts> leftovers from crashed runs.
 	for (const e of entries) {
-		if (e.length === 0) continue;
+		if (e.length == 0) continue;
 		if (e.indexOf(".tmp.", 0) < 0) continue;
 		remove(`${dir}/${e}`);
 	}
@@ -355,7 +355,7 @@ function wipeStampedDirOnMarker(dir: string, markerValue: string): void {
 // upgrade path (msc upgrade, brew, manual cp, downgrade, WIP tree edits).
 export function ensureVersionMarker(): void {
 	const dir = globalObjectsDir();
-	if (dir === "") return;
+	if (dir == "") return;
 	const markerValue = `${VERSION}:${toolchainStamp()}`;
 	wipeStampedDirOnMarker(dir, markerValue);
 	wipeStampedDirOnMarker(headersCacheDir(), markerValue);
@@ -385,7 +385,7 @@ export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
 	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
-		if (stored === fp) return true;
+		if (stored == fp) return true;
 	}
 	// Local miss (or forceRebuild bypass of local) — try the global cache.
 	if (tryRestoreFromGlobal(oFile, fp)) return true;
@@ -424,11 +424,11 @@ function projectCacheFile(): string {
 // Link flags are tracked separately in link.cache.
 let _compilerHash = "";
 function getCompilerHash(ccOption: number): string {
-	if (_compilerHash !== "") return _compilerHash;
+	if (_compilerHash != "") return _compilerHash;
 	const name = getCompilerName(ccOption, "");
 	// New exec() captures stdout; no more tmp-file shell redirect needed.
 	const r = exec(`${name} --version 2>&1`);
-	const version = r.ok ? r.value : (r.error.output !== "" ? r.error.output : r.error.errorOutput);
+	const version = r.ok ? r.value : (r.error.output != "" ? r.error.output : r.error.errorOutput);
 	if (version.length > 0) {
 		_compilerHash = hashContent(version);
 	} else {
@@ -450,7 +450,7 @@ const PRE_DEP = "dep:";
 
 // Parse a line from the cache file. Returns value after prefix, or "" if no match.
 function parseLineValue(line: string, prefix: string): string {
-	if (line.length > prefix.length && line.slice(0, prefix.length) === prefix) {
+	if (line.length > prefix.length && line.slice(0, prefix.length) == prefix) {
 		return line.slice(prefix.length, line.length);
 	}
 	return "";
@@ -462,7 +462,7 @@ function splitLines(s: string): string[] {
 	let start = 0;
 	let i = 0;
 	while (i <= s.length) {
-		if (i === s.length || s.charAt(i) === "\n") {
+		if (i == s.length || s.charAt(i) == "\n") {
 			if (i > start) {
 				lines.push(s.slice(start, i));
 			}
@@ -506,36 +506,36 @@ export function projectCacheChanged(
 
 	for (const line of lines) {
 		let val = parseLineValue(line, PRE_VERSION);
-		if (val !== "") { storedVersion = val; continue; }
+		if (val != "") { storedVersion = val; continue; }
 		val = parseLineValue(line, PRE_OUTPUT);
-		if (val !== "") { storedOutput = val; continue; }
+		if (val != "") { storedOutput = val; continue; }
 		val = parseLineValue(line, PRE_CMDLINE);
-		if (val !== "") { storedCmd = val; continue; }
+		if (val != "") { storedCmd = val; continue; }
 		val = parseLineValue(line, PRE_OUTHASH);
-		if (val !== "") { storedOutputHash = val; continue; }
+		if (val != "") { storedOutputHash = val; continue; }
 		val = parseLineValue(line, PRE_DEP);
-		if (val !== "") { storedDeps.push(val); }
+		if (val != "") { storedDeps.push(val); }
 	}
 
 	const currentCmd = buildCmdFingerprint(ccOption, mode, flags);
 
 	// Reference-aligned: check cacheVersion, outputFile, cmdline
-	if (storedVersion !== CACHE_VERSION) return true;
-	if (storedOutput !== outputFile) return true;
-	if (storedCmd !== currentCmd) return true;
+	if (storedVersion != CACHE_VERSION) return true;
+	if (storedOutput != outputFile) return true;
+	if (storedCmd != currentCmd) return true;
 
 	// Reference-aligned: check output binary modification (detect external tampering)
 	const currentOutputHash = hashFile(outputFile);
-	if (storedOutputHash !== currentOutputHash) return true;
+	if (storedOutputHash != currentOutputHash) return true;
 
 	// Reference-aligned: check depfiles — hash every source file
-	if (storedDeps.length !== depPaths.length) return true;
+	if (storedDeps.length != depPaths.length) return true;
 	let di = 0;
 	while (di < depPaths.length) {
 		const path = depPaths[di];
 		const h = hashFile(path);
 		const currentEntry = `${path}=${h}`;
-		if (storedDeps[di] !== currentEntry) return true;
+		if (storedDeps[di] != currentEntry) return true;
 		// Cache for writeProjectCache reuse (avoid double-read)
 		_cachedDepHashes.push(currentEntry);
 		di = di + 1;
@@ -559,7 +559,7 @@ export function writeProjectCache(
 	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, mode, flags)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
 
-	if (_cachedDepHashes.length === depPaths.length) {
+	if (_cachedDepHashes.length == depPaths.length) {
 		// Reuse hashes from projectCacheChanged — no double-read
 		for (const entry of _cachedDepHashes) {
 			content = content + `${PRE_DEP}${entry}\n`;
@@ -600,7 +600,7 @@ export function isCCodeCached(modPath: string, fp: string): boolean {
 	if (_forceRebuild) return false;
 	if (!exists(oFile) || !exists(fpFile)) return false;
 	const storedFp = try readFile(fpFile) catch "";
-	if (storedFp === fp) return true;
+	if (storedFp == fp) return true;
 	return false;
 }
 
@@ -633,7 +633,7 @@ export function writeCompileFingerprint(modPath: string, cCode: string, compileC
 
 // Precomputed-fp variant for the parallel compile path (fp from moduleCompileFp).
 export function writeCompileFingerprintFp(modPath: string, fp: string): void {
-	if (fp === "") return; // dispatcher job — .o lives next to the output, not in the cache
+	if (fp == "") return; // dispatcher job — .o lives next to the output, not in the cache
 	atomicWriteFile(stableOFileFp(modPath, fp) + ".cfp", fp);
 }
 
@@ -641,7 +641,7 @@ export function writeCompileFingerprintFp(modPath: string, fp: string): void {
 // triggers a clean retry. Removes .o (potentially partial/empty from failed
 // zig cc) + .cfp + .c, all fp-keyed. No-op for dispatcher jobs (empty fp).
 export function invalidateCompileCache(modPath: string, fp: string): void {
-	if (fp === "") return;
+	if (fp == "") return;
 	tryRemoveFile(stableOFileFp(modPath, fp));
 	tryRemoveFile(stableOFileFp(modPath, fp) + ".cfp");
 	tryRemoveFile(stableCFileFp(modPath, fp));
@@ -675,17 +675,17 @@ export function isLinkCached(oFileList: string, linkFlags: string, outputFile: s
 
 	for (const line of lines) {
 		let val = parseLineValue(line, PRE_LINKCMD);
-		if (val !== "") { storedCmd = val; continue; }
+		if (val != "") { storedCmd = val; continue; }
 		val = parseLineValue(line, PRE_OFILES);
-		if (val !== "") { storedOFiles = val; continue; }
+		if (val != "") { storedOFiles = val; continue; }
 		val = parseLineValue(line, PRE_OUTHASH);
-		if (val !== "") { storedOutputHash = val; continue; }
+		if (val != "") { storedOutputHash = val; continue; }
 	}
 
-	if (storedCmd !== linkFlags) return false;
-	if (storedOFiles !== oFileList) return false;
+	if (storedCmd != linkFlags) return false;
+	if (storedOFiles != oFileList) return false;
 	const currentOutputHash = hashFile(outputFile);
-	if (storedOutputHash !== currentOutputHash) return false;
+	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
 
@@ -727,7 +727,7 @@ const HEADER_ENTRY_MAGIC = "MSHI1";
 // Global when available, else the local cache dir (exotic environments).
 function headersCacheDir(): string {
 	const root = globalCacheRoot();
-	if (root !== "") return `${root}/headers`;
+	if (root != "") return `${root}/headers`;
 	return `${getCacheDir()}/headers`;
 }
 
@@ -737,7 +737,7 @@ export function headerInlineKey(source: string, modulePath: string, compact: boo
 
 function depUnderStampedTrees(path: string): boolean {
 	const root = resolveRuntimeDir();
-	if (root === "") return false;
+	if (root == "") return false;
 	return path.startsWith(`${root}/runtime/`) || path.startsWith(`${root}/vendor/`);
 }
 
@@ -750,8 +750,8 @@ function verifyHeaderDep(dep: string): boolean {
 	const hash = dep.slice(tab + 1, dep.length);
 	if (depUnderStampedTrees(path)) return true;
 	const content = try readFile(path) catch "";
-	if (hash === "-") return content === "";
-	return content !== "" && hashContent(content) === hash;
+	if (hash == "-") return content == "";
+	return content != "" && hashContent(content) == hash;
 }
 
 // Lookup a cached inlineHeaderImports output. Entry layout:
@@ -759,7 +759,7 @@ function verifyHeaderDep(dep: string): boolean {
 // Returns "" on miss, disabled, corrupt entry, or any dep that no longer
 // verifies. A miss never deletes the entry — concurrent readers first.
 export function lookupHeaderInline(key: string): string {
-	if (env.get("MSC_NO_HEADER_CACHE") !== "") return "";
+	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	const body = try readFile(`${headersCacheDir()}/${key}.hi`) catch "";
 	if (!body.startsWith(`${HEADER_ENTRY_MAGIC}\n`)) return "";
 	let pos = HEADER_ENTRY_MAGIC.length + 1;
@@ -768,8 +768,8 @@ export function lookupHeaderInline(key: string): string {
 		if (nl < 0) return "";
 		const line = body.slice(pos, nl);
 		pos = nl + 1;
-		if (line === "--") break;
-		if (line.length === 0) continue;
+		if (line == "--") break;
+		if (line.length == 0) continue;
 		if (!verifyHeaderDep(line)) return "";
 	}
 	return body.slice(pos, body.length);
@@ -779,7 +779,7 @@ export function lookupHeaderInline(key: string): string {
 // the recorded read set (path+hash / path+absent lines). Deterministic
 // content for a given key, so concurrent publishers write identical bytes.
 export function storeHeaderInline(key: string, deps: string[], output: string): void {
-	if (env.get("MSC_NO_HEADER_CACHE") !== "") return;
+	if (env.get("MSC_NO_HEADER_CACHE") != "") return;
 	const dir = headersCacheDir();
 	ensureDir(dir);
 	const body = `${HEADER_ENTRY_MAGIC}\n${deps.join("\n")}\n--\n${output}`;
@@ -823,7 +823,7 @@ test "toolchain stamp folds into module and external fingerprints" {
 	const stamp = toolchainStamp();
 	assert stamp.length > 0;
 	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(stamp, 0) >= 0;
-	assert toolchainStamp() === stamp;
+	assert toolchainStamp() == stamp;
 }
 
 test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {
@@ -884,8 +884,8 @@ test "distinct fingerprints get distinct physical objects" {
 	const modPath = "test/bug6/probe_two_configs.ms";
 	const fpA = moduleCompileFp("int main(){}", "cc -O0");
 	const fpB = moduleCompileFp("int main(){}", "cc -O2");
-	assert stableOFileFp(modPath, fpA) !== stableOFileFp(modPath, fpB);
-	assert stableCFileFp(modPath, fpA) !== stableCFileFp(modPath, fpB);
+	assert stableOFileFp(modPath, fpA) != stableOFileFp(modPath, fpB);
+	assert stableCFileFp(modPath, fpA) != stableCFileFp(modPath, fpB);
 	bug6_clearArtifacts(modPath, fpA);
 	bug6_clearArtifacts(modPath, fpB);
 }
@@ -903,7 +903,7 @@ test "cache miss keeps the stale object in place (no remove-on-miss)" {
 	assert exists(stableOFileFp(modPath, fp));
 	assert atomicWriteFile(stableOFileFp(modPath, fp), "new-object");
 	const body = try readFile(stableOFileFp(modPath, fp)) catch "";
-	assert body === "new-object";
+	assert body == "new-object";
 	bug6_clearArtifacts(modPath, fp);
 }
 
@@ -912,13 +912,13 @@ test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
 	atomicWriteFile(p, "one");
 	atomicWriteFile(p, "two");
 	const c = try readFile(p) catch "";
-	assert c === "two";
+	assert c == "two";
 	const entries = readDir(getCacheDir());
 	let leftovers = 0;
 	for (const e of entries) {
 		if (e.indexOf("atomic_probe.txt.tmp.", 0) >= 0) leftovers = leftovers + 1;
 	}
-	assert leftovers === 0;
+	assert leftovers == 0;
 	remove(p);
 }
 
@@ -934,11 +934,11 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 	writeFile(hpath, orig);
 	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false);
 	storeHeaderInline(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
-	assert lookupHeaderInline(key) === "OUT-1";
+	assert lookupHeaderInline(key) == "OUT-1";
 	writeFile(hpath, "extern int hcx2(void);\n");
-	assert lookupHeaderInline(key) === "";
+	assert lookupHeaderInline(key) == "";
 	writeFile(hpath, orig);
-	assert lookupHeaderInline(key) === "OUT-1";
+	assert lookupHeaderInline(key) == "OUT-1";
 }
 
 test "header cache: absent dep stays valid until the file appears" {
@@ -946,9 +946,9 @@ test "header cache: absent dep stays valid until the file appears" {
 	if (exists(gone)) remove(gone);
 	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false);
 	storeHeaderInline(key, [`${gone}\t-`], "OUT-2");
-	assert lookupHeaderInline(key) === "OUT-2";
+	assert lookupHeaderInline(key) == "OUT-2";
 	writeFile(gone, "int x;\n");
-	assert lookupHeaderInline(key) === "";
+	assert lookupHeaderInline(key) == "";
 	if (exists(gone)) remove(gone);
 }
 
@@ -956,28 +956,28 @@ test "header cache: deps under runtime//vendor/ skip disk re-verification" {
 	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false);
 	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
 	storeHeaderInline(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
-	assert lookupHeaderInline(key) === "OUT-3";
+	assert lookupHeaderInline(key) == "OUT-3";
 }
 
 test "header cache: malformed dep line is a miss, empty dep list is a hit" {
 	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false);
 	storeHeaderInline(keyA, ["nodep-newline"], "OUT-4");
-	assert lookupHeaderInline(keyA) === "";
+	assert lookupHeaderInline(keyA) == "";
 	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false);
 	storeHeaderInline(keyB, [], "OUT-5");
-	assert lookupHeaderInline(keyB) === "OUT-5";
+	assert lookupHeaderInline(keyB) == "OUT-5";
 }
 
 test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
 	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false);
 	storeHeaderInline(key, [], "OUT-6");
-	assert lookupHeaderInline(key) === "OUT-6";
+	assert lookupHeaderInline(key) == "OUT-6";
 	env.set("MSC_NO_HEADER_CACHE", "1");
 	try {
-		assert lookupHeaderInline(key) === "";
+		assert lookupHeaderInline(key) == "";
 		storeHeaderInline(key, [], "OUT-7");
 	} finally {
 		env.delete("MSC_NO_HEADER_CACHE");
 	}
-	assert lookupHeaderInline(key) === "OUT-6";
+	assert lookupHeaderInline(key) == "OUT-6";
 }

@@ -27,11 +27,11 @@ async function main() {
     const b = await Promise.all([fu("x"), fu("y")]);
     const c = await Promise.all([fs("s"), fs("t")]);
     const d = await Promise.all([fb(1), fb(2)]);
-    if (a.length + b.length + c.length + d.length !== 8) throw "GUARD RED: lengths";
-    if (a[0] + a[1] !== 6.0) throw "GUARD RED: double values";
-    if (b[0].name !== "x" || b[1].name !== "y") throw "GUARD RED: struct values";
-    if (c[0] !== "s!" || c[1] !== "t!") throw "GUARD RED: string values";
-    if (d[0].v + d[1].v !== 3) throw "GUARD RED: ref values";
+    if (a.length + b.length + c.length + d.length != 8) throw "GUARD RED: lengths";
+    if (a[0] + a[1] != 6.0) throw "GUARD RED: double values";
+    if (b[0].name != "x" || b[1].name != "y") throw "GUARD RED: struct values";
+    if (c[0] != "s!" || c[1] != "t!") throw "GUARD RED: string values";
+    if (d[0].v + d[1].v != 3) throw "GUARD RED: ref values";
     // (An UNREAD Promise.all result is released by the result future's
     // valueDestructor when the future is destroyed on the drain path — not
     // observable via the exit ledger: futures pending at exit are exit-slack

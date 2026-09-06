@@ -51,17 +51,17 @@ function monoStructuralKey(t: Type): string {
 }
 
 function monoOwnerPath(t: Type): string {
-	if (t.sym !== null && t.sym.modulePath !== "") return t.sym.modulePath;
-	if (t.typeNames !== null && t.typeNames.length > 0) {
+	if (t.sym != null && t.sym.modulePath != "") return t.sym.modulePath;
+	if (t.typeNames != null && t.typeNames.length > 0) {
 		const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
-		if (byShape !== "") return byShape;
+		if (byShape != "") return byShape;
 	}
 	return getGlobalTypeOwner(t.typeName);
 }
 
 // C-safe type key for name mangling and dedup.
 export function monoTypeKey(t: Type | null): string {
-	if (t === null) return "null";
+	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Number => "number",
 		TypeKind.String => "string",
@@ -84,9 +84,9 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
 		TypeKind.Struct | TypeKind.Enum => {
-			if (t.typeName === "") return "anon" + hashToBase36(monoStructuralKey(t));
+			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
 			const owner = monoOwnerPath(t);
-			if (owner !== "") return t.typeName + "_" + hashToBase36(owner);
+			if (owner != "") return t.typeName + "_" + hashToBase36(owner);
 			return t.typeName;
 		},
 		TypeKind.GenericInstance => {
@@ -111,7 +111,7 @@ export function monoTypeKey(t: Type | null): string {
 			return key + "_r_" + monoTypeKey(t.typeReturn);
 		},
 		TypeKind.Union => {
-			if (t.typeName !== "") return t.typeName;
+			if (t.typeName != "") return t.typeName;
 			let key = "union";
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKey(child);
@@ -131,8 +131,8 @@ export function monoTypeKey(t: Type | null): string {
 		// keying on the kind ordinal plus name or structure.
 		_ => {
 			let key = "k" + (t.kind as number).toString();
-			if (t.typeName !== "") key = key + "_" + hashToBase36(t.typeName);
-			if (t.typeReturn !== null) key = key + "_" + monoTypeKey(t.typeReturn);
+			if (t.typeName != "") key = key + "_" + hashToBase36(t.typeName);
+			if (t.typeReturn != null) key = key + "_" + monoTypeKey(t.typeReturn);
 			for (const child of t.typeChildren) key = key + "_" + monoTypeKey(child);
 			return key;
 		},
@@ -158,9 +158,9 @@ export function mangleMonoName(baseName: string, concreteTypes: Type[]): string 
 
 // Compare two type arg key arrays for exact match (Standard reference pattern)
 function sameTypeArgKeys(a: string[], b: string[]): boolean {
-	if (a.length !== b.length) return false;
+	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (a[i] !== b[i]) return false;
+		if (a[i] != b[i]) return false;
 	}
 	return true;
 }
@@ -181,7 +181,7 @@ export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 export function monoFindEntry(registry: MonoRegistry, genericName: string, typeArgKeys: string[]): MonoEntry {
 	for (let i = 0; i < registry.entries.length; i += 1) {
 		const entry = registry.entries[i];
-		if (entry.genericName === genericName && sameTypeArgKeys(typeArgKeys, buildTypeArgKeys(entry.concreteTypes))) {
+		if (entry.genericName == genericName && sameTypeArgKeys(typeArgKeys, buildTypeArgKeys(entry.concreteTypes))) {
 			return entry;
 		}
 	}
@@ -199,7 +199,7 @@ export function monoRegister(
 	// Check for existing (dedup)
 	const typeArgKeys = buildTypeArgKeys(concreteTypes);
 	const existing = monoFindEntry(registry, genericName, typeArgKeys);
-	if (existing !== null) return existing;
+	if (existing != null) return existing;
 
 	// Create new entry
 	const mangledName = mangleMonoName(genericName, concreteTypes);
@@ -217,35 +217,35 @@ export function monoRegister(
 // ===== Tests =====
 test "monoTypeKey primitives" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(num) === "number";
+	assert monoTypeKey(num) == "number";
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(str) === "string";
+	assert monoTypeKey(str) == "string";
 	const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(b) === "boolean";
+	assert monoTypeKey(b) == "boolean";
 }
 
 test "monoTypeKey array" {
 	const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(arrT) === "arr_number";
+	assert monoTypeKey(arrT) == "arr_number";
 }
 
 test "monoTypeKey object" {
 	const obj: Type = { kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(obj) === "Box";
+	assert monoTypeKey(obj) == "Box";
 }
 
 test "mangleMonoName single param" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const types: Type[] = [num];
-	assert mangleMonoName("identity", types) === "identity__number";
+	assert mangleMonoName("identity", types) == "identity__number";
 }
 
 test "mangleMonoName two params" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const types: Type[] = [num, str];
-	assert mangleMonoName("pair", types) === "pair__number_string";
+	assert mangleMonoName("pair", types) == "pair__number_string";
 }
 
 test "registry dedup" {
@@ -254,15 +254,15 @@ test "registry dedup" {
 	const params: string[] = ["T"];
 	const types1: Type[] = [num];
 	const entry1 = monoRegister(reg, "identity", params, types1);
-	assert entry1.mangledName === "identity__number";
-	assert reg.entries.length === 1;
+	assert entry1.mangledName == "identity__number";
+	assert reg.entries.length == 1;
 
 	// Same instantiation → dedup
 	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const types2: Type[] = [num2];
 	const entry2 = monoRegister(reg, "identity", params, types2);
-	assert entry2.mangledName === "identity__number";
-	assert reg.entries.length === 1;
+	assert entry2.mangledName == "identity__number";
+	assert reg.entries.length == 1;
 }
 
 test "registry different types" {
@@ -274,22 +274,22 @@ test "registry different types" {
 	const types2: Type[] = [str];
 	monoRegister(reg, "identity", params, types1);
 	monoRegister(reg, "identity", params, types2);
-	assert reg.entries.length === 2;
+	assert reg.entries.length == 2;
 }
 
 test "monoTypeKey anonymous structs key apart" {
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const named: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["name"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const tagged: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["tag"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(named) !== monoTypeKey(tagged);
-	assert monoTypeKey(named) !== "";
+	assert monoTypeKey(named) != monoTypeKey(tagged);
+	assert monoTypeKey(named) != "";
 }
 
 test "monoTypeKey unhandled kinds key apart" {
 	const never: Type = { kind: TypeKind.Never, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	const unknown: Type = { kind: TypeKind.Unknown, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	assert monoTypeKey(never) !== monoTypeKey(unknown);
-	assert monoTypeKey(never) !== "unknown";
+	assert monoTypeKey(never) != monoTypeKey(unknown);
+	assert monoTypeKey(never) != "unknown";
 }
 
 test "registry separates anonymous struct instantiations" {
@@ -300,12 +300,12 @@ test "registry separates anonymous struct instantiations" {
 	const params: string[] = ["T"];
 	monoRegister(reg, "wrap", params, [named]);
 	monoRegister(reg, "wrap", params, [tagged]);
-	assert reg.entries.length === 2;
+	assert reg.entries.length == 2;
 }
 
 test "findEntry returns null for missing" {
 	const reg = createMonoRegistry();
 	const keys: string[] = ["number"];
 	const result = monoFindEntry(reg, "nonexistent", keys);
-	assert result === null;
+	assert result == null;
 }

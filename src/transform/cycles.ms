@@ -23,20 +23,20 @@ import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { mangleMonoName } from "../monomorphize/registry";
 
 function typeIdentity(t: Type): string {
-	if (t.kind === TypeKind.GenericInstance) {
-		if (t.typeName !== "") return mangleMonoName(t.typeName, t.typeChildren);
+	if (t.kind == TypeKind.GenericInstance) {
+		if (t.typeName != "") return mangleMonoName(t.typeName, t.typeChildren);
 		return "";
 	}
-	if (t.typeName !== "" && !isAnonTypeName(t.typeName)) return t.typeName;
+	if (t.typeName != "" && !isAnonTypeName(t.typeName)) return t.typeName;
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
 }
 
 function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	return match (t.kind) {
 		TypeKind.Ref => {
-			if (t.typeReturn === null) return true;
+			if (t.typeReturn == null) return true;
 			return cfaAux(t.typeReturn, origKey, true, marker);
 		},
 		TypeKind.Function => true,
@@ -46,14 +46,14 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			// subclassed into a back-edge, so it can form a cycle independent of its
 			// own declared fields. Independent of the typeExtra walk below (that covers
 			// field inheritance; BOTH apply).
-			if ((t.typeFlags & TypeFlag.OpenClass) !== 0) return true;
+			if ((t.typeFlags & TypeFlag.OpenClass) != 0) return true;
 			const key = typeIdentity(t);
-			if (withRef && key !== "" && key === origKey) return true;
-			if (key !== "") {
+			if (withRef && key != "" && key == origKey) return true;
+			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
 				nameSetAdd(marker, key);
 			}
-			if (t.typeExtra !== null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
+			if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
 			for (const child of t.typeChildren) {
 				if (cfaAux(child, origKey, withRef, marker)) return true;
 			}
@@ -61,8 +61,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 		},
 		TypeKind.Union => {
 			const key = typeIdentity(t);
-			if (withRef && key !== "" && key === origKey) return true;
-			if (key !== "") {
+			if (withRef && key != "" && key == origKey) return true;
+			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
 				nameSetAdd(marker, key);
 			}
@@ -80,8 +80,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 		TypeKind.GenericInstance => {
 			if (isAwaitable(t)) return false;
 			const key = typeIdentity(t);
-			if (withRef && key !== "" && key === origKey) return true;
-			if (key !== "") {
+			if (withRef && key != "" && key == origKey) return true;
+			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
 				nameSetAdd(marker, key);
 			}
@@ -98,27 +98,27 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 }
 
 export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	let subject: Type | null = t;
-	if (subject.kind === TypeKind.Union) {
+	if (subject.kind == TypeKind.Union) {
 		const refInner = unwrapRefNullUnion(subject);
-		if (refInner !== null) subject = refInner;
+		if (refInner != null) subject = refInner;
 	}
-	if (subject.kind === TypeKind.Function) return true;
-	if (subject.kind === TypeKind.Ptr || isUnresolvedType(subject)) return false;
-	if (subject.kind === TypeKind.Ref) {
-		if (subject.typeReturn === null) return true;
+	if (subject.kind == TypeKind.Function) return true;
+	if (subject.kind == TypeKind.Ptr || isUnresolvedType(subject)) return false;
+	if (subject.kind == TypeKind.Ref) {
+		if (subject.typeReturn == null) return true;
 		subject = subject.typeReturn;
 	}
-	if (subject === null) return false;
+	if (subject == null) return false;
 	const key = typeIdentity(subject);
-	if (key !== "") {
+	if (key != "") {
 		if (nameSetContains(cyclicCache, key)) return true;
 		if (nameSetContains(acyclicCache, key)) return false;
 	}
 	const marker = createNameSet();
 	const result = cfaAux(subject, key, false, marker);
-	if (key !== "") {
+	if (key != "") {
 		if (result) { nameSetAdd(cyclicCache, key); } else { nameSetAdd(acyclicCache, key); }
 	}
 	return result;

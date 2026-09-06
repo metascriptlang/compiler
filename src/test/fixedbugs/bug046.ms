@@ -23,8 +23,8 @@ test "bug046: tuple element type inferred without annotation (struct field)" {
 	const h: Bug046Holder = { p: [t, 11] };
 	const a = h.p[0];
 	const b = h.p[1];
-	assert a.kind === 6;
-	assert b === 11;
+	assert a.kind == 6;
+	assert b == 11;
 }
 
 test "bug046: tuple element type inferred without annotation (bare local)" {
@@ -32,6 +32,6 @@ test "bug046: tuple element type inferred without annotation (bare local)" {
 	const p: [Bug046Ty, number] = [t, 42];
 	const a = p[0];
 	const b = p[1];
-	assert a.kind === 9;
-	assert b === 42;
+	assert a.kind == 9;
+	assert b == 42;
 }

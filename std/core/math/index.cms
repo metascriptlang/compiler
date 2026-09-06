@@ -62,7 +62,7 @@ extern function time(slot: int64): int64 from "time";
 let randState: uint64 = 0;
 
 export function random(this typeof Math): float64 {
-	if (randState === 0) {
+	if (randState == 0) {
 		randState = ((time(0) as uint64) * 6364136223846793005) | 1;
 	}
 	let x = randState;

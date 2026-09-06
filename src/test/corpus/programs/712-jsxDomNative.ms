@@ -14,7 +14,7 @@ import { jsxDom, el, txt, attr, DomNode, render } from "std/meta/jsxDom";
 function main(): void {
 	const tree: DomNode = jsxDom(<div id="app"><h1>Hi</h1><p>x</p></div>);
 	const out = render(tree);
-	if (out === "<div id=\"app\"><h1>Hi</h1><p>x</p></div>") { console.log("jsxdom-native PASS"); }
+	if (out == "<div id=\"app\"><h1>Hi</h1><p>x</p></div>") { console.log("jsxdom-native PASS"); }
 	else { console.log("jsxdom-native FAIL: " + out); }
 }
 main();

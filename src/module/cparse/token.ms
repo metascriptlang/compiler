@@ -92,7 +92,7 @@ export function makeEofToken(file: string): CToken {
 
 test "EOF token constructs" {
 	const t = makeEofToken("test.h");
-	assert t.kind === CTokenKind.Eof;
-	assert t.file === "test.h";
-	assert t.atBol === true;
+	assert t.kind == CTokenKind.Eof;
+	assert t.file == "test.h";
+	assert t.atBol == true;
 }

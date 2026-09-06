@@ -14,9 +14,9 @@ function main(): void {
 	console.log("size=" + m.size.toString());
 
 	const hit = m.get("beta");
-	if (hit !== null) { console.log("get=" + hit); }
+	if (hit != null) { console.log("get=" + hit); }
 	const miss = m.get("nope");
-	if (miss === null) { console.log("miss=null"); }
+	if (miss == null) { console.log("miss=null"); }
 
 	m.set("beta", "b2");
 	console.log("sizeAfterUpdate=" + m.size.toString());
@@ -46,7 +46,7 @@ function main(): void {
 	console.log("sizeAfterClear=" + m.size.toString());
 	m.set("omega", "z1");
 	const back = m.get("omega");
-	if (back !== null) { console.log("reuseAfterClear=" + back); }
+	if (back != null) { console.log("reuseAfterClear=" + back); }
 
 	let fe = "";
 	m.forEach((v: string, k: string) => { fe = fe + k + "=" + v + ";"; });
@@ -55,7 +55,7 @@ function main(): void {
 	const lit: Map<string, string> = { "one": "u1", "two": "u2" };
 	lit["three"] = "u3";
 	const two = lit["two"];
-	if (two !== null) { console.log("subscript=" + two); }
+	if (two != null) { console.log("subscript=" + two); }
 	let litKeys = "";
 	for (const k of lit.keys()) { litKeys = litKeys + k + ","; }
 	console.log("literalOrder=" + litKeys);

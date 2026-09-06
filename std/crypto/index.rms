@@ -21,7 +21,7 @@ export function cleanup(): void {
 
 export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
 	const result = msCryptoHashString(algorithm, data, encoding);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(result);

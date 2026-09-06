@@ -18,7 +18,7 @@ interface User {
 test "optional chaining basic" {
 	const u: User = { name: "Alice", address: { city: "NYC", zip: "10001" } };
 	const city = u?.name;
-	assert city === "Alice";
+	assert city == "Alice";
 }
 
 // =========================================================
@@ -28,13 +28,13 @@ test "optional chaining basic" {
 test "nullish coalescing with values" {
 	const a: number = 42;
 	const b = a ?? 0;
-	assert b === 42;
+	assert b == 42;
 }
 
 test "nullish coalescing with null" {
 	const a = null as unknown as string;
 	const b = a ?? "default";
-	assert b === "default";
+	assert b == "default";
 }
 
 // =========================================================
@@ -42,10 +42,10 @@ test "nullish coalescing with null" {
 // =========================================================
 
 test "exponentiation" {
-	assert 2 ** 3 === 8;
-	assert 3 ** 2 === 9;
-	assert 2 ** 10 === 1024;
-	assert 5 ** 0 === 1;
+	assert 2 ** 3 == 8;
+	assert 3 ** 2 == 9;
+	assert 2 ** 10 == 1024;
+	assert 5 ** 0 == 1;
 }
 
 // =========================================================
@@ -55,9 +55,9 @@ test "exponentiation" {
 test "increment and decrement" {
 	let x = 5;
 	x++;
-	assert x === 6;
+	assert x == 6;
 	x--;
-	assert x === 5;
+	assert x == 5;
 }
 
 // =========================================================
@@ -66,9 +66,9 @@ test "increment and decrement" {
 
 test "unary minus" {
 	const a = -5;
-	assert a === -5;
-	assert -a === 5;
-	assert -(-3) === 3;
+	assert a == -5;
+	assert -a == 5;
+	assert -(-3) == 3;
 }
 
 // =========================================================
@@ -80,9 +80,9 @@ function classify(n: number): string {
 }
 
 test "nested ternary" {
-	assert classify(5) === "positive";
-	assert classify(-3) === "negative";
-	assert classify(0) === "zero";
+	assert classify(5) == "positive";
+	assert classify(-3) == "negative";
+	assert classify(0) == "zero";
 }
 
 // =========================================================
@@ -90,8 +90,8 @@ test "nested ternary" {
 // =========================================================
 
 test "string + boolean coercion" {
-	assert "val=" + true === "val=true";
-	assert "val=" + false === "val=false";
+	assert "val=" + true == "val=true";
+	assert "val=" + false == "val=false";
 }
 
 // =========================================================
@@ -103,14 +103,14 @@ test "multiple variable declarations" {
 	let b = 2;
 	let c = 3;
 	const sum = a + b + c;
-	assert sum === 6;
+	assert sum == 6;
 
 	// Swap via temp
 	let temp = a;
 	a = b;
 	b = temp;
-	assert a === 2;
-	assert b === 1;
+	assert a == 2;
+	assert b == 1;
 }
 
 // =========================================================
@@ -134,10 +134,10 @@ test "chained boolean logic" {
 // =========================================================
 
 test "complex expressions" {
-	assert (2 + 3) * 4 === 20;
-	assert 2 + 3 * 4 === 14;
-	assert (10 - 2) / (4 - 2) === 4;
-	assert 1 + 2 + 3 + 4 + 5 === 15;
+	assert (2 + 3) * 4 == 20;
+	assert 2 + 3 * 4 == 14;
+	assert (10 - 2) / (4 - 2) == 4;
+	assert 1 + 2 + 3 + 4 + 5 == 15;
 }
 
 // =========================================================
@@ -171,18 +171,18 @@ function isPositive(n: number): boolean { return n > 0; }
 
 test "function type aliases" {
 	const pos = filter([-2, -1, 0, 1, 2, 3], isPositive);
-	assert pos.length === 3;
-	assert pos[0] === 1;
-	assert pos[2] === 3;
+	assert pos.length == 3;
+	assert pos[0] == 1;
+	assert pos[2] == 3;
 }
 
 function addBang(s: string): string { return s + "!"; }
 
 test "string transform type alias" {
 	const result = mapStr(["hello", "world"], addBang);
-	assert result.length === 2;
-	assert result[0] === "hello!";
-	assert result[1] === "world!";
+	assert result.length == 2;
+	assert result[0] == "hello!";
+	assert result[1] == "world!";
 }
 
 // =========================================================
@@ -191,11 +191,11 @@ test "string transform type alias" {
 
 test "empty literals" {
 	const empty: number[] = [];
-	assert empty.length === 0;
+	assert empty.length == 0;
 
 	const strs: string[] = [];
 	strs.push("a");
-	assert strs.length === 1;
+	assert strs.length == 1;
 }
 
 // =========================================================
@@ -204,13 +204,13 @@ test "empty literals" {
 
 test "array literals" {
 	const nums: number[] = [10, 20, 30];
-	assert nums.length === 3;
-	assert nums[0] === 10;
-	assert nums[2] === 30;
+	assert nums.length == 3;
+	assert nums[0] == 10;
+	assert nums[2] == 30;
 
 	const strs: string[] = ["a", "b", "c"];
-	assert strs.length === 3;
-	assert strs[1] === "b";
+	assert strs.length == 3;
+	assert strs[1] == "b";
 }
 
 // =========================================================
@@ -226,8 +226,8 @@ test "deeply nested access" {
 		middle: { inner: { val: 42 } },
 		name: "test",
 	};
-	assert obj.middle.inner.val === 42;
-	assert obj.name === "test";
+	assert obj.middle.inner.val == 42;
+	assert obj.name == "test";
 }
 
 // =========================================================

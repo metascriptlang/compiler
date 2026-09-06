@@ -32,9 +32,9 @@ function egOuter<T>(xs: T[]): number {
 }
 
 test "explicit T type-arg survives instantiation with nested-call args" {
-	assert egWrap<number>({ each: egEach }) === "vvv", "wrap";
+	assert egWrap<number>({ each: egEach }) == "vvv", "wrap";
 }
 
 test "nested explicit type-args: inner call steals nothing from outer" {
-	assert egOuter<number>([1, 2, 3]) === 3, "outer";
+	assert egOuter<number>([1, 2, 3]) == 3, "outer";
 }

@@ -45,7 +45,7 @@ export function checkNoGenericParamLeakage(program: Node): InvariantViolation[] 
 // Recursive walker. `inTemplate` propagates down so nodes inside a generic
 // template decl skip the invariant (legitimate parametric).
 function walkAndCheck(node: Node, contextName: string, inTemplate: boolean, out: InvariantViolation[]): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	let nextContext = contextName;
 	let nextInTemplate = inTemplate;
@@ -67,8 +67,8 @@ function walkAndCheck(node: Node, contextName: string, inTemplate: boolean, out:
 		_ => {},
 	};
 
-	const isClosureLiteral = node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr;
-	if (!nextInTemplate && isClosureLiteral && node.nodeType !== null) {
+	const isClosureLiteral = node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr;
+	if (!nextInTemplate && isClosureLiteral && node.nodeType != null) {
 		const leak = findGenericParamInType(node.nodeType, "");
 		if (leak.found) {
 			out.push({
@@ -76,8 +76,8 @@ function walkAndCheck(node: Node, contextName: string, inTemplate: boolean, out:
 				typePath: leak.path,
 				leakedTypeName: leak.name,
 				contextName: nextContext,
-				line: node.location !== null ? node.location.line : 0,
-				column: node.location !== null ? node.location.column : 0,
+				line: node.location != null ? node.location.line : 0,
+				column: node.location != null ? node.location.column : 0,
 			});
 		}
 	}
@@ -98,33 +98,33 @@ interface LeakResult {
 // (typeChildren[0].typeReturn, etc.) for diagnostics. See `Type Storage
 // Schema` block in src/checker/types.ms for field semantics.
 function findGenericParamInType(t: Type, path: string): LeakResult {
-	if (t === null) return { found: false, path: "", name: "" };
+	if (t == null) return { found: false, path: "", name: "" };
 
-	if (t.kind === TypeKind.GenericParam) {
-		return { found: true, path: path === "" ? "<self>" : path, name: t.typeName };
+	if (t.kind == TypeKind.GenericParam) {
+		return { found: true, path: path == "" ? "<self>" : path, name: t.typeName };
 	}
 
 	// Nominal struct/union: skip recursion. Inner GenericParam references
 	// are bound via typeChildren at the type's instantiation site, not at
 	// this reference point.
-	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Union) && t.typeName !== "") {
+	if ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && t.typeName != "") {
 		return { found: false, path: "", name: "" };
 	}
 
-	if (t.typeReturn !== null) {
-		const r = findGenericParamInType(t.typeReturn, path === "" ? "typeReturn" : path + ".typeReturn");
+	if (t.typeReturn != null) {
+		const r = findGenericParamInType(t.typeReturn, path == "" ? "typeReturn" : path + ".typeReturn");
 		if (r.found) return r;
 	}
 
-	if (t.typeExtra !== null) {
-		const r = findGenericParamInType(t.typeExtra, path === "" ? "typeExtra" : path + ".typeExtra");
+	if (t.typeExtra != null) {
+		const r = findGenericParamInType(t.typeExtra, path == "" ? "typeExtra" : path + ".typeExtra");
 		if (r.found) return r;
 	}
 
-	if (t.typeChildren !== null) {
+	if (t.typeChildren != null) {
 		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			const child = t.typeChildren[i];
-			const childPath = (path === "" ? "typeChildren[" : path + ".typeChildren[") + i.toString() + "]";
+			const childPath = (path == "" ? "typeChildren[" : path + ".typeChildren[") + i.toString() + "]";
 			const r = findGenericParamInType(child, childPath);
 			if (r.found) return r;
 		}
@@ -138,7 +138,7 @@ export function formatViolation(v: InvariantViolation): string {
 }
 
 export function formatViolations(vs: InvariantViolation[]): string {
-	if (vs.length === 0) return "(no violations)";
+	if (vs.length == 0) return "(no violations)";
 	let out = `${vs.length} invariant violation(s):\n`;
 	for (const v of vs) { out = `${out}  ${formatViolation(v)}\n`; }
 	return out;

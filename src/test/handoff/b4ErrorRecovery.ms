@@ -19,36 +19,36 @@ import { lookupSymbol } from "../../checker/symbol";
 
 test "reported 'any' resolves to Error, silent probe stays Inferred" {
 	const ctx = checkSource("const _p: number = 0;");
-	assert ctx !== null;
-	assert resolveAnnotation("any", ctx, 1, 1).kind === TypeKind.Error;
+	assert ctx != null;
+	assert resolveAnnotation("any", ctx, 1, 1).kind == TypeKind.Error;
 	assert hasErrors(ctx);
 	const silent = checkSource("const _p: number = 0;");
-	assert resolveAnnotation("any", silent, 0, 0).kind === TypeKind.Inferred;
+	assert resolveAnnotation("any", silent, 0, 0).kind == TypeKind.Inferred;
 	assert !hasErrors(silent);
 }
 
 test "reported unresolved type name resolves to Error, silent probe stays Inferred" {
 	const ctx = checkSource("const _p: number = 0;");
-	assert ctx !== null;
-	assert resolveAnnotation("NoSuchTypeZz", ctx, 1, 1).kind === TypeKind.Error;
+	assert ctx != null;
+	assert resolveAnnotation("NoSuchTypeZz", ctx, 1, 1).kind == TypeKind.Error;
 	assert hasErrors(ctx);
 	const silent = checkSource("const _p: number = 0;");
-	assert resolveAnnotation("NoSuchTypeZz", silent, 0, 0).kind === TypeKind.Inferred;
+	assert resolveAnnotation("NoSuchTypeZz", silent, 0, 0).kind == TypeKind.Inferred;
 	assert !hasErrors(silent);
 }
 
 test "cyclic interface extends errors once, no cascade" {
 	const ctx = checkSource("interface A extends A { }");
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
-	assert errorCount(ctx) === 1;
+	assert errorCount(ctx) == 1;
 }
 
 test "template arity mismatch types the call as Error" {
 	const ctx = checkSource("template tw<T>(a: T): boolean { return a == a; }\nconst r = tw(1, 2);");
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "r");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Error;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Error;
 }

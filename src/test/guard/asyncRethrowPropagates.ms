@@ -41,14 +41,14 @@ async function run(): Promise<int32> {
     for (let i = 0; i < 8; i += 1) {
         try { const v = await wrapFresh(); bad += 1; }
         catch (e2) {
-            if (e2.message !== "wrapped:deep") {
+            if (e2.message != "wrapped:deep") {
                 console.log(`GUARD-FAIL wrap got:${e2.message}`);
                 bad += 1;
             }
         }
         try { const v2 = await rethrow(); bad += 1; }
         catch (e3) {
-            if (e3.message !== "deep") {
+            if (e3.message != "deep") {
                 console.log(`GUARD-FAIL rethrow got:${e3.message}`);
                 bad += 1;
             }
@@ -63,19 +63,19 @@ async function run(): Promise<int32> {
 async function single(): Promise<int32> {
     let bad = 0;
     try { const v = await rethrow(); bad += 1; }
-    catch (e) { if (e.message !== "deep") bad += 1; }
+    catch (e) { if (e.message != "deep") bad += 1; }
     try { const v = await wrapFresh(); bad += 1; }
-    catch (e) { if (e.message !== "wrapped:deep") bad += 1; }
+    catch (e) { if (e.message != "wrapped:deep") bad += 1; }
     return bad;
 }
 
 function main(): int32 {
     const badSingle = waitFor(single());
     const bad = waitFor(run());
-    if (badSingle !== 0 || bad !== 0) return 1;
+    if (badSingle != 0 || bad != 0) return 1;
     console.log("ok");
     return 0;
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

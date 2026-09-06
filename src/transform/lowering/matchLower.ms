@@ -32,9 +32,9 @@ import { hashStringSigned } from "std/hash";
 // then lowers the match inside its guard.
 
 function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	if (expr.kind === NodeKind.BinaryExpr) {
+	if (expr.kind == NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
-		if (bd.operator === "&&" || bd.operator === "||") {
+		if (bd.operator == "&&" || bd.operator == "||") {
 			bd.left = hoistNestedMatch(bd.left, hoisted, ctx);
 			if (containsExprKind(bd.right, NodeKind.MatchExpr)) {
 				return lowerGuardedShortCircuit(expr, hoisted, ctx);
@@ -42,7 +42,7 @@ function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): N
 			return expr;
 		}
 	}
-	if (expr.kind === NodeKind.ConditionalExpr) {
+	if (expr.kind == NodeKind.ConditionalExpr) {
 		const cd = expr.data as ConditionalExprData;
 		cd.ternaryCondition = hoistNestedMatch(cd.ternaryCondition, hoisted, ctx);
 		if (containsExprKind(cd.ternaryConsequent, NodeKind.MatchExpr)
@@ -51,7 +51,7 @@ function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): N
 		}
 		return expr;
 	}
-	if (expr.kind === NodeKind.MatchExpr) {
+	if (expr.kind == NodeKind.MatchExpr) {
 		const matchData = expr.data as MatchExprData;
 		matchData.matchDisc = hoistNestedMatch(matchData.matchDisc, hoisted, ctx);
 		return hoistMatchExpr(expr, hoisted, ctx);
@@ -76,7 +76,7 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(resultSym.name, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = resultSym;
-	if (node.nodeType !== null) { letDecl.nodeType = node.nodeType; }
+	if (node.nodeType != null) { letDecl.nodeType = node.nodeType; }
 	hoisted.push(letDecl);
 
 	// if-chain assigning to $matchres_N
@@ -99,12 +99,12 @@ function lowerGuardedShortCircuit(expr: Node, hoisted: Node[], ctx: TransformCon
 	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
 	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
 	resDecl.resolvedSym = resSym;
-	if (expr.nodeType !== null) { resDecl.nodeType = expr.nodeType; }
+	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
 
 	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
 	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
-	const isAnd = bd.operator === "&&";
+	const isAnd = bd.operator == "&&";
 	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
 	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
 	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
@@ -118,12 +118,12 @@ function lowerGuardedTernary(expr: Node, hoisted: Node[], ctx: TransformContext)
 	const t = freshTempSym(ctx, "gtern", expr.nodeType);
 	const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
 	letDecl.resolvedSym = t;
-	if (expr.nodeType !== null) { letDecl.nodeType = expr.nodeType; }
+	if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
 	hoisted.push(letDecl);
-	const thenStmt = (cd.ternaryConsequent.nodeType !== null && cd.ternaryConsequent.nodeType.kind === TypeKind.Never)
+	const thenStmt = (cd.ternaryConsequent.nodeType != null && cd.ternaryConsequent.nodeType.kind == TypeKind.Never)
 		? makeExprStmt(cd.ternaryConsequent, loc)
 		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
-	const elseStmt = (cd.ternaryAlternate.nodeType !== null && cd.ternaryAlternate.nodeType.kind === TypeKind.Never)
+	const elseStmt = (cd.ternaryAlternate.nodeType != null && cd.ternaryAlternate.nodeType.kind == TypeKind.Never)
 		? makeExprStmt(cd.ternaryAlternate, loc)
 		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
 	hoisted.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
@@ -145,10 +145,10 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer !== null && d.initializer.kind === NodeKind.MatchExpr) {
+			if (d.initializer != null && d.initializer.kind == NodeKind.MatchExpr) {
 				return lowerMatchExprInVar(stmt, ctx);
 			}
-			if (d.initializer !== null && containsExprKind(d.initializer, NodeKind.MatchExpr)) {
+			if (d.initializer != null && containsExprKind(d.initializer, NodeKind.MatchExpr)) {
 				const hoisted: Node[] = [];
 				d.initializer = hoistNestedMatch(d.initializer, hoisted, ctx);
 				hoisted.push(stmt);
@@ -157,10 +157,10 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument !== null && d.argument.kind === NodeKind.MatchExpr) {
+			if (d.argument != null && d.argument.kind == NodeKind.MatchExpr) {
 				return lowerMatchExprInReturn(stmt, ctx);
 			}
-			if (d.argument !== null && containsExprKind(d.argument, NodeKind.MatchExpr)) {
+			if (d.argument != null && containsExprKind(d.argument, NodeKind.MatchExpr)) {
 				const hoisted: Node[] = [];
 				d.argument = hoistNestedMatch(d.argument, hoisted, ctx);
 				hoisted.push(stmt);
@@ -169,10 +169,10 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr.kind === NodeKind.MatchStmt) {
+			if (d.expr.kind == NodeKind.MatchStmt) {
 				return lowerMatchStmt(d.expr, ctx);
 			}
-			if (d.expr.kind === NodeKind.MatchExpr) {
+			if (d.expr.kind == NodeKind.MatchExpr) {
 				return lowerMatchExprAsStmt(d.expr, ctx);
 			}
 			if (containsExprKind(d.expr, NodeKind.MatchExpr)) {
@@ -245,7 +245,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
-	if (stmt.nodeType !== null) {
+	if (stmt.nodeType != null) {
 		letDecl.nodeType = stmt.nodeType;
 	}
 	result.push(letDecl);
@@ -292,19 +292,19 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 		if (isBindingPattern(cd.casePatterns)) return false;
 		for (let j = 0; j < cd.casePatterns.length; j += 1) {
 			const p = cd.casePatterns[j];
-			if (p.kind === NodeKind.NumberLiteral) continue;
-			if (p.kind === NodeKind.Identifier && p.resolvedSym !== null) {
-				if (p.resolvedSym.symbolKind === SymbolKind.EnumMember) continue;
+			if (p.kind == NodeKind.NumberLiteral) continue;
+			if (p.kind == NodeKind.Identifier && p.resolvedSym != null) {
+				if (p.resolvedSym.symbolKind == SymbolKind.EnumMember) continue;
 				return false;
 			}
-			if (p.kind === NodeKind.MemberExpr) {
+			if (p.kind == NodeKind.MemberExpr) {
 				// Only accept enum member access (Color.Red), not .code or other property access.
 				// .code patterns are MemberExpr but resolve to runtime values, not constants.
 				const pmd = p.data as { object: Node, property: string };
-				if (pmd.object !== null && pmd.object.nodeType !== null && pmd.object.nodeType.kind === TypeKind.Enum) continue;
+				if (pmd.object != null && pmd.object.nodeType != null && pmd.object.nodeType.kind == TypeKind.Enum) continue;
 				return false;
 			}
-			if (p.kind === NodeKind.UnaryExpr) continue;
+			if (p.kind == NodeKind.UnaryExpr) continue;
 			return false;
 		}
 	}
@@ -322,7 +322,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 		const wd = cases[wi].data as MatchCaseData;
 		if (!isWildcard(wd.casePatterns)) continue;
 		const body = wrapArmBody(wd.caseBody, mode, varName, assignSym, loc);
-		if (wd.caseGuard !== null) {
+		if (wd.caseGuard != null) {
 			defaultBody = makeIf(wd.caseGuard, body, defaultBody, loc);
 		} else {
 			defaultBody = body;
@@ -333,7 +333,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	// mode) AND (b) the default body is observably non-empty. No wildcard, or
 	// `_ => {}`, means there's nothing to gate — skip the flag entirely to eliminate
 	// dead stores and empty `if (!$matched) {}` epilogues in the generated C.
-	const needsFlag = mode !== "return" && !isEmptyBlock(defaultBody);
+	const needsFlag = mode != "return" && !isEmptyBlock(defaultBody);
 	const matchedSym = freshTempSym(ctx, "matched", booleanType());
 	const matchedName = matchedSym.name;
 
@@ -372,7 +372,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 		// Same-set merge (handles both single-pattern and OR-pattern guard chains).
 		let mergedInto = -1;
 		for (let gi = 0; gi < patternKeys.length; gi += 1) {
-			if (patternKeys[gi] === setKey) {
+			if (patternKeys[gi] == setKey) {
 				mergedInto = gi;
 				break;
 			}
@@ -385,7 +385,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 				const lk = patternKey(pat, i);
 				let owner = -1;
 				for (let li = 0; li < labelOwners.length; li += 1) {
-					if (labelOwners[li] === lk) { owner = labelOwnerGroup[li]; break; }
+					if (labelOwners[li] == lk) { owner = labelOwnerGroup[li]; break; }
 				}
 				if (owner >= 0) {
 					ctx.errors.push("match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms");
@@ -430,7 +430,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
 				armBody = makeBlock([setMatched, armBody], loc);
 			}
-			if (guards[ai] !== null) {
+			if (guards[ai] != null) {
 				chained = makeIf(guards[ai], armBody, chained, loc);
 			} else {
 				chained = armBody;
@@ -490,7 +490,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 		const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 
 		if (isWildcard(caseData.casePatterns)) {
-			if (caseData.caseGuard !== null) {
+			if (caseData.caseGuard != null) {
 				// Guarded wildcard: if (guard) { body } else { previous_else }
 				elseNode = makeIf(caseData.caseGuard, body, elseNode, loc);
 			} else {
@@ -502,7 +502,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 		if (isBindingPattern(caseData.casePatterns)) {
 			const bindingName = getBindingName(caseData.casePatterns);
 			const bindDecl = makeVarDecl(bindingName, makeTypedIdent(tempName, discType, loc), DeclKind.Const, loc);
-			if (caseData.caseGuard !== null) {
+			if (caseData.caseGuard != null) {
 				// Bind first, then check guard
 				const guardedBody = makeIf(caseData.caseGuard, body, elseNode, loc);
 				elseNode = prependToBody(bindDecl, guardedBody, loc);
@@ -514,13 +514,13 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 
 		// No wildcard and this is the last arm → use as unconditional else
 		// (checker verified exhaustiveness, so this is safe)
-		if (!hasDefault && i === cases.length - 1 && caseData.caseGuard === null) {
+		if (!hasDefault && i == cases.length - 1 && caseData.caseGuard == null) {
 			elseNode = body;
 			continue;
 		}
 
 		let cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
-		if (caseData.caseGuard !== null) {
+		if (caseData.caseGuard != null) {
 			cond = makeBinary(cond, "&&", caseData.caseGuard, loc);
 		}
 		elseNode = makeIf(cond, body, elseNode, loc);
@@ -535,13 +535,13 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 // C has no expression-blocks — this makes each arm produce a statement-level result.
 
 function wrapArmBody(armBody: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
-	if (mode === "stmt") {
+	if (mode == "stmt") {
 		// Expression-form arms (=> expr) need wrapping in ExprStmt for codegen.
 		// Block-form arms (=> { ... }) are already BlockStmt — pass through.
-		if (armBody.kind !== NodeKind.BlockStmt && armBody.kind !== NodeKind.ExprStmt
-			&& armBody.kind !== NodeKind.IfStmt && armBody.kind !== NodeKind.ReturnStmt
-			&& armBody.kind !== NodeKind.BreakStmt && armBody.kind !== NodeKind.ContinueStmt
-			&& armBody.kind !== NodeKind.ThrowStmt && armBody.kind !== NodeKind.VariableDecl) {
+		if (armBody.kind != NodeKind.BlockStmt && armBody.kind != NodeKind.ExprStmt
+			&& armBody.kind != NodeKind.IfStmt && armBody.kind != NodeKind.ReturnStmt
+			&& armBody.kind != NodeKind.BreakStmt && armBody.kind != NodeKind.ContinueStmt
+			&& armBody.kind != NodeKind.ThrowStmt && armBody.kind != NodeKind.VariableDecl) {
 			return makeExprStmt(armBody, loc);
 		}
 		return armBody;
@@ -553,9 +553,9 @@ function wrapArmBody(armBody: Node, mode: string, varName: string, assignSym: Sy
 // Returns a new node with return/assign inserted at every terminal position.
 function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	// BlockStmt: keep leading stmts, moveInto the last one
-	if (node.kind === NodeKind.BlockStmt) {
+	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		if (bd.statements.length === 0) return node;
+		if (bd.statements.length == 0) return node;
 		const newStmts: Node[] = [];
 		let si = 0;
 		while (si < bd.statements.length - 1) {
@@ -566,31 +566,31 @@ function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol |
 		return makeBlock(newStmts, loc);
 	}
 	// IfStmt: recurse into both branches
-	if (node.kind === NodeKind.IfStmt) {
+	if (node.kind == NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;
 		d.consequent = moveInto(d.consequent, mode, varName, assignSym, loc);
-		if (d.alternate !== null) {
+		if (d.alternate != null) {
 			d.alternate = moveInto(d.alternate, mode, varName, assignSym, loc);
 		}
 		return node;
 	}
 	// Control flow terminals: BreakStmt/ContinueStmt keep as-is
-	if (node.kind === NodeKind.BreakStmt || node.kind === NodeKind.ContinueStmt) {
+	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		return node;
 	}
 	// ReturnStmt in "return" mode: keep as-is (already correct).
 	// ReturnStmt in "assign" mode: strip return, convert to assignment.
 	// This supports `const x = match { arm => { return expr; } }` syntax.
-	if (node.kind === NodeKind.ReturnStmt) {
-		if (mode === "return") return node;
+	if (node.kind == NodeKind.ReturnStmt) {
+		if (mode == "return") return node;
 		const rd = node.data as ReturnStmtData;
-		if (rd.argument !== null) {
+		if (rd.argument != null) {
 			return emitResult(rd.argument, mode, varName, assignSym, loc);
 		}
 		return node;
 	}
 	// ExprStmt: unwrap and wrap in return/assign
-	if (node.kind === NodeKind.ExprStmt) {
+	if (node.kind == NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
 		return emitResult(expr, mode, varName, assignSym, loc);
 	}
@@ -601,18 +601,18 @@ function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol |
 // Emit the final result: either return expr or varName = expr.
 // A noreturn arm yields no value (Nim endsInNoReturn) — emit the bare call.
 function emitResult(expr: Node, mode: string, varName: string, assignSym: Symbol | null, loc: SourceLocation): Node {
-	if (expr.nodeType !== null && expr.nodeType.kind === TypeKind.Never) {
+	if (expr.nodeType != null && expr.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(expr, loc);
 	}
-	if (mode === "return") {
+	if (mode == "return") {
 		return makeReturn(expr, loc);
 	}
-	const lhs = assignSym !== null ? makeIdentResolved(assignSym, loc) : makeIdent(varName, loc);
+	const lhs = assignSym != null ? makeIdentResolved(assignSym, loc) : makeIdent(varName, loc);
 	return makeExprStmt(makeAssign(lhs, expr, loc), loc);
 }
 
 function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
-	if (body.kind === NodeKind.BlockStmt) {
+	if (body.kind == NodeKind.BlockStmt) {
 		const bodyData = body.data as BlockStmtData;
 		const newStmts: Node[] = [];
 		newStmts.push(decl);
@@ -628,20 +628,20 @@ function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
 
 // Check if pattern list is a wildcard (_)
 function isWildcard(patterns: Node[]): boolean {
-	if (patterns.length !== 1) return false;
-	if (patterns[0].kind !== NodeKind.Identifier) return false;
+	if (patterns.length != 1) return false;
+	if (patterns[0].kind != NodeKind.Identifier) return false;
 	const id = patterns[0].data as IdentifierData;
-	return id.name === "_";
+	return id.name == "_";
 }
 
 // Check if pattern list is a binding (single identifier, not _, not a literal/member/enum-rewrite)
 function isBindingPattern(patterns: Node[]): boolean {
-	if (patterns.length !== 1) return false;
-	if (patterns[0].kind !== NodeKind.Identifier) return false;
+	if (patterns.length != 1) return false;
+	if (patterns[0].kind != NodeKind.Identifier) return false;
 	const id = patterns[0].data as IdentifierData;
-	if (id.name === "_") return false;
+	if (id.name == "_") return false;
 	// If the identifier has a resolvedSym, it's an enum value (rewritten from MemberExpr by checker), not a binding
-	if (patterns[0].resolvedSym !== null) return false;
+	if (patterns[0].resolvedSym != null) return false;
 	return true;
 }
 
@@ -659,7 +659,7 @@ function patternKey(pat: Node, caseIdx: number): string {
 		NodeKind.NumberLiteral => `n:${(pat.data as NumberLiteralData).value}`,
 		NodeKind.Identifier => "id:" + (pat.data as IdentifierData).name,
 		NodeKind.MemberExpr => {
-			if (pat.resolvedSym !== null) return "sym:" + pat.resolvedSym.name;
+			if (pat.resolvedSym != null) return "sym:" + pat.resolvedSym.name;
 			return "m:" + (pat.data as { object: Node, property: string }).property;
 		},
 		// Unique fallback — never matches another pattern, effectively disables merge.
@@ -724,12 +724,12 @@ function isAllStringCases(cases: Node[]): boolean {
 		// Hash dispatch has no guard support — buildHashSwitch matches on
 		// string equality alone and would DROP a `when` guard silently.
 		// Guarded matches take the if-chain path instead (correct, unoptimized).
-		if (caseData.caseGuard !== null) return false;
+		if (caseData.caseGuard != null) return false;
 		if (isWildcard(caseData.casePatterns)) continue;
 		if (isBindingPattern(caseData.casePatterns)) return false;
 		// Check all patterns in this arm are string literals
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
-			if (caseData.casePatterns[j].kind !== NodeKind.StringLiteral) return false;
+			if (caseData.casePatterns[j].kind != NodeKind.StringLiteral) return false;
 		}
 		stringCount = stringCount + 1;
 	}
@@ -758,12 +758,12 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	for (const c of cases) {
 		const pd = c.data as MatchCaseData;
 		if (!isWildcard(pd.casePatterns)) continue;
-		if (pd.caseGuard !== null || !isEmptyBlock(pd.caseBody)) {
+		if (pd.caseGuard != null || !isEmptyBlock(pd.caseBody)) {
 			hasRealDefault = true;
 			break;
 		}
 	}
-	const needsFlag = mode !== "return" && hasRealDefault;
+	const needsFlag = mode != "return" && hasRealDefault;
 	const matchedSym = freshTempSym(ctx, "matched", booleanType());
 	const matchedName = matchedSym.name;
 
@@ -800,7 +800,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 			let found = false;
 			let bi = 0;
 			while (!ctx.jsBackend && bi < buckets.length) {
-				if (buckets[bi].hash === hash) {
+				if (buckets[bi].hash == hash) {
 					buckets[bi].guards.push(guardedIf);
 					found = true;
 					break;
@@ -863,24 +863,24 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 }
 
 // ===== Tests =====
-test "match stmt becomes if chain" { assert stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2; }
+test "match stmt becomes if chain" { assert stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) == 2; }
 
-test "match first stmt is VarDecl (discriminant temp)" { assert firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl; }
+test "match first stmt is VarDecl (discriminant temp)" { assert firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) == NodeKind.VariableDecl; }
 
-test "no match passthrough" { assert stmtCountAfter("const x = 1;", lowerMatch) === 1; }
+test "no match passthrough" { assert stmtCountAfter("const x = 1;", lowerMatch) == 1; }
 
-test "match preserves surrounding stmts" { assert stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4; }
+test "match preserves surrounding stmts" { assert stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) == 4; }
 
 test "string hash dispatch for >8 arms" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
 	// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
-	assert stmtCountAfter(src, lowerMatch) === 2;
+	assert stmtCountAfter(src, lowerMatch) == 2;
 }
 
 test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
 	// 2 string arms <= threshold → stays as if-else chain
-	assert stmtCountAfter(src, lowerMatch) === 2;
+	assert stmtCountAfter(src, lowerMatch) == 2;
 }
 
 test "hash switch stmt mode produces $matched guard" {
@@ -888,10 +888,10 @@ test "hash switch stmt mode produces $matched guard" {
 	const src = "match (cmd) { \"a\" => foo(), \"b\" => bar(), \"c\" => c(), \"d\" => d(), \"e\" => e(), \"f\" => f(), \"g\" => g(), \"h\" => h(), \"i\" => i(), _ => fallback() }";
 	const stmts = stmtCountAfter(src, lowerMatch);
 	// Top level: [VarDecl($match_temp), BlockStmt(VarDecl($matched) + Switch + If)]
-	assert stmts === 2;
+	assert stmts == 2;
 }
 
 test "djb2 hash deterministic" {
-	assert hashStringSigned("hello") === hashStringSigned("hello");
-	assert hashStringSigned("a") !== hashStringSigned("b");
+	assert hashStringSigned("hello") == hashStringSigned("hello");
+	assert hashStringSigned("a") != hashStringSigned("b");
 }

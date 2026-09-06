@@ -44,7 +44,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	// Caller side (after extensionMethodLower) issues `<class>_<method>(receiver, args)`;
 	// FunctionDecl mangling reads sym.name through resolvedSym, so using sym.name
 	// keeps the call/decl pair in sync.
-	const fnName = methodNode.resolvedSym !== null && methodNode.resolvedSym.name !== ""
+	const fnName = methodNode.resolvedSym != null && methodNode.resolvedSym.name != ""
 		? methodNode.resolvedSym.name
 		: md.methodName;
 	const fnData: NodeData = {
@@ -54,7 +54,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 		fnBody: md.methodBody,
 		fnFlags: md.methodFlags,
 		fnReturnType: md.methodReturnType,
-		fnDefaults: md.methodDefaults !== null ? md.methodDefaults : [],
+		fnDefaults: md.methodDefaults != null ? md.methodDefaults : [],
 		nativeName: md.nativeName,
 		nameLocation: md.nameLocation,
 	};
@@ -70,7 +70,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	// Update sym.declNode so anyone resolving the symbol sees the FunctionDecl
 	// rather than the now-orphaned MethodDecl (matters for default-fill, LSP
 	// hover-on-decl, and any later transform that walks `sym.declNode`).
-	if (fnNode.resolvedSym !== null) {
+	if (fnNode.resolvedSym != null) {
 		fnNode.resolvedSym.declNode = fnNode;
 	}
 	return fnNode;
@@ -89,7 +89,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	const cd = ctorNode.data as ConstructorDeclData;
 	const className = (classNode.data as ClassDeclData).className;
 	const initName = initFnName(className);
-	const receiverType = classGenerics !== "" ? `${className}<${classGenerics}>` : className;
+	const receiverType = classGenerics != "" ? `${className}<${classGenerics}>` : className;
 	const newParams: string[] = ["this"];
 	const newParamTypes: string[] = [receiverType];
 	for (const p of cd.ctorParams) { newParams.push(p); }
@@ -97,7 +97,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// Receiver-align defaults (same pattern Bug 8 fix uses for method defaults):
 	// fillDefaults expects defaults[0] to be the (always-null) receiver slot.
 	let defaults: Node[] = [];
-	if (cd.ctorDefaults !== null && cd.ctorDefaults.length > 0) {
+	if (cd.ctorDefaults != null && cd.ctorDefaults.length > 0) {
 		defaults.push(null as unknown as Node);
 		for (const def of cd.ctorDefaults) { defaults.push(def); }
 	}
@@ -119,12 +119,12 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// (which DOES include "this") and types from `fnNode.nodeType.typeChildren`
 	// (which doesn't), so we widen typeChildren by prepending the receiver
 	// type to keep the two indexes aligned.
-	if (ctorNode.nodeType !== null && ctorNode.nodeType.typeChildren !== null) {
+	if (ctorNode.nodeType != null && ctorNode.nodeType.typeChildren != null) {
 		const ctorType = ctorNode.nodeType;
 		// Receiver type is the class's declared type (Ref<Struct>). Widening
 		// typeChildren with the right `this` type keeps `genFunctionDecl` /
 		// `shouldIndirectParam` honest — without it, `this` codegens as `void*`.
-		const classType = classNode.nodeType !== null ? classNode.nodeType : noneType();
+		const classType = classNode.nodeType != null ? classNode.nodeType : noneType();
 		const widenedChildren: Type[] = [classType];
 		for (const t of ctorType.typeChildren) { widenedChildren.push(t); }
 		const widenedNames: string[] = ["this"];
@@ -174,10 +174,10 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 	// Class-level generics are stored side-band by the parser, keyed by the
 	// class name. Methods + ctors built before resolution need it to render
 	// the receiver type as `Foo<T>` rather than `Foo`.
-	const className = classNode.kind === NodeKind.ClassDecl
+	const className = classNode.kind == NodeKind.ClassDecl
 		? (classNode.data as ClassDeclData).className
 		: "";
-	const classGenerics = className !== "" ? getGenericDecl(className) : "";
+	const classGenerics = className != "" ? getGenericDecl(className) : "";
 	for (const member of body) {
 		match (member.kind) {
 			NodeKind.MethodDecl => {
@@ -189,10 +189,10 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 			NodeKind.DecoratedDecl => {
 				const dd = member.data as DecoratedDeclData;
 				const inner = dd.decoratedNode;
-				const innerKind = inner !== null ? inner.kind : -1;
-				if (innerKind === NodeKind.MethodDecl) {
+				const innerKind = inner != null ? inner.kind : -1;
+				if (innerKind == NodeKind.MethodDecl) {
 					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner)));
-				} else if (innerKind === NodeKind.ConstructorDecl) {
+				} else if (innerKind == NodeKind.ConstructorDecl) {
 					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner)));
 				} else {
 					newBody.push(member);
@@ -207,7 +207,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 // ===== Entry Point =====
 
 export function lowerMethodToFunction(program: Node, ctx: TransformContext): Node {
-	if (program.kind !== NodeKind.Program) return program;
+	if (program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 	const newStmts: Node[] = [];
 	for (const stmt of pd.programStmts) {
@@ -215,14 +215,14 @@ export function lowerMethodToFunction(program: Node, ctx: TransformContext): Nod
 		// wrapper itself stays in `programStmts`; we only mutate the inner
 		// classBody/actorBody in place and append the lifted FunctionDecls.
 		let target = stmt;
-		if (target.kind === NodeKind.ExportDecl) {
+		if (target.kind == NodeKind.ExportDecl) {
 			target = (target.data as ExportDeclData).exportedDecl;
 		}
-		if (target === null) {
+		if (target == null) {
 			newStmts.push(stmt);
 			continue;
 		}
-		if (target.kind === NodeKind.ClassDecl) {
+		if (target.kind == NodeKind.ClassDecl) {
 			const cd = target.data as ClassDeclData;
 			const result = liftMethodsFromClassBody(target, cd.classBody);
 			cd.classBody = result.body;
@@ -230,7 +230,7 @@ export function lowerMethodToFunction(program: Node, ctx: TransformContext): Nod
 			for (const fn of result.lifted) { newStmts.push(fn); }
 			continue;
 		}
-		if (target.kind === NodeKind.ActorDecl) {
+		if (target.kind == NodeKind.ActorDecl) {
 			// Actors register their methods as extension functions too; lifting
 			// them gives the same uniform top-level FunctionDecl shape. The
 			// `actorLower` transform has already rewritten send/call sites, so

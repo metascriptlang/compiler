@@ -79,14 +79,14 @@ test "post-split: checker and ABI readers agree a Pending type is not a pointer"
 test "alias of unknown still rejects a value-typed argument" {
 	const src = "type A = unknown;\nfunction take(x: A): void { }\nfunction main(): void { const s: string = \"hi\"; take(s as A); }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
 }
 
 test "a string cast to unknown is rejected at the binding" {
 	const src = "function main(): void { const u: unknown = \"hi\" as unknown; }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert hasErrors(ctx);
 }
 
@@ -96,7 +96,7 @@ test "control: a pointer-shaped value passes through the same alias" {
 	// which has a void* repr — so it must be accepted.
 	const src = "class Box { n: number; }\ntype A = unknown;\nfunction take(x: A): void { }\nfunction main(): void { const b = new Box(); take(b as A); }";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }
 
@@ -132,7 +132,7 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 	// only adversarial construction can produce this kind, and emission
 	// answers it with the internal error instead of silent void*.
 	const ctx = checkSource("function main(): void { }");
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, createPrimitive(TypeKind.Pending));
@@ -141,8 +141,8 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 
 test "emission gate control: user unknown emits void* with no error" {
 	const ctx = checkSource("function main(): void { }");
-	assert ctx !== null;
+	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
-	assert getTypeDesc(g, unknownType()) === "void*";
+	assert getTypeDesc(g, unknownType()) == "void*";
 	assert !hasErrors(ctx);
 }

@@ -55,7 +55,7 @@ test "bug009: closure captures let inside test block (single)" {
 	});
 	const fn = s.cb;
 	fn();
-	assert captured.length === 2;
+	assert captured.length == 2;
 }
 
 test "bug009: closure captures let inside test block (mutating counter)" {
@@ -68,7 +68,7 @@ test "bug009: closure captures let inside test block (mutating counter)" {
 	fn();
 	fn();
 	fn();
-	assert counter === 3;
+	assert counter == 3;
 }
 
 // Edge cases — multi-closure / multi-capture / nested-control-flow shapes —

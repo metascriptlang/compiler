@@ -23,8 +23,8 @@ function describe<T>(x: T): string {
 
 function main(): void {
 	let ok = true;
-	if ("abc".tag() !== "str:abc") { ok = false; }
-	if (describe("xyz") !== "str:xyz") { ok = false; }
+	if ("abc".tag() != "str:abc") { ok = false; }
+	if (describe("xyz") != "str:xyz") { ok = false; }
 	if (ok) {
 		console.log("ext-receiver-specificity PASS");
 	} else {

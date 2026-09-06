@@ -19,7 +19,7 @@ function main(): void {
 		setStr(out s, "abcdefghij-abcdefghij-abcdefghij");
 		i = i + 1;
 	}
-	if (s.length !== 34) { console.log("FAIL setStr len=" + s.length); return; }
+	if (s.length != 34) { console.log("FAIL setStr len=" + s.length); return; }
 
 	let a: string = "seed";
 	let b: string = "base";
@@ -28,7 +28,7 @@ function main(): void {
 		setNested(out a, b);
 		j = j + 1;
 	}
-	if (a.length !== b.length + 6) { console.log("FAIL setNested a=" + a.length + " b=" + b.length); return; }
+	if (a.length != b.length + 6) { console.log("FAIL setNested a=" + a.length + " b=" + b.length); return; }
 
 	console.log("out-param heap write done");
 }

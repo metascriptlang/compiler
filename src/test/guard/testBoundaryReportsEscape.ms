@@ -32,5 +32,5 @@ test "a test whose body throws is reported as a failure, not a pass" {
 	const fixture = root + "/src/test/guard/fixtures/escapingThrow.test.ms";
 
 	const code = execFile(mscPath, ["test", fixture]);
-	assert code === 1, "an escaping exception was reported as a passing test";
+	assert code == 1, "an escaping exception was reported as a passing test";
 }

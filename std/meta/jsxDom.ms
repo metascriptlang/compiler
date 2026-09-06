@@ -30,7 +30,7 @@ export function txt(s: string): DomNode {
 
 // Serialize a built tree back to an HTML-ish string (for tests / debugging).
 export function render(n: DomNode): string {
-	if (n.tag === "") { return n.text; }
+	if (n.tag == "") { return n.text; }
 	let s = "<" + n.tag;
 	for (const a of n.attrs) { s = s + " " + a.name + "=\"" + a.value + "\""; }
 	s = s + ">";
@@ -52,7 +52,7 @@ export function render(n: DomNode): string {
 export macro jsxDom(node: Node): Node {
 	let attrEls: Node[] = [];
 	for (const a of node.jsxAttrs) {
-		if (a.kind === NodeKind.JSXAttribute) {
+		if (a.kind == NodeKind.JSXAttribute) {
 			attrEls.push({
 				kind: NodeKind.CallExpr, line: a.line, column: a.column,
 				callee: { kind: NodeKind.Identifier, line: a.line, column: a.column, name: "attr" },
@@ -66,19 +66,19 @@ export macro jsxDom(node: Node): Node {
 
 	let kidEls: Node[] = [];
 	for (const c of node.jsxChildren) {
-		if (c.kind === NodeKind.JSXText) {
+		if (c.kind == NodeKind.JSXText) {
 			kidEls.push({
 				kind: NodeKind.CallExpr, line: c.line, column: c.column,
 				callee: { kind: NodeKind.Identifier, line: c.line, column: c.column, name: "txt" },
 				arguments: [{ kind: NodeKind.StringLiteral, line: c.line, column: c.column, value: c.jsxText }],
 			});
-		} else if (c.kind === NodeKind.JSXExpressionContainer) {
+		} else if (c.kind == NodeKind.JSXExpressionContainer) {
 			kidEls.push({
 				kind: NodeKind.CallExpr, line: c.line, column: c.column,
 				callee: { kind: NodeKind.Identifier, line: c.line, column: c.column, name: "txt" },
 				arguments: [c.jsxExpr],
 			});
-		} else if (c.kind === NodeKind.JSXElement) {
+		} else if (c.kind == NodeKind.JSXElement) {
 			kidEls.push({
 				kind: NodeKind.CallExpr, line: c.line, column: c.column,
 				callee: { kind: NodeKind.Identifier, line: c.line, column: c.column, name: "jsxDom" },

@@ -29,7 +29,7 @@ import { downloadPackage } from "./download";
 //   "@acme/router@1.0.0"  → { name: "@acme/router", version: "1.0.0" }
 function parseNameVersion(arg: string): { name: string, version: string } {
 	// Git source: entire string is the version spec
-	if (arg.length >= 4 && arg.slice(0, 4) === "git:") {
+	if (arg.length >= 4 && arg.slice(0, 4) == "git:") {
 		// Extract alias from the repo name (last path segment before @)
 		const spec = parseGitSpec(arg);
 		if (spec.isValid) {
@@ -37,7 +37,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 			let lastSlash = -1;
 			let i = 0;
 			while (i < spec.url.length) {
-				if (spec.url.charAt(i) === "/") lastSlash = i;
+				if (spec.url.charAt(i) == "/") lastSlash = i;
 				i = i + 1;
 			}
 			const alias = lastSlash >= 0 ? spec.url.slice(lastSlash + 1, spec.url.length) : spec.url;
@@ -50,10 +50,10 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 	let eqIdx = -1;
 	let ei = 0;
 	while (ei < arg.length) {
-		if (arg.charAt(ei) === "=") { eqIdx = ei; ei = arg.length; }
+		if (arg.charAt(ei) == "=") { eqIdx = ei; ei = arg.length; }
 		ei = ei + 1;
 	}
-	if (eqIdx > 0 && eqIdx + 4 < arg.length && arg.slice(eqIdx + 1, eqIdx + 5) === "git:") {
+	if (eqIdx > 0 && eqIdx + 4 < arg.length && arg.slice(eqIdx + 1, eqIdx + 5) == "git:") {
 		const alias = arg.slice(0, eqIdx);
 		const gitSpec = arg.slice(eqIdx + 1, arg.length);
 		return { name: alias, version: gitSpec };
@@ -61,11 +61,11 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 
 	// Scoped package: @org/name or @org/name@version
 	// The first @ is the org prefix, find the @ after the / for the version
-	if (arg.length > 0 && arg.charAt(0) === "@") {
+	if (arg.length > 0 && arg.charAt(0) == "@") {
 		let slashIdx = -1;
 		let si = 1;
 		while (si < arg.length) {
-			if (arg.charAt(si) === "/") { slashIdx = si; si = arg.length; }
+			if (arg.charAt(si) == "/") { slashIdx = si; si = arg.length; }
 			si = si + 1;
 		}
 		if (slashIdx > 0) {
@@ -73,7 +73,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 			let atIdx = -1;
 			let ai = slashIdx + 1;
 			while (ai < arg.length) {
-				if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
+				if (arg.charAt(ai) == "@") { atIdx = ai; ai = arg.length; }
 				ai = ai + 1;
 			}
 			if (atIdx > 0) {
@@ -88,7 +88,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 	let slashIdx = -1;
 	let sli = 0;
 	while (sli < arg.length) {
-		if (arg.charAt(sli) === "/") { slashIdx = sli; sli = arg.length; }
+		if (arg.charAt(sli) == "/") { slashIdx = sli; sli = arg.length; }
 		sli = sli + 1;
 	}
 	if (slashIdx > 0) {
@@ -96,7 +96,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 		let atIdx = -1;
 		let ai = slashIdx + 1;
 		while (ai < arg.length) {
-			if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
+			if (arg.charAt(ai) == "@") { atIdx = ai; ai = arg.length; }
 			ai = ai + 1;
 		}
 		if (atIdx > 0) {
@@ -109,7 +109,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 	let atIdx = -1;
 	let ai = 0;
 	while (ai < arg.length) {
-		if (arg.charAt(ai) === "@") { atIdx = ai; ai = arg.length; }
+		if (arg.charAt(ai) == "@") { atIdx = ai; ai = arg.length; }
 		ai = ai + 1;
 	}
 	if (atIdx > 0) {
@@ -124,7 +124,7 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 // projectRoot: directory containing build.ms
 // args: remaining CLI arguments after "add"
 export function cmdAdd(projectRoot: string, args: string[]): boolean {
-	if (args.length === 0) {
+	if (args.length == 0) {
 		console.log("error: msc add requires a package specifier");
 		console.log("usage: msc add <name>@<version> [-D]");
 		return false;
@@ -141,28 +141,28 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	let isDev = false;
 	let i = 0;
 	while (i < args.length) {
-		if (args[i] === "-D" || args[i] === "--dev") {
+		if (args[i] == "-D" || args[i] == "--dev") {
 			isDev = true;
-		} else if (pkgArg === "") {
+		} else if (pkgArg == "") {
 			pkgArg = args[i];
 		}
 		i = i + 1;
 	}
 
-	if (pkgArg === "") {
+	if (pkgArg == "") {
 		console.log("error: no package specifier provided");
 		return false;
 	}
 
 	const parsed = parseNameVersion(pkgArg);
-	if (parsed.name === "") {
+	if (parsed.name == "") {
 		console.log("error: invalid package specifier: " + pkgArg);
 		return false;
 	}
 	// Fetch registry metadata (reused for latest-resolve + lockfile population)
 	let registryPkg: RegistryPackage = null as unknown as RegistryPackage;
 
-	if (parsed.version === "") {
+	if (parsed.version == "") {
 		// Resolve latest version from registry.
 		console.log("resolving latest version of " + parsed.name + " from registry...");
 		const infoResult = fetchPackageInfo(parsed.name);
@@ -172,7 +172,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		}
 		registryPkg = infoResult.value;
 		const latest = latestVersion(registryPkg);
-		if (latest === null) {
+		if (latest == null) {
 			console.log("error: no published versions for " + parsed.name);
 			return false;
 		}
@@ -181,7 +181,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// file: source — local folder, no version validation, no lockfile entry
-	const isFileSource = parsed.version.length > 5 && parsed.version.slice(0, 5) === "file:";
+	const isFileSource = parsed.version.length > 5 && parsed.version.slice(0, 5) == "file:";
 	if (isFileSource) {
 		const scope = isDev ? "devDeps" : "deps";
 		const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
@@ -196,12 +196,12 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 
 	// Validate version
 	const spec = parseSourceSpec(parsed.version);
-	if (spec.kind === SourceKind.Registry && !spec.version.isValid) {
+	if (spec.kind == SourceKind.Registry && !spec.version.isValid) {
 		console.log("error: invalid version '" + parsed.version + "'");
 		console.log("expected format: <major>.<minor>.<patch> (e.g. 1.2.3)");
 		return false;
 	}
-	if (spec.kind === SourceKind.Git && !spec.git.isValid) {
+	if (spec.kind == SourceKind.Git && !spec.git.isValid) {
 		console.log("error: invalid git source '" + parsed.version + "'");
 		console.log("expected format: git:<host>/<path>@<tag-or-sha>");
 		return false;
@@ -227,7 +227,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	let lockKey = "";
 	let entry: LockEntry = null as unknown as LockEntry;
 
-	if (spec.kind === SourceKind.Git) {
+	if (spec.kind == SourceKind.Git) {
 		lockKey = parsed.name + "@" + parsed.version;
 		const emptyKeys: string[] = [];
 		const emptyVals: string[] = [];
@@ -245,23 +245,23 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	} else {
 		// Get version details from registry (archiveUrl + integrity + deps)
 		let regVersion: RegistryVersion = null as unknown as RegistryVersion;
-		if (registryPkg === null) {
+		if (registryPkg == null) {
 			const infoResult = fetchPackageInfo(parsed.name);
 			if (infoResult.ok) registryPkg = infoResult.value;
 		}
-		if (registryPkg !== null) {
+		if (registryPkg != null) {
 			regVersion = findVersion(registryPkg, parsed.version);
 		}
 
 		lockKey = parsed.name + "@" + parsed.version;
-		const depKeys: string[] = regVersion !== null ? regVersion.depKeys : [];
-		const depValues: string[] = regVersion !== null ? regVersion.depValues : [];
+		const depKeys: string[] = regVersion != null ? regVersion.depKeys : [];
+		const depValues: string[] = regVersion != null ? regVersion.depValues : [];
 		entry = {
 			key: lockKey,
 			source: "registry",
 			version: parsed.version,
-			integrity: regVersion !== null ? regVersion.integrity : "",
-			url: regVersion !== null ? regVersion.archiveUrl : "",
+			integrity: regVersion != null ? regVersion.integrity : "",
+			url: regVersion != null ? regVersion.archiveUrl : "",
 			gitRef: "",
 			commit: "",
 			depKeys,
@@ -275,7 +275,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	let fi = 0;
 	while (fi < lock.entries.length) {
 		const existingName = entryName(lock.entries[fi].key);
-		if (existingName === parsed.name) {
+		if (existingName == parsed.name) {
 			lock.entries[fi] = entry;
 			found = true;
 		}
@@ -292,7 +292,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// Download the package archive
-	if (entry.source === "registry" && entry.url !== "") {
+	if (entry.source == "registry" && entry.url != "") {
 		if (!downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity)) {
 			console.log("warning: added to lockfile but download failed — run `msc install` to retry");
 		}

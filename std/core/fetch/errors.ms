@@ -92,24 +92,24 @@ export function isProtocolError(e: HttpError): boolean {
 
 test "httpError constructor" {
 	const e = httpError(HttpErrorKind.Timeout, "timed out");
-	assert e.kind === HttpErrorKind.Timeout;
-	assert e.message === "timed out";
+	assert e.kind == HttpErrorKind.Timeout;
+	assert e.message == "timed out";
 }
 
 test "connectionFailed constructor" {
 	const e = connectionFailed("refused");
-	assert e.kind === HttpErrorKind.ConnectionFailed;
+	assert e.kind == HttpErrorKind.ConnectionFailed;
 }
 
 test "bodyTooLarge message" {
 	const e = bodyTooLarge(2000, 1000);
-	assert e.kind === HttpErrorKind.BodyTooLarge;
-	assert e.message === "body 2000 exceeds limit 1000";
+	assert e.kind == HttpErrorKind.BodyTooLarge;
+	assert e.message == "body 2000 exceeds limit 1000";
 }
 
 test "tooManyRedirects message" {
 	const e = tooManyRedirects(5);
-	assert e.message === "exceeded 5 redirects";
+	assert e.message == "exceeded 5 redirects";
 }
 
 test "isRetryable true for timeout" {

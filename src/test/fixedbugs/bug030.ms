@@ -50,7 +50,7 @@ test "bug030: chained Ref<Struct> field access returns real value not Nil" {
 	`;
 	const ctx = evalSourceFull(src);
 	// "hello_world".length === 11
-	assert ctx.lastResult.intVal === 11;
+	assert ctx.lastResult.intVal == 11;
 }
 
 test "bug030: nested ObjectLiteral with inline call passes object handle" {
@@ -68,5 +68,5 @@ test "bug030: nested ObjectLiteral with inline call passes object handle" {
 		return o.inner.tag;
 	`;
 	const ctx = evalSourceFull(src);
-	assert ctx.lastResult.intVal === 42;
+	assert ctx.lastResult.intVal == 42;
 }

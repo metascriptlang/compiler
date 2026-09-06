@@ -13,8 +13,8 @@ import { mkP } from "./fixtures/structEqDecl";
 
 function main(): void {
 	const a = mkP(3);
-	if (!(a === mkP(3))) exit(1);
-	if (a === mkP(4)) exit(1);
+	if (!(a == mkP(3))) exit(1);
+	if (a == mkP(4)) exit(1);
 	console.log("GUARD-OK");
 }
 

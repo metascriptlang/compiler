@@ -46,10 +46,10 @@ function findByPath(store: TaFileInputStore, filePath: string): int32 {
 
 function findByFileId(store: TaFileInputStore, fileId: int32): int32 {
 	// fileId === array index for sequentially assigned IDs
-	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId === fileId) return fileId;
+	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId == fileId) return fileId;
 	// Fallback linear scan for non-sequential IDs
 	for (let i = 0; i < store.files.length; i = i + 1) {
-		if (store.files[i].fileId === fileId) return i;
+		if (store.files[i].fileId == fileId) return i;
 	}
 	return -1;
 }
@@ -61,7 +61,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const idx = findByPath(store, filePath);
 	if (idx >= 0) {
 		// Existing file — check if content changed
-		if (store.files[idx].source === source) return false;
+		if (store.files[idx].source == source) return false;
 		store.files[idx].source = source;
 		store.files[idx].sourceHash = taHashString(source);
 		return true;
@@ -138,8 +138,8 @@ export function setFileDurability(store: TaFileInputStore, fileId: int32, dur: T
 // ===== Tests =====
 test "starts empty" {
 	const store = createFileInputStore();
-	assert store.files.length === 0;
-	assert store.nextFileId === 0;
+	assert store.files.length == 0;
+	assert store.nextFileId == 0;
 }
 
 test "set new file returns true" {
@@ -163,20 +163,20 @@ test "getFileId sequential" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "a");
 	setFileText(store, "b.ms", "b");
-	assert getFileId(store, "a.ms") === 0;
-	assert getFileId(store, "b.ms") === 1;
+	assert getFileId(store, "a.ms") == 0;
+	assert getFileId(store, "b.ms") == 1;
 }
 
 test "getFileId unknown returns -1" {
 	const store = createFileInputStore();
-	assert getFileId(store, "unknown.ms") === -1;
+	assert getFileId(store, "unknown.ms") == -1;
 }
 
 test "getFileText retrieves source" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "hello world");
 	const id = getFileId(store, "a.ms");
-	assert getFileText(store, id) === "hello world";
+	assert getFileText(store, id) == "hello world";
 }
 
 test "getFileText after update" {
@@ -184,7 +184,7 @@ test "getFileText after update" {
 	setFileText(store, "a.ms", "v1");
 	const id = getFileId(store, "a.ms");
 	setFileText(store, "a.ms", "v2");
-	assert getFileText(store, id) === "v2";
+	assert getFileText(store, id) == "v2";
 }
 
 test "hasFile true/false" {
@@ -198,13 +198,13 @@ test "getFilePath reverse lookup" {
 	const store = createFileInputStore();
 	setFileText(store, "/a/b.ms", "x");
 	const id = getFileId(store, "/a/b.ms");
-	assert getFilePath(store, id) === "/a/b.ms";
-	assert getFilePath(store, 999) === "";
+	assert getFilePath(store, id) == "/a/b.ms";
+	assert getFilePath(store, 999) == "";
 }
 
 test "getFileHash nonzero" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "content");
 	const id = getFileId(store, "a.ms");
-	assert getFileHash(store, id) !== 0;
+	assert getFileHash(store, id) != 0;
 }

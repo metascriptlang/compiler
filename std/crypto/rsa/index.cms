@@ -65,59 +65,59 @@ extern function msCryptoEcFree(key: int64): void;
 // ===== RSA =====
 
 export function rsaGenerate(bits: int32): Result<int64, CryptoError> {
-	if (bits !== 2048 && bits !== 3072 && bits !== 4096) {
+	if (bits != 2048 && bits != 3072 && bits != 4096) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "rsaGenerate", "bits must be 2048, 3072, or 4096"));
 	}
 	const key = msCryptoRsaGenerate(bits);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "rsaGenerate", "RSA key generation failed"));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "rsaGenerate", "RSA key generation failed"));
 	return Result.ok(key);
 }
 
 export function rsaImportPrivate(pem: string): Result<int64, CryptoError> {
 	const key = msCryptoRsaImportPrivatePem(pem);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPrivate", "failed to parse private key PEM"));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPrivate", "failed to parse private key PEM"));
 	return Result.ok(key);
 }
 
 export function rsaImportPublic(pem: string): Result<int64, CryptoError> {
 	const key = msCryptoRsaImportPublicPem(pem);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPublic", "failed to parse public key PEM"));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPublic", "failed to parse public key PEM"));
 	return Result.ok(key);
 }
 
 export function rsaExportPrivate(key: int64): Result<string, CryptoError> {
 	const pem = msCryptoRsaExportPrivatePem(key);
-	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPrivate", "failed to export private key"));
+	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPrivate", "failed to export private key"));
 	return Result.ok(pem);
 }
 
 export function rsaExportPublic(key: int64): Result<string, CryptoError> {
 	const pem = msCryptoRsaExportPublicPem(key);
-	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPublic", "failed to export public key"));
+	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPublic", "failed to export public key"));
 	return Result.ok(pem);
 }
 
 export function rsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
-	if (algorithm === "") algorithm = "sha256";
+	if (algorithm == "") algorithm = "sha256";
 	const sig = msCryptoRsaSign(key, algorithm, data);
-	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsaSign", "signing failed"));
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsaSign", "signing failed"));
 	return Result.ok(sig);
 }
 
 export function rsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
-	if (algorithm === "") algorithm = "sha256";
+	if (algorithm == "") algorithm = "sha256";
 	return msCryptoRsaVerify(key, algorithm, data, signature);
 }
 
 export function rsaEncrypt(key: int64, data: string): Result<string, CryptoError> {
 	const encrypted = msCryptoRsaEncrypt(key, data);
-	if (encrypted === "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsaEncrypt", "RSA-OAEP encryption failed"));
+	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsaEncrypt", "RSA-OAEP encryption failed"));
 	return Result.ok(encrypted);
 }
 
 export function rsaDecrypt(key: int64, data: string): Result<string, CryptoError> {
 	const decrypted = msCryptoRsaDecrypt(key, data);
-	if (decrypted === "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsaDecrypt", "RSA-OAEP decryption failed"));
+	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsaDecrypt", "RSA-OAEP decryption failed"));
 	return Result.ok(decrypted);
 }
 
@@ -128,45 +128,45 @@ export function rsaFree(key: int64): void {
 // ===== ECDSA =====
 
 export function ecGenerate(curve: string): Result<int64, CryptoError> {
-	if (curve === "") curve = "p256";
+	if (curve == "") curve = "p256";
 	const key = msCryptoEcGenerate(curve);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", `EC key generation failed for curve ${curve}`));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", `EC key generation failed for curve ${curve}`));
 	return Result.ok(key);
 }
 
 export function ecImportPrivate(pem: string): Result<int64, CryptoError> {
 	const key = msCryptoEcImportPrivatePem(pem);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPrivate", "failed to parse EC private key PEM"));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPrivate", "failed to parse EC private key PEM"));
 	return Result.ok(key);
 }
 
 export function ecImportPublic(pem: string): Result<int64, CryptoError> {
 	const key = msCryptoEcImportPublicPem(pem);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPublic", "failed to parse EC public key PEM"));
+	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPublic", "failed to parse EC public key PEM"));
 	return Result.ok(key);
 }
 
 export function ecExportPrivate(key: int64): Result<string, CryptoError> {
 	const pem = msCryptoEcExportPrivatePem(key);
-	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPrivate", "failed to export EC private key"));
+	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPrivate", "failed to export EC private key"));
 	return Result.ok(pem);
 }
 
 export function ecExportPublic(key: int64): Result<string, CryptoError> {
 	const pem = msCryptoEcExportPublicPem(key);
-	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPublic", "failed to export EC public key"));
+	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPublic", "failed to export EC public key"));
 	return Result.ok(pem);
 }
 
 export function ecdsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
-	if (algorithm === "") algorithm = "sha256";
+	if (algorithm == "") algorithm = "sha256";
 	const sig = msCryptoEcdsaSign(key, algorithm, data);
-	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ecdsaSign", "ECDSA signing failed"));
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ecdsaSign", "ECDSA signing failed"));
 	return Result.ok(sig);
 }
 
 export function ecdsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
-	if (algorithm === "") algorithm = "sha256";
+	if (algorithm == "") algorithm = "sha256";
 	return msCryptoEcdsaVerify(key, algorithm, data, signature);
 }
 
@@ -174,7 +174,7 @@ export function ecdsaVerify(key: int64, data: string, signature: string, algorit
 
 export function ecdhDerive(privateKey: int64, publicKey: int64): Result<string, CryptoError> {
 	const shared = msCryptoEcdhDerive(privateKey, publicKey);
-	if (shared === "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ecdhDerive", "ECDH key agreement failed"));
+	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ecdhDerive", "ECDH key agreement failed"));
 	return Result.ok(shared);
 }
 

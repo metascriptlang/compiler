@@ -97,7 +97,7 @@ function createPartitions(): Partitions {
 function variableId(p: Partitions, name: string): int32 {
 	let i = 0;
 	while (i < p.vars.length) {
-		if (p.vars[i].name === name) return i;
+		if (p.vars[i].name == name) return i;
 		i += 1;
 	}
 	return -1;
@@ -121,13 +121,13 @@ function registerVariable(p: Partitions, name: string, isParam: boolean): void {
 function ufRoot(p: Partitions, start: int32): int32 {
 	let r = start;
 	let depth = 0;
-	while (p.vars[r].con.kind === CK_DEPENDS_ON) {
+	while (p.vars[r].con.kind == CK_DEPENDS_ON) {
 		r = p.vars[r].con.target;
 		depth += 1;
 	}
 	if (depth > 0) {
 		let it = start;
-		while (p.vars[it].con.kind === CK_DEPENDS_ON) {
+		while (p.vars[it].con.kind == CK_DEPENDS_ON) {
 			const next = p.vars[it].con.target;
 			p.vars[it].con = { kind: CK_DEPENDS_ON, target: r };
 			it = next;
@@ -144,14 +144,14 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 
 	const ra = ufRoot(p, aid);
 	const rb = ufRoot(p, bid);
-	if (ra === rb) return;
+	if (ra == rb) return;
 
 	// Collect rb's graph info before merging
 	let rbFlags: int32 = 0;
 	let rbMut: int32 = 0;
 	let rbCon: int32 = p.abstractTime;
 	let rbMutations: int32[] = [];
-	if (p.vars[rb].con.kind === CK_ROOT_OF) {
+	if (p.vars[rb].con.kind == CK_ROOT_OF) {
 		const gb = p.graphs[p.vars[rb].con.target];
 		rbFlags = gb.flags;
 		rbMut = gb.maxMutation;
@@ -162,7 +162,7 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 	// Make rb depend on ra
 	p.vars[rb].con = { kind: CK_DEPENDS_ON, target: ra };
 
-	if (p.vars[ra].con.kind === CK_EMPTY_ROOT) {
+	if (p.vars[ra].con.kind == CK_EMPTY_ROOT) {
 		// ra becomes root of a new graph
 		p.vars[ra].con = { kind: CK_ROOT_OF, target: p.graphs.length };
 		const muts: int32[] = [];
@@ -171,7 +171,7 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 			flags: rbFlags, maxMutation: rbMut,
 			minConnection: rbCon, mutations: muts,
 		});
-	} else if (p.vars[ra].con.kind === CK_ROOT_OF) {
+	} else if (p.vars[ra].con.kind == CK_ROOT_OF) {
 		// Merge rb's info into ra's graph
 		const ga = p.graphs[p.vars[ra].con.target];
 		if (rbCon < ga.minConnection) ga.minConnection = rbCon;
@@ -188,13 +188,13 @@ function potentialMutation(p: Partitions, name: string): void {
 	if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
 
 	const r = ufRoot(p, id);
-	if (p.vars[r].con.kind === CK_EMPTY_ROOT) {
+	if (p.vars[r].con.kind == CK_EMPTY_ROOT) {
 		p.vars[r].con = { kind: CK_ROOT_OF, target: p.graphs.length };
 		p.graphs.push({
 			flags: SF_IS_MUTATED, maxMutation: p.abstractTime,
 			minConnection: MAX_TIME, mutations: [p.abstractTime],
 		});
-	} else if (p.vars[r].con.kind === CK_ROOT_OF) {
+	} else if (p.vars[r].con.kind == CK_ROOT_OF) {
 		const g = p.graphs[p.vars[r].con.target];
 		if (p.abstractTime > g.maxMutation) g.maxMutation = p.abstractTime;
 		g.flags = g.flags | SF_IS_MUTATED;
@@ -203,7 +203,7 @@ function potentialMutation(p: Partitions, name: string): void {
 }
 
 function dangerousMutation(g: MutationInfo, v: VarEntry): boolean {
-	if ((g.flags & SF_IS_MUTATED) === 0) return false;
+	if ((g.flags & SF_IS_MUTATED) == 0) return false;
 	for (const m of g.mutations) {
 		if (m >= v.aliveStart && m <= v.aliveEnd) return true;
 	}
@@ -213,14 +213,14 @@ function dangerousMutation(g: MutationInfo, v: VarEntry): boolean {
 // ===== Helpers =====
 
 function getIdentName(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.Identifier) return (node.data as IdentifierData).name;
+	if (node == null) return "";
+	if (node.kind == NodeKind.Identifier) return (node.data as IdentifierData).name;
 	return "";
 }
 
 // Find root identifiers in a path expression (e.g., obj.field → "obj")
 function collectPathRoots(node: Node, result: string[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Identifier => { result.push((node.data as IdentifierData).name); },
 		NodeKind.MemberExpr => collectPathRoots((node.data as MemberExprData).object, result),
@@ -235,7 +235,7 @@ function collectPathRoots(node: Node, result: string[]): void {
 // If dest borrows → connected via union-find → cursor candidate.
 
 function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
-	if (src === null) return;
+	if (src == null) return;
 
 	match (src.kind) {
 		// Literals: harmless, no ownership
@@ -336,7 +336,7 @@ function markReassigned(p: Partitions, vid: int32): void {
 }
 
 function liveRanges(p: Partitions, node: Node | null): void {
-	if (node === null) return;
+	if (node == null) return;
 	p.abstractTime += 1;
 
 	match (node.kind) {
@@ -345,7 +345,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 			liveRanges(p, d.initializer);
 			registerVariable(p, d.declName, false);
 			// Declared in loop body → effectively reassigned each iteration
-			if (p.inLoop > 0 && d.initializer !== null) {
+			if (p.inLoop > 0 && d.initializer != null) {
 				const vid = variableId(p, d.declName);
 				if (vid >= 0) markReassigned(p, vid);
 			}
@@ -355,14 +355,14 @@ function liveRanges(p: Partitions, node: Node | null): void {
 			const d = node.data as BinaryExprData;
 			liveRanges(p, d.left);
 			liveRanges(p, d.right);
-			if (d.operator === "=") {
+			if (d.operator == "=") {
 				const lhs = getIdentName(d.left);
-				if (lhs !== "") {
+				if (lhs != "") {
 					const vid = variableId(p, lhs);
 					if (vid >= 0) {
 						// Track single reassignment source (for it = it.next pattern)
 						const rhs = getIdentName(d.right);
-						if (rhs !== "" && (p.vars[vid].reassignedTo === "" || p.vars[vid].reassignedTo === rhs)) {
+						if (rhs != "" && (p.vars[vid].reassignedTo == "" || p.vars[vid].reassignedTo == rhs)) {
 							p.vars[vid].reassignedTo = rhs;
 							if (p.inConditional > 0 && p.inLoop > 0) {
 								p.vars[vid].flags = p.vars[vid].flags | VF_IS_COND_REASSIGNED;
@@ -524,7 +524,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 function deps(p: Partitions, destName: string, src: Node): void {
 	const destId = variableId(p, destName);
 	if (destId < 0) return;
-	if (src === null) return;
+	if (src == null) return;
 
 	// Classify: does dest own data or borrow?
 	destMightOwn(p, destId, src);
@@ -533,20 +533,20 @@ function deps(p: Partitions, destName: string, src: Node): void {
 	const srcRoots: string[] = [];
 	collectPathRoots(src, srcRoots);
 	for (const srcName of srcRoots) {
-		if (srcName === destName) continue; // self-assign ok (it = it.next)
+		if (srcName == destName) continue; // self-assign ok (it = it.next)
 		const srcId = variableId(p, srcName);
 		if (srcId >= 0) {
 			// Source lives shorter than dest → can't borrow
-			if ((p.vars[srcId].flags & VF_IS_PARAM) === 0 &&
+			if ((p.vars[srcId].flags & VF_IS_PARAM) == 0 &&
 				p.vars[srcId].aliveEnd < p.vars[destId].aliveEnd) {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 			// Source is reassigned or prevented → can't borrow
-			if ((p.vars[srcId].flags & (VF_IS_REASSIGNED | VF_PREVENT_CURSOR)) !== 0) {
+			if ((p.vars[srcId].flags & (VF_IS_REASSIGNED | VF_PREVENT_CURSOR)) != 0) {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 			// Source reassigned to different target → can't borrow
-			if (p.vars[srcId].reassignedTo !== "" && p.vars[srcId].reassignedTo !== destName) {
+			if (p.vars[srcId].reassignedTo != "" && p.vars[srcId].reassignedTo != destName) {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 		}
@@ -554,7 +554,7 @@ function deps(p: Partitions, destName: string, src: Node): void {
 }
 
 function trav(p: Partitions, node: Node | null): void {
-	if (node === null) return;
+	if (node == null) return;
 	p.abstractTime += 1;
 
 	match (node.kind) {
@@ -570,7 +570,7 @@ function trav(p: Partitions, node: Node | null): void {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			trav(p, d.left);
-			if (d.operator === "=") {
+			if (d.operator == "=") {
 				p.inAsgnSource += 1;
 				trav(p, d.right);
 				p.inAsgnSource -= 1;
@@ -582,7 +582,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 				// Cursor deps for assignment
 				const lhs = getIdentName(d.left);
-				if (lhs !== "") deps(p, lhs, d.right);
+				if (lhs != "") deps(p, lhs, d.right);
 			} else {
 				trav(p, d.right);
 			}
@@ -598,7 +598,7 @@ function trav(p: Partitions, node: Node | null): void {
 			for (const arg of d.arguments) { trav(p, arg); }
 
 			// Method call (obj.method(...)) → obj is potentially mutated
-			if (d.callee !== null && d.callee.kind === NodeKind.MemberExpr) {
+			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
 				const objRoots: string[] = [];
 				collectPathRoots((d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
@@ -606,7 +606,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 			// HiddenAddr arguments → callee receives mutable pointer (var param)
 			for (const arg of d.arguments) {
-				if (arg !== null && arg.kind === NodeKind.HiddenAddr) {
+				if (arg != null && arg.kind == NodeKind.HiddenAddr) {
 					const addrRoots: string[] = [];
 					collectPathRoots((arg.data as { expr: Node }).expr, addrRoots);
 					for (const r of addrRoots) {
@@ -656,7 +656,7 @@ function trav(p: Partitions, node: Node | null): void {
 			if (p.inAsgnSource > 0) {
 				for (const elem of d.elements) {
 					const eName = getIdentName(elem);
-					if (eName !== "") {
+					if (eName != "") {
 						const eid = variableId(p, eName);
 						if (eid >= 0) p.vars[eid].flags = p.vars[eid].flags | VF_OWNS_DATA;
 					}
@@ -669,7 +669,7 @@ function trav(p: Partitions, node: Node | null): void {
 			if (p.inAsgnSource > 0) {
 				for (const prop of d.properties) {
 					const pName = getIdentName(prop);
-					if (pName !== "") {
+					if (pName != "") {
 						const pid = variableId(p, pName);
 						if (pid >= 0) p.vars[pid].flags = p.vars[pid].flags | VF_OWNS_DATA;
 					}
@@ -681,7 +681,7 @@ function trav(p: Partitions, node: Node | null): void {
 		NodeKind.MoveExpr => {
 			trav(p, (node.data as MoveExprData).moveArg);
 			const moveName = getIdentName((node.data as MoveExprData).moveArg);
-			if (moveName !== "") {
+			if (moveName != "") {
 				const mid = variableId(p, moveName);
 				if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR;
 			}
@@ -769,19 +769,19 @@ function computeCursorDecisions(p: Partitions): CursorSet {
 	while (i < p.vars.length) {
 		const v = p.vars[i];
 		// Skip params (handled separately in inject.ms)
-		if ((v.flags & VF_IS_PARAM) !== 0) { i += 1; continue; }
+		if ((v.flags & VF_IS_PARAM) != 0) { i += 1; continue; }
 		// Skip DRC-generated temps
 		if (v.name.startsWith("$")) { i += 1; continue; }
 		// Must not own data, be prevented, or be conditionally reassigned
-		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | VF_IS_COND_REASSIGNED)) !== 0) {
+		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | VF_IS_COND_REASSIGNED)) != 0) {
 			i += 1; continue;
 		}
 		// Reassigned variables can't be cursors
-		if ((v.flags & VF_IS_REASSIGNED) !== 0) { i += 1; continue; }
+		if ((v.flags & VF_IS_REASSIGNED) != 0) { i += 1; continue; }
 
 		// Check graph for dangerous mutation during cursor's lifetime
 		const r = ufRoot(p, i);
-		if (p.vars[r].con.kind === CK_ROOT_OF) {
+		if (p.vars[r].con.kind == CK_ROOT_OF) {
 			const g = p.graphs[p.vars[r].con.target];
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
@@ -802,15 +802,15 @@ export function createCursorSet(): CursorSet {
 
 export function isCursorVar(cs: CursorSet, varName: string): boolean {
 	for (const n of cs) {
-		if (n === varName) return true;
+		if (n == varName) return true;
 	}
 	return false;
 }
 
 // Main entry point — called once per function body, before DRC injection.
 export function inferCursors(body: Node): CursorSet {
-	if (body === null) return createCursorSet();
-	if (body.kind !== NodeKind.BlockStmt) return createCursorSet();
+	if (body == null) return createCursorSet();
+	if (body.kind != NodeKind.BlockStmt) return createCursorSet();
 
 	const p = createPartitions();
 
@@ -839,9 +839,9 @@ function getStmts(input: string): Node[] {
 
 function getFuncBody(input: string): Node {
 	const stmts = getStmts(input);
-	if (stmts.length === 0) return null as unknown as Node;
+	if (stmts.length == 0) return null as unknown as Node;
 	const stmt = stmts[0];
-	if (stmt.kind === NodeKind.FunctionDecl) {
+	if (stmt.kind == NodeKind.FunctionDecl) {
 		return (stmt.data as FunctionDeclData).fnBody;
 	}
 	return null as unknown as Node;

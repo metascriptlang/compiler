@@ -90,7 +90,7 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 			data.copyTo(out, off, 0, bodyLen);
 		}
 		const rem: int32 = bodyLen % BLOCK_SIZE;
-		const padded: int32 = rem === 0 ? bodyLen : bodyLen + (BLOCK_SIZE - rem);
+		const padded: int32 = rem == 0 ? bodyLen : bodyLen + (BLOCK_SIZE - rem);
 		off = off + padded;
 		j = j + 1;
 	}
@@ -198,7 +198,7 @@ function splitPath(path: string): Result<PathSplit, string> {
 	let bestSplit: int32 = -1;
 	let i: int32 = 0;
 	while (i < blen) {
-		if (path.byteAt(i) === 47) {
+		if (path.byteAt(i) == 47) {
 			// i is a "/" position. prefix = path[0..i], suffix = path[i+1..blen]
 			const prefixLen: int32 = i;
 			const suffixLen: int32 = blen - i - 1;
@@ -230,7 +230,7 @@ function padOctal(value: number, width: number): string {
 	if (v < 0) v = 0;
 	// Build octal digits right-to-left.
 	const digits: string[] = [];
-	if (v === 0) {
+	if (v == 0) {
 		digits.push("0");
 	} else {
 		while (v > 0) {
@@ -251,13 +251,13 @@ function padOctal(value: number, width: number): string {
 }
 
 function octalDigit(d: number): string {
-	if (d === 0) return "0";
-	if (d === 1) return "1";
-	if (d === 2) return "2";
-	if (d === 3) return "3";
-	if (d === 4) return "4";
-	if (d === 5) return "5";
-	if (d === 6) return "6";
+	if (d == 0) return "0";
+	if (d == 1) return "1";
+	if (d == 2) return "2";
+	if (d == 3) return "3";
+	if (d == 4) return "4";
+	if (d == 5) return "5";
+	if (d == 6) return "6";
 	return "7";
 }
 

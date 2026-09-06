@@ -29,7 +29,7 @@ export enum AliasKind {
 // Reference: strip transparent wrappers (type conversions, hidden addr/deref) to reach the real node.
 
 export function skipConvDfa(n: Node): Node {
-	if (n === null) return n;
+	if (n == null) return n;
 	return match (n.kind) {
 		NodeKind.TypeAssertion => skipConvDfa((n.data as TypeAssertionData).asExpr),
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => skipConvDfa((n.data as HiddenStdConvData).convExpr),
@@ -43,9 +43,9 @@ export function skipConvDfa(n: Node): Node {
 
 export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) => boolean): boolean {
 	let n = skipConvDfa(orig);
-	if (n === null) return false;
+	if (n == null) return false;
 
-	while (n !== null) {
+	while (n != null) {
 		match (n.kind) {
 			NodeKind.MemberExpr => {
 				n = skipConvDfa((n.data as MemberExprData).object);
@@ -56,7 +56,7 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 			NodeKind.HiddenDeref => {
 				const inner = skipConvDfa((n.data as HiddenDerefData).expr);
 				// Only owned deref (Ref<T>) is analysable, not Ptr<T>
-				if (inner !== null && inner.nodeType !== null && inner.nodeType.kind === TypeKind.Ptr) return false;
+				if (inner != null && inner.nodeType != null && inner.nodeType.kind == TypeKind.Ptr) return false;
 				n = inner;
 			},
 			NodeKind.HiddenAddr => {
@@ -64,11 +64,11 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 			},
 			NodeKind.Identifier => {
 				const sym = n.resolvedSym;
-				if (sym === null) return false;
+				if (sym == null) return false;
 				// Not global (module-level)
 				if (hasFlag(sym, SymbolFlag.Global)) return false;
 				// Params are borrows — not movable
-				if (sym.symbolKind === SymbolKind.Parameter) return false;
+				if (sym.symbolKind == SymbolKind.Parameter) return false;
 				// Not a cursor (borrow)
 				if (isCursorFn(sym.name)) return false;
 				return true;
@@ -85,7 +85,7 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 
 export function getRootSym(node: Node): Symbol {
 	let n = skipConvDfa(node);
-	while (n !== null) {
+	while (n != null) {
 		match (n.kind) {
 			NodeKind.Identifier => { return n.resolvedSym; },
 			NodeKind.MemberExpr => { n = skipConvDfa((n.data as MemberExprData).object); },
@@ -104,7 +104,7 @@ export function getRootSym(node: Node): Symbol {
 function decomposePath(n: Node): Node[] {
 	const path: Node[] = [];
 	let cur = skipConvDfa(n);
-	while (cur !== null) {
+	while (cur != null) {
 		match (cur.kind) {
 			NodeKind.Identifier => {
 				path.push(cur);
@@ -151,7 +151,7 @@ function decomposePath(n: Node): Node[] {
 //   x[i]  -> x      = No    (x[i] does NOT contain x)
 
 export function aliases(obj: Node, field: Node): AliasKind {
-	if (obj === null || field === null) return AliasKind.No;
+	if (obj == null || field == null) return AliasKind.No;
 
 	// Decompose both nodes into path components
 	// path[0] = leaf (deepest), path[len-1] = root (Identifier)
@@ -172,36 +172,36 @@ export function aliases(obj: Node, field: Node): AliasKind {
 		const objNode = objPath[objLen - 1 - i];
 		const fieldNode = fieldPath[fieldLen - 1 - i];
 
-		if (objNode.kind !== fieldNode.kind) return AliasKind.No;
+		if (objNode.kind != fieldNode.kind) return AliasKind.No;
 
 		match (objNode.kind) {
 			NodeKind.Identifier => {
 				// Compare by symbol identity
 				const objSym = objNode.resolvedSym;
 				const fieldSym = fieldNode.resolvedSym;
-				if (objSym !== null && fieldSym !== null) {
-					if (objSym !== fieldSym) return AliasKind.No;
+				if (objSym != null && fieldSym != null) {
+					if (objSym != fieldSym) return AliasKind.No;
 				} else {
 					// Fallback: compare by name
 					const objName = (objNode.data as IdentifierData).name;
 					const fieldName = (fieldNode.data as IdentifierData).name;
-					if (objName !== fieldName) return AliasKind.No;
+					if (objName != fieldName) return AliasKind.No;
 				}
 			},
 			NodeKind.MemberExpr => {
 				// Compare field names
 				const objProp = (objNode.data as MemberExprData).property;
 				const fieldProp = (fieldNode.data as MemberExprData).property;
-				if (objProp !== fieldProp) return AliasKind.No;
+				if (objProp != fieldProp) return AliasKind.No;
 			},
 			NodeKind.ArrayAccess => {
 				// Compare indices
 				const objIdx = (objNode.data as ArrayAccessData).index;
 				const fieldIdx = (fieldNode.data as ArrayAccessData).index;
-				if (objIdx.kind === NodeKind.NumberLiteral && fieldIdx.kind === NodeKind.NumberLiteral) {
+				if (objIdx.kind == NodeKind.NumberLiteral && fieldIdx.kind == NodeKind.NumberLiteral) {
 					const objVal = (objIdx.data as NumberLiteralData).value;
 					const fieldVal = (fieldIdx.data as NumberLiteralData).value;
-					if (objVal !== fieldVal) return AliasKind.No;
+					if (objVal != fieldVal) return AliasKind.No;
 				} else {
 					// At least one runtime index — downgrade to Maybe
 					result = AliasKind.Maybe;
@@ -225,7 +225,7 @@ export function aliases(obj: Node, field: Node): AliasKind {
 // For leaf expressions, delegate to aliases().
 
 export function deepAliases(dest: Node, ri: Node): boolean {
-	if (ri === null || dest === null) return false;
+	if (ri == null || dest == null) return false;
 
 	return match (ri.kind) {
 		NodeKind.CallExpr => {
@@ -272,7 +272,7 @@ export function deepAliases(dest: Node, ri: Node): boolean {
 		NodeKind.TypeAssertion => deepAliases(dest, (ri.data as TypeAssertionData).asExpr),
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => deepAliases(dest, (ri.data as HiddenStdConvData).convExpr),
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => deepAliases(dest, (ri.data as HiddenDerefData).expr),
-		_ => aliases(dest, ri) !== AliasKind.No,
+		_ => aliases(dest, ri) != AliasKind.No,
 	};
 }
 
@@ -287,23 +287,23 @@ function getExpr(input: string): Node {
 	if (!result.ok) return null as unknown as Node;
 	const prog = result.value;
 	const d = prog.data as { programStmts: Node[] };
-	if (d.programStmts.length === 0) return null as unknown as Node;
+	if (d.programStmts.length == 0) return null as unknown as Node;
 	const stmt = d.programStmts[0];
-	if (stmt.kind !== NodeKind.ExprStmt) return null as unknown as Node;
+	if (stmt.kind != NodeKind.ExprStmt) return null as unknown as Node;
 	return (stmt.data as ExprStmtData).expr;
 }
 
 // Test helper: walk a subtree and attach `sym` to every matching Identifier.
 // Nested function bodies are scope boundaries (not recursed into).
 function attachSymToNodeAlias(node: Node, name: string, sym: Symbol): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
-		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		if ((node.data as IdentifierData).name == name) node.resolvedSym = sym;
 		return;
 	}
-	if (node.kind === NodeKind.FunctionDecl
-		|| node.kind === NodeKind.ArrowFunction
-		|| node.kind === NodeKind.FunctionExpr) return;
+	if (node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr) return;
 	forEachChild(node, (c: Node): void => { attachSymToNodeAlias(c, name, sym); });
 }
 
@@ -312,13 +312,13 @@ function attachSymToNodeAlias(node: Node, name: string, sym: Symbol): void {
 test "skipConvDfa passes through identifier" {
 	const expr = getExpr("x;");
 	const result = skipConvDfa(expr);
-	assert result !== null;
-	assert result.kind === NodeKind.Identifier;
+	assert result != null;
+	assert result.kind == NodeKind.Identifier;
 }
 
 test "skipConvDfa null safety" {
 	const result = skipConvDfa(null as unknown as Node);
-	assert result === null;
+	assert result == null;
 }
 
 // ===== Tests: aliases =====
@@ -327,7 +327,7 @@ test "aliases: x -> x = Yes" {
 	const expr = getExpr("x;");
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(expr, "x", symX);
-	assert aliases(expr, expr) === AliasKind.Yes;
+	assert aliases(expr, expr) == AliasKind.Yes;
 }
 
 test "aliases: x -> x.f = Yes (x contains x.f)" {
@@ -336,7 +336,7 @@ test "aliases: x -> x.f = Yes (x contains x.f)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.Yes;
+	assert aliases(obj, field) == AliasKind.Yes;
 }
 
 test "aliases: x.f -> x = No (field doesn't contain parent)" {
@@ -345,7 +345,7 @@ test "aliases: x.f -> x = No (field doesn't contain parent)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.No;
+	assert aliases(obj, field) == AliasKind.No;
 }
 
 test "aliases: x.f -> x.f = Yes" {
@@ -354,7 +354,7 @@ test "aliases: x.f -> x.f = Yes" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.Yes;
+	assert aliases(a, b) == AliasKind.Yes;
 }
 
 test "aliases: x.f -> x.g = No (different fields)" {
@@ -363,7 +363,7 @@ test "aliases: x.f -> x.g = No (different fields)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.No;
+	assert aliases(a, b) == AliasKind.No;
 }
 
 test "aliases: x[0] -> x[0] = Yes" {
@@ -372,7 +372,7 @@ test "aliases: x[0] -> x[0] = Yes" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.Yes;
+	assert aliases(a, b) == AliasKind.Yes;
 }
 
 test "aliases: x[0] -> x[1] = No (different literal indices)" {
@@ -381,7 +381,7 @@ test "aliases: x[0] -> x[1] = No (different literal indices)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.No;
+	assert aliases(a, b) == AliasKind.No;
 }
 
 test "aliases: x -> x[i] = Yes (x contains x[i])" {
@@ -390,7 +390,7 @@ test "aliases: x -> x[i] = Yes (x contains x[i])" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.Yes;
+	assert aliases(obj, field) == AliasKind.Yes;
 }
 
 test "aliases: x[i] -> x = No (element doesn't contain parent)" {
@@ -399,7 +399,7 @@ test "aliases: x[i] -> x = No (element doesn't contain parent)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.No;
+	assert aliases(obj, field) == AliasKind.No;
 }
 
 test "aliases: x[i] -> x[j] = Maybe (runtime indices)" {
@@ -408,7 +408,7 @@ test "aliases: x[i] -> x[j] = Maybe (runtime indices)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.Maybe;
+	assert aliases(a, b) == AliasKind.Maybe;
 }
 
 test "aliases: different variables = No" {
@@ -418,11 +418,11 @@ test "aliases: different variables = No" {
 	const symY = makeTestSym("y");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "y", symY);
-	assert aliases(a, b) === AliasKind.No;
+	assert aliases(a, b) == AliasKind.No;
 }
 
 test "aliases: null = No" {
-	assert aliases(null as unknown as Node, null as unknown as Node) === AliasKind.No;
+	assert aliases(null as unknown as Node, null as unknown as Node) == AliasKind.No;
 }
 
 test "aliases: x.f.g -> x.f.g = Yes (deep match)" {
@@ -431,7 +431,7 @@ test "aliases: x.f.g -> x.f.g = Yes (deep match)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.Yes;
+	assert aliases(a, b) == AliasKind.Yes;
 }
 
 test "aliases: x.f.g -> x.f.h = No (deep diverge at leaf)" {
@@ -440,7 +440,7 @@ test "aliases: x.f.g -> x.f.h = No (deep diverge at leaf)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(a, "x", symX);
 	attachSymToNodeAlias(b, "x", symX);
-	assert aliases(a, b) === AliasKind.No;
+	assert aliases(a, b) == AliasKind.No;
 }
 
 test "aliases: x.f -> x.f.g = Yes (containment at depth 2)" {
@@ -449,7 +449,7 @@ test "aliases: x.f -> x.f.g = Yes (containment at depth 2)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.Yes;
+	assert aliases(obj, field) == AliasKind.Yes;
 }
 
 test "aliases: x.f.g -> x.f = No (deeper doesn't contain shallower)" {
@@ -458,7 +458,7 @@ test "aliases: x.f.g -> x.f = No (deeper doesn't contain shallower)" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(obj, "x", symX);
 	attachSymToNodeAlias(field, "x", symX);
-	assert aliases(obj, field) === AliasKind.No;
+	assert aliases(obj, field) == AliasKind.No;
 }
 
 // ===== Tests: deepAliases =====

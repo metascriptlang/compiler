@@ -24,7 +24,7 @@ import { Node, NodeKind } from "../ast/node";
 // ArrowFunction: parameter types inferred from the expected function type.
 // Not yet handled (Phase 6+): ArrayLiteral, FunctionExpr, tagged templates.
 export function isContextSensitive(arg: Node): boolean {
-	if (arg === null) return false;
-	return arg.kind === NodeKind.ObjectLiteral
-		|| arg.kind === NodeKind.ArrowFunction;
+	if (arg == null) return false;
+	return arg.kind == NodeKind.ObjectLiteral
+		|| arg.kind == NodeKind.ArrowFunction;
 }

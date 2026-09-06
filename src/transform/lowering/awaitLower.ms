@@ -74,7 +74,7 @@ export function makeUnboxCall(voidPtrExpr: Node, innerType: Type | null, loc: So
 // Uses the T1/T2 semantic layer: if the expression type is `Promise<T>` (plain or affine),
 // extract T. Otherwise returns null (let C handle it as void*).
 function getAwaitInnerType(awaitArgExpr: Node): Type | null {
-	if (awaitArgExpr === null || awaitArgExpr.nodeType === null) return null;
+	if (awaitArgExpr == null || awaitArgExpr.nodeType == null) return null;
 	return awaitedType(awaitArgExpr.nodeType);
 }
 
@@ -83,19 +83,19 @@ function getAwaitInnerType(awaitArgExpr: Node): Type | null {
 // Check if a node is a spawn() call. Returns the closure argument and optional
 // timeout from the options object: spawn(fn, { timeout: N }).
 export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node | null } {
-	if (node === null || node.kind !== NodeKind.CallExpr) return { closure: null, timeout: null };
+	if (node == null || node.kind != NodeKind.CallExpr) return { closure: null, timeout: null };
 	const cd = node.data as CallExprData;
-	const sym = node.resolvedSym !== null ? node.resolvedSym : cd.callee.resolvedSym;
-	if (sym === null || (sym.builtinKind !== "PromiseSpawn" && sym.nativeName !== "msSpawn")) return { closure: null, timeout: null };
+	const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
+	if (sym == null || (sym.builtinKind != "PromiseSpawn" && sym.nativeName != "msSpawn")) return { closure: null, timeout: null };
 	if (cd.arguments.length < 1) return { closure: null, timeout: null };
 	const closure = cd.arguments[0];
 	let timeout: Node | null = null;
 	// Extract timeout from options object: spawn(fn, { timeout: N })
-	if (cd.arguments.length >= 2 && cd.arguments[1].kind === NodeKind.ObjectLiteral) {
+	if (cd.arguments.length >= 2 && cd.arguments[1].kind == NodeKind.ObjectLiteral) {
 		const opts = cd.arguments[1].data as ObjectLiteralData;
 		let i = 0;
 		while (i < opts.keys.length) {
-			if (opts.keys[i] === "timeout") {
+			if (opts.keys[i] == "timeout") {
 				timeout = opts.properties[i];
 				break;
 			}
@@ -112,7 +112,7 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 // the single msAwaitGroupBlocking call). If no timeout, returns single blocking call.
 export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext): Node[] {
 	const stmts: Node[] = [];
-	if (timeoutExpr === null) {
+	if (timeoutExpr == null) {
 		// No timeout — simple blocking wait
 		stmts.push(makeExprStmt(
 			makeCall(makeIdent("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
@@ -165,7 +165,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 // Slow path (timeout): heap-allocated msAwaitGroup with mutex/condvar for timed wait.
 function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
 	// Timeout requires mutex+condvar → fall back to heap AwaitGroup
-	if (timeoutExpr !== null) {
+	if (timeoutExpr != null) {
 		return expandFusedAwaitHeap(closureArg, loc, ctx, timeoutExpr);
 	}
 
@@ -205,12 +205,12 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 
 	// 2. Inject cancel safe-points into the closure body
 	let closureBody: Node | null = null;
-	if (closureArg.kind === NodeKind.FunctionExpr) {
+	if (closureArg.kind == NodeKind.FunctionExpr) {
 		closureBody = (closureArg.data as FunctionExprData).funcExprBody;
-	} else if (closureArg.kind === NodeKind.ArrowFunction) {
+	} else if (closureArg.kind == NodeKind.ArrowFunction) {
 		closureBody = (closureArg.data as ArrowFunctionData).arrowBody;
 	}
-	if (closureBody !== null) {
+	if (closureBody != null) {
 		injectCancelSafePoints(closureBody, ag.ident, loc);
 	}
 
@@ -248,7 +248,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	// created twice — once for msWaitForReady and once for msFutureReadT — and
 	// the second future is never awaited, causing an assertion failure.
 	let futIdent = handleExpr;
-	if (handleExpr.kind !== NodeKind.Identifier) {
+	if (handleExpr.kind != NodeKind.Identifier) {
 		const tmp = makeTempDecl(ctx, "fut", handleExpr, handleExpr.nodeType, loc);
 		// Parked-handle marker, on the SYMBOL (survives every later node rewrite —
 		// extension-method and call-hoist passes rebuild the CallExpr node): the
@@ -264,8 +264,8 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	// Typed path: msWaitForReady(handle) + msFutureReadT(handle) → typed value
 	// msWaitForReady blocks until the future finishes (without consuming the value),
 	// then msFutureReadT extracts the typed value from the future struct.
-	const readFn = innerType !== null ? typedFutureReadFn(innerType) : "";
-	if (readFn !== "") {
+	const readFn = innerType != null ? typedFutureReadFn(innerType) : "";
+	if (readFn != "") {
 		stmts.push(makeExprStmt(
 			makeCall(makeIdent("msWaitForReady", loc), [futIdent], loc), loc));
 		const res = makeTempDecl(ctx, "aw", makeCall(makeIdent(readFn, loc), [futIdent], loc), innerType, loc);
@@ -288,20 +288,20 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], resultIdent: Node } {
 	const spawnInfo = getSpawnInfo(awaitArg);
 	const innerType = getAwaitInnerType(awaitArg);
-	if (spawnInfo.closure !== null) {
+	if (spawnInfo.closure != null) {
 		// Fused path: AwaitGroup → void* results, needs unboxing
 		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx, spawnInfo.timeout);
-		if (innerType !== null) {
+		if (innerType != null) {
 			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
 		}
 		return expansion;
 	}
 	// Scoped deferred: `const h = spawn(fn); ... await h;` → msAwaitSlot
 	// Check if the awaited identifier was registered as a spawn handle in this scope.
-	if (awaitArg.kind === NodeKind.Identifier) {
+	if (awaitArg.kind == NodeKind.Identifier) {
 		const name = (awaitArg.data as IdentifierData).name;
 		const slotEntry = _spawnSlotMap.get(name);
-		if (slotEntry !== null) {
+		if (slotEntry != null) {
 			_spawnSlotMap.delete(name);
 			const stmts: Node[] = [];
 			// msAwaitSlotWait($slot);
@@ -314,7 +314,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			stmts.push(makeExprStmt(
 				makeCall(makeIdent("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
 			let resultIdent = agr.ident;
-			if (slotEntry.innerType !== null) {
+			if (slotEntry.innerType != null) {
 				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);
 			}
 			return { stmts, resultIdent };
@@ -325,7 +325,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	// expandDeferredAwait signals via `typed` whether it used msFutureReadT
 	// (no unboxing needed) or fell back to void* msWaitFor (needs unboxing).
 	let expansion = expandDeferredAwait(awaitArg, loc, ctx, innerType);
-	if (!expansion.typed && innerType !== null) {
+	if (!expansion.typed && innerType != null) {
 		expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
 	}
 	return { stmts: expansion.stmts, resultIdent: expansion.resultIdent };
@@ -339,9 +339,9 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 // data field and appends the stmt. (P9 DRY — 3 match arms share this pattern.)
 function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext): { stmts: Node[], replacement: Node } {
 	const noResult: { stmts: Node[], replacement: Node } = { stmts: null as unknown as Node[], replacement: null as unknown as Node };
-	if (expr === null) return noResult;
+	if (expr == null) return noResult;
 	// Direct: expr IS the AwaitExpr
-	if (expr.kind === NodeKind.AwaitExpr) {
+	if (expr.kind == NodeKind.AwaitExpr) {
 		const ad = expr.data as AwaitExprData;
 		const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
 		return { stmts: expansion.stmts, replacement: expansion.resultIdent };
@@ -363,12 +363,12 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			// → rewrite to msAwaitSlotCreate + msSpawnSlotSubmit, register for later await.
 			// Only matches builtin spawn() (builtinKind=PromiseSpawn), not raw msSpawn FFI.
 			// spawn() handles are affine Promises used exclusively with await, safe to eliminate.
-			if (d.declKind === DeclKind.Const && d.initializer !== null) {
+			if (d.declKind == DeclKind.Const && d.initializer != null) {
 				const si = getSpawnInfo(d.initializer);
-				const initSym = d.initializer.resolvedSym !== null ? d.initializer.resolvedSym
-					: (d.initializer.kind === NodeKind.CallExpr ? (d.initializer.data as CallExprData).callee.resolvedSym : null);
-				if (si.closure !== null && si.timeout === null
-					&& initSym !== null && initSym.builtinKind === "PromiseSpawn"
+				const initSym = d.initializer.resolvedSym != null ? d.initializer.resolvedSym
+					: (d.initializer.kind == NodeKind.CallExpr ? (d.initializer.data as CallExprData).callee.resolvedSym : null);
+				if (si.closure != null && si.timeout == null
+					&& initSym != null && initSym.builtinKind == "PromiseSpawn"
 					&& !_spawnSlotMap.has(d.declName)) {
 					const innerType = getAwaitInnerType(d.initializer);
 					const stmts: Node[] = [];
@@ -385,7 +385,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				}
 			}
 			const expanded = tryExpandAwaitExpr(d.initializer, stmt, ctx);
-			if (expanded.replacement !== null) {
+			if (expanded.replacement != null) {
 				d.initializer = expanded.replacement;
 				expanded.stmts.push(stmt);
 				return expanded.stmts;
@@ -393,7 +393,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr !== null && d.expr.kind === NodeKind.AwaitExpr) {
+			if (d.expr != null && d.expr.kind == NodeKind.AwaitExpr) {
 				// Bare `await expr;` — the awaited value still belongs to this scope: the
 				// await result carries the caller's reference exactly as in `const r = await h`.
 				// Dropping the result ident here left that value with no owner and no
@@ -406,7 +406,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				const ad = d.expr.data as AwaitExprData;
 				const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
 				const discardedType = getAwaitInnerType(ad.awaitArg);
-				if (discardedType !== null && discardedType.kind !== TypeKind.Void) {
+				if (discardedType != null && discardedType.kind != TypeKind.Void) {
 					const dloc = stmt.location;
 					const dsym = freshOwnedSym(ctx, "disc", discardedType);
 					const ddecl = makeVarDecl(dsym.name, expansion.resultIdent, DeclKind.Const, dloc);
@@ -417,7 +417,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return expansion.stmts;
 			}
 			const expanded = tryExpandAwaitExpr(d.expr, stmt, ctx);
-			if (expanded.replacement !== null) {
+			if (expanded.replacement != null) {
 				d.expr = expanded.replacement;
 				expanded.stmts.push(stmt);
 				return expanded.stmts;
@@ -426,7 +426,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
 			const expanded = tryExpandAwaitExpr(d.argument, stmt, ctx);
-			if (expanded.replacement !== null) {
+			if (expanded.replacement != null) {
 				d.argument = expanded.replacement;
 				expanded.stmts.push(stmt);
 				return expanded.stmts;
@@ -434,10 +434,10 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ExportDecl => {
 			const ed = stmt.data as ExportDeclData;
-			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.VariableDecl) {
+			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
 				const d = ed.exportedDecl.data as VariableDeclData;
 				const expanded = tryExpandAwaitExpr(d.initializer, stmt, ctx);
-				if (expanded.replacement !== null) {
+				if (expanded.replacement != null) {
 					d.initializer = expanded.replacement;
 					expanded.stmts.push(stmt);
 					return expanded.stmts;
@@ -447,7 +447,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		NodeKind.AssertStmt => {
 			const d = stmt.data as AssertStmtData;
 			const expanded = tryExpandAwaitExpr(d.assertExpr, stmt, ctx);
-			if (expanded.replacement !== null) {
+			if (expanded.replacement != null) {
 				d.assertExpr = expanded.replacement;
 				expanded.stmts.push(stmt);
 				return expanded.stmts;
@@ -473,15 +473,15 @@ let _hoistCtx: TransformContext = null as unknown as TransformContext;
 let _hoistLoc: SourceLocation = null as unknown as SourceLocation;
 
 function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } {
-	if (expr === null) return null;
-	if (expr.kind === NodeKind.AwaitExpr) return null;
+	if (expr == null) return null;
+	if (expr.kind == NodeKind.AwaitExpr) return null;
 
 	_hoistStmts = [];
 	_hoistCtx = ctx;
 	_hoistLoc = loc;
 
 	const replaced = replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind !== NodeKind.AwaitExpr) return node;
+		if (node.kind != NodeKind.AwaitExpr) return node;
 		// Extract every AwaitExpr into preceding statements + replace with result ident.
 		// replaceInExpr is bottom-up (left subtrees first), so evaluation order is preserved:
 		// `await a + await b` → expand(a) stmts, expand(b) stmts, then $aw0 + $aw1.
@@ -491,7 +491,7 @@ function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext
 		return expansion.resultIdent;
 	});
 
-	if (_hoistStmts.length === 0) return null;
+	if (_hoistStmts.length == 0) return null;
 	return { stmts: _hoistStmts, replacement: replaced };
 }
 

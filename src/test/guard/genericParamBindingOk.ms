@@ -40,7 +40,7 @@ function main(): void {
     c.update((x: int32) => x + 1);
     const s = new GuardCell<string>("a");
     s.update((x: string) => x + "b");
-    if (c.get() === 6 && s.get() === "ab") {
+    if (c.get() == 6 && s.get() == "ab") {
         console.log("GUARD-OK");
     } else {
         console.log("GUARD-RED c=" + c.get() + " s=" + s.get());

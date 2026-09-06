@@ -27,7 +27,7 @@ function main(): void {
 	m.set("a", n as unknown as H);
 	const got = m.get("a") as H;         // unknown|null as unknown — the exact repro
 	const node = got as Node2;           // unknown -> Ref (legal pointer cast)
-	if (node.v !== 7) { throw "GUARD RED: nilable-unknown as-cast lost the pointer"; }
+	if (node.v != 7) { throw "GUARD RED: nilable-unknown as-cast lost the pointer"; }
 	console.log("nilableUnknownAsCast ok");
 }
 main();

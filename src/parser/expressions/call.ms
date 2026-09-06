@@ -17,17 +17,17 @@ type NodesResult = Result<Node[], string>;
 
 export function parseExprList(state: ParserState, endKind: TokenKind, exprParser: ExprParser): NodesResult {
 	const items: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== endKind) {
+	while (!isAtEnd(state) && current(state).kind != endKind) {
 		const item = try exprParser(state, 0);
 		stampEnd(state, item);
 		items.push(item);
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		} else {
 			break;
 		}
 	}
-	if (current(state).kind === endKind) { advance(state); }
+	if (current(state).kind == endKind) { advance(state); }
 	return Result.ok(items);
 }
 
@@ -44,7 +44,7 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 	const args = try parseExprList(state, TokenKind.RParen, exprParser);
 	const callNode = createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen);
 	stampEnd(state, callNode);
-	if (typeArg !== "") {
+	if (typeArg != "") {
 		callNode.typeArg = typeArg;
 	}
 	return Result.ok(callNode);
@@ -75,15 +75,15 @@ function listCount(input: string): int32 {
 	return result.value.length;
 }
 
-test "no args" { assert callArgCount("()") === 0; }
+test "no args" { assert callArgCount("()") == 0; }
 
-test "two args" { assert callArgCount("(a, b)") === 2; }
+test "two args" { assert callArgCount("(a, b)") == 2; }
 
-test "trailing comma" { assert callArgCount("(a, b,)") === 2; }
+test "trailing comma" { assert callArgCount("(a, b,)") == 2; }
 
-test "empty list" { assert listCount("") === 0; }
+test "empty list" { assert listCount("") == 0; }
 
-test "three items" { assert listCount("a, b, c") === 3; }
+test "three items" { assert listCount("a, b, c") == 3; }
 
 test "nested call" { assert parseOk("f(g(x))"); }
 

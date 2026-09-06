@@ -35,50 +35,50 @@ export function retargetJumps(program: Node, ctx: TransformContext): Node {
 }
 
 function isFnBoundary(kind: NodeKind): boolean {
-	return kind === NodeKind.FunctionDecl
-		|| kind === NodeKind.FunctionExpr
-		|| kind === NodeKind.ArrowFunction
-		|| kind === NodeKind.MethodDecl
-		|| kind === NodeKind.ConstructorDecl
-		|| kind === NodeKind.TestDecl;
+	return kind == NodeKind.FunctionDecl
+		|| kind == NodeKind.FunctionExpr
+		|| kind == NodeKind.ArrowFunction
+		|| kind == NodeKind.MethodDecl
+		|| kind == NodeKind.ConstructorDecl
+		|| kind == NodeKind.TestDecl;
 }
 
 function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {
-	if (target.node.kind === NodeKind.WhileStmt) {
+	if (target.node.kind == NodeKind.WhileStmt) {
 		const wd = target.node.data as WhileStmtData;
-		if (wd.whileLabel === "") {
+		if (wd.whileLabel == "") {
 			ctx.tempCounter += 1;
 			wd.whileLabel = `__lp${ctx.tempCounter}`;
 		}
 		return wd.whileLabel;
 	}
-	if (target.node.kind === NodeKind.DoWhileStmt) {
+	if (target.node.kind == NodeKind.DoWhileStmt) {
 		const dd = target.node.data as DoWhileStmtData;
-		if (dd.dwLabel === "") {
+		if (dd.dwLabel == "") {
 			ctx.tempCounter += 1;
 			dd.dwLabel = `__lp${ctx.tempCounter}`;
 		}
 		return dd.dwLabel;
 	}
-	if (target.node.kind === NodeKind.ForStmt) {
+	if (target.node.kind == NodeKind.ForStmt) {
 		const fd = target.node.data as ForStmtData;
-		if (fd.forLabel === "") {
+		if (fd.forLabel == "") {
 			ctx.tempCounter += 1;
 			fd.forLabel = `__lp${ctx.tempCounter}`;
 		}
 		return fd.forLabel;
 	}
-	if (target.node.kind === NodeKind.ForOfStmt) {
+	if (target.node.kind == NodeKind.ForOfStmt) {
 		const fd = target.node.data as ForOfStmtData;
-		if (fd.forOfLabel === "") {
+		if (fd.forOfLabel == "") {
 			ctx.tempCounter += 1;
 			fd.forOfLabel = `__lp${ctx.tempCounter}`;
 		}
 		return fd.forOfLabel;
 	}
-	if (target.node.kind === NodeKind.ForInStmt) {
+	if (target.node.kind == NodeKind.ForInStmt) {
 		const fd = target.node.data as ForInStmtData;
-		if (fd.forInLabel === "") {
+		if (fd.forInLabel == "") {
 			ctx.tempCounter += 1;
 			fd.forInLabel = `__lp${ctx.tempCounter}`;
 		}
@@ -89,19 +89,19 @@ function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {
 
 function retargetBreak(node: Node, st: RetargetState): void {
 	const bd = node.data as BreakStmtData;
-	if (bd.breakLabel !== "") return;
+	if (bd.breakLabel != "") return;
 	let crossedSwitch = false;
 	let i = st.stack.length - 1;
 	while (i >= 0) {
 		const t = st.stack[i];
-		if (t.targetKind === TK_SWITCH) {
+		if (t.targetKind == TK_SWITCH) {
 			crossedSwitch = true;
 			i -= 1;
 			continue;
 		}
 		if (crossedSwitch) {
 			const lbl = ensureLoopLabel(t, st.ctx);
-			if (lbl !== "") bd.breakLabel = lbl;
+			if (lbl != "") bd.breakLabel = lbl;
 		}
 		return;
 	}
@@ -109,19 +109,19 @@ function retargetBreak(node: Node, st: RetargetState): void {
 
 function retargetContinue(node: Node, st: RetargetState): void {
 	const cd = node.data as ContinueStmtData;
-	if (cd.continueLabel !== "") return;
+	if (cd.continueLabel != "") return;
 	let crossedWrapper = false;
 	let i = st.stack.length - 1;
 	while (i >= 0) {
 		const t = st.stack[i];
-		if (t.targetKind === TK_SWITCH || t.targetKind === TK_WRAPPER) {
-			if (t.targetKind === TK_WRAPPER) crossedWrapper = true;
+		if (t.targetKind == TK_SWITCH || t.targetKind == TK_WRAPPER) {
+			if (t.targetKind == TK_WRAPPER) crossedWrapper = true;
 			i -= 1;
 			continue;
 		}
 		if (crossedWrapper) {
 			const lbl = ensureLoopLabel(t, st.ctx);
-			if (lbl !== "") cd.continueLabel = lbl;
+			if (lbl != "") cd.continueLabel = lbl;
 		}
 		return;
 	}
@@ -129,11 +129,11 @@ function retargetContinue(node: Node, st: RetargetState): void {
 
 function walk(node: Node, st: RetargetState): void {
 	const kind = node.kind;
-	if (kind === NodeKind.BreakStmt) {
+	if (kind == NodeKind.BreakStmt) {
 		retargetBreak(node, st);
 		return;
 	}
-	if (kind === NodeKind.ContinueStmt) {
+	if (kind == NodeKind.ContinueStmt) {
 		retargetContinue(node, st);
 		return;
 	}
@@ -144,26 +144,26 @@ function walk(node: Node, st: RetargetState): void {
 		st.stack = savedStack;
 		return;
 	}
-	if (kind === NodeKind.WhileStmt) {
+	if (kind == NodeKind.WhileStmt) {
 		st.stack.push({ targetKind: TK_LOOP, node });
 		forEachChild(node, (child: Node) => { walk(child, st); });
 		st.stack.pop();
 		return;
 	}
-	if (kind === NodeKind.DoWhileStmt) {
+	if (kind == NodeKind.DoWhileStmt) {
 		const dd = node.data as DoWhileStmtData;
 		st.stack.push({ targetKind: dd.dwSwitchWrapper ? TK_WRAPPER : TK_LOOP, node });
 		forEachChild(node, (child: Node) => { walk(child, st); });
 		st.stack.pop();
 		return;
 	}
-	if (kind === NodeKind.ForStmt || kind === NodeKind.ForOfStmt || kind === NodeKind.ForInStmt) {
+	if (kind == NodeKind.ForStmt || kind == NodeKind.ForOfStmt || kind == NodeKind.ForInStmt) {
 		st.stack.push({ targetKind: TK_LOOP, node });
 		forEachChild(node, (child: Node) => { walk(child, st); });
 		st.stack.pop();
 		return;
 	}
-	if (kind === NodeKind.SwitchStmt) {
+	if (kind == NodeKind.SwitchStmt) {
 		st.stack.push({ targetKind: TK_SWITCH, node });
 		forEachChild(node, (child: Node) => { walk(child, st); });
 		st.stack.pop();

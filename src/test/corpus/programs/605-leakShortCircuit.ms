@@ -24,7 +24,7 @@ function main(): void {
 	let hits = 0;
 	let i = 0;
 	while (i < 3000000) {
-		const a = (i % 2 === 0);
+		const a = (i % 2 == 0);
 		if (a && provide(i).ok) { hits = hits + 1; }
 		i = i + 1;
 	}

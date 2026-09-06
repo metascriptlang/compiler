@@ -38,12 +38,12 @@ test "specialization only the importer asks for links" {
 // union ctor-param proto/def mismatch), not the cross-module instantiation this guards.
 test "string specialization from the importer" {
 	const names = new GcCell<string>("neon");
-	assert names.value === "neon", "string cell";
+	assert names.value == "neon", "string cell";
 }
 
 test "the defining module's own specialization still works" {
 	const n = gcMakeNumber();
-	assert n.value === 41, "number cell from the definer";
+	assert n.value == 41, "number cell from the definer";
 	const mine = new GcCell<number>(7);
-	assert mine.value === 7, "same specialization from the importer";
+	assert mine.value == 7, "same specialization from the importer";
 }

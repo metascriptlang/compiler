@@ -42,7 +42,7 @@ function main(): void {
     for (let n = 0; n < 20; n = n + 1) {
         const c = new Cell();
         const r = await c.ping();
-        if (r !== 64) { exit(1); }
+        if (r != 64) { exit(1); }
         stale.push(c.pid);
         stop(c.pid, ExitReason.Normal);
         stop(c.pid, ExitReason.Normal);
@@ -61,7 +61,7 @@ function main(): void {
         total = total + r;
         stop(c.pid, ExitReason.Normal);
     }
-    if (total !== 1280) {
+    if (total != 1280) {
         console.log("actorStalePid FAIL total=" + total.toString());
         exit(1);
     }

@@ -133,7 +133,7 @@ console.log(fromDupB().toString());
 	const js = compileProjectToJSWithStd(entries, "test/dupPrivUse.ms");
 	assert js.indexOf("ERROR", 0) < 0;
 	assert !js.contains("function dupPrivHelper(");
-	assert js.count("function dupPrivHelper") === 2;
+	assert js.count("function dupPrivHelper") == 2;
 	assert !js.contains("const dupPrivTag =");
 	assert js.count("dupPrivTag") >= 4;
 	assert js.contains("function fromDupA(");

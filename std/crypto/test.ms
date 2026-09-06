@@ -9,65 +9,65 @@ import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, 
 test "sha256 empty string" {
 	const result = sha256("");
 	assert result.ok;
-	assert result.value === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+	assert result.value == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 }
 
 test "sha256 hello world" {
 	const result = sha256("hello world");
 	assert result.ok;
-	assert result.value === "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+	assert result.value == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 }
 
 test "sha256 base64 encoding" {
 	const result = sha256("hello world", "base64");
 	assert result.ok;
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 // SHA-512 test vectors
 test "sha512 empty string" {
 	const result = sha512("");
 	assert result.ok;
-	assert result.value === "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
+	assert result.value == "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
 }
 
 test "sha512 hello" {
 	const result = sha512("hello");
 	assert result.ok;
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 // SHA-384
 test "sha384 empty string" {
 	const result = sha384("");
 	assert result.ok;
-	assert result.value === "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b";
+	assert result.value == "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b";
 }
 
 // SHA-1
 test "sha1 empty string" {
 	const result = sha1("");
 	assert result.ok;
-	assert result.value === "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+	assert result.value == "da39a3ee5e6b4b0d3255bfef95601890afd80709";
 }
 
 test "sha1 hello world" {
 	const result = sha1("hello world");
 	assert result.ok;
-	assert result.value === "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed";
+	assert result.value == "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed";
 }
 
 // MD5
 test "md5 empty string" {
 	const result = md5("");
 	assert result.ok;
-	assert result.value === "d41d8cd98f00b204e9800998ecf8427e";
+	assert result.value == "d41d8cd98f00b204e9800998ecf8427e";
 }
 
 test "md5 hello world" {
 	const result = md5("hello world");
 	assert result.ok;
-	assert result.value === "5eb63bbbe01eeed093cb22bb8f5acdc3";
+	assert result.value == "5eb63bbbe01eeed093cb22bb8f5acdc3";
 }
 
 // ===== Generic Hash Function =====
@@ -75,7 +75,7 @@ test "md5 hello world" {
 test "hash with algorithm parameter" {
 	const result = hash("sha256", "test");
 	assert result.ok;
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 test "hash with unsupported algorithm" {
@@ -88,13 +88,13 @@ test "hash with unsupported algorithm" {
 test "hmac sha256" {
 	const result = hmac("sha256", "secret-key", "hello world");
 	assert result.ok;
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 test "hmac sha512" {
 	const result = hmac("sha512", "key", "data");
 	assert result.ok;
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 test "hmac with unsupported algorithm" {
@@ -115,7 +115,7 @@ test "randomBytes different each call" {
 	const b = randomBytes(16);
 	assert a.ok;
 	assert b.ok;
-	assert a.value !== b.value;
+	assert a.value != b.value;
 }
 
 test "randomInt in range" {
@@ -130,7 +130,7 @@ test "randomUUID format" {
 	assert result.ok;
 	// UUID v4 format: 8-4-4-4-12 = 36 chars
 	// Can't check length without string utility, but ensure non-empty
-	assert result.value !== "";
+	assert result.value != "";
 }
 
 // ===== Timing-Safe Comparison =====
@@ -157,7 +157,7 @@ test "streaming sha256 single update" {
 	const hasher = createHash("sha256");
 	hasher.update("hello world");
 	const digest = hasher.digest("hex");
-	assert digest === "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+	assert digest == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 }
 
 test "streaming sha256 multiple updates" {
@@ -166,14 +166,14 @@ test "streaming sha256 multiple updates" {
 	hasher.update(" ");
 	hasher.update("world");
 	const digest = hasher.digest("hex");
-	assert digest === "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+	assert digest == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 }
 
 test "streaming sha512" {
 	const hasher = createHash("sha512");
 	hasher.update("");
 	const digest = hasher.digest("hex");
-	assert digest === "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
+	assert digest == "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
 }
 
 // ===== Streaming HMAC =====
@@ -185,7 +185,7 @@ test "streaming hmac sha256" {
 	// Should match one-shot hmac
 	const oneshot = hmac("sha256", "secret-key", "hello world");
 	assert oneshot.ok;
-	assert digest === oneshot.value;
+	assert digest == oneshot.value;
 }
 
 test "streaming hmac multiple updates" {
@@ -197,7 +197,7 @@ test "streaming hmac multiple updates" {
 
 	const oneshot = hmac("sha256", "key", "hello world");
 	assert oneshot.ok;
-	assert digest === oneshot.value;
+	assert digest == oneshot.value;
 }
 
 // ===== Algorithm Support =====

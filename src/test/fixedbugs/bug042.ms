@@ -41,7 +41,7 @@ function bug042_lookup<K, V>(m: Bug042Map<K, V>, target: K, h: int64): boolean {
 	let i = 0;
 	while (i < m.entries.length) {
 		const e = m.entries[i];
-		if (e.hcode === h && e.key === target) { return true; }
+		if (e.hcode == h && e.key == target) { return true; }
 		i = i + 1;
 	}
 	return false;

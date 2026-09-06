@@ -26,8 +26,8 @@ import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken } from "../
 // here, so this is a no-op for it (guards against double-deref).
 function unwrapRefArrayRecv(recv: Node): Node {
 	const t = recv.nodeType;
-	if (t !== null && t.kind === TypeKind.Ref && t.typeReturn !== null
-			&& t.typeReturn.kind === TypeKind.Array) {
+	if (t != null && t.kind == TypeKind.Ref && t.typeReturn != null
+			&& t.typeReturn.kind == TypeKind.Array) {
 		const deref = createNode(NodeKind.HiddenDeref, { expr: recv }, syntheticToken(recv.location));
 		deref.nodeType = t.typeReturn;
 		return deref;
@@ -48,20 +48,20 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 // Propagate SizedArray type to ArrayLiteral initializers so rewriteArrayLiteral skips them.
 function propagateSizedArrayType(node: Node): Node {
 	// VariableDecl: const fixed: number[3] = [10, 20, 30]
-	if (node.kind === NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (node.nodeType !== null && node.nodeType.kind === TypeKind.SizedArray) {
-			if (d.initializer !== null && d.initializer.kind === NodeKind.ArrayLiteral) {
+		if (node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray) {
+			if (d.initializer != null && d.initializer.kind == NodeKind.ArrayLiteral) {
 				d.initializer.nodeType = node.nodeType;
 			}
 		}
 	}
 	// Assignment: fixed = [10, 20, 30]
-	if (node.kind === NodeKind.BinaryExpr) {
+	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator === "=") {
-			if (d.left.nodeType !== null && d.left.nodeType.kind === TypeKind.SizedArray) {
-				if (d.right !== null && d.right.kind === NodeKind.ArrayLiteral) {
+		if (d.operator == "=") {
+			if (d.left.nodeType != null && d.left.nodeType.kind == TypeKind.SizedArray) {
+				if (d.right != null && d.right.kind == NodeKind.ArrayLiteral) {
 					d.right.nodeType = d.left.nodeType;
 				}
 			}
@@ -73,11 +73,11 @@ function propagateSizedArrayType(node: Node): Node {
 // ===== Rewriter =====
 
 function rewriteAccess(node: Node): Node {
-	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
-	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
-	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
-	if (node.kind === NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind === NodeKind.CallExpr) return rewriteLockedIntrinsic(rewriteExternArrayReturn(node));
+	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node);
+	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
+	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
+	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
+	if (node.kind == NodeKind.CallExpr) return rewriteLockedIntrinsic(rewriteExternArrayReturn(node));
 	return node;
 }
 
@@ -87,12 +87,12 @@ function rewriteAccess(node: Node): Node {
 // extern symbol so codegen reaches that rewrite — the extern path emits the
 // nativeName call directly and would produce a call to an undeclared function.
 function rewriteLockedIntrinsic(node: Node): Node {
-	if (node.kind !== NodeKind.CallExpr) return node;
-	if (node.resolvedSym === null) return node;
+	if (node.kind != NodeKind.CallExpr) return node;
+	if (node.resolvedSym == null) return node;
 	const cd = node.data as CallExprData;
-	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return node;
+	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return node;
 	const name = (cd.callee.data as IdentifierData).name;
-	if (name !== "msLockedLoad" && name !== "msLockedStore") return node;
+	if (name != "msLockedLoad" && name != "msLockedStore") return node;
 	const call = makeCall(makeIdent(name, node.location), cd.arguments, node.location);
 	call.nodeType = node.nodeType;
 	return call;
@@ -103,13 +103,13 @@ function rewriteLockedIntrinsic(node: Node): Node {
 // destination matches — same shape as a fresh array literal / new Array().
 function rewriteExternArrayReturn(node: Node): Node {
 	const refType = node.nodeType;
-	if (refType === null || refType.kind !== TypeKind.Ref || refType.typeReturn === null
-			|| refType.typeReturn.kind !== TypeKind.Array) return node;
+	if (refType == null || refType.kind != TypeKind.Ref || refType.typeReturn == null
+			|| refType.typeReturn.kind != TypeKind.Array) return node;
 	const sym = node.resolvedSym;
-	if (sym === null || sym.nativeName === ""
-			|| sym.symbolKind === SymbolKind.Variable
-			|| sym.symbolKind === SymbolKind.Parameter
-			|| sym.symbolKind === SymbolKind.Property) return node;
+	if (sym == null || sym.nativeName == ""
+			|| sym.symbolKind == SymbolKind.Variable
+			|| sym.symbolKind == SymbolKind.Parameter
+			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;
 	node.nodeType = refType.typeReturn;
 	const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
@@ -127,7 +127,7 @@ function rewriteNewExpr(node: Node): Node {
 	// handle and would box the payload as the whole pointee.
 	if (isLockedRef(refType)) {
 		const ld = node.data as NewExprData;
-		if (ld.newArguments.length === 1) {
+		if (ld.newArguments.length == 1) {
 			const cell = makeCall(makeIdent("msBoxLocked", node.location), [ld.newArguments[0]], node.location);
 			cell.nodeType = refType;
 			return cell;
@@ -137,14 +137,14 @@ function rewriteNewExpr(node: Node): Node {
 	// Checked BEFORE the Ref<Array> path so Arc<Array> also takes the atomic box.
 	if (isAtomicRef(refType)) {
 		const d = node.data as NewExprData;
-		if (d.newArguments.length === 1) {
+		if (d.newArguments.length == 1) {
 			const box = makeCall(makeIdent("msBoxArc", node.location), [d.newArguments[0]], node.location);
 			box.nodeType = refType;
 			return box;
 		}
 	}
-	if (refType !== null && refType.kind === TypeKind.Ref && refType.typeReturn !== null
-			&& refType.typeReturn.kind === TypeKind.Array) {
+	if (refType != null && refType.kind == TypeKind.Ref && refType.typeReturn != null
+			&& refType.typeReturn.kind == TypeKind.Array) {
 		node.nodeType = refType.typeReturn;
 		const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
 		box.nodeType = refType;
@@ -159,11 +159,11 @@ function rewriteArrayAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
 	d.array = unwrapRefArrayRecv(d.array);
 	const arrType = d.array.nodeType;
-	if (arrType === null) return node;
+	if (arrType == null) return node;
 
 	const loc = node.location;
 
-	if (arrType.kind === TypeKind.Array) {
+	if (arrType.kind == TypeKind.Array) {
 		const elemType = arrType.typeReturn;
 		const macroName = getArrayMacroName(elemType);
 		const result = makeCall(makeIdent(macroName, loc), [d.array, d.index], loc);
@@ -171,32 +171,32 @@ function rewriteArrayAccess(node: Node): Node {
 		return result;
 	}
 
-	if (arrType.kind === TypeKind.SizedArray) {
+	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeFlags;
 		const result = makeCall(makeIdent("msSizedArrayAccess", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
-	if (arrType.kind === TypeKind.Span) {
+	if (arrType.kind == TypeKind.Span) {
 		const result = makeCall(makeIdent("msSpanAccess", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
-	if (arrType.kind === TypeKind.String) {
+	if (arrType.kind == TypeKind.String) {
 		const result = makeCall(makeIdent("msStringCharAccess", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	// Tuple index: t[0] → t._0 (rewrite ArrayAccess → MemberExpr)
-	if (arrType.kind === TypeKind.Tuple) {
-		if (d.index.kind === NodeKind.NumberLiteral) {
+	if (arrType.kind == TypeKind.Tuple) {
+		if (d.index.kind == NodeKind.NumberLiteral) {
 			const idx = (d.index.data as NumberLiteralData).value;
 			const fieldName = "_" + idx.toString();
 			const result = makeMember(d.array, fieldName, loc);
-			if (arrType.typeChildren !== null && idx < arrType.typeChildren.length) {
+			if (arrType.typeChildren != null && idx < arrType.typeChildren.length) {
 				result.nodeType = arrType.typeChildren[idx];
 			}
 			return result;
@@ -209,14 +209,14 @@ function rewriteArrayAccess(node: Node): Node {
 
 // Determine macro name from array element type
 function getArrayMacroName(elemType: Type | null): string {
-	if (elemType === null) return "msRefArrayAccess";
-	if (elemType.kind === TypeKind.Uint8) return "msArrayAccess";
+	if (elemType == null) return "msRefArrayAccess";
+	if (elemType.kind == TypeKind.Uint8) return "msArrayAccess";
 	if (isNumeric(elemType)) return "msArrayAccess";
-	if (elemType.kind === TypeKind.String) return "msArrayAccess";
+	if (elemType.kind == TypeKind.String) return "msArrayAccess";
 	// Pointer element types (classes, refs) use msRefArray — void* indirection
-	if (elemType.kind === TypeKind.Ref || elemType.kind === TypeKind.Ptr) return "msRefArrayAccess";
+	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) return "msRefArrayAccess";
 	// Union(Ref<T>, Null) collapses to T* in C — same representation as Ref<T>.
-	if (elemType.kind === TypeKind.Union && unwrapRefNullUnion(elemType) !== null) return "msRefArrayAccess";
+	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return "msRefArrayAccess";
 	// Value-type struct elements use per-type array typedefs
 	return "msArrayAccess";
 }
@@ -227,42 +227,42 @@ function rewriteMemberExpr(node: Node): Node {
 	const d = node.data as MemberExprData;
 	d.object = unwrapRefArrayRecv(d.object);
 	const objType = d.object.nodeType;
-	if (objType === null) return node;
+	if (objType == null) return node;
 
 	// .length on CString → strlen(s) (C standard library)
 	// .length on String → msStringLength(s) (UTF-16 code units, TypeScript parity)
 	// .length on arrays → .len (element count)
-	if (d.property === "length") {
-		if (objType.kind === TypeKind.CString) {
+	if (d.property == "length") {
+		if (objType.kind == TypeKind.CString) {
 			const loc = node.location;
 			const result = makeCall(makeIdent("strlen", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
-		if (objType.kind === TypeKind.String) {
+		if (objType.kind == TypeKind.String) {
 			const loc = node.location;
 			const result = makeCall(makeIdent("msStringLength", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
-		if (objType.kind === TypeKind.Array || objType.kind === TypeKind.SizedArray ||
-			objType.kind === TypeKind.Span) {
+		if (objType.kind == TypeKind.Array || objType.kind == TypeKind.SizedArray ||
+			objType.kind == TypeKind.Span) {
 			d.property = "len";
 		}
 		return node;
 	}
 
 	// .byteLength on String → .len (raw UTF-8 byte count)
-	if (d.property === "byteLength") {
-		if (objType.kind === TypeKind.String) {
+	if (d.property == "byteLength") {
+		if (objType.kind == TypeKind.String) {
 			d.property = "len";
 		}
 		return node;
 	}
 
 	// .unicodeLength on String → msStringUnicodeLength(s) (codepoint count)
-	if (d.property === "unicodeLength") {
-		if (objType.kind === TypeKind.String) {
+	if (d.property == "unicodeLength") {
+		if (objType.kind == TypeKind.String) {
 			const loc = node.location;
 			const result = makeCall(makeIdent("msStringUnicodeLength", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
@@ -273,8 +273,8 @@ function rewriteMemberExpr(node: Node): Node {
 
 	// .data → .p->data for Array (pointer dereference through p field)
 	// SizedArray/Span: .data stays as .data (direct field)
-	if (d.property === "data") {
-		if (objType.kind === TypeKind.Array) {
+	if (d.property == "data") {
+		if (objType.kind == TypeKind.Array) {
 			d.property = "p->data";
 		}
 	}
@@ -296,8 +296,8 @@ function rewriteArrayLiteral(node: Node): Node {
 	// reference array Ref<Array<T>>: lower the inner value array, then box it onto the
 	// heap via msBoxRefArray (refcounted cell) so the variable holds a shared pointer.
 	const refType = node.nodeType;
-	if (refType !== null && refType.kind === TypeKind.Ref && refType.typeReturn !== null
-			&& refType.typeReturn.kind === TypeKind.Array) {
+	if (refType != null && refType.kind == TypeKind.Ref && refType.typeReturn != null
+			&& refType.typeReturn.kind == TypeKind.Array) {
 		node.nodeType = refType.typeReturn;
 		const inner = rewriteArrayLiteral(node);
 		const box = makeCall(makeIdent("msBoxRefArray", node.location), [inner], node.location);
@@ -305,17 +305,17 @@ function rewriteArrayLiteral(node: Node): Node {
 		return box;
 	}
 
-	if (d.elements.length === 0) return node;
+	if (d.elements.length == 0) return node;
 
 	const arrType = node.nodeType;
-	if (arrType === null || arrType.kind !== TypeKind.Array) return node;
+	if (arrType == null || arrType.kind != TypeKind.Array) return node;
 	const elemType = arrType.typeReturn;
-	if (elemType === null) return node;
+	if (elemType == null) return node;
 
 	const loc = node.location;
 
 	// number[]/float64[] → msNumberArrayFrom(count, e1, e2, ...)
-	if (elemType.kind === TypeKind.Number || elemType.kind === TypeKind.Float64) {
+	if (elemType.kind == TypeKind.Number || elemType.kind == TypeKind.Float64) {
 		const args: Node[] = [makeNumber(d.elements.length, loc)];
 		for (let i = 0; i < d.elements.length; i += 1) {
 			args.push(d.elements[i]);
@@ -326,7 +326,7 @@ function rewriteArrayLiteral(node: Node): Node {
 	}
 
 	// string[] → msStringArrayFromArr(count, e1, e2, ...)
-	if (elemType.kind === TypeKind.String) {
+	if (elemType.kind == TypeKind.String) {
 		const args: Node[] = [makeNumber(d.elements.length, loc)];
 		for (let i = 0; i < d.elements.length; i += 1) {
 			args.push(d.elements[i]);

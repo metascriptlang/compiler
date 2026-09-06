@@ -54,23 +54,23 @@ export function internal(msg: string): SurrealError {
 
 test "rpcError carries code + message" {
 	const e = rpcError(-32602, "invalid params");
-	assert e.kind === SurrealErrorKind.Rpc;
-	assert e.rpcCode === -32602;
-	assert e.message === "invalid params";
+	assert e.kind == SurrealErrorKind.Rpc;
+	assert e.rpcCode == -32602;
+	assert e.message == "invalid params";
 }
 
 test "connectionFailed" {
 	const e = connectionFailed("refused");
-	assert e.kind === SurrealErrorKind.ConnectionFailed;
+	assert e.kind == SurrealErrorKind.ConnectionFailed;
 }
 
 test "authFailed distinct from generic rpc error" {
 	const e = authFailed("bad credentials");
-	assert e.kind === SurrealErrorKind.AuthFailed;
-	assert e.kind !== SurrealErrorKind.Rpc;
+	assert e.kind == SurrealErrorKind.AuthFailed;
+	assert e.kind != SurrealErrorKind.Rpc;
 }
 
 test "decodeError surfaces parser failures" {
 	const e = decodeError("cbor truncated");
-	assert e.kind === SurrealErrorKind.Decode;
+	assert e.kind == SurrealErrorKind.Decode;
 }

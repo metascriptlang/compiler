@@ -37,12 +37,12 @@ export interface RegistryPackage {
 // ===== JSON Helpers =====
 
 function getStr(obj: JsonValue, field: string): string {
-	if (obj === null || obj.kind !== JsonKind.Object) return "";
+	if (obj == null || obj.kind != JsonKind.Object) return "";
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			const v = obj.values[i];
-			if (v !== null && v.kind === JsonKind.String) return v.strVal;
+			if (v != null && v.kind == JsonKind.String) return v.strVal;
 		}
 		i = i + 1;
 	}
@@ -50,10 +50,10 @@ function getStr(obj: JsonValue, field: string): string {
 }
 
 function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj === null || obj.kind !== JsonKind.Object) return null as unknown as JsonValue;
+	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) return obj.values[i];
+		if (obj.keys[i] == field && i < obj.values.length) return obj.values[i];
 		i = i + 1;
 	}
 	return null as unknown as JsonValue;
@@ -62,7 +62,7 @@ function getObj(obj: JsonValue, field: string): JsonValue {
 function getArray(obj: JsonValue, field: string): JsonValue[] {
 	const empty: JsonValue[] = [];
 	const arr = getObj(obj, field);
-	if (arr === null || arr.kind !== JsonKind.Array) return empty;
+	if (arr == null || arr.kind != JsonKind.Array) return empty;
 	return arr.items;
 }
 
@@ -70,13 +70,13 @@ function getArray(obj: JsonValue, field: string): JsonValue[] {
 function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
 	const keys: string[] = [];
 	const values: string[] = [];
-	if (depsObj === null || depsObj.kind !== JsonKind.Object) return { keys: keys, values: values };
+	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys: keys, values: values };
 	let i = 0;
 	while (i < depsObj.keys.length) {
 		keys.push(depsObj.keys[i]);
 		if (i < depsObj.values.length) {
 			const el = depsObj.values[i];
-			if (el !== null && el.kind === JsonKind.String) {
+			if (el != null && el.kind == JsonKind.String) {
 				values.push(el.strVal);
 			} else {
 				values.push("");
@@ -113,7 +113,7 @@ export function registryBaseUrl(): string {
 // "alice/router"  → "/packages/user/alice/router"
 // "@acme/router"  → "/packages/org/acme/router"
 function packageApiPath(name: string): string {
-	if (name.length > 0 && name.charAt(0) === "@") {
+	if (name.length > 0 && name.charAt(0) == "@") {
 		// Org-scoped: @acme/router → /packages/org/acme/router (strip @)
 		return "/packages/org/" + name.slice(1, name.length);
 	}
@@ -121,7 +121,7 @@ function packageApiPath(name: string): string {
 	let slashIdx = -1;
 	let i = 0;
 	while (i < name.length) {
-		if (name.charAt(i) === "/") { slashIdx = i; i = name.length; }
+		if (name.charAt(i) == "/") { slashIdx = i; i = name.length; }
 		i = i + 1;
 	}
 	if (slashIdx > 0) {
@@ -137,15 +137,15 @@ function packageApiPath(name: string): string {
 export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpError> {
 	const url = registryBaseUrl() + packageApiPath(name);
 	const resp = try fetch(url);
-	if (resp.status === 404) {
+	if (resp.status == 404) {
 		return Result.err(httpError(HttpErrorKind.InvalidResponse, "package not found: " + name));
 	}
-	if (resp.status !== 200) {
+	if (resp.status != 200) {
 		return Result.err(httpError(HttpErrorKind.InvalidResponse, "registry returned HTTP " + resp.status.toString()));
 	}
 
 	const parsed = parseJson(resp.body);
-	if (!parsed.ok || parsed.value.kind !== JsonKind.Object) {
+	if (!parsed.ok || parsed.value.kind != JsonKind.Object) {
 		return Result.err(invalidResponse("invalid JSON from registry"));
 	}
 	const obj = parsed.value;
@@ -170,7 +170,7 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 export function findVersion(pkg: RegistryPackage, version: string): RegistryVersion {
 	let i = 0;
 	while (i < pkg.versions.length) {
-		if (pkg.versions[i].version === version) return pkg.versions[i];
+		if (pkg.versions[i].version == version) return pkg.versions[i];
 		i = i + 1;
 	}
 	return null as unknown as RegistryVersion;
@@ -178,6 +178,6 @@ export function findVersion(pkg: RegistryPackage, version: string): RegistryVers
 
 // Get the latest version (first in the versions array — server orders by publishedAt DESC).
 export function latestVersion(pkg: RegistryPackage): RegistryVersion {
-	if (pkg.versions.length === 0) return null as unknown as RegistryVersion;
+	if (pkg.versions.length == 0) return null as unknown as RegistryVersion;
 	return pkg.versions[0];
 }

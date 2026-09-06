@@ -76,20 +76,20 @@ async function loopBreakCrossesFinally(): Promise<int32> {
 
 test "bug129: finally runs after an awaited try body" {
 	const acc = await tryFinallyAwait();
-	assert acc === 8;
+	assert acc == 8;
 }
 
 test "bug129: try/catch/finally with an await takes the normal path" {
 	const acc = await tryCatchFinallyAwait();
-	assert acc === 32;
+	assert acc == 32;
 }
 
 test "bug129: finally runs when the try body throws after an await" {
 	const acc = await finallyRunsOnThrow();
-	assert acc === 1204;
+	assert acc == 1204;
 }
 
 test "bug129: a break out of the loop still runs the finally" {
 	const acc = await loopBreakCrossesFinally();
-	assert acc === 53;
+	assert acc == 53;
 }

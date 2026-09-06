@@ -160,7 +160,7 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 	// declaration, which routes a global's destroy to a program-exit list instead
 	// of the scope's final section; module globals are never destroyed here, so
 	// declining to register is that same routing.
-	if (sym !== null && hasFlag(sym, SymbolFlag.Global)) return;
+	if (sym != null && hasFlag(sym, SymbolFlag.Global)) return;
 	const scope = currentScope(dctx);
 	const info: VarInfo = { varName, sym, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
@@ -169,7 +169,7 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 // Mark a variable as uninitialized (for `let x;` without initializer — Phase D first-write optimization)
 export function markUninitialized(dctx: DrcContext, varName: string): void {
 	const vi = findVarInfoInContext(dctx, varName);
-	if (vi !== null) {
+	if (vi != null) {
 		vi.isInitialized = false;
 	}
 }
@@ -185,7 +185,7 @@ export function recordMove(dctx: DrcContext, varName: string): void {
 
 export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
 	for (const mv of scope.wasMoved) {
-		if (mv.varName === varName) return true;
+		if (mv.varName == varName) return true;
 	}
 	return false;
 }
@@ -197,7 +197,7 @@ export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 	while (i > 0) {
 		i -= 1;
 		const vi = findVarInfo(dctx.scopes[i], varName);
-		if (vi !== null) {
+		if (vi != null) {
 			if (!wasMovedInScope(dctx.scopes[i], varName)) {
 				const mv: MovedVar = { varName, exprNode: null as unknown as Node };
 				dctx.scopes[i].wasMoved.push(mv);
@@ -222,7 +222,7 @@ export function varMovedInContext(dctx: DrcContext, varName: string): boolean {
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		if (findVarInfo(dctx.scopes[i], varName) !== null) {
+		if (findVarInfo(dctx.scopes[i], varName) != null) {
 			return wasMovedInScope(dctx.scopes[i], varName);
 		}
 	}
@@ -235,10 +235,10 @@ export function clearMoveInContext(dctx: DrcContext, varName: string): void {
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		if (findVarInfo(dctx.scopes[i], varName) !== null) {
+		if (findVarInfo(dctx.scopes[i], varName) != null) {
 			const filtered: MovedVar[] = [];
 			for (const mv of dctx.scopes[i].wasMoved) {
-				if (mv.varName !== varName) filtered.push(mv);
+				if (mv.varName != varName) filtered.push(mv);
 			}
 			dctx.scopes[i].wasMoved = filtered;
 			return;
@@ -269,7 +269,7 @@ export function setNeedsTryAll(dctx: DrcContext): void {
 
 export function findVarInfo(scope: DrcScope, varName: string): VarInfo {
 	for (const vi of scope.varsToCleanup) {
-		if (vi.varName === varName) return vi;
+		if (vi.varName == varName) return vi;
 	}
 	return null as unknown as VarInfo;
 }
@@ -280,7 +280,7 @@ export function findVarInfoInContext(dctx: DrcContext, varName: string): VarInfo
 	while (i > 0) {
 		i -= 1;
 		const vi = findVarInfo(dctx.scopes[i], varName);
-		if (vi !== null) return vi;
+		if (vi != null) return vi;
 	}
 	return null as unknown as VarInfo;
 }
@@ -294,7 +294,7 @@ export function findVarInfoInFunction(dctx: DrcContext, varName: string): VarInf
 		i -= 1;
 		const scope = dctx.scopes[i];
 		const vi = findVarInfo(scope, varName);
-		if (vi !== null) return vi;
+		if (vi != null) return vi;
 		// Once we pass through a function scope, everything below is outer/module scope
 		if (scope.isFunction) return null as unknown as VarInfo;
 	}
@@ -341,21 +341,21 @@ export function clearPendingForVar(dctx: DrcContext, varName: string): void {
 }
 
 function isPendingWasMovedFor(s: Node, varName: string): boolean {
-	if (s.kind !== NodeKind.ExprStmt) return false;
+	if (s.kind != NodeKind.ExprStmt) return false;
 	const ed = s.data as ExprStmtData;
-	if (ed.expr.kind !== NodeKind.CallExpr) return false;
+	if (ed.expr.kind != NodeKind.CallExpr) return false;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.arguments.length === 0) return false;
+	if (cd.arguments.length == 0) return false;
 	const arg = cd.arguments[0];
 	// Ref types: msPtrWasMoved(varName) — direct Identifier arg
-	if (arg.kind === NodeKind.Identifier) {
-		return (arg.data as IdentifierData).name === varName;
+	if (arg.kind == NodeKind.Identifier) {
+		return (arg.data as IdentifierData).name == varName;
 	}
 	// Named types: T_wasMoved(&varName) — HiddenAddr wrapping Identifier
-	if (arg.kind === NodeKind.HiddenAddr) {
+	if (arg.kind == NodeKind.HiddenAddr) {
 		const hd = arg.data as { expr: Node };
-		if (hd.expr.kind === NodeKind.Identifier) {
-			return (hd.expr.data as IdentifierData).name === varName;
+		if (hd.expr.kind == NodeKind.Identifier) {
+			return (hd.expr.data as IdentifierData).name == varName;
 		}
 	}
 	return false;
@@ -402,27 +402,27 @@ function testMinimalRc(): RcInfo {
 // ===== Tests =====
 test "create context" {
 	const dctx = testDrcCtx();
-	assert scopeDepth(dctx) === 0;
+	assert scopeDepth(dctx) == 0;
 }
 
 test "push and pop scope" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
-	assert scopeDepth(dctx) === 1;
+	assert scopeDepth(dctx) == 1;
 	assert currentScope(dctx).isFunction;
 	assert !currentScope(dctx).isLoop;
 	popScope(dctx);
-	assert scopeDepth(dctx) === 0;
+	assert scopeDepth(dctx) == 0;
 }
 
 test "nested scopes" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	pushScope(dctx, true, false);
-	assert scopeDepth(dctx) === 2;
+	assert scopeDepth(dctx) == 2;
 	assert currentScope(dctx).isLoop;
 	popScope(dctx);
-	assert scopeDepth(dctx) === 1;
+	assert scopeDepth(dctx) == 1;
 	assert currentScope(dctx).isFunction;
 	popScope(dctx);
 }
@@ -432,8 +432,8 @@ test "register RC var" {
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
 	registerVar(dctx, "s", rcInfo, false, noSym);
-	assert currentScope(dctx).varsToCleanup.length === 1;
-	assert currentScope(dctx).varsToCleanup[0].varName === "s";
+	assert currentScope(dctx).varsToCleanup.length == 1;
+	assert currentScope(dctx).varsToCleanup[0].varName == "s";
 	popScope(dctx);
 }
 
@@ -442,7 +442,7 @@ test "skip non-cleanup type" {
 	pushScope(dctx, false, true);
 	const info = noRcInfo();
 	registerVar(dctx, "x", info, false, noSym);
-	assert currentScope(dctx).varsToCleanup.length === 0;
+	assert currentScope(dctx).varsToCleanup.length == 0;
 	popScope(dctx);
 }
 
@@ -453,10 +453,10 @@ test "skip cursor" {
 	registerVar(dctx, "s", rcInfo, true, noSym);
 	// Cursor IS registered (for findVarInfoInContext visibility) but marked isCursor=true.
 	// generateCleanup skips cursor vars, so no destroy/wasMoved is emitted.
-	assert currentScope(dctx).varsToCleanup.length === 1;
+	assert currentScope(dctx).varsToCleanup.length == 1;
 	const vi = currentScope(dctx).varsToCleanup[0];
 	assert vi.isCursor;
-	assert vi.varName === "s";
+	assert vi.varName == "s";
 	popScope(dctx);
 }
 
@@ -503,8 +503,8 @@ test "findVarInfo found" {
 	const rcInfo = testMinimalRc();
 	registerVar(dctx, "s", rcInfo, false, noSym);
 	const vi = findVarInfo(currentScope(dctx), "s");
-	assert vi !== null;
-	assert vi.varName === "s";
+	assert vi != null;
+	assert vi.varName == "s";
 	popScope(dctx);
 }
 
@@ -512,7 +512,7 @@ test "findVarInfo not found" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const vi = findVarInfo(currentScope(dctx), "nope");
-	assert vi === null;
+	assert vi == null;
 	popScope(dctx);
 }
 
@@ -523,10 +523,10 @@ test "findVarInfoInContext searches outer scopes" {
 	registerVar(dctx, "outer", rcInfo, false, noSym);
 	pushScope(dctx, false, false);
 	const vi = findVarInfoInContext(dctx, "outer");
-	assert vi !== null;
-	assert vi.varName === "outer";
+	assert vi != null;
+	assert vi.varName == "outer";
 	const none = findVarInfoInContext(dctx, "nope");
-	assert none === null;
+	assert none == null;
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -535,7 +535,7 @@ test "initially empty" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, false);
 	assert !hasPending(dctx);
-	assert currentScope(dctx).pendingStmts.length === 0;
+	assert currentScope(dctx).pendingStmts.length == 0;
 }
 
 test "add and flush cycle" {
@@ -547,5 +547,5 @@ test "add and flush cycle" {
 	const target: Node[] = [];
 	flushPending(dctx, target);
 	assert !hasPending(dctx);
-	assert target.length === 1;
+	assert target.length == 1;
 }

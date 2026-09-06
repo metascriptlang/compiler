@@ -100,18 +100,18 @@ function getRangeMaxForKind(kind: TypeKind): number {
 
 function rangeCheckVisitor(node: Node): Node {
 	// Explicit casts: x as int8 → msCheckRangeI8(x, -128, 127)
-	if (node.kind === NodeKind.TypeAssertion) {
+	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const fnName = getRangeCheckFn(d.asType);
-		if (fnName === "") return node;
+		if (fnName == "") return node;
 		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
 	}
 	// Parity: standard reference's implicit narrowing transformation
-	if (node.kind === NodeKind.HiddenStdConv) {
+	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
-		if (d.convType === null) return node;
+		if (d.convType == null) return node;
 		const fnName = getRangeCheckForTypeKind(d.convType.kind);
-		if (fnName === "") return node;
+		if (fnName == "") return node;
 		return makeRangeCheck(d.convExpr, fnName, getRangeMinForKind(d.convType.kind), getRangeMaxForKind(d.convType.kind), node.location);
 	}
 	return node;
@@ -134,8 +134,8 @@ function castExprKind(input: string): NodeKind {
 	const ctx = createTransformContext();
 	injectRangeChecks(result.value, ctx);
 	const stmts = getStmts(result.value);
-	if (stmts.length === 0) return NodeKind.Program;
-	if (stmts[0].kind !== NodeKind.ExprStmt) return NodeKind.Program;
+	if (stmts.length == 0) return NodeKind.Program;
+	if (stmts[0].kind != NodeKind.ExprStmt) return NodeKind.Program;
 	const sd = stmts[0].data as ExprStmtData;
 	return sd.expr.kind;
 }
@@ -144,37 +144,37 @@ function parsedAsType(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "";
 	const stmts = getStmts(result.value);
-	if (stmts.length === 0) return "";
-	if (stmts[0].kind !== NodeKind.ExprStmt) return "";
+	if (stmts.length == 0) return "";
+	if (stmts[0].kind != NodeKind.ExprStmt) return "";
 	const sd = stmts[0].data as ExprStmtData;
-	if (sd.expr.kind !== NodeKind.TypeAssertion) return "";
+	if (sd.expr.kind != NodeKind.TypeAssertion) return "";
 	const td = sd.expr.data as TypeAssertionData;
 	return td.asType;
 }
 
 // ===== Tests =====
-test "non-cast unchanged" { assert firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr; }
+test "non-cast unchanged" { assert firstExprKindAfter("x + y;", injectRangeChecks) == NodeKind.BinaryExpr; }
 
-test "call unchanged" { assert firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr; }
+test "call unchanged" { assert firstExprKindAfter("f();", injectRangeChecks) == NodeKind.CallExpr; }
 
-test "passthrough" { assert stmtCountAfter("const x = 1;", injectRangeChecks) === 1; }
+test "passthrough" { assert stmtCountAfter("const x = 1;", injectRangeChecks) == 1; }
 
-test "member access unchanged" { assert firstExprKindAfter("obj.x;", injectRangeChecks) === NodeKind.MemberExpr; }
+test "member access unchanged" { assert firstExprKindAfter("obj.x;", injectRangeChecks) == NodeKind.MemberExpr; }
 
-test "identifier unchanged" { assert firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier; }
+test "identifier unchanged" { assert firstExprKindAfter("x;", injectRangeChecks) == NodeKind.Identifier; }
 
-test "parser stores asType" { assert parsedAsType("x as int8;") === "int8"; }
+test "parser stores asType" { assert parsedAsType("x as int8;") == "int8"; }
 
-test "parser stores asType number" { assert parsedAsType("x as number;") === "number"; }
+test "parser stores asType number" { assert parsedAsType("x as number;") == "number"; }
 
-test "parser stores asType union" { assert parsedAsType("x as string | null;") === "string | null"; }
+test "parser stores asType union" { assert parsedAsType("x as string | null;") == "string | null"; }
 
-test "cast to int8 becomes range check" { assert castExprKind("x as int8;") === NodeKind.CallExpr; }
+test "cast to int8 becomes range check" { assert castExprKind("x as int8;") == NodeKind.CallExpr; }
 
-test "cast to uint16 becomes range check" { assert castExprKind("x as uint16;") === NodeKind.CallExpr; }
+test "cast to uint16 becomes range check" { assert castExprKind("x as uint16;") == NodeKind.CallExpr; }
 
-test "cast to int32 becomes range check" { assert castExprKind("x as int32;") === NodeKind.CallExpr; }
+test "cast to int32 becomes range check" { assert castExprKind("x as int32;") == NodeKind.CallExpr; }
 
-test "cast to number unchanged" { assert castExprKind("x as number;") === NodeKind.TypeAssertion; }
+test "cast to number unchanged" { assert castExprKind("x as number;") == NodeKind.TypeAssertion; }
 
-test "cast to string unchanged" { assert castExprKind("x as string;") === NodeKind.TypeAssertion; }
+test "cast to string unchanged" { assert castExprKind("x as string;") == NodeKind.TypeAssertion; }

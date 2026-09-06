@@ -26,7 +26,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	}
 
 	// Check if there are any deps at all
-	if (cfg.deps.keys.length === 0 && cfg.devDeps.keys.length === 0) {
+	if (cfg.deps.keys.length == 0 && cfg.devDeps.keys.length == 0) {
 		console.log("no dependencies to install");
 		return true;
 	}
@@ -40,7 +40,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	while (di < cfg.deps.keys.length) {
 		const name = cfg.deps.keys[di];
 		const ver = cfg.deps.values[di];
-		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
+		if (ver.length > 5 && ver.slice(0, 5) == "file:") {
 			const relPath = ver.slice(5, ver.length);
 			const absPath = isAbsolute(relPath) ? relPath : join(projectRoot, relPath);
 			if (exists(absPath)) {
@@ -59,7 +59,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	while (ddi < cfg.devDeps.keys.length) {
 		const name = cfg.devDeps.keys[ddi];
 		const ver = cfg.devDeps.values[ddi];
-		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
+		if (ver.length > 5 && ver.slice(0, 5) == "file:") {
 			const relPath = ver.slice(5, ver.length);
 			const absPath = isAbsolute(relPath) ? relPath : join(projectRoot, relPath);
 			if (exists(absPath)) {
@@ -79,7 +79,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	if (lock.valid) {
 		for (const entry of lock.entries) {
 			const name = entryName(entry.key);
-			if (entry.source === "registry" && entry.version !== "") {
+			if (entry.source == "registry" && entry.version != "") {
 				const srcPath = registrySrcPath(name, entry.version);
 				if (isCached(srcPath)) {
 					installed = installed + 1;
@@ -87,17 +87,17 @@ export function cmdInstall(projectRoot: string): boolean {
 					// Resolve archiveUrl from lockfile or fetch from registry
 					let archiveUrl = entry.url;
 					let integrity = entry.integrity;
-					if (archiveUrl === "") {
+					if (archiveUrl == "") {
 						const infoR = fetchPackageInfo(name);
 						if (infoR.ok) {
 							const ver = findVersion(infoR.value, entry.version);
-							if (ver !== null) {
+							if (ver != null) {
 								archiveUrl = ver.archiveUrl;
-								if (integrity === "") integrity = ver.integrity;
+								if (integrity == "") integrity = ver.integrity;
 							}
 						}
 					}
-					if (archiveUrl !== "" && downloadPackage(name, entry.version, archiveUrl, integrity)) {
+					if (archiveUrl != "" && downloadPackage(name, entry.version, archiveUrl, integrity)) {
 						installed = installed + 1;
 					} else {
 						console.log(`missing: ${name}@${entry.version} (download failed)`);
@@ -113,7 +113,7 @@ export function cmdInstall(projectRoot: string): boolean {
 		let ci = 0;
 		while (ci < cfg.deps.keys.length) {
 			const ver = cfg.deps.values[ci];
-			if (ver.length <= 5 || ver.slice(0, 5) !== "file:") hasNonFile = true;
+			if (ver.length <= 5 || ver.slice(0, 5) != "file:") hasNonFile = true;
 			ci = ci + 1;
 		}
 		if (hasNonFile) {

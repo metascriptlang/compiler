@@ -149,19 +149,19 @@ function renderWired(): string {
 function main(): void {
 	let ok = true;
 
-	if (render() !== "T1") ok = false;
-	if (render() !== "T1") ok = false;
-	if (render() !== "T1") ok = false;
+	if (render() != "T1") ok = false;
+	if (render() != "T1") ok = false;
+	if (render() != "T1") ok = false;
 
-	if (renderArrow() !== "T2") ok = false;
-	if (renderArrow() !== "T2") ok = false;
+	if (renderArrow() != "T2") ok = false;
+	if (renderArrow() != "T2") ok = false;
 
-	if (builds !== 2) ok = false;
+	if (builds != 2) ok = false;
 
-	if (renderWired() !== "W1") ok = false;
-	if (renderWired() !== "W1") ok = false;
-	if (wbuilds !== 1) ok = false;
-	if (notes !== 2) ok = false;
+	if (renderWired() != "W1") ok = false;
+	if (renderWired() != "W1") ok = false;
+	if (wbuilds != 1) ok = false;
+	if (notes != 2) ok = false;
 
 	if (ok) {
 		console.log("macro-expr-hoist PASS");

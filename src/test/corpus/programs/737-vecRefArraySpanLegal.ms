@@ -15,19 +15,19 @@ function takeSpan(s: Span<int32>): int32 { return s.length; }
 function literalBoth(): boolean {
 	const r: int32[] = [1, 2];
 	const v: Vec<int32> = [1, 2, 3];
-	return r.length === 2 && v.length === 3;
+	return r.length == 2 && v.length == 3;
 }
 
 function refArrayToSpan(): boolean {
 	const r: int32[] = [1, 2];
 	const s: Span<int32> = r;
-	return takeSpan(r) === 2 && s.length === 2;
+	return takeSpan(r) == 2 && s.length == 2;
 }
 
 function vecToSpan(): boolean {
 	const v: Vec<int32> = [1, 2, 3];
 	const s: Span<int32> = v;
-	return takeSpan(v) === 3 && s.length === 3;
+	return takeSpan(v) == 3 && s.length == 3;
 }
 
 function main(): void {

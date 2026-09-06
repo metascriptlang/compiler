@@ -22,21 +22,21 @@ export function lowerObjectLiteralComplete(program: Node, ctx: TransformContext)
 }
 
 function completeLiteral(node: Node): Node {
-	if (node.kind !== NodeKind.ObjectLiteral) return node;
-	if (node.nodeType === null) return node;
+	if (node.kind != NodeKind.ObjectLiteral) return node;
+	if (node.nodeType == null) return node;
 	const peeled = peelThrough(unwrapRef(node.nodeType), PEEL_ALL);
-	const t = peeled === null ? unwrapRef(node.nodeType) : peeled;
-	if (t.kind !== TypeKind.Struct) return node;
-	if (t.typeNames === null || t.typeChildren === null) return node;
-	if (t.sym !== null && hasFlag(t.sym, SymbolFlag.ImportC)) return node;
+	const t = peeled == null ? unwrapRef(node.nodeType) : peeled;
+	if (t.kind != TypeKind.Struct) return node;
+	if (t.typeNames == null || t.typeChildren == null) return node;
+	if (t.sym != null && hasFlag(t.sym, SymbolFlag.ImportC)) return node;
 	const d = node.data as ObjectLiteralData;
-	if (d.keys.length !== d.properties.length) return node;
+	if (d.keys.length != d.properties.length) return node;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const fieldName = t.typeNames[i];
 		if (fieldName.startsWith("__")) continue;
 		if (hasKey(d.keys, fieldName)) continue;
 		const fieldType = t.typeChildren[i];
-		if (fieldType.kind === TypeKind.Function) continue;
+		if (fieldType.kind == TypeKind.Function) continue;
 		d.keys.push(fieldName);
 		d.properties.push(makeDefaultValue(fieldType, node.location));
 	}
@@ -45,7 +45,7 @@ function completeLiteral(node: Node): Node {
 
 function hasKey(keys: string[], name: string): boolean {
 	for (const k of keys) {
-		if (k === name) return true;
+		if (k == name) return true;
 	}
 	return false;
 }

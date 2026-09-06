@@ -40,39 +40,39 @@ function someInt(v: int32): int32 | null { return v; }
 function noneStr(): string | null { return null; }
 
 test "bug061: absent carrier never equals a payload" {
-	assert !(noneInt() === 1);
+	assert !(noneInt() == 1);
 }
 
 test "bug061: absent carrier does not equal ZERO either" {
-	assert !(noneInt() === 0);
+	assert !(noneInt() == 0);
 }
 
 test "bug061: present carrier compares on its payload" {
-	assert someInt(7) === 7;
-	assert !(someInt(7) === 8);
+	assert someInt(7) == 7;
+	assert !(someInt(7) == 8);
 }
 
 test "bug061: absent equals absent" {
-	assert noneInt() === noneInt();
-	assert !(noneInt() === someInt(0));
+	assert noneInt() == noneInt();
+	assert !(noneInt() == someInt(0));
 }
 
 test "bug061: !== is the exact negation" {
-	assert noneInt() !== 0;
-	assert someInt(7) !== 8;
-	assert !(someInt(7) !== 7);
+	assert noneInt() != 0;
+	assert someInt(7) != 8;
+	assert !(someInt(7) != 7);
 }
 
 test "bug061: string payload routes through string equality" {
-	assert !(noneStr() === "");
-	assert noneStr() !== "a";
+	assert !(noneStr() == "");
+	assert noneStr() != "a";
 }
 
 test "bug061: the carrier side is evaluated only once" {
 	const m: Map<string, int32> = new Map<string, int32>();
 	m.set("k", 3);
-	assert m.get("k") === 3;
-	assert m["k"] === 3;
+	assert m.get("k") == 3;
+	assert m["k"] == 3;
 }
 
 test "bug061: calling a possibly-null callee is rejected" {
@@ -94,7 +94,7 @@ test "bug061: unwrapping the callee makes the same call legal" {
 	const m: Map<string, IntCmpB> = new Map<string, IntCmpB>();
 	m.set("min", (a, b) => (a < b ? a : b) as int32);
 	const f = m.get("min")!;
-	assert f(3, 7) === 3;
+	assert f(3, 7) == 3;
 }
 
 type IntCmpB = (a: int32, b: int32) => int32;

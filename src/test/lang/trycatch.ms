@@ -12,7 +12,7 @@ test "basic try/catch — no throw" {
 	} catch (e) {
 		r = -1;
 	}
-	assert r === 10;
+	assert r == 10;
 }
 
 test "basic try/catch — throws" {
@@ -22,7 +22,7 @@ test "basic try/catch — throws" {
 	} catch (e) {
 		r = -1;
 	}
-	assert r === -1;
+	assert r == -1;
 }
 
 test "finally — no throw" {
@@ -34,7 +34,7 @@ test "finally — no throw" {
 	} finally {
 		log = log + "finally";
 	}
-	assert log === "try,finally";
+	assert log == "try,finally";
 }
 
 test "finally — with throw" {
@@ -47,7 +47,7 @@ test "finally — with throw" {
 	} finally {
 		log = log + "finally";
 	}
-	assert log === "try,catch,finally";
+	assert log == "try,catch,finally";
 }
 
 test "nested try/catch" {
@@ -64,8 +64,8 @@ test "nested try/catch" {
 	} catch (e) {
 		outer = "outer-caught";
 	}
-	assert inner === "inner-caught";
-	assert outer === "outer-try";
+	assert inner == "inner-caught";
+	assert outer == "outer-try";
 }
 
 test "throw propagates through finally" {
@@ -79,7 +79,7 @@ test "throw propagates through finally" {
 	} catch (e) {
 		caught = "got-it";
 	}
-	assert caught === "got-it";
+	assert caught == "got-it";
 }
 
 test "throw new Error — caught" {
@@ -89,7 +89,7 @@ test "throw new Error — caught" {
 	} catch (e) {
 		r = 42;
 	}
-	assert r === 42;
+	assert r == 42;
 }
 
 test "throw new Error — propagates through finally" {
@@ -103,5 +103,5 @@ test "throw new Error — propagates through finally" {
 	} catch (e) {
 		log = log + ",caught";
 	}
-	assert log === "finally,caught";
+	assert log == "finally,caught";
 }

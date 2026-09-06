@@ -26,9 +26,9 @@ function collectG<U>(make: (i: number) => U): U[] {
 
 function main(): void {
 	const arr = collectG<() => number>((i) => () => i * 10);
-	if (arr.length !== 2) { throw "GUARD RED: U[] length wrong"; }
-	if (arr[0]() !== 0) { throw "GUARD RED: elem 0 wrong"; }
-	if (arr[1]() !== 10) { throw "GUARD RED: elem 1 wrong"; }
+	if (arr.length != 2) { throw "GUARD RED: U[] length wrong"; }
+	if (arr[0]() != 0) { throw "GUARD RED: elem 0 wrong"; }
+	if (arr[1]() != 10) { throw "GUARD RED: elem 1 wrong"; }
 	console.log("genericFnArrayAnnot ok");
 }
 

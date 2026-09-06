@@ -32,16 +32,16 @@ test "bug084: string concat with unknown is a checker error" {
 }
 
 test "bug084 control: equality on unknown stays legal" {
-	assert errorCount("function f(u: unknown): boolean { return u === null; }") === 0;
+	assert errorCount("function f(u: unknown): boolean { return u === null; }") == 0;
 }
 
 test "bug084 control: a narrowed operand stays legal" {
 	// unknown narrows to POINTER-SHAPED targets only (void*-repr rule, bug069/
 	// unknownKindReaders pin the value-type rejection) — narrow to the Ref, then
 	// do arithmetic on its field.
-	assert errorCount("class Box { n: number; }\nfunction f(u: unknown): number { return (u as Box).n + 1; }") === 0;
+	assert errorCount("class Box { n: number; }\nfunction f(u: unknown): number { return (u as Box).n + 1; }") == 0;
 }
 
 test "bug084 control: assignment into an unknown local stays legal" {
-	assert errorCount("class Box { n: number; }\nfunction f(): void { let u: unknown = null; const b = new Box(); u = b as unknown; }") === 0;
+	assert errorCount("class Box { n: number; }\nfunction f(): void { let u: unknown = null; const b = new Box(); u = b as unknown; }") == 0;
 }

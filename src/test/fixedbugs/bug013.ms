@@ -34,10 +34,10 @@ function listen(event: string, cb: (n: string, p: string) => void): void {
 test "bug013: lambda with early-return infers void return" {
 	let captured = "";
 	listen("x", (n, p) => {
-		if (n !== "x") return;
+		if (n != "x") return;
 		captured = p;
 	});
-	assert captured === "data";
+	assert captured == "data";
 }
 
 test "bug013: lambda with bare return only (no other returns) — still void" {
@@ -52,8 +52,8 @@ test "bug013: lambda with bare return only (no other returns) — still void" {
 test "bug013: lambda with conditional bare return + fall-through — fall-through path runs" {
 	let counter: int32 = 0;
 	listen("not-skip", (n, p) => {
-		if (n === "skip") return;
+		if (n == "skip") return;
 		counter = counter + 1;
 	});
-	assert counter === 1;
+	assert counter == 1;
 }

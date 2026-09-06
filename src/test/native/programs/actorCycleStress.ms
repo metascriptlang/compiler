@@ -33,7 +33,7 @@ function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 200000; i = i + 1) {
 		const v = churn();
-		if (v !== 6) { console.log(`FAIL iter=${i} v=${v}`); return; }
+		if (v != 6) { console.log(`FAIL iter=${i} v=${v}`); return; }
 		acc = (acc + v) % 1000;
 	}
 	console.log(`actor-cycle-stress done acc=${acc}`);

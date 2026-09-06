@@ -19,7 +19,7 @@ import { registryDownloadPath, registrySrcPath } from "./cache";
 export function downloadPackage(name: string, version: string, archiveUrl: string, expectedIntegrity: string): boolean {
 	// Check if already extracted
 	const extractedPath = registrySrcPath(name, version);
-	if (extractedPath === "" ) {
+	if (extractedPath == "" ) {
 		console.log("error: HOME not set, cannot resolve cache path");
 		return false;
 	}
@@ -38,18 +38,18 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 		console.log(`  error: download failed: ${resp.error.message}`);
 		return false;
 	}
-	if (resp.value.status !== 200) {
+	if (resp.value.status != 200) {
 		console.log(`  error: registry returned HTTP ${resp.value.status.toString()}`);
 		return false;
 	}
 	const archiveBytes = resp.value.body;
 
 	// Step 2: Verify integrity (SHA-256, W3C SRI format: "sha256-<base64>")
-	if (expectedIntegrity !== "") {
+	if (expectedIntegrity != "") {
 		const hashR = sha256(archiveBytes, "base64");
 		if (hashR.ok) {
 			const computed = "sha256-" + hashR.value;
-			if (computed !== expectedIntegrity) {
+			if (computed != expectedIntegrity) {
 				console.log(`  error: integrity mismatch for ${name}@${version}`);
 				console.log(`    expected: ${expectedIntegrity}`);
 				console.log(`    got:      ${computed}`);
@@ -60,7 +60,7 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 
 	// Step 3: Save archive to cache/download/
 	const dlPath = registryDownloadPath(name, version);
-	if (dlPath !== "") {
+	if (dlPath != "") {
 		ensureDir(dirname(dlPath));
 		writeFile(dlPath, archiveBytes);
 	}
@@ -81,12 +81,12 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 
 		// Strip "package/" prefix from entry names
 		let entryPath = entry.name;
-		if (entryPath.length > 8 && entryPath.slice(0, 8) === "package/") {
+		if (entryPath.length > 8 && entryPath.slice(0, 8) == "package/") {
 			entryPath = entryPath.slice(8, entryPath.length);
 		}
 
 		// Skip manifest.json (internal, not needed in extracted form)
-		if (entryPath === "manifest.json") continue;
+		if (entryPath == "manifest.json") continue;
 
 		const outPath = join(extractedPath, entryPath);
 		ensureDir(dirname(outPath));

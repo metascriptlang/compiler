@@ -25,18 +25,18 @@ interface Cube {
 
 test "var-decl primitive | null with non-null value narrows + reads correctly" {
 	const x: number | null = 42;
-	if (x === null) {
+	if (x == null) {
 		assert false;  // unreachable
 	} else {
-		assert x === 42;        // narrowed read — was MS_FALSE → unreachable pre-fix
-		assert x + 100 === 142; // arithmetic on narrowed primitive
+		assert x == 42;        // narrowed read — was MS_FALSE → unreachable pre-fix
+		assert x + 100 == 142; // arithmetic on narrowed primitive
 	}
 }
 
 test "var-decl string | null with non-null value" {
 	const s: string | null = "hi";
-	if (s !== null) {
-		assert s === "hi";
+	if (s != null) {
+		assert s == "hi";
 	} else {
 		assert false;
 	}
@@ -44,8 +44,8 @@ test "var-decl string | null with non-null value" {
 
 test "var-decl boolean | null with non-null value" {
 	const b: boolean | null = true;
-	if (b !== null) {
-		assert b === true;
+	if (b != null) {
+		assert b == true;
 	} else {
 		assert false;
 	}
@@ -53,8 +53,8 @@ test "var-decl boolean | null with non-null value" {
 
 test "var-decl struct | null with non-null value, member access after narrow" {
 	const t: Token | null = { kind: 7 };
-	if (t !== null) {
-		assert t.kind === 7;  // narrowed MemberExpr access
+	if (t != null) {
+		assert t.kind == 7;  // narrowed MemberExpr access
 	} else {
 		assert false;
 	}
@@ -64,49 +64,49 @@ test "var-decl struct | null with non-null value, member access after narrow" {
 
 test "var-decl primitive | null with null retypes correctly" {
 	const x: number | null = null;
-	assert x === null;
+	assert x == null;
 }
 
 test "var-decl struct | null with null retypes correctly" {
 	const t: Token | null = null;
-	assert t === null;
+	assert t == null;
 }
 
 // ===== Function param Maybe<T> + narrowing (Gap 2) =====
 
 function paramPrim(x: number | null): number {
-	if (x === null) return 0;
+	if (x == null) return 0;
 	return x;  // narrowed — Gap 2: param path must call removeNullFromType
 }
 
 test "function param primitive | null narrows in else branch" {
-	assert paramPrim(42) === 42;
-	assert paramPrim(null) === 0;
+	assert paramPrim(42) == 42;
+	assert paramPrim(null) == 0;
 }
 
 function paramStruct(t: Token | null): number {
-	if (t === null) return -1;
+	if (t == null) return -1;
 	return t.kind;  // narrowed member access on param
 }
 
 test "function param struct | null narrows + member access" {
-	assert paramStruct({ kind: 9 }) === 9;
-	assert paramStruct(null) === -1;
+	assert paramStruct({ kind: 9 }) == 9;
+	assert paramStruct(null) == -1;
 }
 
 // ===== Function call argument auto-wrap (Gap 1) =====
 // f(42) where f: (number | null) — needsStdConv didn't know about Maybe wrap.
 
 test "call arg auto-wraps T → Maybe<T>" {
-	assert paramPrim(42) === 42;
+	assert paramPrim(42) == 42;
 }
 
 test "call arg auto-wraps null → Maybe<T>" {
-	assert paramPrim(null) === 0;
+	assert paramPrim(null) == 0;
 }
 
 test "call arg auto-wraps struct → Maybe<Struct>" {
-	assert paramStruct({ kind: 5 }) === 5;
+	assert paramStruct({ kind: 5 }) == 5;
 }
 
 // ===== Function returning T | null =====
@@ -118,12 +118,12 @@ function returnPrim(b: boolean): number | null {
 
 test "function returning primitive | null with value" {
 	const r = returnPrim(true);
-	assert r !== null;
-	if (r !== null) assert r === 42;
+	assert r != null;
+	if (r != null) assert r == 42;
 }
 
 test "function returning primitive | null with null" {
-	assert returnPrim(false) === null;
+	assert returnPrim(false) == null;
 }
 
 function returnStruct(b: boolean): Token | null {
@@ -133,20 +133,20 @@ function returnStruct(b: boolean): Token | null {
 
 test "function returning struct | null with value" {
 	const t = returnStruct(true);
-	assert t !== null;
-	if (t !== null) assert t.kind === 1;
+	assert t != null;
+	if (t != null) assert t.kind == 1;
 }
 
 test "function returning struct | null with null" {
-	assert returnStruct(false) === null;
+	assert returnStruct(false) == null;
 }
 
 // ===== Object literal field T | null (struct field of Maybe type) =====
 
 test "object literal Maybe field with non-null value" {
 	const c: Cube = { tweet: "hi", cursor: "abc" };
-	if (c.cursor !== null) {
-		assert c.cursor === "abc";  // narrowed member access — Gap 3
+	if (c.cursor != null) {
+		assert c.cursor == "abc";  // narrowed member access — Gap 3
 	} else {
 		assert false;
 	}
@@ -154,36 +154,36 @@ test "object literal Maybe field with non-null value" {
 
 test "object literal Maybe field with null value" {
 	const c: Cube = { tweet: "hi", cursor: null };
-	assert c.cursor === null;
+	assert c.cursor == null;
 }
 
 // ===== Ternary on narrowed Maybe member (Gap 3) =====
 
 test "ternary on Maybe member field unwraps narrow on true arm" {
 	const c: Cube = { tweet: "hi", cursor: "ok" };
-	const display: string = c.cursor !== null ? c.cursor : "default";
-	assert display === "ok";
+	const display: string = c.cursor != null ? c.cursor : "default";
+	assert display == "ok";
 }
 
 test "ternary on null Maybe member takes default arm" {
 	const c: Cube = { tweet: "hi", cursor: null };
-	const display: string = c.cursor !== null ? c.cursor : "default";
-	assert display === "default";
+	const display: string = c.cursor != null ? c.cursor : "default";
+	assert display == "default";
 }
 
 // ===== Assignment to Maybe variable =====
 
 test "assign primitive value to mutable Maybe<T> variable" {
 	let x: number | null = null;
-	assert x === null;
+	assert x == null;
 	x = 42;
-	assert x !== null;
-	if (x !== null) assert x === 42;
+	assert x != null;
+	if (x != null) assert x == 42;
 }
 
 test "assign null to mutable Maybe<T> variable" {
 	let x: number | null = 42;
-	if (x !== null) assert x === 42;
+	if (x != null) assert x == 42;
 	x = null;
-	assert x === null;
+	assert x == null;
 }

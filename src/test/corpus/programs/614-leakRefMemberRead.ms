@@ -20,7 +20,7 @@ function provide(i: number): Box {
 	let s = "x";
 	let j = 0;
 	while (j < 6) { s = s + s; j = j + 1; }
-	return { buf: s, active: i % 2 === 0 };
+	return { buf: s, active: i % 2 == 0 };
 }
 
 function main(): void {

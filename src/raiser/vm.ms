@@ -210,11 +210,11 @@ function getReg(vm: RaiserVM, idx: number): RaiserValue {
 // --- ORC refcount helpers (gated on gcMode; no-op in arena mode) ---
 
 function vmIncref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.gcMode === "orc") rcIncref(vm.arrayHeap, vm.objectHeap, val);
+	if (vm.gcMode == "orc") rcIncref(vm.arrayHeap, vm.objectHeap, val);
 }
 
 function vmDecref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.gcMode === "orc") rcDecref(vm.arrayHeap, vm.objectHeap, val);
+	if (vm.gcMode == "orc") rcDecref(vm.arrayHeap, vm.objectHeap, val);
 }
 
 // Adaptive cycle collection: when the live (allocated minus recycled) heap object
@@ -227,7 +227,7 @@ function vmLiveCount(vm: RaiserVM): number {
 }
 
 function vmMaybeCollect(vm: RaiserVM): void {
-	if (vm.gcMode !== "orc") return;
+	if (vm.gcMode != "orc") return;
 	if (vmLiveCount(vm) <= vm.gcThreshold) return;
 	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
 	let next = vmLiveCount(vm) * 2;
@@ -237,7 +237,7 @@ function vmMaybeCollect(vm: RaiserVM): void {
 
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
 	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
-	if (vm.gcMode === "orc") {
+	if (vm.gcMode == "orc") {
 		// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
 		const old = vm.regs.slots[idx];
 		rcIncref(vm.arrayHeap, vm.objectHeap, val);
@@ -335,7 +335,7 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 	copyValueInto(f.value, owned);
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
-		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
+		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
 }
@@ -352,7 +352,7 @@ function futureFail(vm: RaiserVM, handle: number, message: string): void {
 	f.errorMsg = message;
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
-		if (s.status === RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
+		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
 }
@@ -376,7 +376,7 @@ export function vmOrphanFailures(vm: RaiserVM): string[] {
 
 function popSafePoint(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
-	if (n === 0) return -1;
+	if (n == 0) return -1;
 	const top = vm.safePoints[n - 1];
 	vm.safePoints.length = n - 1;
 	return top;
@@ -422,7 +422,7 @@ function unwindStep(vm: RaiserVM): void {
 				return;
 			}
 			const meta = getFuncInst(func, sp);
-			if (meta.op === RaiserOpcode.Catch) {
+			if (meta.op == RaiserOpcode.Catch) {
 				vm.unwinding = false;
 				vm.savedIp = -1;
 				// Bind the caught value into the register the handler names,
@@ -434,14 +434,14 @@ function unwindStep(vm: RaiserVM): void {
 				vm.ip = sp + 1;
 				return;
 			}
-			if (meta.op === RaiserOpcode.Finally) {
+			if (meta.op == RaiserOpcode.Finally) {
 				vm.ip = sp + 1;
 				return;
 			}
 			vmError(vm, `safepoint ${sp} does not point at a handler`);
 			return;
 		}
-		if (vm.callStack.items.length === 0) {
+		if (vm.callStack.items.length == 0) {
 			unhandledException(vm);
 			return;
 		}
@@ -454,14 +454,14 @@ function unwindStep(vm: RaiserVM): void {
 // that can own the next finally to run; re-executing the Ret finds the next.
 function cleanUpOnReturn(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
-	if (n === 0) return -1;
+	if (n == 0) return -1;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	let sp = vm.safePoints[n - 1];
 	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
 	const meta = getFuncInst(func, sp);
-	if (meta.op === RaiserOpcode.Catch) sp = sp + getBx(meta);
+	if (meta.op == RaiserOpcode.Catch) sp = sp + getBx(meta);
 	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
-	if (getFuncInst(func, sp).op !== RaiserOpcode.Finally) return -1;
+	if (getFuncInst(func, sp).op != RaiserOpcode.Finally) return -1;
 	vm.safePoints.length = n - 1;
 	return sp + 1;
 }
@@ -525,7 +525,7 @@ function schedulePick(vm: RaiserVM): number {
 	let k = 1;
 	while (k <= n) {
 		const idx = (vm.current + k) % n;
-		if (vm.sched.strands.items[idx].status === RaiserStrandStatus.Ready) return idx;
+		if (vm.sched.strands.items[idx].status == RaiserStrandStatus.Ready) return idx;
 		k = k + 1;
 	}
 	return -1;
@@ -539,19 +539,19 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	copyValueInto(s.result, value);
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
-	return vm.current !== 0;
+	return vm.current != 0;
 }
 
 function vmHasRunnable(vm: RaiserVM): boolean {
 	for (const s of vm.sched.strands.items) {
-		if (s.status === RaiserStrandStatus.Ready) return true;
+		if (s.status == RaiserStrandStatus.Ready) return true;
 	}
 	return false;
 }
 
 function vmHasBlocked(vm: RaiserVM): boolean {
 	for (const s of vm.sched.strands.items) {
-		if (s.status === RaiserStrandStatus.Blocked) return true;
+		if (s.status == RaiserStrandStatus.Blocked) return true;
 	}
 	return false;
 }
@@ -596,13 +596,13 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 // captures nothing; otherwise it is the callee's last argument, and `spawn`
 // takes a zero-arg closure, so env is its only one.
 function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
-	if (closure.kind !== RaiserValueKind.Object) {
+	if (closure.kind != RaiserValueKind.Object) {
 		vmError(vm, "spawn expects a closure");
 		return -1;
 	}
 	const fnField = heapObjectGetField(vm.objectHeap, closure.intVal, "fn");
 	const funcIdx = fnField.intVal;
-	if (fnField.kind !== RaiserValueKind.Int || funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
+	if (fnField.kind != RaiserValueKind.Int || funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
 		vmError(vm, `spawn: function index out of bounds: ${funcIdx}`);
 		return -1;
 	}
@@ -613,7 +613,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
-	if (envField.kind === RaiserValueKind.Object) {
+	if (envField.kind == RaiserValueKind.Object) {
 		// C hands the thunk a borrow of the parent's captures and the analyzer
 		// proves the parent outlives them; a handle means nothing in another
 		// heap, so the capture graph crosses as a copy the child owns.
@@ -650,7 +650,7 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	const base = vm.baseReg;
 	const v = getReg(vm, base + inst.b);
-	if (v.kind !== RaiserValueKind.Future) {
+	if (v.kind != RaiserValueKind.Future) {
 		// Awaiting a plain value is the identity — Promise.resolve semantics.
 		const copy = raiserNil();
 		copyValueInto(copy, v);
@@ -702,7 +702,7 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (!vm.yielded) return;
 		vm.yielded = false;
 		const cur = vm.sched.strands.items[vm.current];
-		if (cur.status === RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
+		if (cur.status == RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
 		strandSave(vm);
 		const next = schedulePick(vm);
 		if (next < 0) {
@@ -730,7 +730,7 @@ function runStrandSlice(vm: RaiserVM): void {
 		const base = vm.baseReg;
 
 		// --- Core ops ---
-		if (op === RaiserOpcode.LoadConst) {
+		if (op == RaiserOpcode.LoadConst) {
 			const bx = getBx(inst);
 			if (bx >= getFuncConstLen(func)) {
 				vmError(vm, `constant index out of bounds: ${bx}`);
@@ -741,22 +741,22 @@ function runStrandSlice(vm: RaiserVM): void {
 				copyValueInto(copy, val);
 				setReg(vm, base + inst.a, copy);
 			}
-		} else if (op === RaiserOpcode.Move) {
+		} else if (op == RaiserOpcode.Move) {
 			// Copy to avoid aliasing between registers
 			const src = getReg(vm, base + inst.b);
 			const copy = raiserNil();
 			copyValueInto(copy, src);
 			setReg(vm, base + inst.a, copy);
-		} else if (op === RaiserOpcode.LoadNil) {
+		} else if (op == RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
-		} else if (op === RaiserOpcode.Halt) {
+		} else if (op == RaiserOpcode.Halt) {
 			const haltVal = getReg(vm, base + inst.a);
 			if (strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
-				finishProgram(vm, haltVal, inst.b === 1);
+				finishProgram(vm, haltVal, inst.b == 1);
 			}
-		} else if (op === RaiserOpcode.Jump) {
+		} else if (op == RaiserOpcode.Jump) {
 			const offset = getSignedAx(inst);
 			if (offset < 0) {
 				// Loop back-edge: this is ONE iteration. Straight-line code is
@@ -772,183 +772,183 @@ function runStrandSlice(vm: RaiserVM): void {
 			}
 			vm.ip = vm.ip + offset;
 		// --- i64 arithmetic ---
-		} else if (op === RaiserOpcode.AddI64) {
+		} else if (op == RaiserOpcode.AddI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			setReg(vm, base + inst.a, raiserInt(lhs.intVal + rhs.intVal));
-		} else if (op === RaiserOpcode.SubI64) {
+		} else if (op == RaiserOpcode.SubI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			setReg(vm, base + inst.a, raiserInt(lhs.intVal - rhs.intVal));
-		} else if (op === RaiserOpcode.MulI64) {
+		} else if (op == RaiserOpcode.MulI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			setReg(vm, base + inst.a, raiserInt(lhs.intVal * rhs.intVal));
-		} else if (op === RaiserOpcode.DivI64) {
+		} else if (op == RaiserOpcode.DivI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			if (rhs.intVal === 0) { vmError(vm, "integer division by zero");
+			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
 			} else {
 				const quot: int32 = (lhs.intVal as int32 / rhs.intVal as int32) | 0;
 				setReg(vm, base + inst.a, raiserInt(quot as number));
 			}
-		} else if (op === RaiserOpcode.ModI64) {
+		} else if (op == RaiserOpcode.ModI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			if (rhs.intVal === 0) { vmError(vm, "integer modulo by zero");
+			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
 				setReg(vm, base + inst.a, raiserInt(lhs.intVal % rhs.intVal));
 			}
-		} else if (op === RaiserOpcode.NegI64) {
+		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));
 		// --- i64 compare-branch ---
-		} else if (op === RaiserOpcode.BeqI64) {
+		} else if (op == RaiserOpcode.BeqI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal === rhs.intVal) vm.ip = vm.ip + inst.c;
-		} else if (op === RaiserOpcode.BneI64) {
+			if (lhs.intVal == rhs.intVal) vm.ip = vm.ip + inst.c;
+		} else if (op == RaiserOpcode.BneI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal !== rhs.intVal) vm.ip = vm.ip + inst.c;
-		} else if (op === RaiserOpcode.BltI64) {
+			if (lhs.intVal != rhs.intVal) vm.ip = vm.ip + inst.c;
+		} else if (op == RaiserOpcode.BltI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal < rhs.intVal) vm.ip = vm.ip + inst.c;
-		} else if (op === RaiserOpcode.BleI64) {
+		} else if (op == RaiserOpcode.BleI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal <= rhs.intVal) vm.ip = vm.ip + inst.c;
-		} else if (op === RaiserOpcode.BgtI64) {
+		} else if (op == RaiserOpcode.BgtI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal > rhs.intVal) vm.ip = vm.ip + inst.c;
-		} else if (op === RaiserOpcode.BgeI64) {
+		} else if (op == RaiserOpcode.BgeI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal >= rhs.intVal) vm.ip = vm.ip + inst.c;
 		// --- Bitwise ---
-		} else if (op === RaiserOpcode.BitAnd) {
+		} else if (op == RaiserOpcode.BitAnd) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const la: int32 = lhs.intVal as int32;
 			const ra: int32 = rhs.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((la & ra) as number));
-		} else if (op === RaiserOpcode.BitOr) {
+		} else if (op == RaiserOpcode.BitOr) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const lo: int32 = lhs.intVal as int32;
 			const ro: int32 = rhs.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((lo | ro) as number));
-		} else if (op === RaiserOpcode.BitXor) {
+		} else if (op == RaiserOpcode.BitXor) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const lx: int32 = lhs.intVal as int32;
 			const rx: int32 = rhs.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((lx ^ rx) as number));
-		} else if (op === RaiserOpcode.BitNot) {
+		} else if (op == RaiserOpcode.BitNot) {
 			const val = getReg(vm, base + inst.b);
 			const vn: int32 = val.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((~vn) as number));
-		} else if (op === RaiserOpcode.ShiftLeft) {
+		} else if (op == RaiserOpcode.ShiftLeft) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const lsl: int32 = lhs.intVal as int32;
 			const rsl: int32 = rhs.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((lsl << rsl) as number));
-		} else if (op === RaiserOpcode.ShiftRight) {
+		} else if (op == RaiserOpcode.ShiftRight) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const lsr: int32 = lhs.intVal as int32;
 			const rsr: int32 = rhs.intVal as int32;
 			setReg(vm, base + inst.a, raiserInt((lsr >> rsr) as number));
 		// --- Complex ops (previously handled in MetaScript fallback) ---
-		} else if (op === RaiserOpcode.Print) {
+		} else if (op == RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);
 			const s = raiserToString(val);
 			vm.output = `${vm.output}${s}\n`;
-		} else if (op === RaiserOpcode.Call) {
+		} else if (op == RaiserOpcode.Call) {
 			vmHandleCall(vm, inst);
-		} else if (op === RaiserOpcode.CallIndirect) {
+		} else if (op == RaiserOpcode.CallIndirect) {
 			vmHandleCallIndirect(vm, inst);
-		} else if (op === RaiserOpcode.Ret) {
+		} else if (op == RaiserOpcode.Ret) {
 			vmHandleRet(vm, inst);
-		} else if (op === RaiserOpcode.NewArray) {
+		} else if (op == RaiserOpcode.NewArray) {
 			vmHandleNewArray(vm, inst);
-		} else if (op === RaiserOpcode.LoadIndex) {
+		} else if (op == RaiserOpcode.LoadIndex) {
 			vmHandleLoadIndex(vm, inst);
-		} else if (op === RaiserOpcode.StoreIndex) {
+		} else if (op == RaiserOpcode.StoreIndex) {
 			vmHandleStoreIndex(vm, inst);
-		} else if (op === RaiserOpcode.ArrayLen) {
+		} else if (op == RaiserOpcode.ArrayLen) {
 			vmHandleArrayLen(vm, inst);
-		} else if (op === RaiserOpcode.ArrayPush) {
+		} else if (op == RaiserOpcode.ArrayPush) {
 			vmHandleArrayPush(vm, inst);
-		} else if (op === RaiserOpcode.ArraySetLen) {
+		} else if (op == RaiserOpcode.ArraySetLen) {
 			vmHandleArraySetLen(vm, inst);
-		} else if (op === RaiserOpcode.NewObject) {
+		} else if (op == RaiserOpcode.NewObject) {
 			vmHandleNewObject(vm, inst);
-		} else if (op === RaiserOpcode.LoadField) {
+		} else if (op == RaiserOpcode.LoadField) {
 			vmHandleLoadField(vm, mod, inst);
-		} else if (op === RaiserOpcode.StoreField) {
+		} else if (op == RaiserOpcode.StoreField) {
 			vmHandleStoreField(vm, mod, inst);
-		} else if (op === RaiserOpcode.ConcatStr) {
+		} else if (op == RaiserOpcode.ConcatStr) {
 			vmHandleConcatStr(vm, inst);
-		} else if (op === RaiserOpcode.EqStr) {
+		} else if (op == RaiserOpcode.EqStr) {
 			vmHandleEqStr(vm, inst);
-		} else if (op === RaiserOpcode.NeStr) {
+		} else if (op == RaiserOpcode.NeStr) {
 			vmHandleNeStr(vm, inst);
-		} else if (op === RaiserOpcode.LtStr) {
+		} else if (op == RaiserOpcode.LtStr) {
 			vmHandleLtStr(vm, inst);
-		} else if (op === RaiserOpcode.LeStr) {
+		} else if (op == RaiserOpcode.LeStr) {
 			vmHandleLeStr(vm, inst);
-		} else if (op === RaiserOpcode.StrLen) {
+		} else if (op == RaiserOpcode.StrLen) {
 			vmHandleStrLen(vm, inst);
-		} else if (op === RaiserOpcode.StrCharAt) {
+		} else if (op == RaiserOpcode.StrCharAt) {
 			vmHandleStrCharAt(vm, inst);
-		} else if (op === RaiserOpcode.StrSlice) {
+		} else if (op == RaiserOpcode.StrSlice) {
 			vmHandleStrSlice(vm, inst);
-		} else if (op === RaiserOpcode.AddF64) {
+		} else if (op == RaiserOpcode.AddF64) {
 			vmHandleAddF64(vm, inst);
-		} else if (op === RaiserOpcode.SubF64) {
+		} else if (op == RaiserOpcode.SubF64) {
 			vmHandleSubF64(vm, inst);
-		} else if (op === RaiserOpcode.MulF64) {
+		} else if (op == RaiserOpcode.MulF64) {
 			vmHandleMulF64(vm, inst);
-		} else if (op === RaiserOpcode.DivF64) {
+		} else if (op == RaiserOpcode.DivF64) {
 			vmHandleDivF64(vm, inst);
-		} else if (op === RaiserOpcode.NegF64) {
+		} else if (op == RaiserOpcode.NegF64) {
 			vmHandleNegF64(vm, inst);
-		} else if (op === RaiserOpcode.BeqF64) {
+		} else if (op == RaiserOpcode.BeqF64) {
 			vmCmpBranchF64(vm, inst, 0);
-		} else if (op === RaiserOpcode.BneF64) {
+		} else if (op == RaiserOpcode.BneF64) {
 			vmCmpBranchF64(vm, inst, 1);
-		} else if (op === RaiserOpcode.BltF64) {
+		} else if (op == RaiserOpcode.BltF64) {
 			vmCmpBranchF64(vm, inst, 2);
-		} else if (op === RaiserOpcode.BleF64) {
+		} else if (op == RaiserOpcode.BleF64) {
 			vmCmpBranchF64(vm, inst, 3);
-		} else if (op === RaiserOpcode.BgtF64) {
+		} else if (op == RaiserOpcode.BgtF64) {
 			vmCmpBranchF64(vm, inst, 4);
-		} else if (op === RaiserOpcode.BgeF64) {
+		} else if (op == RaiserOpcode.BgeF64) {
 			vmCmpBranchF64(vm, inst, 5);
-		} else if (op === RaiserOpcode.CallHost) {
+		} else if (op == RaiserOpcode.CallHost) {
 			vmHandleCallHost(vm, inst);
-		} else if (op === RaiserOpcode.IsNil) {
+		} else if (op == RaiserOpcode.IsNil) {
 			const v = getReg(vm, base + inst.b);
-			setReg(vm, base + inst.a, raiserBool(v.kind === RaiserValueKind.Nil));
-		} else if (op === RaiserOpcode.Yield) {
+			setReg(vm, base + inst.a, raiserBool(v.kind == RaiserValueKind.Nil));
+		} else if (op == RaiserOpcode.Yield) {
 			vm.yielded = true;
-		} else if (op === RaiserOpcode.Spawn) {
+		} else if (op == RaiserOpcode.Spawn) {
 			const fut = vmSpawnClosure(vm, getReg(vm, base + inst.b));
 			if (fut >= 0) setReg(vm, base + inst.a, raiserFuture(fut));
-		} else if (op === RaiserOpcode.Await) {
+		} else if (op == RaiserOpcode.Await) {
 			vmHandleAwait(vm, inst);
-		} else if (op === RaiserOpcode.Try) {
+		} else if (op == RaiserOpcode.Try) {
 			vm.safePoints.push(vm.ip - 1 + getBx(inst));
-		} else if (op === RaiserOpcode.Catch) {
+		} else if (op == RaiserOpcode.Catch) {
 			vmError(vm, "Catch is handler metadata and must never execute");
-		} else if (op === RaiserOpcode.Finally) {
+		} else if (op == RaiserOpcode.Finally) {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
-		} else if (op === RaiserOpcode.FinallyEnd) {
+		} else if (op == RaiserOpcode.FinallyEnd) {
 			if (vm.savedIp >= 0) {
 				vm.ip = vm.savedIp;
 				vm.savedIp = -1;
@@ -1017,7 +1017,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 		vm.ip = finIp;
 		return;
 	}
-	if (vm.callStack.items.length === 0) {
+	if (vm.callStack.items.length == 0) {
 		// Top-level return — the strand is finished; the main one ends the
 		// program, but only once the remaining strands have drained.
 		const retVal = getReg(vm, vm.baseReg + inst.a);
@@ -1176,7 +1176,7 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
-	if (lenVal.kind !== RaiserValueKind.Int) {
+	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
@@ -1205,7 +1205,7 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 	if (idx >= 0 && idx < fields.length) {
 		const func = getModuleFunc(mod, vm.funcIdx);
 		const nameVal = getFuncConst(func, inst.c);
-		if (fields[idx].name === nameVal.strVal) {
+		if (fields[idx].name == nameVal.strVal) {
 			// Cache hit — O(1) access
 			const dstHit = getReg(vm, vm.baseReg + inst.a);
 			vmIncref(vm, fields[idx].value);
@@ -1221,7 +1221,7 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 	const fieldName = nameVal.strVal;
 	let fi = 0;
 	while (fi < fields.length) {
-		if (fields[fi].name === fieldName) {
+		if (fields[fi].name == fieldName) {
 			inst.cachedIdx = fi;
 			const dstMiss = getReg(vm, vm.baseReg + inst.a);
 			vmIncref(vm, fields[fi].value);
@@ -1255,7 +1255,7 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 	if (idx >= 0 && idx < fields.length) {
 		const func = getModuleFunc(mod, vm.funcIdx);
 		const nameVal = getFuncConst(func, inst.b);
-		if (fields[idx].name === nameVal.strVal) {
+		if (fields[idx].name == nameVal.strVal) {
 			// Cache hit — O(1) update
 			vmIncref(vm, val);
 			vmDecref(vm, fields[idx].value);
@@ -1270,7 +1270,7 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 	const fieldName = nameVal.strVal;
 	let fi = 0;
 	while (fi < fields.length) {
-		if (fields[fi].name === fieldName) {
+		if (fields[fi].name == fieldName) {
 			inst.cachedIdx = fi;
 			vmIncref(vm, val);
 			vmDecref(vm, fields[fi].value);
@@ -1304,7 +1304,7 @@ function vmHandleConcatStr(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleEqStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (lhs.strVal === rhs.strVal) {
+	if (lhs.strVal == rhs.strVal) {
 		vm.ip = vm.ip + inst.c;
 	}
 }
@@ -1312,7 +1312,7 @@ function vmHandleEqStr(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleNeStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (lhs.strVal !== rhs.strVal) {
+	if (lhs.strVal != rhs.strVal) {
 		vm.ip = vm.ip + inst.c;
 	}
 }
@@ -1376,7 +1376,7 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 // --- Float value extraction (handles int-to-float promotion) ---
 
 function asNum(val: RaiserValue): number {
-	if (val.kind === RaiserValueKind.Float) return val.floatVal;
+	if (val.kind == RaiserValueKind.Float) return val.floatVal;
 	return val.intVal;
 }
 
@@ -1422,7 +1422,7 @@ function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
 	const rv = asNum(rhs);
-	if (rv !== 0.0) {
+	if (rv != 0.0) {
 		dst.floatVal = asNum(lhs) / rv;
 	} else {
 		dst.floatVal = 0.0;
@@ -1447,12 +1447,12 @@ function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): v
 	const l = asNum(getReg(vm, vm.baseReg + inst.a));
 	const r = asNum(getReg(vm, vm.baseReg + inst.b));
 	let cond = false;
-	if (cmpOp === 0) { cond = l === r; }
-	else if (cmpOp === 1) { cond = l !== r; }
-	else if (cmpOp === 2) { cond = l < r; }
-	else if (cmpOp === 3) { cond = l <= r; }
-	else if (cmpOp === 4) { cond = l > r; }
-	else if (cmpOp === 5) { cond = l >= r; }
+	if (cmpOp == 0) { cond = l == r; }
+	else if (cmpOp == 1) { cond = l != r; }
+	else if (cmpOp == 2) { cond = l < r; }
+	else if (cmpOp == 3) { cond = l <= r; }
+	else if (cmpOp == 4) { cond = l > r; }
+	else if (cmpOp == 5) { cond = l >= r; }
 	if (cond) { vm.ip = vm.ip + inst.c; }
 }
 
@@ -1471,14 +1471,14 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const base = vm.baseReg;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	const nameConst = getFuncConst(func, inst.b);
-	if (nameConst.kind !== RaiserValueKind.String) {
+	if (nameConst.kind != RaiserValueKind.String) {
 		vmError(vm, `CallHost expected string constant at index ${inst.b}, got kind ${nameConst.kind}`);
 		return;
 	}
 	const name = nameConst.strVal;
 
 	const fn = lookupHostFn(name);
-	if (fn === (null as unknown as RaiserHostFn)) {
+	if (fn == (null as unknown as RaiserHostFn)) {
 		vmError(vm, `Unknown host function: ${name}`);
 		return;
 	}
@@ -1498,7 +1498,7 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const prevArrHeap = activeHostArrayHeap();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	const result = fn(args);
-	if (prevObjHeap !== null && prevArrHeap !== null) {
+	if (prevObjHeap != null && prevArrHeap != null) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
 
@@ -1566,18 +1566,18 @@ test "halt returns constant" {
 		],
 		[raiserInt(42)]
 	));
-	assert vm.exitValue.intVal === 42;
+	assert vm.exitValue.intVal == 42;
 }
 
-test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30; }
+test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal == 30; }
 
-test "sub: 100 - 42 = 58" { assert execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58; }
+test "sub: 100 - 42 = 58" { assert execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal == 58; }
 
-test "mul: 6 * 7 = 42" { assert execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42; }
+test "mul: 6 * 7 = 42" { assert execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal == 42; }
 
-test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42; }
+test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }
 
-test "mod: 17 % 5 = 2" { assert execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2; }
+test "mod: 17 % 5 = 2" { assert execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal == 2; }
 
 test "neg: -(7) = -7" {
 	const vm = execModule(makeTestModule(
@@ -1588,7 +1588,7 @@ test "neg: -(7) = -7" {
 		],
 		[raiserInt(7)]
 	));
-	assert vm.exitValue.intVal === -7;
+	assert vm.exitValue.intVal == -7;
 }
 
 test "chained: (2 + 3) * 4 = 20" {
@@ -1603,7 +1603,7 @@ test "chained: (2 + 3) * 4 = 20" {
 		],
 		[raiserInt(2), raiserInt(3), raiserInt(4)]
 	));
-	assert vm.exitValue.intVal === 20;
+	assert vm.exitValue.intVal == 20;
 }
 
 test "print captures output" {
@@ -1615,7 +1615,7 @@ test "print captures output" {
 		],
 		[raiserInt(42)]
 	));
-	assert vm.output === "42\n";
+	assert vm.output == "42\n";
 }
 
 test "bgt: 10 > 5 → true branch" {
@@ -1632,7 +1632,7 @@ test "bgt: 10 > 5 → true branch" {
 		],
 		[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "bgt: 3 > 5 → false branch" {
@@ -1649,7 +1649,7 @@ test "bgt: 3 > 5 → false branch" {
 		],
 		[raiserInt(3), raiserInt(5), raiserInt(1), raiserInt(0)]
 	));
-	assert vm.exitValue.intVal === 0;
+	assert vm.exitValue.intVal == 0;
 }
 
 test "loop: sum 1..5 = 15" {
@@ -1667,7 +1667,7 @@ test "loop: sum 1..5 = 15" {
 		],
 		[raiserInt(0), raiserInt(1), raiserInt(5)]
 	));
-	assert vm.exitValue.intVal === 15;
+	assert vm.exitValue.intVal == 15;
 }
 
 test "beq: equal values" {
@@ -1682,7 +1682,7 @@ test "beq: equal values" {
 		],
 		[raiserInt(7), raiserInt(1)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "NewArray empty" {
@@ -1693,7 +1693,7 @@ test "NewArray empty" {
 		],
 		[]
 	));
-	assert vm.exitValue.kind === RaiserValueKind.Array;
+	assert vm.exitValue.kind == RaiserValueKind.Array;
 }
 
 test "NewArray with elements + LoadIndex" {
@@ -1708,7 +1708,7 @@ test "NewArray with elements + LoadIndex" {
 		],
 		[raiserInt(10), raiserInt(20), raiserInt(1)]
 	));
-	assert vm.exitValue.intVal === 20;
+	assert vm.exitValue.intVal == 20;
 }
 
 test "ArrayLen" {
@@ -1723,7 +1723,7 @@ test "ArrayLen" {
 		],
 		[raiserInt(1), raiserInt(2), raiserInt(3)]
 	));
-	assert vm.exitValue.intVal === 3;
+	assert vm.exitValue.intVal == 3;
 }
 
 test "ArrayPush + ArrayLen" {
@@ -1737,7 +1737,7 @@ test "ArrayPush + ArrayLen" {
 		],
 		[raiserInt(42)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "ArraySetLen truncates" {
@@ -1755,7 +1755,7 @@ test "ArraySetLen truncates" {
 		],
 		[raiserInt(7), raiserInt(1)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "ArraySetLen nil-extends" {
@@ -1769,7 +1769,7 @@ test "ArraySetLen nil-extends" {
 		],
 		[raiserInt(3)]
 	));
-	assert vm.exitValue.intVal === 3;
+	assert vm.exitValue.intVal == 3;
 	// the extended slot reads as nil
 	const vm2 = execModule(makeTestModule(
 		[
@@ -1782,7 +1782,7 @@ test "ArraySetLen nil-extends" {
 		],
 		[raiserInt(3), raiserInt(2)]
 	));
-	assert vm2.exitValue.kind === RaiserValueKind.Nil;
+	assert vm2.exitValue.kind == RaiserValueKind.Nil;
 }
 
 test "StoreIndex" {
@@ -1798,7 +1798,7 @@ test "StoreIndex" {
 		],
 		[raiserInt(0), raiserInt(0), raiserInt(99)]
 	));
-	assert vm.exitValue.intVal === 99;
+	assert vm.exitValue.intVal == 99;
 }
 
 test "NewObject + StoreField + LoadField" {
@@ -1812,7 +1812,7 @@ test "NewObject + StoreField + LoadField" {
 		],
 		[raiserInt(42), raiserString("x")]
 	));
-	assert vm.exitValue.intVal === 42;
+	assert vm.exitValue.intVal == 42;
 }
 
 test "multiple fields" {
@@ -1828,7 +1828,7 @@ test "multiple fields" {
 		],
 		[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
 	));
-	assert vm.exitValue.intVal === 20;
+	assert vm.exitValue.intVal == 20;
 }
 
 test "field update" {
@@ -1844,7 +1844,7 @@ test "field update" {
 		],
 		[raiserInt(1), raiserInt(99), raiserString("x")]
 	));
-	assert vm.exitValue.intVal === 99;
+	assert vm.exitValue.intVal == 99;
 }
 
 test "ConcatStr: two strings" {
@@ -1857,7 +1857,7 @@ test "ConcatStr: two strings" {
 		],
 		[raiserString("hello"), raiserString(" world")]
 	));
-	assert vm.exitValue.strVal === "hello world";
+	assert vm.exitValue.strVal == "hello world";
 }
 
 test "ConcatStr: int + string coercion" {
@@ -1870,7 +1870,7 @@ test "ConcatStr: int + string coercion" {
 		],
 		[raiserString("val: "), raiserInt(42)]
 	));
-	assert vm.exitValue.strVal === "val: 42";
+	assert vm.exitValue.strVal == "val: 42";
 }
 
 test "EqStr: equal strings skip" {
@@ -1885,7 +1885,7 @@ test "EqStr: equal strings skip" {
 		],
 		[raiserString("abc"), raiserInt(1), raiserInt(0)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "EqStr: unequal strings no skip" {
@@ -1900,7 +1900,7 @@ test "EqStr: unequal strings no skip" {
 		],
 		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
 	));
-	assert vm.exitValue.intVal === 0;
+	assert vm.exitValue.intVal == 0;
 }
 
 test "NeStr: unequal strings skip" {
@@ -1915,7 +1915,7 @@ test "NeStr: unequal strings skip" {
 		],
 		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
 	));
-	assert vm.exitValue.intVal === 1;
+	assert vm.exitValue.intVal == 1;
 }
 
 test "StrLen: string length" {
@@ -1927,7 +1927,7 @@ test "StrLen: string length" {
 		],
 		[raiserString("hello")]
 	));
-	assert vm.exitValue.intVal === 5;
+	assert vm.exitValue.intVal == 5;
 }
 
 test "StrCharAt: get character" {
@@ -1940,7 +1940,7 @@ test "StrCharAt: get character" {
 		],
 		[raiserString("hello"), raiserInt(1)]
 	));
-	assert vm.exitValue.strVal === "e";
+	assert vm.exitValue.strVal == "e";
 }
 
 test "StrSlice: substring" {
@@ -1954,7 +1954,7 @@ test "StrSlice: substring" {
 		],
 		[raiserString("hello world"), raiserInt(0), raiserInt(5)]
 	));
-	assert vm.exitValue.strVal === "hello";
+	assert vm.exitValue.strVal == "hello";
 }
 
 test "StrLen: empty string" {
@@ -1966,7 +1966,7 @@ test "StrLen: empty string" {
 		],
 		[raiserString("")]
 	));
-	assert vm.exitValue.intVal === 0;
+	assert vm.exitValue.intVal == 0;
 }
 
 test "CallIndirect basic" {
@@ -1990,7 +1990,7 @@ test "CallIndirect basic" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	assert vm.exitValue.intVal === 42;
+	assert vm.exitValue.intVal == 42;
 }
 
 test "CallIndirect with args" {
@@ -2016,7 +2016,7 @@ test "CallIndirect with args" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	assert vm.exitValue.intVal === 30;
+	assert vm.exitValue.intVal == 30;
 }
 
 test "CallIndirect return value" {
@@ -2042,7 +2042,7 @@ test "CallIndirect return value" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	assert vm.exitValue.intVal === 42;
+	assert vm.exitValue.intVal == 42;
 }
 
 test "two objects bidirectional link in function" {
@@ -2072,7 +2072,7 @@ test "two objects bidirectional link in function" {
 	const funcs: RaiserFunction[] = [mk, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	assert vm.exitValue.intVal === 5;
+	assert vm.exitValue.intVal == 5;
 }
 
 // --- Phase 5: Safety & Diagnostics tests ---
@@ -2095,7 +2095,7 @@ test "iteration budget counts loop back-edges, not instructions" {
 	assert vm.halted;
 	assert vm.error.indexOf("too many iterations") >= 0;
 	assert vm.error.indexOf("--max-vm-iterations=") >= 0;
-	assert vm.loopCount === 101;
+	assert vm.loopCount == 101;
 }
 
 test "forward jumps are free; only back-edges consume the budget" {
@@ -2117,9 +2117,9 @@ test "forward jumps are free; only back-edges consume the budget" {
 	const funcs: RaiserFunction[] = [func];
 	const mod = createRaiserModule("test", funcs, 0);
 	const vm = execModule(mod);
-	assert vm.error === "";
-	assert vm.loopCount === 3;
-	assert vm.exitValue.intVal === 0;
+	assert vm.error == "";
+	assert vm.loopCount == 3;
+	assert vm.exitValue.intVal == 0;
 }
 
 test "unknown opcode sets error" {
@@ -2130,7 +2130,7 @@ test "unknown opcode sets error" {
 	];
 	const consts: RaiserValue[] = [];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error !== "";
+	assert vm.error != "";
 }
 
 test "stack trace with function calls" {
@@ -2152,7 +2152,7 @@ test "stack trace with function calls" {
 	const funcs: RaiserFunction[] = [inner, main];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	assert vm.exitValue.intVal === 42;
+	assert vm.exitValue.intVal == 42;
 	// The VM halted inside inner — stack trace should show the call chain
 	const trace = vmDumpStack(vm);
 	assert trace.length > 0;
@@ -2179,9 +2179,9 @@ test "CallHost echo string roundtrip" {
 	];
 	const consts: RaiserValue[] = [raiserString("echo"), raiserString("hello")];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error === "";
-	assert vm.exitValue.kind === RaiserValueKind.String;
-	assert vm.exitValue.strVal === "hello";
+	assert vm.error == "";
+	assert vm.exitValue.kind == RaiserValueKind.String;
+	assert vm.exitValue.strVal == "hello";
 }
 
 test "CallHost two-arg native" {
@@ -2199,8 +2199,8 @@ test "CallHost two-arg native" {
 	];
 	const consts: RaiserValue[] = [raiserString("add"), raiserInt(10), raiserInt(32)];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error === "";
-	assert vm.exitValue.intVal === 42;
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 42;
 }
 
 test "CallHost zero-arg native" {
@@ -2216,8 +2216,8 @@ test "CallHost zero-arg native" {
 	];
 	const consts: RaiserValue[] = [raiserString("seven")];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error === "";
-	assert vm.exitValue.intVal === 7;
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 7;
 }
 
 test "CallHost unknown name errors" {
@@ -2234,22 +2234,22 @@ test "CallHost unknown name errors" {
 
 test "instruction line field preserved" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 0, 1, 2);
-	assert inst.line === 0;
+	assert inst.line == 0;
 	inst.line = 42;
-	assert inst.line === 42;
+	assert inst.line == 42;
 }
 
 // --- Phase 1 Safety Tests ---
 
 test "div by zero sets error" {
 	const vm = execBinOp(RaiserOpcode.DivI64, 10, 0);
-	assert vm.error === "integer division by zero";
+	assert vm.error == "integer division by zero";
 	assert vm.halted;
 }
 
 test "mod by zero sets error" {
 	const vm = execBinOp(RaiserOpcode.ModI64, 10, 0);
-	assert vm.error === "integer modulo by zero";
+	assert vm.error == "integer modulo by zero";
 	assert vm.halted;
 }
 
@@ -2351,7 +2351,7 @@ test "vmCallFunction: trampoline call with scalar args" {
 	const a2 = raiserInt(4);
 	const args: RaiserValue[] = [a1, a2];
 	const r = vmCallFunction(vm, 0, args);
-	assert r.intVal === 7;
+	assert r.intVal == 7;
 }
 
 test "vmCallFunction: reusable VM, different args, no recompile" {
@@ -2368,12 +2368,12 @@ test "vmCallFunction: reusable VM, different args, no recompile" {
 	const x2 = raiserInt(20);
 	const argsA: RaiserValue[] = [x1, x2];
 	const rA = vmCallFunction(vm, 0, argsA);
-	assert rA.intVal === 30;
+	assert rA.intVal == 30;
 	const y1 = raiserInt(1);
 	const y2 = raiserInt(2);
 	const argsB: RaiserValue[] = [y1, y2];
 	const rB = vmCallFunction(vm, 0, argsB);
-	assert rB.intVal === 3;
+	assert rB.intVal == 3;
 }
 
 test "vmCallFunction: nested Call/Ret through trampoline" {
@@ -2401,7 +2401,7 @@ test "vmCallFunction: nested Call/Ret through trampoline" {
 	const a = raiserInt(5);
 	const args: RaiserValue[] = [a];
 	const r = vmCallFunction(vm, 1, args);
-	assert r.intVal === 7;
+	assert r.intVal == 7;
 }
 
 // --- Strand scheduling ---
@@ -2411,9 +2411,9 @@ test "single strand: no scheduler involvement" {
 		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
 		[raiserInt(42)]
 	));
-	assert vm.exitValue.intVal === 42;
-	assert vm.sched.strands.items.length === 1;
-	assert vm.sched.strands.items[0].status === RaiserStrandStatus.Done;
+	assert vm.exitValue.intVal == 42;
+	assert vm.sched.strands.items.length == 1;
+	assert vm.sched.strands.items[0].status == RaiserStrandStatus.Done;
 }
 
 test "two strands interleave at Yield" {
@@ -2445,13 +2445,13 @@ test "two strands interleave at Yield" {
 	// The worker's 2 lands between main's 1 and 3. What happens to the
 	// worker's remaining half when main ends is drain semantics — S2 owns it,
 	// so this pins only the switch.
-	assert vm.output.slice(0, 4) === "1\n2\n";
+	assert vm.output.slice(0, 4) == "1\n2\n";
 
 	// Control: the same main with no strand to switch to yields to itself,
 	// so the 2 above came from the scheduler.
 	const vmAlone = createVM(mod, "arena");
 	execLoop(vmAlone);
-	assert vmAlone.output === "1\n3\n";
+	assert vmAlone.output == "1\n3\n";
 }
 
 test "spawned strand finishes and hands the turn back" {
@@ -2475,9 +2475,9 @@ test "spawned strand finishes and hands the turn back" {
 	const vm = createVM(mod, "arena");
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
-	assert vm.output === "7\n9\n";
-	assert vm.sched.strands.items[1].status === RaiserStrandStatus.Done;
-	assert vm.sched.strands.items[1].result.intVal === 7;
+	assert vm.output == "7\n9\n";
+	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Done;
+	assert vm.sched.strands.items[1].result.intVal == 7;
 }
 
 test "each strand keeps its own registers" {
@@ -2501,8 +2501,8 @@ test "each strand keeps its own registers" {
 	const vm = createVM(mod, "arena");
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
-	assert vm.exitValue.intVal === 11;
-	assert vm.sched.strands.items[1].result.intVal === 22;
+	assert vm.exitValue.intVal == 11;
+	assert vm.sched.strands.items[1].result.intVal == 22;
 }
 
 // --- Futures: spawn / await ---
@@ -2539,10 +2539,10 @@ test "spawn returns a future the strand completes, await reads it" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
-	assert vm.output === "7\n";
-	assert vm.exitValue.intVal === 7;
-	assert vm.sched.futures.items.length === 1;
+	assert vm.error == "";
+	assert vm.output == "7\n";
+	assert vm.exitValue.intVal == 7;
+	assert vm.sched.futures.items.length == 1;
 	assert vm.sched.futures.items[0].finished;
 }
 
@@ -2567,15 +2567,15 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
+	assert vm.error == "";
 	// The value survives being materialized twice — out of the strand that
 	// built it, then out of the future's own storage into the reader.
-	assert vm.output === "42\n";
+	assert vm.output == "42\n";
 	// One object per stage: the worker built it, the future owns a copy, and
 	// main holds the closure it spawned plus the copy it read back.
-	assert vm.sched.strands.items[1].objectHeap.objects.length === 1;
-	assert vm.sched.futures.items[0].valueObjectHeap.objects.length === 1;
-	assert vm.objectHeap.objects.length === 2;
+	assert vm.sched.strands.items[1].objectHeap.objects.length == 1;
+	assert vm.sched.futures.items[0].valueObjectHeap.objects.length == 1;
+	assert vm.objectHeap.objects.length == 2;
 }
 
 test "a spawned strand writes to its own copy of the captured env" {
@@ -2606,12 +2606,12 @@ test "a spawned strand writes to its own copy of the captured env" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
+	assert vm.error == "";
 	// C would let the child write straight through the borrow; here the child
 	// owns a copy, so the parent still reads what it stored (Amendment J).
-	assert vm.output === "7\n";
+	assert vm.output == "7\n";
 	const childEnv = heapObjectGetField(vm.sched.strands.items[1].objectHeap, 0, "n");
-	assert childEnv.intVal === 99;
+	assert childEnv.intVal == 99;
 }
 
 test "await parks the reader until the future completes" {
@@ -2642,8 +2642,8 @@ test "await parks the reader until the future completes" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
-	assert vm.output === "1\n2\n3\n";
+	assert vm.error == "";
+	assert vm.output == "1\n2\n3\n";
 }
 
 test "a finished future can be read again" {
@@ -2664,8 +2664,8 @@ test "a finished future can be read again" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
-	assert vm.output === "7\n7\n";
+	assert vm.error == "";
+	assert vm.output == "7\n7\n";
 }
 
 test "main ending drains the strands it left running" {
@@ -2689,9 +2689,9 @@ test "main ending drains the strands it left running" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error === "";
-	assert vm.output === "1\n2\n";
-	assert vm.exitValue.intVal === 1;
+	assert vm.error == "";
+	assert vm.output == "1\n2\n";
+	assert vm.exitValue.intVal == 1;
 }
 
 test "process.exit skips the drain" {
@@ -2715,8 +2715,8 @@ test "process.exit skips the drain" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.output === "1\n";
-	assert vm.sched.strands.items[1].status === RaiserStrandStatus.Ready;
+	assert vm.output == "1\n";
+	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Ready;
 }
 
 // --- Exceptions ---
@@ -2742,10 +2742,10 @@ test "throw lands in the enclosing catch, then the finally runs" {
 		],
 		[raiserInt(5), raiserInt(9)]
 	));
-	assert vm.error === "";
-	assert vm.output === "5\n9\n";
-	assert vm.exitValue.intVal === 5;
-	assert vm.safePoints.length === 0;
+	assert vm.error == "";
+	assert vm.output == "5\n9\n";
+	assert vm.exitValue.intVal == 5;
+	assert vm.safePoints.length == 0;
 }
 
 test "no throw skips the catch and still runs the finally" {
@@ -2766,9 +2766,9 @@ test "no throw skips the catch and still runs the finally" {
 		],
 		[raiserInt(7), raiserInt(9)]
 	));
-	assert vm.error === "";
-	assert vm.output === "7\n9\n";
-	assert vm.safePoints.length === 0;
+	assert vm.error == "";
+	assert vm.output == "7\n9\n";
+	assert vm.safePoints.length == 0;
 }
 
 test "an uncaught throw on the main strand is a VM error" {
@@ -2780,7 +2780,7 @@ test "an uncaught throw on the main strand is a VM error" {
 		],
 		[raiserString("boom")]
 	));
-	assert vm.output === "";
+	assert vm.output == "";
 	assert vm.error.length > 0;
 }
 
@@ -2807,10 +2807,10 @@ test "a throw unwinds out of the callee into the caller's catch" {
 	const fBoom = createRaiserFunction("boom", boomCode, [raiserInt(42)], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fBoom];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error === "";
+	assert vm.error == "";
 	// The statement after the throwing call must not run.
-	assert vm.output === "42\n";
-	assert vm.exitValue.intVal === 42;
+	assert vm.output == "42\n";
+	assert vm.exitValue.intVal == 42;
 }
 
 test "a finally on the way out runs before the outer catch sees the throw" {
@@ -2844,8 +2844,8 @@ test "a finally on the way out runs before the outer catch sees the throw" {
 	const fInner = createRaiserFunction("inner", innerCode, [raiserInt(8), raiserInt(6)], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fInner];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error === "";
-	assert vm.output === "6\n8\n";
+	assert vm.error == "";
+	assert vm.output == "6\n8\n";
 }
 
 test "a throw in a spawned strand fails its future and re-raises in the reader" {
@@ -2873,11 +2873,11 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("boom")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error === "";
-	assert vm.output === "boom\n";
+	assert vm.error == "";
+	assert vm.output == "boom\n";
 	assert vm.sched.futures.items[0].failed;
 	assert vm.sched.futures.items[0].errorObserved;
-	assert vmOrphanFailures(vm).length === 0;
+	assert vmOrphanFailures(vm).length == 0;
 }
 
 test "a failed future nobody read is an orphan rejection" {
@@ -2893,10 +2893,10 @@ test "a failed future nobody read is an orphan rejection" {
 	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("dropped")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error === "";
+	assert vm.error == "";
 	const orphans = vmOrphanFailures(vm);
-	assert orphans.length === 1;
-	assert orphans[0] === "dropped";
+	assert orphans.length == 1;
+	assert orphans[0] == "dropped";
 }
 
 test "awaiting a plain value is the identity" {

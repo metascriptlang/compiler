@@ -114,7 +114,7 @@ const HEX_DIGITS = "0123456789abcdef";
 export function hashToHex(h: Hash): string {
 	let v: int64 = h;
 	if (v < (0 as int64)) v = v + (4294967296 as int64);
-	if (v === (0 as int64)) return "0";
+	if (v == (0 as int64)) return "0";
 	let result = "";
 	while (v > (0 as int64)) {
 		const digit: int64 = v % (16 as int64);
@@ -149,26 +149,26 @@ export function hashToBase36(s: string): string {
 // Named calls (djb2, splitmix32) used where overload resolution is ambiguous.
 
 test "hash string deterministic" {
-	assert djb2("hello") === djb2("hello");
-	assert djb2("a") !== djb2("b");
+	assert djb2("hello") == djb2("hello");
+	assert djb2("a") != djb2("b");
 }
 
 test "hash string empty" {
-	assert djb2("") === 5381;
+	assert djb2("") == 5381;
 }
 
 test "hash int zero" {
-	assert splitmix32(0) !== 0;
+	assert splitmix32(0) != 0;
 }
 
 test "hash int different inputs" {
-	assert splitmix32(1) !== splitmix32(2);
+	assert splitmix32(1) != splitmix32(2);
 }
 
 test "hash boolean" {
 	const t: int64 = 1;
 	const f: int64 = 0;
-	assert t !== f;
+	assert t != f;
 }
 
 test "hash array combines" {
@@ -176,52 +176,52 @@ test "hash array combines" {
 	const fa = finalize(a);
 	const b = mix(mix(0, djb2("name")), splitmix32(42));
 	const fb = finalize(b);
-	assert fa === fb;
-	assert fa !== 0;
+	assert fa == fb;
+	assert fa != 0;
 }
 
 test "hash array order matters" {
 	const a = finalize(mix(mix(0, djb2("a")), djb2("b")));
 	const b = finalize(mix(mix(0, djb2("b")), djb2("a")));
-	assert a !== b;
+	assert a != b;
 }
 
 test "hashStringSigned matches unsigned" {
 	const u = djb2("test");
 	const s = hashStringSigned("test");
 	if (u <= (0x7FFFFFFF as int64)) {
-		assert s === (u as int32);
+		assert s == (u as int32);
 	}
 }
 
 test "hashCombine deterministic" {
-	assert hashCombine(1, 2) === hashCombine(1, 2);
+	assert hashCombine(1, 2) == hashCombine(1, 2);
 }
 
 test "hashCombine with different inputs" {
-	assert hashCombine(100, 200) !== hashCombine(100, 201);
+	assert hashCombine(100, 200) != hashCombine(100, 201);
 }
 
 test "fingerprint deterministic" {
-	assert fingerprint("abc") === fingerprint("abc");
+	assert fingerprint("abc") == fingerprint("abc");
 }
 
 test "fingerprint differs from hash" {
-	assert fingerprint("hello") !== djb2("hello");
+	assert fingerprint("hello") != djb2("hello");
 }
 
 test "hashToHex ff" {
-	assert hashToHex(255) === "ff";
+	assert hashToHex(255) == "ff";
 }
 
 test "hashToHex zero" {
-	assert hashToHex(0) === "0";
+	assert hashToHex(0) == "0";
 }
 
 test "hashToBase36 deterministic" {
-	assert hashToBase36("test") === hashToBase36("test");
+	assert hashToBase36("test") == hashToBase36("test");
 }
 
 test "hashValueToBase36 zero" {
-	assert hashValueToBase36(0) === "0";
+	assert hashValueToBase36(0) == "0";
 }

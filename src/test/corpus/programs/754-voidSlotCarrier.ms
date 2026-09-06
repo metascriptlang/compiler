@@ -26,21 +26,21 @@ function main(): void {
 	let ok = true;
 
 	const a = [tick("a")];
-	ok = check("arrayLen", a.length === 1) && ok;
+	ok = check("arrayLen", a.length == 1) && ok;
 	console.log("elem=" + a[0]);
 
 	const b = [tick("b"), tick("c")];
-	ok = check("arrayLen2", b.length === 2) && ok;
+	ok = check("arrayLen2", b.length == 2) && ok;
 
 	const o = { v: tick("d") };
 	console.log("field=" + o.v);
 
 	// Mixed object: the valued field runs before the void one and keeps its value.
 	const m = { a: value("e"), v: tick("f") };
-	ok = check("mixedValue", m.a === 1) && ok;
+	ok = check("mixedValue", m.a == 1) && ok;
 	console.log("mixedVoid=" + m.v);
 
-	ok = check("order", trace === "abcdef") && ok;
+	ok = check("order", trace == "abcdef") && ok;
 
 	if (!ok) { console.log("void slots FAILED trace=" + trace); return; }
 	console.log("void slots ok");

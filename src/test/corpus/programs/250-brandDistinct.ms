@@ -12,7 +12,7 @@ function main(): void {
 	console.log(fmtOrder(a));
 	console.log(a.length);
 	const b: OrderId = "A-1" as OrderId;
-	if (a === b) { console.log("same"); }
+	if (a == b) { console.log("same"); }
 	const s: ScoreTag = 41 as ScoreTag;
 	console.log((s as int32) + 1);
 }

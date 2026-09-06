@@ -19,11 +19,11 @@ test "union type alias resolves to TypeKind.Union in checker" {
 	`);
 	let found = false;
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (sym.name === "makeItem") {
+		if (sym.name == "makeItem") {
 			const ft = sym.symbolType;
-			assert ft.typeChildren.length === 2;
-			assert ft.typeChildren[1].kind === TypeKind.Union;
-			assert ft.typeChildren[1].typeName === "MyData";
+			assert ft.typeChildren.length == 2;
+			assert ft.typeChildren[1].kind == TypeKind.Union;
+			assert ft.typeChildren[1].typeName == "MyData";
 			found = true;
 		}
 	}

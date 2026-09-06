@@ -63,7 +63,7 @@ export function jStrIf(b: JsonBuilder, key: string, val: string): void {
 }
 
 export function jNumIf(b: JsonBuilder, key: string, val: number, skip: number): void {
-	if (val !== skip) jNum(b, key, val);
+	if (val != skip) jNum(b, key, val);
 }
 
 export function jRawIf(b: JsonBuilder, key: string, raw: string): void {
@@ -94,17 +94,17 @@ export function jEnd(b: JsonBuilder): string {
 // ===== Tests =====
 
 test "empty object" {
-	assert jEnd(jsonObj()) === "{}";
+	assert jEnd(jsonObj()) == "{}";
 }
 
 test "empty array" {
-	assert jEnd(jsonArr()) === "[]";
+	assert jEnd(jsonArr()) == "[]";
 }
 
 test "single string field" {
 	const b = jsonObj();
 	jStr(b, "name", "hello");
-	assert jEnd(b) === "{\"name\":\"hello\"}";
+	assert jEnd(b) == "{\"name\":\"hello\"}";
 }
 
 test "multiple fields" {
@@ -116,8 +116,8 @@ test "multiple fields" {
 	assert r.indexOf("\"label\":\"foo\"") >= 0;
 	assert r.indexOf("\"kind\":6") >= 0;
 	assert r.indexOf("\"deprecated\":false") >= 0;
-	assert r.charAt(0) === "{";
-	assert r.charAt(r.length - 1) === "}";
+	assert r.charAt(0) == "{";
+	assert r.charAt(r.length - 1) == "}";
 }
 
 test "nested objects via jRaw" {
@@ -126,7 +126,7 @@ test "nested objects via jRaw" {
 	jNum(inner, "character", 5);
 	const b = jsonObj();
 	jRaw(b, "start", jEnd(inner));
-	assert jEnd(b) === "{\"start\":{\"line\":0,\"character\":5}}";
+	assert jEnd(b) == "{\"start\":{\"line\":0,\"character\":5}}";
 }
 
 test "array with items" {
@@ -134,14 +134,14 @@ test "array with items" {
 	jItem(a, "1");
 	jItem(a, "2");
 	jItem(a, "3");
-	assert jEnd(a) === "[1,2,3]";
+	assert jEnd(a) == "[1,2,3]";
 }
 
 test "array with string items" {
 	const a = jsonArr();
 	jStrItem(a, "a");
 	jStrItem(a, "b");
-	assert jEnd(a) === "[\"a\",\"b\"]";
+	assert jEnd(a) == "[\"a\",\"b\"]";
 }
 
 test "conditional skip empty" {
@@ -157,7 +157,7 @@ test "conditional skip empty" {
 test "null field" {
 	const b = jsonObj();
 	jNull(b, "result");
-	assert jEnd(b) === "{\"result\":null}";
+	assert jEnd(b) == "{\"result\":null}";
 }
 
 test "string escaping" {

@@ -18,9 +18,9 @@ function main(): void {
 	const f: JsonValue = v.getDynamicField("f");
 	console.log("f=" + (f.asBoolean() ? "t" : "f"));
 	const z: JsonValue = v.getDynamicField("z");
-	console.log("zKind=" + (z.kind === JsonKind.Null ? "null" : "other"));
+	console.log("zKind=" + (z.kind == JsonKind.Null ? "null" : "other"));
 	const missing: JsonValue = v.getDynamicField("nope");
-	console.log("missing=" + (missing.kind === JsonKind.Null ? "null" : "found"));
+	console.log("missing=" + (missing.kind == JsonKind.Null ? "null" : "found"));
 
 	const a: JsonValue = v.getDynamicField("a");
 	console.log("aLen=" + a.length().toString());

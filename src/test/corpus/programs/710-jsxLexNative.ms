@@ -18,7 +18,7 @@ function countJsxTokens(src: string): number {
 	let n = 0;
 	for (const t of lr.value) {
 		const k = t.kind;
-		if (k === TokenKind.JsxTagStart || k === TokenKind.JsxClose || k === TokenKind.JsxText) {
+		if (k == TokenKind.JsxTagStart || k == TokenKind.JsxClose || k == TokenKind.JsxText) {
 			n = n + 1;
 		}
 	}

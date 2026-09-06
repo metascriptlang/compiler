@@ -23,7 +23,7 @@ function dropUnread(i: int32): void {
 
 function buildOrThrow(i: int32): string {
 	const head = makePart(i);
-	if (i % 7 === 3) { throw "boom-" + head; }
+	if (i % 7 == 3) { throw "boom-" + head; }
 	return head + "-ok";
 }
 

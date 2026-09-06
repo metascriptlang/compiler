@@ -34,7 +34,7 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 let _retAwaitCounter: number = 0;
 
 function splitReturnAwait(node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	if (isFuncBoundary(node)) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
@@ -65,9 +65,9 @@ function splitReturnAwaitInStmts(stmts: Node[]): void {
 	let i = 0;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
-		if (stmt !== null && stmt.kind === NodeKind.ReturnStmt) {
+		if (stmt != null && stmt.kind == NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
-			if (rd.argument !== null && rd.argument.kind === NodeKind.AwaitExpr) {
+			if (rd.argument != null && rd.argument.kind == NodeKind.AwaitExpr) {
 				const loc = stmt.location;
 				const tmpName = "$retAwait" + _retAwaitCounter.toString();
 				_retAwaitCounter = _retAwaitCounter + 1;
@@ -98,8 +98,8 @@ function splitReturnAwaitInStmts(stmts: Node[]): void {
 // Stops at nested function boundaries (each async function is independent).
 
 function rewriteAwaits(node: Node): Node {
-	if (node === null) return node;
-	if (node.kind === NodeKind.AwaitExpr) {
+	if (node == null) return node;
+	if (node.kind == NodeKind.AwaitExpr) {
 		const d = node.data as AwaitExprData;
 		return createNode(NodeKind.YieldExpr, { yieldArg: d.awaitArg, isDelegate: false }, syntheticToken(node.location));
 	}
@@ -124,7 +124,7 @@ function walkAsync(node: Node): void {
 			const d = node.data as FunctionDeclData;
 			// Recurse first (handle nested async functions)
 			walkAsync(d.fnBody);
-			if (d.fnFlags === "async" || d.fnFlags === "async_generator") {
+			if (d.fnFlags == "async" || d.fnFlags == "async_generator") {
 				node.flags = node.flags | NodeFlag.WasAsync;
 				// Pre-pass: split `return await expr` → `const $retAwait = await expr; return $retAwait;`
 				// Must run BEFORE rewriteAwaits so the VarDecl is in the body for collectDeclNames.
@@ -156,7 +156,7 @@ function walkAsync(node: Node): void {
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			walkAsync(d.methodBody);
-			if (d.methodFlags === "async" || d.methodFlags === "async_generator") {
+			if (d.methodFlags == "async" || d.methodFlags == "async_generator") {
 				node.flags = node.flags | NodeFlag.WasAsync;
 				splitReturnAwait(d.methodBody);
 				rewriteAwaits(d.methodBody);
@@ -192,12 +192,12 @@ function walkAsync(node: Node): void {
 
 // Check function expressions and arrows for async flag
 function walkCheckExpr(node: Node | null): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			walkAsync(d.funcExprBody);
-			if (d.funcExprFlags === "async" || d.funcExprFlags === "async_generator") {
+			if (d.funcExprFlags == "async" || d.funcExprFlags == "async_generator") {
 				node.flags = node.flags | NodeFlag.WasAsync;
 				splitReturnAwait(d.funcExprBody);
 				rewriteAwaits(d.funcExprBody);
@@ -206,13 +206,13 @@ function walkCheckExpr(node: Node | null): void {
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			if ((d.arrowFlags === "async" || d.arrowFlags === "async_generator")
-				&& d.arrowBody !== null && d.arrowBody.kind !== NodeKind.BlockStmt) {
+			if ((d.arrowFlags == "async" || d.arrowFlags == "async_generator")
+				&& d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt) {
 				const ret = makeReturn(d.arrowBody, node.location);
 				d.arrowBody = createNode(NodeKind.BlockStmt, { statements: [ret] }, syntheticToken(node.location));
 			}
 			walkAsync(d.arrowBody);
-			if (d.arrowFlags === "async" || d.arrowFlags === "async_generator") {
+			if (d.arrowFlags == "async" || d.arrowFlags == "async_generator") {
 				node.flags = node.flags | NodeFlag.WasAsync;
 				splitReturnAwait(d.arrowBody);
 				rewriteAwaits(d.arrowBody);
@@ -236,14 +236,14 @@ export function lowerAsync(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-async passthrough" { assert firstStmtKindAfter("function f() { return 1; }", lowerAsync) === NodeKind.FunctionDecl; }
+test "non-async passthrough" { assert firstStmtKindAfter("function f() { return 1; }", lowerAsync) == NodeKind.FunctionDecl; }
 
-test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerAsync) === 1; }
+test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerAsync) == 1; }
 
-test "async function still one stmt" { assert stmtCountAfter("async function f() { await x; }", lowerAsync) === 1; }
+test "async function still one stmt" { assert stmtCountAfter("async function f() { await x; }", lowerAsync) == 1; }
 
-test "async flag cleared" { assert firstStmtKindAfter("async function f() { await x; }", lowerAsync) === NodeKind.FunctionDecl; }
+test "async flag cleared" { assert firstStmtKindAfter("async function f() { await x; }", lowerAsync) == NodeKind.FunctionDecl; }
 
-test "async arrow unchanged count" { assert stmtCountAfter("const f = async () => await x;", lowerAsync) === 1; }
+test "async arrow unchanged count" { assert stmtCountAfter("const f = async () => await x;", lowerAsync) == 1; }
 
-test "non-async function preserved" { assert stmtCountAfter("function f() { return 1; }", lowerAsync) === 1; }
+test "non-async function preserved" { assert stmtCountAfter("function f() { return 1; }", lowerAsync) == 1; }

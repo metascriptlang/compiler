@@ -32,29 +32,29 @@ export function lowerRestParams(program: Node, ctx: TransformContext): Node {
 }
 
 function isConsoleLogCallee(callee: Node): boolean {
-	if (callee.kind !== NodeKind.MemberExpr) return false;
+	if (callee.kind != NodeKind.MemberExpr) return false;
 	const m = callee.data as MemberExprData;
-	if (m.property !== "log") return false;
-	if (m.object.kind !== NodeKind.Identifier) return false;
-	return (m.object.data as IdentifierData).name === "console";
+	if (m.property != "log") return false;
+	if (m.object.kind != NodeKind.Identifier) return false;
+	return (m.object.data as IdentifierData).name == "console";
 }
 
 function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements } as unknown as NodeData,
 		createToken(TokenKind.LBracket, "[", line));
-	if (restType !== null) arr.nodeType = restType;
+	if (restType != null) arr.nodeType = restType;
 	return arr;
 }
 
 function lowerRestNew(node: Node): Node {
 	const d = node.data as NewExprData;
-	if (d.newCallee === null || d.newCallee.resolvedSym === null) return node;
+	if (d.newCallee == null || d.newCallee.resolvedSym == null) return node;
 
 	const ctorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
-	if (ctorTypes === null || ctorTypes.length === 0) return node;
+	if (ctorTypes == null || ctorTypes.length == 0) return node;
 	const lastType = ctorTypes[ctorTypes.length - 1];
-	if (lastType === null || lastType.kind !== TypeKind.Varargs) return node;
+	if (lastType == null || lastType.kind != TypeKind.Varargs) return node;
 
 	const restIdx = ctorTypes.length - 1;
 	const restType = lastType.typeChildren.length > 0
@@ -85,12 +85,12 @@ function lowerRestNew(node: Node): Node {
 }
 
 function lowerRest(node: Node): Node {
-	if (node.kind === NodeKind.NewExpr) return lowerRestNew(node);
-	if (node.kind !== NodeKind.CallExpr) return node;
+	if (node.kind == NodeKind.NewExpr) return lowerRestNew(node);
+	if (node.kind != NodeKind.CallExpr) return node;
 
 	const d = node.data as CallExprData;
 	const callee = d.callee;
-	if (callee === null) return node;
+	if (callee == null) return node;
 	// console.log is a flat-varargs intrinsic — every backend prints its args
 	// individually (C debugLower, JS native, Raiser loop); packing breaks all three.
 	if (isConsoleLogCallee(callee)) return node;
@@ -98,22 +98,22 @@ function lowerRest(node: Node): Node {
 	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
 	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
 	// name up in the global symbol table so varargs packing still applies.
-	if (sym === null && callee.kind === NodeKind.Identifier
-		&& activeCtx !== null && activeCtx.checkerCtx !== null) {
+	if (sym == null && callee.kind == NodeKind.Identifier
+		&& activeCtx != null && activeCtx.checkerCtx != null) {
 		const id = callee.data as IdentifierData;
 		const found = lookupSymbol(activeCtx.checkerCtx.table, id.name);
-		if (found !== null) {
+		if (found != null) {
 			sym = found;
 			callee.resolvedSym = found;
 		}
 	}
-	if (sym === null) return node;
-	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return node;
+	if (sym == null) return node;
+	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
 	const typeChildren = sym.symbolType.typeChildren;
-	if (typeChildren.length === 0) return node;
+	if (typeChildren.length == 0) return node;
 	const lastType = typeChildren[typeChildren.length - 1];
-	if (lastType === null || lastType.kind !== TypeKind.Varargs) return node;
+	if (lastType == null || lastType.kind != TypeKind.Varargs) return node;
 
 	// Method calls keep `this` as typeChildren[0] but the call-site arguments
 	// don't include the receiver (it lives in callee.MemberExpr.object). Skip
@@ -121,8 +121,8 @@ function lowerRest(node: Node): Node {
 	// stays aligned. Static extension calls (`Math.floor(x)`) and free function
 	// calls keep their natural alignment.
 	const typeNames = sym.symbolType.typeNames;
-	const hasThisSlot = typeNames.length > 0 && typeNames[0] === "this"
-		&& callee.kind === NodeKind.MemberExpr;
+	const hasThisSlot = typeNames.length > 0 && typeNames[0] == "this"
+		&& callee.kind == NodeKind.MemberExpr;
 	const restIdx = (typeChildren.length - 1) - (hasThisSlot ? 1 : 0);
 
 	// Peel Varargs → user's array type (e.g. string[]) for the ArrayLiteral.

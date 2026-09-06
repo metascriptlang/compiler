@@ -30,14 +30,14 @@ function main(): void {
 	m.set("gamma", "3");
 	console.log("size=" + m.size.toString());
 	const hit = m.get("beta");
-	if (hit !== null) { console.log("get=" + hit); }
+	if (hit != null) { console.log("get=" + hit); }
 	const miss = m.get("nope");
-	if (miss === null) { console.log("miss=null"); }
+	if (miss == null) { console.log("miss=null"); }
 
 	m.set("beta", "2b");
 	console.log("sizeAfterUpdate=" + m.size.toString());
 	const upd = m.get("beta");
-	if (upd !== null) { console.log("updated=" + upd); }
+	if (upd != null) { console.log("updated=" + upd); }
 
 	console.log("hasGamma=" + (m.has("gamma") ? "y" : "n"));
 	console.log("delGamma=" + (m.delete("gamma") ? "y" : "n"));
@@ -67,9 +67,9 @@ function main(): void {
 	}
 	console.log("churnSize=" + churn.size.toString());
 	const odd = churn.get("k101");
-	if (odd !== null) { console.log("churnHit=" + odd); }
+	if (odd != null) { console.log("churnHit=" + odd); }
 	const even = churn.get("k100");
-	if (even === null) { console.log("churnMiss=null"); }
+	if (even == null) { console.log("churnMiss=null"); }
 
 	const feParts: string[] = [];
 	m.forEach((v: string, k: string) => { feParts.push(k + "=" + v); });
@@ -85,7 +85,7 @@ function main(): void {
 
 	const hl: HashMap<string, string> = { "lit": "L1" };
 	const lv = hl.get("lit");
-	if (lv !== null) { console.log("hmLiteral=" + lv); }
+	if (lv != null) { console.log("hmLiteral=" + lv); }
 }
 
 main();

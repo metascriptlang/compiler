@@ -18,7 +18,7 @@ const arrow = () => { mark("c"); };
 arrow();
 
 function finish(): void {
-	if (trace === "abc" && n === 42) { console.log("unannotated all-ok"); }
+	if (trace == "abc" && n == 42) { console.log("unannotated all-ok"); }
 	else { console.log("FAIL trace=" + trace + " n=" + n.toString()); }
 }
 finish();

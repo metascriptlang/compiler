@@ -11,7 +11,7 @@ test "Maybe<Ref<T>> collapses to Ref<T>" {
 	const inner = createStruct("FooM", ["x"], [numberType()], true);
 	const ref = createRef(inner);
 	const maybe = createMaybeType(ref);
-	assert maybe.kind === TypeKind.Ref;
+	assert maybe.kind == TypeKind.Ref;
 	assert !isMaybeType(maybe);
 }
 
@@ -19,14 +19,14 @@ test "Maybe<Ptr<T>> collapses to Ptr<T>" {
 	const inner = createStruct("BarM", ["x"], [numberType()], true);
 	const ptr = createPtr(inner);
 	const maybe = createMaybeType(ptr);
-	assert maybe.kind === TypeKind.Ptr;
+	assert maybe.kind == TypeKind.Ptr;
 	assert !isMaybeType(maybe);
 }
 
 test "Maybe<Struct> creates wrapper" {
 	const inner = createStruct("TokM", ["kind", "value"], [numberType(), stringType()], true);
 	const maybe = createMaybeType(inner);
-	assert maybe.kind === TypeKind.Struct;
+	assert maybe.kind == TypeKind.Struct;
 	assert isMaybeType(maybe);
-	assert maybe.typeNames.length === 2;
+	assert maybe.typeNames.length == 2;
 }

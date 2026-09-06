@@ -16,7 +16,7 @@ function check(name: string, ok: boolean): boolean {
 
 function roundInt(n: int64): boolean {
 	const r = decode(encode(cborInt(n)));
-	return r.ok && asNumber(r.value) === n;
+	return r.ok && asNumber(r.value) == n;
 }
 
 function main(): void {
@@ -30,39 +30,39 @@ function main(): void {
 
 	// float64 round-trip is bit-exact through the scratch slot.
 	const rPi = decode(encode(cborFloat(3.14159)));
-	ok = check("floatPi", rPi.ok && asNumber(rPi.value) === 3.14159) && ok;
+	ok = check("floatPi", rPi.ok && asNumber(rPi.value) == 3.14159) && ok;
 	const rTenth = decode(encode(cborFloat(0.1)));
-	ok = check("floatTenth", rTenth.ok && asNumber(rTenth.value) === 0.1) && ok;
+	ok = check("floatTenth", rTenth.ok && asNumber(rTenth.value) == 0.1) && ok;
 
 	// int64 accessor keeps the wide value.
 	const rWide = decode(encode(cborInt(2000000000)));
-	ok = check("int64acc", rWide.ok && asInt64(rWide.value) === 2000000000) && ok;
+	ok = check("int64acc", rWide.ok && asInt64(rWide.value) == 2000000000) && ok;
 
 	// text with a multibyte char.
 	const rTxt = decode(encode(cborText("héllo")));
-	ok = check("text", rTxt.ok && asString(rTxt.value) === "héllo") && ok;
+	ok = check("text", rTxt.ok && asString(rTxt.value) == "héllo") && ok;
 
 	// bytes payload survives the Buffer representation on both targets.
 	const rByt = decode(encode(cborBytes(Buffer.fromArray([1, 2, 255]))));
 	let bLen = -1;
 	let bLast = -1;
-	if (rByt.ok && rByt.value.kind === CborKind.Bytes) {
+	if (rByt.ok && rByt.value.kind == CborKind.Bytes) {
 		const bb = rByt.value.bytesVal;
 		bLen = bb.byteLength() as int32;
 		bLast = bb.byteAt(2);
 	}
-	ok = check("bytes", bLen === 3 && bLast === 255) && ok;
+	ok = check("bytes", bLen == 3 && bLast == 255) && ok;
 
 	// heterogeneous array.
 	const rArr = decode(encode(cborArray([cborInt(1), cborText("a"), cborBool(true)])));
-	ok = check("array", rArr.ok && length(rArr.value) === 3 &&
-		asNumber(at(rArr.value, 0)) === 1 && asString(at(rArr.value, 1)) === "a") && ok;
-	ok = check("bool", rArr.ok && asBoolean(at(rArr.value, 2)) === true) && ok;
+	ok = check("array", rArr.ok && length(rArr.value) == 3 &&
+		asNumber(at(rArr.value, 0)) == 1 && asString(at(rArr.value, 1)) == "a") && ok;
+	ok = check("bool", rArr.ok && asBoolean(at(rArr.value, 2)) == true) && ok;
 
 	// text-keyed map.
 	const rMap = decode(encode(cborTextMap(["x", "y"], [cborInt(10), cborInt(20)])));
-	ok = check("map", rMap.ok && length(rMap.value) === 2 &&
-		asNumber(getDynamicField(rMap.value, "y")) === 20) && ok;
+	ok = check("map", rMap.ok && length(rMap.value) == 2 &&
+		asNumber(getDynamicField(rMap.value, "y")) == 20) && ok;
 
 	// null survives the round-trip.
 	const rNull = decode(encode(cborNull()));

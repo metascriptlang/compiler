@@ -17,7 +17,7 @@ import { ExprStmtData } from "../../ast/node";
 // ===== Visitor =====
 
 function lowerMoveNode(node: Node): Node {
-	if (node.kind !== NodeKind.MoveExpr) return node;
+	if (node.kind != NodeKind.MoveExpr) return node;
 	const d = node.data as MoveExprData;
 	// Unwrap: `move x` → `x`
 	return d.moveArg;
@@ -30,10 +30,10 @@ export function lowerMoveExpr(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "move x becomes Identifier" { assert firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier; }
+test "move x becomes Identifier" { assert firstExprKindAfter("move x;", lowerMoveExpr) == NodeKind.Identifier; }
 
-test "move f() becomes CallExpr" { assert firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr; }
+test "move f() becomes CallExpr" { assert firstExprKindAfter("move f();", lowerMoveExpr) == NodeKind.CallExpr; }
 
-test "non-move unchanged" { assert firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier; }
+test "non-move unchanged" { assert firstExprKindAfter("x;", lowerMoveExpr) == NodeKind.Identifier; }
 
-test "stmt count preserved" { assert stmtCountAfter("move a; move b;", lowerMoveExpr) === 2; }
+test "stmt count preserved" { assert stmtCountAfter("move a; move b;", lowerMoveExpr) == 2; }

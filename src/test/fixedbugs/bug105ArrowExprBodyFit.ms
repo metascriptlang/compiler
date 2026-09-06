@@ -40,40 +40,40 @@ function inner105(): int32 {
 test "expr-body arrow into a nullable-returning fn field wraps the Maybe" {
 	const o: Ops105 = { g: (x: int32) => x };
 	const r = o.g(5);
-	assert r !== null;
-	assert r! === 5;
+	assert r != null;
+	assert r! == 5;
 }
 
 test "annotated expr-body arrow wraps the Maybe" {
 	const o: Ops105 = { g: (x: int32): int32 | null => x };
 	const r = o.g(6);
-	assert r !== null;
-	assert r! === 6;
+	assert r != null;
+	assert r! == 6;
 }
 
 test "typed-const expr-body arrow wraps the Maybe" {
 	const f: NullFn105 = (x: int32) => x;
 	const r = f(4);
-	assert r !== null;
-	assert r! === 4;
+	assert r != null;
+	assert r! == 4;
 }
 
 test "expr-body null literal retypes to the Maybe carrier" {
 	const o: Ops105 = { g: (x: int32) => null };
-	assert o.g(1) === null;
+	assert o.g(1) == null;
 }
 
 test "string payload expr-body arrow wraps the Maybe" {
 	const o: StrOps105 = { s: (x: string) => x };
 	const r = o.s("hi");
-	assert r !== null;
-	assert r! === "hi";
+	assert r != null;
+	assert r! == "hi";
 }
 
 test "named function expr-body auto-wraps into a closure" {
 	const o: Holder105 = { h: () => inner105 };
 	const f = o.h();
-	assert f() === 7;
+	assert f() == 7;
 }
 
 function use105(cb: (x: int32) => int32 | null): int32 | null {
@@ -82,19 +82,19 @@ function use105(cb: (x: int32) => int32 | null): int32 | null {
 
 test "ternary expr-body arrow wraps the Maybe" {
 	const o: Ops105 = { g: (x: int32) => (x > 2 ? x : null) };
-	assert o.g(5) !== null;
-	assert o.g(1) === null;
+	assert o.g(5) != null;
+	assert o.g(1) == null;
 }
 
 test "call-arg expr-body arrow wraps the Maybe" {
 	const r = use105((x: int32) => x);
-	assert r !== null;
-	assert r! === 3;
+	assert r != null;
+	assert r! == 3;
 }
 
 test "block-body arrow neighbour stays green" {
 	const o: Ops105 = { g: (x: int32) => { return x; } };
 	const r = o.g(2);
-	assert r !== null;
-	assert r! === 2;
+	assert r != null;
+	assert r! == 2;
 }

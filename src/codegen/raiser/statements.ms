@@ -29,7 +29,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 	match (node.kind) {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument !== null) {
+			if (d.argument != null) {
 				const reg = compileExpr(s, d.argument);
 				emitRet(s, reg);
 			} else {
@@ -73,7 +73,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.ImportDecl => { compileImportDecl(s, node); },
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			if (d.exportedDecl.kind === NodeKind.ExprStmt) {
+			if (d.exportedDecl.kind == NodeKind.ExprStmt) {
 				const ed = d.exportedDecl.data as ExprStmtData;
 				const reg = compileExpr(s, ed.expr);
 				emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
@@ -115,10 +115,10 @@ function compileBlock(s: RaiserCompState, node: Node): void {
 
 function compileVariableDecl(s: RaiserCompState, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.initializer !== null) {
+	if (d.initializer != null) {
 		// Check if initializer is a function reference (e.g., from non-capturing lambda lifting)
 		// Wrap in closure pair { fn: funcIdx, env: nil } so it can be passed around and called uniformly
-		if (d.initializer.kind === NodeKind.Identifier) {
+		if (d.initializer.kind == NodeKind.Identifier) {
 			const initId = d.initializer.data as IdentifierData;
 			const fIdx = resolveFunc(s, initId.name);
 			if (fIdx >= 0) {
@@ -152,7 +152,7 @@ function compileIfStmt(s: RaiserCompState, node: Node): void {
 
 	compileStmt(s, d.consequent);
 
-	if (d.alternate !== null) {
+	if (d.alternate != null) {
 		const jumpPastElse = emitJumpPlaceholder(s);
 		patchJumpTo(s, jumpToElse, codeLen(s));
 		compileStmt(s, d.alternate);
@@ -213,7 +213,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as ForStmtData;
 
 	// Compile init
-	if (d.forInit !== null) {
+	if (d.forInit != null) {
 		compileStmt(s, d.forInit);
 	}
 
@@ -222,7 +222,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 
 	// Condition
 	let exitJump = -1;
-	if (d.forCondition !== null) {
+	if (d.forCondition != null) {
 		const condReg = compileExpr(s, d.forCondition);
 		exitJump = emitBranchIfFalsy(s, condReg);
 	}
@@ -233,7 +233,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	patchLoopContinues(s);
 
 	// Update
-	if (d.forUpdate !== null) {
+	if (d.forUpdate != null) {
 		compileExpr(s, d.forUpdate);
 	}
 
@@ -346,8 +346,8 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocReg(s);
-		if (d.catchName !== "") declareLocal(s, d.catchName, catchReg);
-		if (d.catchBody !== null) compileStmt(s, d.catchBody);
+		if (d.catchName != "") declareLocal(s, d.catchName, catchReg);
+		if (d.catchBody != null) compileStmt(s, d.catchBody);
 		catchEnd = emitJumpPlaceholder(s);
 	}
 
@@ -361,7 +361,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
 	}
 	patchJumpTo(s, toFinally, finIdx);
-	if (d.finallyBody !== null) compileStmt(s, d.finallyBody);
+	if (d.finallyBody != null) compileStmt(s, d.finallyBody);
 	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0));
 }
 
@@ -385,7 +385,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 		const cd = d.switchCases[ci].data as SwitchCaseData;
 		if (cd.isDefault) continue;
 
-		if (cd.caseTests.length === 1) {
+		if (cd.caseTests.length == 1) {
 			// Single test (common case — fast path)
 			const testReg = compileExpr(s, cd.caseTests[0]);
 			emitInst(s, raiserABC(RaiserOpcode.BeqI64, discReg, testReg, 1));

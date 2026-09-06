@@ -49,7 +49,7 @@ function main(): void {
     for (let n = 0; n < 300; n = n + 1) {
         const w = new Churner();
         const r = await w.run();
-        if (r !== 192) { exit(1); }
+        if (r != 192) { exit(1); }
         acc = (acc + r) % 100000;
         stop(w.pid, ExitReason.Normal);
     }

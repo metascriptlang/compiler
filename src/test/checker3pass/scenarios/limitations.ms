@@ -42,7 +42,7 @@ test "limitation: closure-first generic call — global invariant still holds (n
 	//   (a) checker errors (legitimate "can't infer T")
 	//   (b) clean check + arrow param resolves to a non-GenericParam type
 	// What we REJECT: silent corruption (no errors but GenericParam leaked).
-	if (result.errors.length === 0) {
+	if (result.errors.length == 0) {
 		const violations = checkNoGenericParamLeakage(result.program);
 		if (violations.length > 0) {
 			assert false, "limitation: silent corruption detected — checker emitted no errors but GenericParam leaked:\n" + formatViolations(violations);

@@ -38,8 +38,8 @@ function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.declKind === DeclKind.Var) {
-				if (d.initializer !== null && d.initializer.kind !== NodeKind.NullLiteral) {
+			if (d.declKind == DeclKind.Var) {
+				if (d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
 					stmts[idx] = makeExprStmt(makeAssign(makeIdent(d.declName, loc), d.initializer, loc), loc);
 				} else {
 					stmts[idx] = makeBlock([], loc);
@@ -83,7 +83,7 @@ function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void
 }
 
 function convertVarInBody(body: Node, loc: SourceLocation): void {
-	if (body.kind === NodeKind.BlockStmt) {
+	if (body.kind == NodeKind.BlockStmt) {
 		const d = body.data as BlockStmtData;
 		convertVarsInStmts(d.statements, loc);
 	}
@@ -95,9 +95,9 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 	const ns: NameSet = createNameSet();
 	collectDeclNames(body, ns, true);
 
-	if (ns.items.length === 0) return;
+	if (ns.items.length == 0) return;
 
-	if (body.kind !== NodeKind.BlockStmt) return;
+	if (body.kind != NodeKind.BlockStmt) return;
 	const bd = body.data as BlockStmtData;
 
 	convertVarsInStmts(bd.statements, loc);
@@ -176,7 +176,7 @@ function walkVarHoist(node: Node): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer !== null) walkVarHoist(d.initializer);
+			if (d.initializer != null) walkVarHoist(d.initializer);
 		},
 		_ => {},
 	};
@@ -190,26 +190,26 @@ export function lowerVarHoist(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "const unchanged" { assert stmtCountAfter("const x = 1;", lowerVarHoist) === 1; }
+test "const unchanged" { assert stmtCountAfter("const x = 1;", lowerVarHoist) == 1; }
 
-test "let unchanged" { assert stmtCountAfter("let x = 1;", lowerVarHoist) === 1; }
+test "let unchanged" { assert stmtCountAfter("let x = 1;", lowerVarHoist) == 1; }
 
-test "module var stays" { assert firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl; }
+test "module var stays" { assert firstStmtKindAfter("var x = 1;", lowerVarHoist) == NodeKind.VariableDecl; }
 
-test "function with var" { assert stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1; }
+test "function with var" { assert stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) == 1; }
 
-test "function with var is FunctionDecl" { assert firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl; }
+test "function with var is FunctionDecl" { assert firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) == NodeKind.FunctionDecl; }
 
-test "no var passthrough" { assert stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1; }
+test "no var passthrough" { assert stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) == 1; }
 
-test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2; }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) == 2; }
 
 test "var hoisted adds let at top" {
 	// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
-	assert fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2;
+	assert fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) == 2;
 }
 
 test "nested fn var not hoisted to outer" {
 	// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
-	assert fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1;
+	assert fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) == 1;
 }

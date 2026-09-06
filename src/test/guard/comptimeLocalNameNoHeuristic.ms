@@ -27,7 +27,7 @@ macro nameProbe(tag: Node): Node {
 
 function main(): void {
 	const got = nameProbe(0);
-	console.log(got === "plain:n:e:t" ? "names:ok" : "names:RED " + got);
+	console.log(got == "plain:n:e:t" ? "names:ok" : "names:RED " + got);
 	console.log("comptimeLocalNameNoHeuristic ok");
 }
 

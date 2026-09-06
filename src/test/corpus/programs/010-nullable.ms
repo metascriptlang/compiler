@@ -22,17 +22,17 @@ function main(): void {
 	// value-type nullable — narrow then use
 	const a = pickNum(42, true);
 	const b = pickNum(7, false);
-	if (a !== null) { console.log("a=" + a); } else { console.log("a absent"); }
-	if (b !== null) { console.log("b=" + b); } else { console.log("b absent"); }
+	if (a != null) { console.log("a=" + a); } else { console.log("a absent"); }
+	if (b != null) { console.log("b=" + b); } else { console.log("b absent"); }
 
 	// reference-type nullable — field access after narrow
 	const p = pickBox(true);
 	const q = pickBox(false);
-	if (p !== null) { console.log("p.label=" + p.label); } else { console.log("p absent"); }
-	if (q !== null) { console.log("q.label=" + q.label); } else { console.log("q absent"); }
+	if (p != null) { console.log("p.label=" + p.label); } else { console.log("p absent"); }
+	if (q != null) { console.log("q.label=" + q.label); } else { console.log("q absent"); }
 
 	// nullable in boolean / ternary context
-	console.log(a !== null ? "a truthy" : "a falsy");
-	console.log(b !== null ? "b truthy" : "b falsy");
+	console.log(a != null ? "a truthy" : "a falsy");
+	console.log(b != null ? "b truthy" : "b falsy");
 }
 main();

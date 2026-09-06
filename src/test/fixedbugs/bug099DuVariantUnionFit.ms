@@ -18,7 +18,7 @@ interface B99Square { kind: "square"; s: float64; }
 type B99Shape = B99Circle | B99Square;
 
 function b99take(sh: B99Shape): float64 {
-	if (sh.kind === "circle") {
+	if (sh.kind == "circle") {
 		return sh.r;
 	}
 	return sh.s;
@@ -44,42 +44,42 @@ function b99res(which: boolean): Result<B99Shape, string> {
 test "bug099: variant widens at var init" {
 	const c: B99Circle = { kind: "circle", r: 3.0 };
 	const a: B99Shape = c;
-	assert a.kind === "circle";
-	assert b99take(a) === 3.0;
+	assert a.kind == "circle";
+	assert b99take(a) == 3.0;
 }
 
 test "bug099: variant widens at reassignment" {
 	const c: B99Circle = { kind: "circle", r: 5.0 };
 	let b: B99Shape = { kind: "square", s: 2.0 };
-	assert b.kind === "square";
+	assert b.kind == "square";
 	b = c;
-	assert b.kind === "circle";
-	assert b99take(b) === 5.0;
+	assert b.kind == "circle";
+	assert b99take(b) == 5.0;
 }
 
 test "bug099: variant widens at a plain call argument" {
 	const c: B99Circle = { kind: "circle", r: 6.0 };
-	assert b99take(c) === 6.0;
+	assert b99take(c) == 6.0;
 }
 
 test "bug099: variant widens on return" {
 	const s = b99pick(true);
-	assert s.kind === "circle";
+	assert s.kind == "circle";
 	const q = b99pick(false);
-	assert q.kind === "square";
+	assert q.kind == "square";
 }
 
 test "bug099: variant widens through Result.ok generic inference" {
 	const r = b99res(true);
 	assert r.ok;
 	if (r.ok) {
-		assert r.value.kind === "circle";
+		assert r.value.kind == "circle";
 	}
 }
 
 test "bug099: source stays readable after a copying widen" {
 	const c: B99Circle = { kind: "circle", r: 9.0 };
 	const s: B99Shape = c;
-	assert c.r === 9.0;
-	assert b99take(s) === 9.0;
+	assert c.r == 9.0;
+	assert b99take(s) == 9.0;
 }

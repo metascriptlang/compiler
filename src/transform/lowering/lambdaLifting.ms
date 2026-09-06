@@ -134,7 +134,7 @@ function registerVarTypeResolved(state: LiftState, name: string, typeStr: string
 function lookupVarResolvedType(state: LiftState, name: string): Type {
 	let i = state.varTypes.length - 1;
 	while (i >= 0) {
-		if (state.varTypes[i].name === name && state.varTypes[i].resolvedType !== null) return state.varTypes[i].resolvedType;
+		if (state.varTypes[i].name == name && state.varTypes[i].resolvedType != null) return state.varTypes[i].resolvedType;
 		i -= 1;
 	}
 	return null as unknown as Type;
@@ -143,7 +143,7 @@ function lookupVarResolvedType(state: LiftState, name: string): Type {
 function lookupVarType(state: LiftState, name: string): string {
 	let i = state.varTypes.length - 1;
 	while (i >= 0) {
-		if (state.varTypes[i].name === name) return state.varTypes[i].typeStr;
+		if (state.varTypes[i].name == name) return state.varTypes[i].typeStr;
 		i -= 1;
 	}
 	return "unknown";
@@ -153,8 +153,8 @@ function lookupVarType(state: LiftState, name: string): string {
 // Reference parity: the reference reuses original proc symbol (types already set). We create new node
 // via makeFnDecl (string-based), then fix types from the original's concrete type.
 function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
-	if (originalNodeType === null || fnNode.nodeType === null || fnNode.nodeType.typeChildren === null) return;
-	if (originalNodeType.typeChildren !== null) {
+	if (originalNodeType == null || fnNode.nodeType == null || fnNode.nodeType.typeChildren == null) return;
+	if (originalNodeType.typeChildren != null) {
 		const origCount = originalNodeType.typeChildren.length;
 		for (let pi = 0; pi < origCount; pi += 1) {
 			if (pi < fnNode.nodeType.typeChildren.length
@@ -163,7 +163,7 @@ function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
 			}
 		}
 	}
-	if (originalNodeType.typeReturn !== null
+	if (originalNodeType.typeReturn != null
 		&& !isUnresolvedType(originalNodeType.typeReturn)) {
 		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
 	}
@@ -172,7 +172,7 @@ function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
 // Derive type string from resolved nodeType (Reference parity: use resolved symbol types for field typing)
 // Used when string annotation is empty but checker has resolved the type.
 function typeToEnvStr(t: Type | null): string {
-	if (t === null) return "";
+	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "number",
 		TypeKind.String => "string",
@@ -189,20 +189,20 @@ function typeToEnvStr(t: Type | null): string {
 		TypeKind.Float32 => "float32",
 		TypeKind.Function => "msClosure",
 		TypeKind.Struct | TypeKind.Enum => {
-			if (t.typeName !== null && t.typeName !== "") {
+			if (t.typeName != null && t.typeName != "") {
 				const name = t.typeName;
 				return name;
 			}
 			return "";
 		},
 		TypeKind.Ref | TypeKind.Ptr => {
-			if (t.typeReturn !== null) return typeToEnvStr(t.typeReturn);
+			if (t.typeReturn != null) return typeToEnvStr(t.typeReturn);
 			return "";
 		},
 		TypeKind.Array => {
-			if (t.typeReturn !== null) {
+			if (t.typeReturn != null) {
 				const elem = typeToEnvStr(t.typeReturn);
-				if (elem !== "") { return elem + "[]"; } else { return "unknown[]"; }
+				if (elem != "") { return elem + "[]"; } else { return "unknown[]"; }
 			} else { return "unknown[]"; }
 		},
 		TypeKind.GenericInstance => t.typeName,
@@ -215,8 +215,8 @@ function typeToEnvStr(t: Type | null): string {
 // Mirrors ccgIntroducedPtr in codegen/types.ms — kept in sync manually
 // (transform must not import codegen to avoid circular dependency).
 function isCcgPtrType(t: Type): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.Array || t.kind === TypeKind.Union || t.kind === TypeKind.Span;
+	if (t == null) return false;
+	return t.kind == TypeKind.Array || t.kind == TypeKind.Union || t.kind == TypeKind.Span;
 }
 // Note: ccgIntroducedPtr also promotes GenericInstance and large Tuples.
 // Those are rare as captured params — add here if needed.
@@ -266,12 +266,12 @@ function inEnclosingFnBody(state: LiftState): boolean {
 }
 
 function hasEnclosingFnEnv(state: LiftState): boolean {
-	return state.sharedEnvName !== "";
+	return state.sharedEnvName != "";
 }
 
 function currentEnvAccessName(state: LiftState): string {
 	if (state.sharedEnvActive) return state.sharedEnvVarName;
-	if (state.sharedEnvName !== "") return ENV_PARAM_NAME;
+	if (state.sharedEnvName != "") return ENV_PARAM_NAME;
 	return "";
 }
 
@@ -280,10 +280,10 @@ function currentEnvAccessName(state: LiftState): string {
 // Used to determine if a capture can be moved instead of copied.
 
 function nodeRefsName(node: Node, varName: string): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		return d.name === varName;
+		return d.name == varName;
 	}
 	if (isFuncBoundary(node)) return false;
 	let found = false;
@@ -347,32 +347,32 @@ function computeLastUseCapturesForState(captures: NameSet, state: LiftState): vo
 // Pre-register VarDecl types from a function body so setupSharedEnv can resolve env field types.
 // Without this, captured vars from async transforms lack nodeType → env fields become void*.
 function preRegisterVarTypes(body: Node, state: LiftState): void {
-	if (body === null) return;
-	if (body.kind === NodeKind.VariableDecl) {
+	if (body == null) return;
+	if (body.kind == NodeKind.VariableDecl) {
 		const d = body.data as VariableDeclData;
-		if (d.declType !== "") {
+		if (d.declType != "") {
 			registerVarType(state, d.declName, d.declType);
-		} else if (body.nodeType !== null) {
+		} else if (body.nodeType != null) {
 			const derived = typeToEnvStr(body.nodeType);
-			if (derived !== "") {
+			if (derived != "") {
 				registerVarTypeResolved(state, d.declName, derived, body.nodeType);
 			}
 		}
 		return;
 	}
-	if (body.kind === NodeKind.FunctionDecl || body.kind === NodeKind.ArrowFunction || body.kind === NodeKind.FunctionExpr) return;
-	if (body.kind === NodeKind.BlockStmt) {
+	if (body.kind == NodeKind.FunctionDecl || body.kind == NodeKind.ArrowFunction || body.kind == NodeKind.FunctionExpr) return;
+	if (body.kind == NodeKind.BlockStmt) {
 		const d = body.data as BlockStmtData;
 		for (const s of d.statements) preRegisterVarTypes(s, state);
 		return;
 	}
-	if (body.kind === NodeKind.IfStmt) {
+	if (body.kind == NodeKind.IfStmt) {
 		const d = body.data as IfStmtData;
 		preRegisterVarTypes(d.consequent, state);
 		preRegisterVarTypes(d.alternate, state);
 		return;
 	}
-	if (body.kind === NodeKind.WhileStmt) {
+	if (body.kind == NodeKind.WhileStmt) {
 		preRegisterVarTypes((body.data as WhileStmtData).whileBody, state);
 		return;
 	}
@@ -401,20 +401,20 @@ function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet
 }
 
 function collectCaptures(node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (!isBuiltinName(d.name) && !isLocalVar(_captureSS, d.name) && isOuterVar(_captureSS, d.name)) {
 			// Reference parity (interestingVar): skip types — not runtime values.
-			if (node.resolvedSym !== null) {
+			if (node.resolvedSym != null) {
 				const sk = node.resolvedSym.symbolKind;
-				if (sk === SymbolKind.Class || sk === SymbolKind.Interface
-					|| sk === SymbolKind.TypeAlias || sk === SymbolKind.Enum) {
+				if (sk == SymbolKind.Class || sk == SymbolKind.Interface
+					|| sk == SymbolKind.TypeAlias || sk == SymbolKind.Enum) {
 					return;
 				}
 			}
 			const sym = node.resolvedSym;
-			const isModLevel = (sym !== null && (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter))
+			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter))
 				? hasFlag(sym, SymbolFlag.Global)
 				: isModuleLevelVar(_captureSS, d.name);
 			if (!isModLevel) {
@@ -427,7 +427,7 @@ function collectCaptures(node: Node): void {
 		return;
 	}
 	if (isFuncBoundary(node)) return;
-	if (node.kind === NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		collectCaptures(d.initializer);
 		defineVar(_captureSS, d.declName);
@@ -442,17 +442,17 @@ function collectCaptures(node: Node): void {
 
 // Check if an env struct field is a Ptr type (pointer-promoted param or grandparent capture).
 function isEnvPtrField(envStructType: Type, fieldName: string): boolean {
-	if (envStructType === null || envStructType.typeNames === null) return false;
+	if (envStructType == null || envStructType.typeNames == null) return false;
 	let i = 0;
 	while (i < envStructType.typeNames.length) {
-		if (envStructType.typeNames[i] === fieldName) {
+		if (envStructType.typeNames[i] == fieldName) {
 			if (i >= envStructType.typeChildren.length) return false;
 			const ft = envStructType.typeChildren[i];
-			if (ft === null || ft.kind !== TypeKind.Ptr) return false;
+			if (ft == null || ft.kind != TypeKind.Ptr) return false;
 			// Only match ccgIntroducedPtr captures (Array, Union, Span stored as Ptr<T>).
 			// Regular Ptr-typed variables (void*, msAwaitGroup*, etc.) should NOT get extra deref.
 			const inner = ft.typeReturn;
-			return inner !== null && (inner.kind === TypeKind.Array || inner.kind === TypeKind.Union || inner.kind === TypeKind.Span);
+			return inner != null && (inner.kind == TypeKind.Array || inner.kind == TypeKind.Union || inner.kind == TypeKind.Span);
 		}
 		i += 1;
 	}
@@ -463,10 +463,10 @@ function isEnvPtrField(envStructType: Type, fieldName: string): boolean {
 // chain walk to decide whether a capture lives in the current env or further
 // up the `$up` chain.
 function envHasField(envStructType: Type, fieldName: string): boolean {
-	if (envStructType === null || envStructType.typeNames === null) return false;
+	if (envStructType == null || envStructType.typeNames == null) return false;
 	let i = 0;
 	while (i < envStructType.typeNames.length) {
-		if (envStructType.typeNames[i] === fieldName) return true;
+		if (envStructType.typeNames[i] == fieldName) return true;
 		i += 1;
 	}
 	return false;
@@ -477,9 +477,9 @@ function envHasField(envStructType: Type, fieldName: string): boolean {
 // which may itself be untyped (e.g. destructuring/async-synthesized captures). Leaving
 // the lifted member untyped makes the DRC save-temp fall back to C `double`.
 function envFieldType(envStructType: Type, fieldName: string): Type {
-	if (envStructType === null || envStructType.typeNames === null || envStructType.typeChildren === null) return null as unknown as Type;
+	if (envStructType == null || envStructType.typeNames == null || envStructType.typeChildren == null) return null as unknown as Type;
 	for (let i = 0; i < envStructType.typeNames.length; i += 1) {
-		if (envStructType.typeNames[i] === fieldName && i < envStructType.typeChildren.length) {
+		if (envStructType.typeNames[i] == fieldName && i < envStructType.typeChildren.length) {
 			return envStructType.typeChildren[i];
 		}
 	}
@@ -516,12 +516,12 @@ function chainWalkFrom(access0: Node, curType0: Type, fieldName: string, chainNa
 	}
 	let result = makeMember(access, fieldName, loc);
 	const declaredFt = envFieldType(curType, fieldName);
-	result.nodeType = declaredFt !== null ? declaredFt : nodeOriginalType;
+	result.nodeType = declaredFt != null ? declaredFt : nodeOriginalType;
 	// If the storing env keeps this field as a ccgIntroducedPtr (Array/Union/
 	// Span as `Ptr<T>`), one extra deref recovers T.
 	if (isEnvPtrField(curType, fieldName)) {
 		result = makeHiddenDeref(result, loc);
-		result.nodeType = declaredFt !== null ? declaredFt : nodeOriginalType;
+		result.nodeType = declaredFt != null ? declaredFt : nodeOriginalType;
 	}
 	return result;
 }
@@ -555,8 +555,8 @@ function rewriteNode(
 	envTypeName: string, envStructType: Type,
 	chainNames: string[], chainTypes: Type[],
 ): Node | null {
-	if (node === null) return null;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (nameSetContains(captures, d.name)) {
 			// If the captured name is NOT a field of the current env, walk the
@@ -576,11 +576,11 @@ function rewriteNode(
 			const deref = makeHiddenDeref(cast, node.location);
 			let result = makeMember(deref, d.name, node.location);
 			const declaredFt = envFieldType(envStructType, d.name);
-			result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
+			result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
 			// Ptr field (pointer-promoted param capture): extra deref to get T from T*
 			if (isEnvPtrField(envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
+				result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
 			}
 			return result;
 		}
@@ -589,7 +589,7 @@ function rewriteNode(
 	if (isFuncBoundary(node)) return node;
 	mapChildren(node, (child: Node): Node => {
 		const rewritten = rewriteNode(child, captures, envTypeName, envStructType, chainNames, chainTypes);
-		return rewritten === null ? child : rewritten;
+		return rewritten == null ? child : rewritten;
 	});
 	return node;
 }
@@ -600,28 +600,28 @@ function rewriteNode(
 // This ensures mutations inside closures are visible to the outer function and vice versa.
 
 function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
-	if (node === null) return null;
-	if (rewrite.redirectFrom !== "" && node.kind === NodeKind.MemberExpr) {
+	if (node == null) return null;
+	if (rewrite.redirectFrom != "" && node.kind == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
 		const obj = md.object;
-		if (obj !== null && obj.kind === NodeKind.Identifier && nameSetContains(rewrite.capturedNames, md.property)) {
+		if (obj != null && obj.kind == NodeKind.Identifier && nameSetContains(rewrite.capturedNames, md.property)) {
 			const od = obj.data as IdentifierData;
-			if (od.name === rewrite.redirectFrom) {
+			if (od.name == rewrite.redirectFrom) {
 				const envIdent = makeIdent(rewrite.envVarName, node.location);
 				envIdent.nodeType = createRef(rewrite.envStructType);
 				const redirected = makeMember(envIdent, md.property, node.location);
 				const ft = envFieldType(rewrite.envStructType, md.property);
-				redirected.nodeType = ft !== null ? ft : node.nodeType;
+				redirected.nodeType = ft != null ? ft : node.nodeType;
 				return redirected;
 			}
 		}
 	}
-	if (node.kind === NodeKind.Identifier) {
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		// Skip function captures — module-level functions are always accessible in C,
 		// only local variables need outer-ref rewriting through the env.
-		const isFnCapture = node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Function;
-		if (!isFnCapture && nameSetContains(rewrite.capturedNames, d.name) && rewrite.envVarName !== "") {
+		const isFnCapture = node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
+		if (!isFnCapture && nameSetContains(rewrite.capturedNames, d.name) && rewrite.envVarName != "") {
 			// Ancestor capture skipped from this env: walk `$up` from the named
 			// env var to the ancestor env that stores it (Nim accessViaEnvParam).
 			// Without this, an ancestor ref at THIS scope emits `_envN->field` for
@@ -639,11 +639,11 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 			envIdent.nodeType = createRef(rewrite.envStructType);
 			let result = makeMember(envIdent, d.name, node.location);
 			const declaredFt = envFieldType(rewrite.envStructType, d.name);
-			result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
+			result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
 			// Ptr field (ccgIntroducedPtr capture): extra deref to get T from T*
 			if (isEnvPtrField(rewrite.envStructType, d.name)) {
 				result = makeHiddenDeref(result, node.location);
-				result.nodeType = declaredFt !== null ? declaredFt : node.nodeType;
+				result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
 			}
 			return result;
 		}
@@ -651,10 +651,10 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	}
 	// Don't enter nested function bodies or already-lifted closure pairs
 	if (isFuncBoundary(node)) return node;
-	if ((node.flags & NodeFlag.Closure) !== 0) return node;
+	if ((node.flags & NodeFlag.Closure) != 0) return node;
 	mapChildren(node, (child: Node): Node => {
 		const rewritten = rewriteOuterRef(child, rewrite);
-		return rewritten === null ? child : rewritten;
+		return rewritten == null ? child : rewritten;
 	});
 	return node;
 }
@@ -695,14 +695,14 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// would later read whatever the LAST iteration wrote, not its own. Fix: when
 	// inside a loop, allocate a per-closure env (snapshot of captures at creation
 	// site). Outside loops, shared env is safe and faster.
-	const useShared = state.sharedEnvActive && state.insideLoop === 0;
+	const useShared = state.sharedEnvActive && state.insideLoop == 0;
 
 	if (useShared) {
 		// Shared env path (reference parity: ownerToType — all closures share one env)
 		envName = state.sharedEnvName;
 		envVarName = state.sharedEnvVarName;
 		envStructType = state.sharedEnvStructType;
-	} else if (preEnv !== null) {
+	} else if (preEnv != null) {
 		// Loop-site closure: the snapshot pair env was created pre-walk (so
 		// `setupSharedEnv` could wire `$up` against its real type). Reuse it.
 		envName = preEnv.envName;
@@ -728,20 +728,20 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 			// this env. They live in the parent env and are reached via the
 			// `$up` chain walk in `rewriteNode`.
 			const orig = findCapturedIdent(name, state.capturedIdents);
-			const isCcgCapture = orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
+			const isCcgCapture = orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
 			const isGrandparent = !isCcgCapture
 				&& !isDirectParentVar(state.ss, name)
 				&& !isModuleLevelVar(state.ss, name);
 			if (isGrandparent) continue;  // reached via chain walk
 			envFields.push(name);
 			envFieldTypes.push(lookupVarType(state, name));
-			if (orig !== null && orig.nodeType !== null) {
+			if (orig != null && orig.nodeType != null) {
 				let resolvedType = orig.nodeType;
 				if (isCcgPtrType(resolvedType)) { resolvedType = createPtr(resolvedType); }
 				envResolvedTypes.push(resolvedType);
 			} else {
 				const resolvedFallback = lookupVarResolvedType(state, name);
-				if (resolvedFallback !== null) { envResolvedTypes.push(resolvedFallback); }
+				if (resolvedFallback != null) { envResolvedTypes.push(resolvedFallback); }
 				else { envResolvedTypes.push(resolveSimpleTypeStr(lookupVarType(state, name))); }
 			}
 		}
@@ -768,9 +768,9 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
 	}
 	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType, rwChainNames, rwChainTypes);
-	if (rewrittenBody === null) {
+	if (rewrittenBody == null) {
 		rewrittenBody = makeBlock([], loc);
-	} else if (rewrittenBody.kind !== NodeKind.BlockStmt) {
+	} else if (rewrittenBody.kind != NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
 	}
 
@@ -804,12 +804,12 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		// closure body).
 		const parentEnvVarName = currentEnvAccessName(state);
 		const parentEnvStructType = hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type);
-		const initCaptures = preEnv !== null ? preEnv.fields : captures;
-		const initIdents = preEnv !== null ? preEnv.fieldIdents : state.capturedIdents;
+		const initCaptures = preEnv != null ? preEnv.fields : captures;
+		const initIdents = preEnv != null ? preEnv.fieldIdents : state.capturedIdents;
 		const loopLocals = state.sharedEnvActive ? loopLocalSubset(initCaptures, state) : createNameSet();
 		const ownsIteration = loopLocals.items.length > 0;
 		const snapshotOnly = state.sharedEnvActive && !ownsIteration;
-		const envPair = makeEnvVarAndClosurePair(envVarName, liftedName, envStructType, initCaptures, state.lastUseCaptures, initIdents, state.currentParams, state.ss, parentEnvVarName, parentEnvStructType, loc, preEnv !== null);
+		const envPair = makeEnvVarAndClosurePair(envVarName, liftedName, envStructType, initCaptures, state.lastUseCaptures, initIdents, state.currentParams, state.ss, parentEnvVarName, parentEnvStructType, loc, preEnv != null);
 		state.hoistedEnvDecls.push(envPair.envDeclHoisted);
 		state.pendingEnvRewrites.push({
 			envVarName, envStructType,
@@ -846,7 +846,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	state.closureCounter += 1;
 	const liftedName = `$fn_${state.currentFnName}_${state.closureCounter}`;
 	let liftedBody = body;
-	if (liftedBody.kind !== NodeKind.BlockStmt) {
+	if (liftedBody.kind != NodeKind.BlockStmt) {
 		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
 	}
 	const fnNode = makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc);
@@ -860,7 +860,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	// types) for `((RetType(*)(Params))fn)(args)`. Without this, the cast
 	// defaults to `void(*)(void)` and IIFE fails to compile.
 	const fnIdent = makeIdent(liftedName, loc);
-	if (originalNodeType !== null && originalNodeType.kind === TypeKind.Function) {
+	if (originalNodeType != null && originalNodeType.kind == TypeKind.Function) {
 		fnIdent.nodeType = originalNodeType;
 	}
 	return wrapFnAsClosure(fnIdent, loc);
@@ -871,7 +871,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
 	for (const n of capturedIdents) {
 		const d = n.data as IdentifierData;
-		if (d.name === name) return n;
+		if (d.name == name) return n;
 	}
 	return null as unknown as Node;
 }
@@ -900,7 +900,7 @@ function makeEnvVarAndClosurePair(envVarName: string, liftedName: string, envStr
 	const envValues: Node[] = [];
 	// Up-chain field init: pointer to lexical parent env, or null at module-level.
 	envKeys.push(UP_FIELD);
-	if (parentEnvVarName !== "" && parentEnvStructType !== null) {
+	if (parentEnvVarName != "" && parentEnvStructType != null) {
 		const upInit = makeIdent(parentEnvVarName, loc);
 		upInit.nodeType = createRef(parentEnvStructType);
 		envValues.push(upInit);
@@ -912,16 +912,16 @@ function makeEnvVarAndClosurePair(envVarName: string, liftedName: string, envStr
 		// field skip in `liftClosure` per-closure env construction). They are
 		// reached via the `$up` chain walk in `rewriteNode`.
 		const orig = findCapturedIdent(name, capturedIdents);
-		const isCcgCapture = orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
-		const isFnCapture = orig !== null && orig.resolvedSym !== null
-			&& orig.resolvedSym.symbolKind === SymbolKind.Function;
+		const isCcgCapture = orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
+		const isFnCapture = orig != null && orig.resolvedSym != null
+			&& orig.resolvedSym.symbolKind == SymbolKind.Function;
 		const isGrandparent = !isCcgCapture && !isFnCapture
 			&& !isDirectParentVar(ss, name)
 			&& !isModuleLevelVar(ss, name);
 		if (isGrandparent && !noAncestorSkip) continue;
 		envKeys.push(name);
 		let ident = makeIdent(name, loc);
-		if (orig !== null && orig.resolvedSym !== null) {
+		if (orig != null && orig.resolvedSym != null) {
 			ident.resolvedSym = orig.resolvedSym;
 			ident.nodeType = orig.nodeType;
 		}
@@ -932,7 +932,7 @@ function makeEnvVarAndClosurePair(envVarName: string, liftedName: string, envStr
 		// ccgIntroducedPtr captures (Array, Union, Span) store pointer via HiddenAddr.
 		if (isCcgCapture) {
 			envVal = createNode(NodeKind.HiddenAddr, { expr: envVal }, syntheticToken(loc));
-			if (orig.nodeType !== null) envVal.nodeType = createPtr(orig.nodeType);
+			if (orig.nodeType != null) envVal.nodeType = createPtr(orig.nodeType);
 		}
 		if (nameSetContains(lastUseCaptures, name)) {
 			envValues.push(makeMoveExpr(envVal, loc));
@@ -997,13 +997,13 @@ function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state:
 		const orig = findCapturedIdent(name, capturedIdents);
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
-		if (orig !== null && orig.nodeType !== null) {
+		if (orig != null && orig.nodeType != null) {
 			let resolvedType = orig.nodeType;
 			if (isCcgPtrType(resolvedType)) { resolvedType = createPtr(resolvedType); }
 			envResolvedTypes.push(resolvedType);
 		} else {
 			const resolvedFallback = lookupVarResolvedType(state, name);
-			if (resolvedFallback !== null) { envResolvedTypes.push(resolvedFallback); }
+			if (resolvedFallback != null) { envResolvedTypes.push(resolvedFallback); }
 			else { envResolvedTypes.push(resolveSimpleTypeStr(lookupVarType(state, name))); }
 		}
 	}
@@ -1022,8 +1022,8 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	// below must agree with that identity — a mismatch is an out-of-bounds cast.
 	// When outerEnvName === "" the closure has no enclosing env (top-level
 	// FunctionDecl), so no `$up` wiring applies.
-	const outerEnvName = pairEnv !== null ? pairEnv.envName : state.sharedEnvName;
-	const outerEnvStructType = pairEnv !== null ? pairEnv.envStructType : state.sharedEnvStructType;
+	const outerEnvName = pairEnv != null ? pairEnv.envName : state.sharedEnvName;
+	const outerEnvStructType = pairEnv != null ? pairEnv.envStructType : state.sharedEnvStructType;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
 	state.sharedEnvVarName = `_env_${state.currentFnName}_`;
@@ -1036,12 +1036,12 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	// (Nim accessViaEnvParam), never by copying values down (that was bug D).
 	const parentChainNames: string[] = [];
 	const parentChainTypes: Type[] = [];
-	if (outerEnvName !== "" && outerEnvStructType !== null) {
+	if (outerEnvName != "" && outerEnvStructType != null) {
 		parentChainNames.push(outerEnvName);
 		parentChainTypes.push(outerEnvStructType);
 		// pairEnv's own `$up` points at the enclosing fn's shared env — keep the
 		// chain truthful past the pair env.
-		if (pairEnv !== null && state.sharedEnvName !== "" && state.sharedEnvStructType !== null) {
+		if (pairEnv != null && state.sharedEnvName != "" && state.sharedEnvStructType != null) {
 			parentChainNames.push(state.sharedEnvName);
 			parentChainTypes.push(state.sharedEnvStructType);
 		}
@@ -1059,7 +1059,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	// envs this is null; per-closure envs created inside functions point back to
 	// the function's shared env via this field. Drives chain walk in rewriteNode.
 	envFields.push(UP_FIELD);
-	if (outerEnvName !== "" && outerEnvStructType !== null) {
+	if (outerEnvName != "" && outerEnvStructType != null) {
 		// Owning ref to the enclosing env (Nim's `up` is a ref): keeps the parent
 		// frame alive while any nested closure holds this env, so the `$up` walk
 		// never dangles for an escaping closure (DRC increfs on wire, ORC decrefs
@@ -1074,7 +1074,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
 		// field here — it is read via the `$up` walk, never copied (Nim parity).
 		let isAncestor = false;
-		if (ownLocalNames === null || !nameSetContains(ownLocalNames, name)) {
+		if (ownLocalNames == null || !nameSetContains(ownLocalNames, name)) {
 			for (const at of parentChainTypes) { if (envHasField(at, name)) { isAncestor = true; break; } }
 		}
 		if (isAncestor) continue;
@@ -1082,7 +1082,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		envFieldTypes.push(lookupVarType(state, name));
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
 		const isParamCapture = nameSetContains(state.currentParams, name);
-		if (orig !== null && orig.nodeType !== null) {
+		if (orig != null && orig.nodeType != null) {
 			let resolvedType = orig.nodeType;
 			// Intentional divergence from standard reference (see CLAUDE.md):
 			// ccgIntroducedPtr params (Array, Union, Span): store POINTER in shared env.
@@ -1095,7 +1095,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 			envResolvedTypes.push(resolvedType);
 		} else {
 			const fallback = lookupVarResolvedType(state, name);
-			if (fallback !== null) { envResolvedTypes.push(fallback); }
+			if (fallback != null) { envResolvedTypes.push(fallback); }
 			else { envResolvedTypes.push(resolveSimpleTypeStr(lookupVarType(state, name))); }
 		}
 	}
@@ -1117,7 +1117,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	// Wire `$up` to the enclosing env. This closure's lifted body receives the
 	// enclosing env as `_envP` (the closure pair carries it), so nested closures
 	// walk `$up` to reach ancestor-frame slots (Nim rawClosureCreation up-field).
-	if (outerEnvName !== "" && outerEnvStructType !== null) {
+	if (outerEnvName != "" && outerEnvStructType != null) {
 		const upLhs = makeMember(makeIdent(state.sharedEnvVarName, loc), UP_FIELD, loc);
 		upLhs.nodeType = createRef(outerEnvStructType);
 		// Cast the void* enclosing-env param to Ref<outerEnv> so DRC sees an owning
@@ -1140,28 +1140,28 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	for (const name of allCaptures.items) {
 		const isParam = nameSetContains(state.currentParams, name);
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
-		const symOrig = (orig !== null) ? orig.resolvedSym : null;
-		const isModLevel = (symOrig !== null
-				&& (symOrig.symbolKind === SymbolKind.Variable || symOrig.symbolKind === SymbolKind.Parameter))
+		const symOrig = (orig != null) ? orig.resolvedSym : null;
+		const isModLevel = (symOrig != null
+				&& (symOrig.symbolKind == SymbolKind.Variable || symOrig.symbolKind == SymbolKind.Parameter))
 			? hasFlag(symOrig, SymbolFlag.Global)
 			: isModuleLevelVar(state.ss, name);
 		if (isParam || isModLevel) {
 			const lhs = makeMember(makeIdent(state.sharedEnvVarName, loc), name, loc);
-			const isCcgParam = isParam && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
+			const isCcgParam = isParam && orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
 			if (isCcgParam) {
 				// Ptr field: LHS type must be Ptr<T> so DRC skips RC hooks (noRcInfo for Ptr)
 				lhs.nodeType = createPtr(orig.nodeType);
-			} else if (orig !== null && orig.nodeType !== null) {
+			} else if (orig != null && orig.nodeType != null) {
 				lhs.nodeType = orig.nodeType;
 			}
 			let rhs = makeIdent(name, loc);
-			if (orig !== null && orig.resolvedSym !== null) {
+			if (orig != null && orig.resolvedSym != null) {
 				rhs.resolvedSym = orig.resolvedSym;
 				rhs.nodeType = orig.nodeType;
 			}
 			// Module-level functions: wrap as msClosure { fn: func, env: null }
-			const isFnCapture = orig !== null && orig.resolvedSym !== null
-				&& orig.resolvedSym.symbolKind === SymbolKind.Function;
+			const isFnCapture = orig != null && orig.resolvedSym != null
+				&& orig.resolvedSym.symbolKind == SymbolKind.Function;
 			if (isFnCapture) {
 				rhs = wrapFnAsClosure(rhs, loc);
 			}
@@ -1221,7 +1221,7 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 	let pi = pendingBefore;
 	while (pi < state.pendingEnvRewrites.length) {
 		const rewrite = state.pendingEnvRewrites[pi];
-		if (rewrite.envVarDecl !== null) {
+		if (rewrite.envVarDecl != null) {
 			// Apply already-active rewrites to the init statement so that any
 			// captured-var references inside it resolve to the enclosing env
 			// (typically the shared function-scope env). Without this, a
@@ -1249,7 +1249,7 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 		pi += 1;
 	}
 	// Truncate processed entries
-	if (pendingBefore === 0) {
+	if (pendingBefore == 0) {
 		state.pendingEnvRewrites = [];
 	} else {
 		const kept: PendingEnvRewrite[] = [];
@@ -1284,7 +1284,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 		// `tryLiftClosure`'s `saveSharedEnv` flips active off when walking
 		// nested-arrow bodies but keeps the enclosing fn's env identifiers
 		// intact, so VarDecls inside such bodies still need rewriting.
-		if (hasEnclosingFnEnv(state) && stmts[si].kind === NodeKind.VariableDecl) {
+		if (hasEnclosingFnEnv(state) && stmts[si].kind == NodeKind.VariableDecl) {
 			const vd = stmts[si].data as VariableDeclData;
 			if (nameSetContains(state.sharedEnvCapturedNames, vd.declName)) {
 				// VarDecl of a captured var: rewrite to env field assignment.
@@ -1303,12 +1303,12 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 					envAccess.nodeType = state.sharedEnvStructType;
 				}
 				const lhs = makeMember(envAccess, vd.declName, stmtLoc);
-				if (stmts[si].nodeType !== null) lhs.nodeType = stmts[si].nodeType;
-				const init = (vd.initializer !== null) ? vd.initializer : makeNull(stmtLoc);
+				if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
+				const init = (vd.initializer != null) ? vd.initializer : makeNull(stmtLoc);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
 		}
-		if (!isTopLevel && stmts[si].kind === NodeKind.FunctionDecl) {
+		if (!isTopLevel && stmts[si].kind == NodeKind.FunctionDecl) {
 			state.liftedFunctions.push(stmts[si]);
 		} else {
 			result.push(stmts[si]);
@@ -1319,7 +1319,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 }
 
 function walkLift(node: Node, state: LiftState): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
@@ -1350,7 +1350,7 @@ function walkLift(node: Node, state: LiftState): void {
 			// manufactures orphan closures (void* env, unlowered methods) that codegen later drops.
 			if (d.fnFlags.indexOf("gen:") >= 0) return;
 			const savedName = state.currentFnName;
-			if (d.fnName !== "") {
+			if (d.fnName != "") {
 				state.currentFnName = d.fnName;
 				defineVar(state.ss, d.fnName);
 				// Reference parity: captured function refs → closure type
@@ -1370,16 +1370,16 @@ function walkLift(node: Node, state: LiftState): void {
 				nameSetAdd(state.currentParams, d.params[pi]);
 				let paramTypeStr = (pi < d.fnParamTypes.length) ? d.fnParamTypes[pi] : "";
 				// Reference parity: use resolved type from checker for env field typing
-				if (fnType !== null && fnType.typeChildren !== null && pi < fnType.typeChildren.length) {
+				if (fnType != null && fnType.typeChildren != null && pi < fnType.typeChildren.length) {
 					const pt = fnType.typeChildren[pi];
-					if (pt !== null) {
+					if (pt != null) {
 						const derived = typeToEnvStr(pt);
-						if (derived !== "") {
+						if (derived != "") {
 							paramTypeStr = derived;
 						}
 					}
 				}
-				if (paramTypeStr !== "") {
+				if (paramTypeStr != "") {
 					registerVarType(state, d.params[pi], paramTypeStr);
 				}
 				pi += 1;
@@ -1423,18 +1423,18 @@ function walkLift(node: Node, state: LiftState): void {
 			// during `walkOrLift`) sees the bound name as an outer var and
 			// captures it. Same heuristic mirrored in checker `checkVariableDecl`
 			// and detection pass `detectPassWalk` / `detectAllWalk`.
-			const isSelfRefClosureInit = d.initializer !== null
-				&& (d.initializer.kind === NodeKind.ArrowFunction
-					|| d.initializer.kind === NodeKind.FunctionExpr);
+			const isSelfRefClosureInit = d.initializer != null
+				&& (d.initializer.kind == NodeKind.ArrowFunction
+					|| d.initializer.kind == NodeKind.FunctionExpr);
 			if (isSelfRefClosureInit) defineVar(state.ss, d.declName);
 			d.initializer = walkOrLift(d.initializer, state);
 			if (!isSelfRefClosureInit) defineVar(state.ss, d.declName);
-			if (d.declType !== "") {
+			if (d.declType != "") {
 				registerVarType(state, d.declName, d.declType);
-			} else if (node.nodeType !== null) {
+			} else if (node.nodeType != null) {
 				// Reference parity: use resolved type from checker when no annotation
 				const derived = typeToEnvStr(node.nodeType);
-				if (derived !== "") {
+				if (derived != "") {
 					registerVarTypeResolved(state, d.declName, derived, node.nodeType);
 				}
 			}
@@ -1484,7 +1484,7 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			walkLift(d.tryBody, state);
-			if (d.catchName !== "") {
+			if (d.catchName != "") {
 				defineVar(state.ss, d.catchName);
 			}
 			walkLift(d.catchBody, state);
@@ -1508,7 +1508,7 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			if (d.className !== "") {
+			if (d.className != "") {
 				defineVar(state.ss, d.className);
 			}
 			for (const member of d.classBody) {
@@ -1584,22 +1584,22 @@ function walkLift(node: Node, state: LiftState): void {
 			// `0 /* unlowered ArrowFunction */`. walkOrLift handles both
 			// the IIFE case (lift the arrow → closure pair) and the normal
 			// case (just walk).
-			const calleeWasArrow = d.callee.kind === NodeKind.ArrowFunction
-				|| d.callee.kind === NodeKind.FunctionExpr;
+			const calleeWasArrow = d.callee.kind == NodeKind.ArrowFunction
+				|| d.callee.kind == NodeKind.FunctionExpr;
 			d.callee = walkOrLift(d.callee, state);
 			// After lifting an arrow callee, the call must use the closure-call
 			// convention: `callee.fn(args, callee.env)`. closureCallMarker only
 			// detects MemberExpr-typed callees with Function nodeType, so it'd
 			// miss our ObjectLiteral closure-pair callee. Mark it here.
-			if (calleeWasArrow && d.callee.kind === NodeKind.ObjectLiteral) {
+			if (calleeWasArrow && d.callee.kind == NodeKind.ObjectLiteral) {
 				d.isDirectCall = false;
 			}
 			let i = 0;
 			while (i < d.arguments.length) {
 				const arg = d.arguments[i];
-				if (arg.kind === NodeKind.ArrowFunction || arg.kind === NodeKind.FunctionExpr) {
+				if (arg.kind == NodeKind.ArrowFunction || arg.kind == NodeKind.FunctionExpr) {
 					const lifted = tryLiftClosure(arg, state);
-					if (lifted.kind !== arg.kind) {
+					if (lifted.kind != arg.kind) {
 						d.arguments[i] = lifted;
 					}
 				} else {
@@ -1643,7 +1643,7 @@ function walkLift(node: Node, state: LiftState): void {
 
 // Prepend hoisted env declarations to a statement array ( setupEnvVar at function entry).
 function prependHoistedEnvDecls(hoisted: Node[], stmts: Node[]): Node[] {
-	if (hoisted.length === 0) return stmts;
+	if (hoisted.length == 0) return stmts;
 	const newStmts: Node[] = [];
 	let hi = 0;
 	while (hi < hoisted.length) { newStmts.push(hoisted[hi]); hi += 1; }
@@ -1685,7 +1685,7 @@ function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPr
 	state.hoistedEnvDecls = [];
 	preWalk();
 	walkLift(body, state);
-	if (state.hoistedEnvDecls.length > 0 && body !== null && body.kind === NodeKind.BlockStmt) {
+	if (state.hoistedEnvDecls.length > 0 && body != null && body.kind == NodeKind.BlockStmt) {
 		const bd = body.data as BlockStmtData;
 		bd.statements = prependHoistedEnvDecls(state.hoistedEnvDecls, bd.statements);
 	}
@@ -1697,8 +1697,8 @@ function walkLiftBody(body: Node, state: LiftState, preWalk: () => void = noopPr
 // Walk a node, lifting closures if it's an ArrowFunction/FunctionExpr with captures.
 // Returns the (possibly replaced) node.
 function walkOrLift(node: Node | null, state: LiftState): Node {
-	if (node === null) return null as unknown as Node;
-	if (node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) {
+	if (node == null) return null as unknown as Node;
+	if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
 		return tryLiftClosure(node, state);
 	}
 	walkLift(node, state);
@@ -1750,7 +1750,7 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 // currentParams.
 //
 function collectOwnDeclNames(node: Node, acc: NameSet): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
@@ -1825,7 +1825,7 @@ function liftCapturingClosureBody(
 			if (!nameSetContains(fullSet, on)) {
 				nameSetAdd(fullSet, on);
 				const oi = findCapturedIdent(on, ownCapturedIdents);
-				if (oi !== null) { fullIdents.push(oi); }
+				if (oi != null) { fullIdents.push(oi); }
 			}
 		}
 		if (fullSet.items.length > 0) {
@@ -1874,10 +1874,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 	state.activeEnvRewrites = [];
 	const savedShared = saveSharedEnv(state);
 
-	if (node.kind === NodeKind.ArrowFunction) {
+	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
 		return liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow);
-	} else if (node.kind === NodeKind.FunctionExpr) {
+	} else if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		return liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr);
 	} else {
@@ -1896,10 +1896,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 // arrows (fixedbugs/bug039) and nested arrows inside an expression body
 // (fixedbugs/bug095) both died on that.
 function normalizeArrowBodies(node: Node): Node {
-	if (node === null) return null as unknown as Node;
-	if (node.kind === NodeKind.ArrowFunction) {
+	if (node == null) return null as unknown as Node;
+	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		if (d.arrowBody !== null && d.arrowBody.kind !== NodeKind.BlockStmt) {
+		if (d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt) {
 			const loc = d.arrowBody.location;
 			d.arrowBody = makeBlock([makeReturn(d.arrowBody, loc)], loc);
 		}
@@ -1920,11 +1920,11 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	walkLift(program, state);
 
 	// Prepend env structs + lifted functions to program
-	if (state.envStructs.length === 0 && state.liftedFunctions.length === 0) {
+	if (state.envStructs.length == 0 && state.liftedFunctions.length == 0) {
 		return program;
 	}
 
-	if (program.kind === NodeKind.Program) {
+	if (program.kind == NodeKind.Program) {
 		const d = program.data as ProgramData;
 		const newStmts: Node[] = [];
 		for (const s of state.envStructs) {
@@ -1943,54 +1943,54 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "no closures passthrough" { assert stmtCountAfter("const x = 1;", lowerLambda) === 1; }
+test "no closures passthrough" { assert stmtCountAfter("const x = 1;", lowerLambda) == 1; }
 
-test "function without capture unchanged" { assert firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl; }
+test "function without capture unchanged" { assert firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) == NodeKind.FunctionDecl; }
 
 test "nested function hoisted to top level" {
 	const result = parseInput("function outer() { function f() { return 1; } f(); }");
 	if (!result.ok) { assert false; return; }
 	const lowered = lowerLambda(result.value, makeCtx());
 	const stmts = getStmts(lowered);
-	assert stmts.length === 2;
-	assert stmts[0].kind === NodeKind.FunctionDecl;
-	assert stmts[1].kind === NodeKind.FunctionDecl;
+	assert stmts.length == 2;
+	assert stmts[0].kind == NodeKind.FunctionDecl;
+	assert stmts[1].kind == NodeKind.FunctionDecl;
 }
 
 test "non-capturing arrow lifted" {
 	// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
-	assert stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2;
-	assert firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl;
+	assert stmtCountAfter("const f = (x) => x + 1;", lowerLambda) == 2;
+	assert firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) == NodeKind.FunctionDecl;
 }
 
 test "arrow inside array literal lifted" {
-	assert stmtCountAfter("const a = [() => 1];", lowerLambda) === 2;
-	assert firstStmtKindAfter("const a = [() => 1];", lowerLambda) === NodeKind.FunctionDecl;
+	assert stmtCountAfter("const a = [() => 1];", lowerLambda) == 2;
+	assert firstStmtKindAfter("const a = [() => 1];", lowerLambda) == NodeKind.FunctionDecl;
 }
 
 test "non-capturing arrow in function lifted" {
 	// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
-	assert stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2;
+	assert stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) == 2;
 }
 
 test "arrow with capture generates 3 stmts" {
 	// function outer() { let x = 1; const f = () => x; }
 	// → env struct + lifted fn + original fn = 3 stmts
-	assert stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3;
+	assert stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) == 3;
 }
 
-test "env struct is first stmt" { assert firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl; }
+test "env struct is first stmt" { assert firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) == NodeKind.InterfaceDecl; }
 
 test "builtin name not captured" {
 	// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
-	assert stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2;
+	assert stmtCountAfter("function f() { const g = () => console; }", lowerLambda) == 2;
 }
 
-test "multiple captures one env" { assert stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3; }
+test "multiple captures one env" { assert stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) == 3; }
 
 test "non-capturing function expr lifted" {
-	assert stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2;
-	assert firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl;
+	assert stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) == 2;
+	assert firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) == NodeKind.FunctionDecl;
 }
 
 test "isCaptureLastUse: var not used after closure" {

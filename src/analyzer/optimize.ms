@@ -22,23 +22,23 @@ import { testLoc } from "./inject";
 // ===== Known wasMoved / destroy function names =====
 
 function isWasMovedFn(name: string): boolean {
-	return name === "msStringWasMoved"
-		|| name === "msArrayNumberWasMoved"
-		|| name === "msArrayStringWasMoved"
-		|| name === "msArrayRefWasMoved"
-		|| name === "msClosureWasMoved"
-		|| name === "msPtrWasMoved"
+	return name == "msStringWasMoved"
+		|| name == "msArrayNumberWasMoved"
+		|| name == "msArrayStringWasMoved"
+		|| name == "msArrayRefWasMoved"
+		|| name == "msClosureWasMoved"
+		|| name == "msPtrWasMoved"
 		|| name.endsWith("WasMoved");
 }
 
 function isDestroyFn(name: string): boolean {
-	return name === "msStringDecref"
-		|| name === "msDecref"
-		|| name === "msDecrefCyclic"
-		|| name === "msArrayDestroy"
-		|| name === "msArrayStringDestroy"
-		|| name === "msArrayRefDestroy"
-		|| name === "msClosureDestroy"
+	return name == "msStringDecref"
+		|| name == "msDecref"
+		|| name == "msDecrefCyclic"
+		|| name == "msArrayDestroy"
+		|| name == "msArrayStringDestroy"
+		|| name == "msArrayRefDestroy"
+		|| name == "msClosureDestroy"
 		|| name.endsWith("Destroy");
 }
 
@@ -49,16 +49,16 @@ function isDestroyFn(name: string): boolean {
 // Scan a block's top-level statements for wasMoved calls
 function collectBlockMoved(block: Node): NameSet {
 	const result: NameSet = createNameSet();
-	if (block === null) return result;
-	if (block.kind !== NodeKind.BlockStmt) return result;
+	if (block == null) return result;
+	if (block.kind != NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
 	for (const stmt of bd.statements) {
 		const wm = getWasMovedVar(stmt);
-		if (wm !== "") {
+		if (wm != "") {
 			nameSetAdd(result, wm);
 		}
 		// Also collect from nested if/else branches
-		if (stmt.kind === NodeKind.IfStmt) {
+		if (stmt.kind == NodeKind.IfStmt) {
 			const nested = collectIfMoved(stmt);
 			for (const v of nested.items) {
 				nameSetAdd(result, v);
@@ -74,10 +74,10 @@ function collectIfMoved(ifNode: Node): NameSet {
 	const consMoved = collectBlockMoved(d.consequent);
 
 	// No else — can't guarantee moved on all paths
-	if (d.alternate === null) return createNameSet();
+	if (d.alternate == null) return createNameSet();
 
 	// else-if chain: recurse
-	if (d.alternate.kind === NodeKind.IfStmt) {
+	if (d.alternate.kind == NodeKind.IfStmt) {
 		const altMoved = collectIfMoved(d.alternate);
 		return nameSetIntersect(consMoved, altMoved);
 	}
@@ -91,36 +91,36 @@ function collectIfMoved(ifNode: Node): NameSet {
 
 // Extract single argument name from a call expression statement
 function extractSingleCallArg(stmt: Node): string {
-	if (stmt === null || stmt.kind !== NodeKind.ExprStmt) return "";
+	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return "";
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr === null || ed.expr.kind !== NodeKind.CallExpr) return "";
+	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return "";
 	const cd = ed.expr.data as CallExprData;
-	if (cd.arguments.length !== 1) return "";
+	if (cd.arguments.length != 1) return "";
 	// Access arguments[0] inline — avoid local Node variable (DRC use-after-free on return)
-	if (cd.arguments[0] === null || cd.arguments[0].kind !== NodeKind.Identifier) return "";
+	if (cd.arguments[0] == null || cd.arguments[0].kind != NodeKind.Identifier) return "";
 	return (cd.arguments[0].data as IdentifierData).name;
 }
 
 // Extract callee name from ExprStmt(CallExpr(...))
 function extractCalleeName(stmt: Node): string {
-	if (stmt === null || stmt.kind !== NodeKind.ExprStmt) return "";
+	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return "";
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr === null || ed.expr.kind !== NodeKind.CallExpr) return "";
+	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return "";
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee === null || cd.callee.kind !== NodeKind.Identifier) return "";
+	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return "";
 	return (cd.callee.data as IdentifierData).name;
 }
 
 function getWasMovedVar(stmt: Node): string {
 	const callee = extractCalleeName(stmt);
-	if (callee === "") return "";
+	if (callee == "") return "";
 	if (!isWasMovedFn(callee)) return "";
 	return extractSingleCallArg(stmt);
 }
 
 function getDestroyVar(stmt: Node): string {
 	const callee = extractCalleeName(stmt);
-	if (callee === "") return "";
+	if (callee == "") return "";
 	if (!isDestroyFn(callee)) return "";
 	return extractSingleCallArg(stmt);
 }
@@ -136,14 +136,14 @@ function optimizeBlock(stmts: Node[]): Node[] {
 	let i = 0;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
-		if (stmt === null) {
+		if (stmt == null) {
 			i += 1;
 			continue;
 		}
 
 		// Track wasMoved calls — add var to moved set
 		const wmVar = getWasMovedVar(stmt);
-		if (wmVar !== "") {
+		if (wmVar != "") {
 			nameSetAdd(moved, wmVar);
 			result.push(stmt);
 			i += 1;
@@ -152,13 +152,13 @@ function optimizeBlock(stmts: Node[]): Node[] {
 
 		// Eliminate destroy for definitely-moved vars
 		const dVar = getDestroyVar(stmt);
-		if (dVar !== "" && nameSetContains(moved, dVar)) {
+		if (dVar != "" && nameSetContains(moved, dVar)) {
 			i += 1;  // skip destroy — var was already zeroed by wasMoved
 			continue;
 		}
 
 		// Collect moved vars from exhaustive if/else branches
-		if (stmt.kind === NodeKind.IfStmt) {
+		if (stmt.kind == NodeKind.IfStmt) {
 			const ifMoved = collectIfMoved(stmt);
 			for (const v of ifMoved.items) {
 				nameSetAdd(moved, v);
@@ -174,7 +174,7 @@ function optimizeBlock(stmts: Node[]): Node[] {
 // ===== Recursive Walker =====
 
 function walkOptimize(node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	match (node.kind) {
 		NodeKind.Program => {
@@ -257,7 +257,7 @@ test "eliminates wasMoved+destroy pair" {
 	const stmts: Node[] = [wm, destroy];
 	const result = optimizeBlock(stmts);
 	// destroy eliminated, only wasMoved remains
-	assert result.length === 1;
+	assert result.length == 1;
 }
 
 test "eliminates non-adjacent wasMoved+destroy" {
@@ -267,7 +267,7 @@ test "eliminates non-adjacent wasMoved+destroy" {
 	const stmts: Node[] = [wm, other, destroy];
 	const result = optimizeBlock(stmts);
 	// Non-adjacent destroy eliminated — wasMoved + other remain
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "preserves different vars" {
@@ -276,7 +276,7 @@ test "preserves different vars" {
 	const stmts: Node[] = [wm, destroy];
 	const result = optimizeBlock(stmts);
 	// Different vars — both preserved
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "eliminates multiple pairs" {
@@ -287,7 +287,7 @@ test "eliminates multiple pairs" {
 	const stmts: Node[] = [wm1, d1, wm2, d2];
 	const result = optimizeBlock(stmts);
 	// Both destroy calls eliminated
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "preserves standalone wasMoved" {
@@ -295,7 +295,7 @@ test "preserves standalone wasMoved" {
 	const other = makeOtherStmt();
 	const stmts: Node[] = [wm, other];
 	const result = optimizeBlock(stmts);
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "preserves standalone destroy" {
@@ -303,19 +303,19 @@ test "preserves standalone destroy" {
 	const other = makeOtherStmt();
 	const stmts: Node[] = [destroy, other];
 	const result = optimizeBlock(stmts);
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "extracts var from wasMoved call" {
 	const wm = makeWmCall("myVar");
 	const name = getWasMovedVar(wm);
-	assert name === "myVar";
+	assert name == "myVar";
 }
 
 test "returns empty for non-wasMoved" {
 	const other = makeOtherStmt();
 	const name = getWasMovedVar(other);
-	assert name === "";
+	assert name == "";
 }
 
 test "if/else both move same var → eliminate destroy" {
@@ -333,7 +333,7 @@ test "if/else both move same var → eliminate destroy" {
 	const stmts: Node[] = [ifNode, destroy];
 	const result = optimizeBlock(stmts);
 	// destroy(x) eliminated — x was moved on all paths
-	assert result.length === 1;
+	assert result.length == 1;
 }
 
 test "if without else → preserve destroy" {
@@ -348,7 +348,7 @@ test "if without else → preserve destroy" {
 	const stmts: Node[] = [ifNode, destroy];
 	const result = optimizeBlock(stmts);
 	// No else — can't guarantee moved, destroy preserved
-	assert result.length === 2;
+	assert result.length == 2;
 }
 
 test "if/else move different vars → preserve both destroys" {
@@ -364,5 +364,5 @@ test "if/else move different vars → preserve both destroys" {
 	const stmts: Node[] = [ifNode, destroyX, destroyY];
 	const result = optimizeBlock(stmts);
 	// Neither is moved on ALL paths — both preserved
-	assert result.length === 3;
+	assert result.length == 3;
 }

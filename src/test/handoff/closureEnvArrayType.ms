@@ -11,9 +11,9 @@ function findEnvDecl(prog: Node): Node {
 	let i = 0;
 	while (i < pd.programStmts.length) {
 		const stmt = pd.programStmts[i];
-		if (stmt.kind === NodeKind.InterfaceDecl) {
+		if (stmt.kind == NodeKind.InterfaceDecl) {
 			const id = stmt.data as InterfaceDeclData;
-			if (id.interfaceName.length > 0 && id.interfaceName.charAt(0) === "$") {
+			if (id.interfaceName.length > 0 && id.interfaceName.charAt(0) == "$") {
 				return stmt;
 			}
 		}
@@ -25,15 +25,15 @@ function findEnvDecl(prog: Node): Node {
 // Helper to find field type in env struct
 function envFieldType(envDecl: Node, fieldName: string): TypeKind {
 	const t = envDecl.nodeType;
-	if (t === null) return TypeKind.Pending;
+	if (t == null) return TypeKind.Pending;
 	let i = 0;
 	while (i < t.typeNames.length) {
-		if (t.typeNames[i] === fieldName) {
-			if (i < t.typeChildren.length && t.typeChildren[i] !== null) {
+		if (t.typeNames[i] == fieldName) {
+			if (i < t.typeChildren.length && t.typeChildren[i] != null) {
 				let ft = t.typeChildren[i];
 				// Arrays are reference types (Ref<Array>) after the T[]→Ref<Array> flip;
 				// unwrap to report the underlying array kind.
-				if (ft.kind === TypeKind.Ref && ft.typeReturn !== null) ft = ft.typeReturn;
+				if (ft.kind == TypeKind.Ref && ft.typeReturn != null) ft = ft.typeReturn;
 				return ft.kind;
 			}
 		}
@@ -45,26 +45,26 @@ function envFieldType(envDecl: Node, fieldName: string): TypeKind {
 test "string[] env field resolves to Array(String)" {
 	const src = "function outer(): void {\nconst items: string[] = [];\nconst fn = (x: string): string => { items.push(x);\nreturn x; };\n}";
 	const prog = fullPipeline(src);
-	assert prog !== null;
+	assert prog != null;
 	const env = findEnvDecl(prog);
-	assert env !== null;
-	assert envFieldType(env, "items") === TypeKind.Array;
+	assert env != null;
+	assert envFieldType(env, "items") == TypeKind.Array;
 }
 
 test "number[] env field resolves to Array(Number)" {
 	const src = "function outer(): void {\nconst nums: number[] = [];\nconst fn = (x: number): number => { nums.push(x);\nreturn x; };\n}";
 	const prog = fullPipeline(src);
-	assert prog !== null;
+	assert prog != null;
 	const env = findEnvDecl(prog);
-	assert env !== null;
-	assert envFieldType(env, "nums") === TypeKind.Array;
+	assert env != null;
+	assert envFieldType(env, "nums") == TypeKind.Array;
 }
 
 test "struct[] env field resolves to Array" {
 	const src = "interface Item { name: string; value: number; }\nfunction outer(): void {\nconst items: Item[] = [];\nconst fn = (x: number): number => { return items.length; };\n}";
 	const prog = fullPipeline(src);
-	assert prog !== null;
+	assert prog != null;
 	const env = findEnvDecl(prog);
-	assert env !== null;
-	assert envFieldType(env, "items") === TypeKind.Array;
+	assert env != null;
+	assert envFieldType(env, "items") == TypeKind.Array;
 }

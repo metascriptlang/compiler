@@ -138,7 +138,7 @@ function stateName(s: WsState): string {
 const RX_COMPACT_THRESHOLD: int32 = 65536;
 
 function compactRxBuf(ws: WsClient): void {
-	if (ws._rxStart === 0) return;
+	if (ws._rxStart == 0) return;
 	const liveLen = ws._rxBuf.length - ws._rxStart;
 	if (ws._rxStart < RX_COMPACT_THRESHOLD && ws._rxStart < liveLen) return;
 	ws._rxBuf = sliceBytes(ws._rxBuf, ws._rxStart, ws._rxBuf.length);
@@ -155,7 +155,7 @@ function compactRxBuf(ws: WsClient): void {
 function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Result<string, WsError> {
 	const raw = msCryptoRandomBytesRaw(4);
 	const maskBytes = stringToBytes(raw);
-	if (maskBytes.length !== 4) {
+	if (maskBytes.length != 4) {
 		return Result.err(wsInternalError("mask key generation failed (RNG returned " + maskBytes.length.toString() + " bytes)"));
 	}
 	const frame = buildFrame(opcode, fin, payload, maskBytes);
@@ -163,7 +163,7 @@ function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Resul
 }
 
 async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Promise<Result<void, WsError>> {
-	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
+	if (ws.state != WsState.Open && opcode != OPCODE_CLOSE) {
 		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
 	}
 	if (payload.length > MAX_PAYLOAD_BYTES) {
@@ -177,7 +177,7 @@ async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Pr
 }
 
 function sendFrameSync(ws: WsClient, opcode: int32, payload: uint8[]): Result<void, WsError> {
-	if (ws.state !== WsState.Open && opcode !== OPCODE_CLOSE) {
+	if (ws.state != WsState.Open && opcode != OPCODE_CLOSE) {
 		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
 	}
 	if (payload.length > MAX_PAYLOAD_BYTES) {
@@ -231,7 +231,7 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 
 		if (r.value.needMore) {
 			const chunk = await recvAsync(ws.fd, 16384);
-			if (chunk.length === 0) {
+			if (chunk.length == 0) {
 				netClose(ws.fd);
 				ws.state = WsState.Closed;
 				return Result.err(wsClosed("connection closed by peer"));
@@ -245,7 +245,7 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 		compactRxBuf(ws);
 
 		const d = processFrame(ws._frag, f);
-		if (d.action === "error") {
+		if (d.action == "error") {
 			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(d.closeCode, empty);
 			await sendFrameAsync(ws, OPCODE_CLOSE, closePayload);
@@ -253,15 +253,15 @@ export async function recv(this ws: WsClient): Promise<Result<WsMessage, WsError
 			ws.state = WsState.Closed;
 			return Result.err(wsProtocolError(d.errorMsg));
 		}
-		if (d.autoReplyOpcode !== 0) {
+		if (d.autoReplyOpcode != 0) {
 			await sendFrameAsync(ws, d.autoReplyOpcode, d.autoReplyPayload);
 		}
-		if (d.action === "delivered_close") {
+		if (d.action == "delivered_close") {
 			netClose(ws.fd);
 			ws.state = WsState.Closed;
 			return Result.ok(d.message);
 		}
-		if (d.action === "deliver") {
+		if (d.action == "deliver") {
 			return Result.ok(d.message);
 		}
 		// "continue" — loop for next frame
@@ -282,7 +282,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 
 		if (r.value.needMore) {
 			const chunk = netRecv(ws.fd, 16384);
-			if (chunk.length === 0) {
+			if (chunk.length == 0) {
 				netClose(ws.fd);
 				ws.state = WsState.Closed;
 				return Result.err(wsClosed("connection closed by peer"));
@@ -296,7 +296,7 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 		compactRxBuf(ws);
 
 		const d = processFrame(ws._frag, f);
-		if (d.action === "error") {
+		if (d.action == "error") {
 			const empty: uint8[] = [];
 			const closePayload = encodeClosePayload(d.closeCode, empty);
 			sendFrameSync(ws, OPCODE_CLOSE, closePayload);
@@ -304,15 +304,15 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 			ws.state = WsState.Closed;
 			return Result.err(wsProtocolError(d.errorMsg));
 		}
-		if (d.autoReplyOpcode !== 0) {
+		if (d.autoReplyOpcode != 0) {
 			sendFrameSync(ws, d.autoReplyOpcode, d.autoReplyPayload);
 		}
-		if (d.action === "delivered_close") {
+		if (d.action == "delivered_close") {
 			netClose(ws.fd);
 			ws.state = WsState.Closed;
 			return Result.ok(d.message);
 		}
-		if (d.action === "deliver") {
+		if (d.action == "deliver") {
 			return Result.ok(d.message);
 		}
 	}
@@ -321,8 +321,8 @@ export function recvSync(this ws: WsClient): Result<WsMessage, WsError> {
 // ===== Public close =====
 
 export async function close(this ws: WsClient, code: int32, reason: string): Promise<Result<void, WsError>> {
-	if (ws.state === WsState.Closed) return Result.ok(null);
-	if (ws.state === WsState.Closing) {
+	if (ws.state == WsState.Closed) return Result.ok(null);
+	if (ws.state == WsState.Closing) {
 		// Already initiated. Just shut the socket.
 		netClose(ws.fd);
 		ws.state = WsState.Closed;
@@ -344,8 +344,8 @@ export async function close(this ws: WsClient, code: int32, reason: string): Pro
 }
 
 export function closeSync(this ws: WsClient, code: int32, reason: string): Result<void, WsError> {
-	if (ws.state === WsState.Closed) return Result.ok(null);
-	if (ws.state === WsState.Closing) {
+	if (ws.state == WsState.Closed) return Result.ok(null);
+	if (ws.state == WsState.Closing) {
 		netClose(ws.fd);
 		ws.state = WsState.Closed;
 		return Result.ok(null);
@@ -381,7 +381,7 @@ async function readUntilHeaderEndAsync(fd: int32): Promise<Result<HandshakeRead,
 	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = await recvAsync(fd, HANDSHAKE_RECV_BUF);
-		if (chunk.byteLength === 0) {
+		if (chunk.byteLength == 0) {
 			return Result.err(wsHandshakeFailed("connection closed during handshake"));
 		}
 		appendBytes(bytes, stringToBytes(chunk));
@@ -403,7 +403,7 @@ function readUntilHeaderEndSync(fd: int32): Result<HandshakeRead, WsError> {
 	let bytes: uint8[] = [];
 	while (true) {
 		const chunk = netRecv(fd, HANDSHAKE_RECV_BUF);
-		if (chunk.byteLength === 0) {
+		if (chunk.byteLength == 0) {
 			return Result.err(wsHandshakeFailed("connection closed during handshake"));
 		}
 		appendBytes(bytes, stringToBytes(chunk));
@@ -427,7 +427,7 @@ function defaultConnectOptions(): ConnectOptions {
 }
 
 export async function connect(url: string, options: ConnectOptions = null): Promise<Result<WsClient, WsError>> {
-	const opts = options === null ? defaultConnectOptions() : options;
+	const opts = options == null ? defaultConnectOptions() : options;
 
 	const u = parseWsUrl(url);
 	if (!u.ok) return Result.err(u.error);
@@ -476,7 +476,7 @@ export async function connect(url: string, options: ConnectOptions = null): Prom
 }
 
 export function connectSync(url: string, options: ConnectOptions = null): Result<WsClient, WsError> {
-	const opts = options === null ? defaultConnectOptions() : options;
+	const opts = options == null ? defaultConnectOptions() : options;
 
 	const u = parseWsUrl(url);
 	if (!u.ok) return Result.err(u.error);

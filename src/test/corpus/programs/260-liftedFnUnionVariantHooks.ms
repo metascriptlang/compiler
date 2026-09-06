@@ -20,7 +20,7 @@ function mkSquare(i: int32): Square {
 }
 
 function pick(i: int32): Shape {
-	if (i % 2 === 0) {
+	if (i % 2 == 0) {
 		const c: Circle = mkCircle(i);
 		return c;
 	}
@@ -43,7 +43,7 @@ function main(): void {
 	console.log("total=" + total.toString());
 
 	const one = pick(0);
-	if (one.kind === "circle") {
+	if (one.kind == "circle") {
 		console.log("read=" + one.label + "/" + area(one).toString());
 	}
 }

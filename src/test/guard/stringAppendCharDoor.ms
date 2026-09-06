@@ -30,7 +30,7 @@ function main(): number {
 	// The char door itself — a 1-byte literal, the case the rewrite exists for.
 	let a = id("x");
 	a = a + "y";
-	if (a.byteLength() !== 2 || a !== id("xy")) {
+	if (a.byteLength() != 2 || a != id("xy")) {
 		console.log("GUARD RED: ascii char door, bytes=" + a.byteLength() + " s=" + a);
 		failures = failures + 1;
 	}
@@ -38,7 +38,7 @@ function main(): number {
 	// One UTF-16 unit, TWO bytes — must stay on the string door.
 	let b = id("a");
 	b = b + "é";
-	if (b.byteLength() !== 3 || b.length !== 2 || b !== id("aé")) {
+	if (b.byteLength() != 3 || b.length != 2 || b != id("aé")) {
 		console.log("GUARD RED: 2-byte literal took the char door, bytes=" + b.byteLength() + " len=" + b.length + " s=" + b);
 		failures = failures + 1;
 	}
@@ -46,7 +46,7 @@ function main(): number {
 	// Same hazard through the `+=` lowering site.
 	let c = id("a");
 	c += "é";
-	if (c.byteLength() !== 3 || c !== id("aé")) {
+	if (c.byteLength() != 3 || c != id("aé")) {
 		console.log("GUARD RED: += 2-byte literal, bytes=" + c.byteLength() + " s=" + c);
 		failures = failures + 1;
 	}
@@ -54,7 +54,7 @@ function main(): number {
 	// Same hazard through the flattened-chain site (msStringConcatArr → AppendArr).
 	let d = id("a");
 	d = d + "é" + "z";
-	if (d.byteLength() !== 4 || d.length !== 3 || d !== id("aéz")) {
+	if (d.byteLength() != 4 || d.length != 3 || d != id("aéz")) {
 		console.log("GUARD RED: chain 2-byte literal, bytes=" + d.byteLength() + " len=" + d.length + " s=" + d);
 		failures = failures + 1;
 	}
@@ -62,7 +62,7 @@ function main(): number {
 	// Three-byte literal, still one UTF-16 unit.
 	let e = id("a");
 	e = e + "€";
-	if (e.byteLength() !== 4 || e.length !== 2 || e !== id("a€")) {
+	if (e.byteLength() != 4 || e.length != 2 || e != id("a€")) {
 		console.log("GUARD RED: 3-byte literal took the char door, bytes=" + e.byteLength() + " len=" + e.length + " s=" + e);
 		failures = failures + 1;
 	}
@@ -70,7 +70,7 @@ function main(): number {
 	// Multi-character literal — the other half of the shape test.
 	let f = id("a");
 	f = f + "yz";
-	if (f.byteLength() !== 3 || f !== id("ayz")) {
+	if (f.byteLength() != 3 || f != id("ayz")) {
 		console.log("GUARD RED: multi-char literal truncated, bytes=" + f.byteLength() + " s=" + f);
 		failures = failures + 1;
 	}
@@ -79,7 +79,7 @@ function main(): number {
 	// and must arrive as the control character, not as a backslash pair.
 	let g = id("a");
 	g = g + "\n";
-	if (g.byteLength() !== 2 || g.charCodeAt(1) !== 10) {
+	if (g.byteLength() != 2 || g.charCodeAt(1) != 10) {
 		console.log("GUARD RED: escape literal, bytes=" + g.byteLength() + " code=" + g.charCodeAt(1));
 		failures = failures + 1;
 	}
@@ -89,19 +89,19 @@ function main(): number {
 	let h = id("");
 	let i = 0;
 	while (i < 40) { h = h + "q"; i = i + 1; }
-	if (h.byteLength() !== 40 || h.length !== 40) {
+	if (h.byteLength() != 40 || h.length != 40) {
 		console.log("GUARD RED: repeated char door, bytes=" + h.byteLength() + " len=" + h.length);
 		failures = failures + 1;
 	}
 	h = h + "é";
-	if (h.byteLength() !== 42 || h.length !== 41) {
+	if (h.byteLength() != 42 || h.length != 41) {
 		console.log("GUARD RED: non-ascii after char-door run, bytes=" + h.byteLength() + " len=" + h.length);
 		failures = failures + 1;
 	}
 
-	if (failures === 0) console.log("GUARD-OK stringAppendCharDoor");
+	if (failures == 0) console.log("GUARD-OK stringAppendCharDoor");
 	return failures;
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

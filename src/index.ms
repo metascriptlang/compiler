@@ -26,7 +26,7 @@ import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compil
 import { ensureVersionMarker } from "./compiler/cache";
 
 function requireFile(opts: CliOptions): void {
-	if (opts.inputFile === "") {
+	if (opts.inputFile == "") {
 		console.log(`${error("error")}: ${cyan(opts.command)} requires an input file`);
 		printUsage();
 		process.exit(1);
@@ -61,12 +61,12 @@ export function main(): number {
 	// so this runs before dispatch, not inside run/build. Entries are
 	// extension-less module paths: std/ specifiers pass through, project
 	// paths become absolute against projectRoot.
-	if (projectRoot !== "") {
+	if (projectRoot != "") {
 		const giCfg = loadBuildConfig(buildMsPath, false);
 		if (giCfg.valid && giCfg.globalImports.length > 0) {
 			const extras: string[] = [];
 			for (const gi of giCfg.globalImports) {
-				if (gi.length > 4 && gi.slice(0, 4) === "std/") {
+				if (gi.length > 4 && gi.slice(0, 4) == "std/") {
 					extras.push(gi);
 				} else if (isAbsolute(gi)) {
 					extras.push(normalize(gi));
@@ -91,14 +91,14 @@ export function main(): number {
 		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, loadFmtSection(".")); },
 		"run" => {
 			// argv path overrides build.ms root; fallback to build.ms when no argv
-			if (opts.inputFile === "") {
+			if (opts.inputFile == "") {
 				const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 				if (cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			}
 			requireFile(opts);
-			if (opts.target === Target.JS) {
+			if (opts.target == Target.JS) {
 				cmdRunJS(opts.inputFile, opts);
-			} else if (opts.target === Target.Raiser) {
+			} else if (opts.target == Target.Raiser) {
 				cmdRunRaiser(opts.inputFile, opts);
 			} else {
 				cmdRun(opts.inputFile, opts);
@@ -107,7 +107,7 @@ export function main(): number {
 		"test" => {
 			defineSymbol(opts.defines, "testBuild", "true");
 			requireFile(opts);
-			if (opts.target === Target.JS) {
+			if (opts.target == Target.JS) {
 				cmdTestJS(opts.inputFile, opts);
 			} else {
 				cmdTest(opts.inputFile, opts);
@@ -117,7 +117,7 @@ export function main(): number {
 			// Load build.ms for config (target, optimize, outDir, etc.)
 			const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 			// argv path overrides build.ms root
-			if (opts.inputFile === "" && cfg.valid && cfg.entry.length > 0) {
+			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) {
 				opts.inputFile = cfg.entry;
 			}
 			requireFile(opts);
@@ -126,23 +126,23 @@ export function main(): number {
 				if (opts.verbose) {
 					verboseLog(`build.ms: root=${cfg.entry} target=${cfg.build.target}`);
 				}
-				if (opts.mode === MODE_DEBUG && cfg.build.optimize === "release") {
+				if (opts.mode == MODE_DEBUG && cfg.build.optimize == "release") {
 					opts.mode = MODE_RELEASE;
 				}
 			}
 			// Apply cc section from build.ms: resolve per-target config, CLI flags override
 			if (cfg.valid) {
 				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget);
-				if (resolved.entry !== "" && opts.inputFile === "") opts.inputFile = resolved.entry;
-				if (opts.ccBinary === "" && resolved.compiler !== "") opts.ccBinary = resolved.compiler;
-				if (opts.passC === "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
-				if (opts.passL === "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
+				if (resolved.entry != "" && opts.inputFile == "") opts.inputFile = resolved.entry;
+				if (opts.ccBinary == "" && resolved.compiler != "") opts.ccBinary = resolved.compiler;
+				if (opts.passC == "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
+				if (opts.passL == "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
 			}
-			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {
-				const outDir = (cfg.valid && cfg.build.outDir !== "") ? cfg.build.outDir : opts.outputPath;
+			if ((cfg.valid && cfg.build.target == "js") || opts.target == Target.JS) {
+				const outDir = (cfg.valid && cfg.build.outDir != "") ? cfg.build.outDir : opts.outputPath;
 				cmdBuildJS(opts.inputFile, outDir, opts);
 			} else {
-				if (cfg.valid && opts.outputPath === "" && cfg.build.outFile !== "") {
+				if (cfg.valid && opts.outputPath == "" && cfg.build.outFile != "") {
 					opts.outputPath = cfg.build.outFile;
 				}
 				cmdBuildC(opts.inputFile, opts, cfg.resolve);
@@ -150,13 +150,13 @@ export function main(): number {
 		},
 		"add" => {
 			const addArgs: string[] = [];
-			if (opts.inputFile !== "") addArgs.push(opts.inputFile);
+			if (opts.inputFile != "") addArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { addArgs.push(ea); }
 			if (!cmdAdd(projectRoot, addArgs)) process.exit(1);
 		},
 		"remove" => {
 			const rmArgs: string[] = [];
-			if (opts.inputFile !== "") rmArgs.push(opts.inputFile);
+			if (opts.inputFile != "") rmArgs.push(opts.inputFile);
 			if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
 		},
 		"install" => {
@@ -180,7 +180,7 @@ export function main(): number {
 		},
 		"org" => {
 			const orgArgs: string[] = [];
-			if (opts.inputFile !== "") orgArgs.push(opts.inputFile);
+			if (opts.inputFile != "") orgArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
 			if (!cmdOrg(orgArgs)) process.exit(1);
 		},

@@ -29,7 +29,7 @@ export { readFile, writeFile } from "../fs/index";
 // Platform identifier — normalize Node's "win32" to our "windows" so MS code
 // sees the same values across backends.
 const nodePlatform: string = process.platform;
-export const platform: string = nodePlatform === "win32" ? "windows" : nodePlatform;
+export const platform: string = nodePlatform == "win32" ? "windows" : nodePlatform;
 
 export function fileExists(path: string): boolean {
 	return existsSync(path);

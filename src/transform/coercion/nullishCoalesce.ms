@@ -20,15 +20,15 @@ export function lowerNullishCoalesce(program: Node, ctx: TransformContext): Node
 // ===== Visitor =====
 
 function lowerNullishNode(node: Node): Node {
-	if (node.kind !== NodeKind.BinaryExpr) return node;
+	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
-	if (d.operator !== "??") return node;
+	if (d.operator != "??") return node;
 
 	// A scalar left operand carries no null, and the lowered test would emit
 	// `double !== NULL`, which is not valid C. TS keeps the expression legal and
 	// its value is the left operand.
 	const leftType = d.left.nodeType;
-	if (leftType !== null && !isMaybeType(leftType) && (isNumeric(leftType) || isBoolType(leftType))) {
+	if (leftType != null && !isMaybeType(leftType) && (isNumeric(leftType) || isBoolType(leftType))) {
 		return d.left;
 	}
 
@@ -42,8 +42,8 @@ function lowerNullishNode(node: Node): Node {
 	// Nullable fallback keeps both arms in the carrier — no rewrite.
 	const lt = d.left.nodeType;
 	const rt = d.right.nodeType;
-	if (lt !== null && isMaybeType(lt)
-		&& rt !== null && rt.kind !== TypeKind.Null && !isMaybeType(rt)) {
+	if (lt != null && isMaybeType(lt)
+		&& rt != null && rt.kind != TypeKind.Null && !isMaybeType(rt)) {
 		const val = makeMember(d.left, "value", loc);
 		val.nodeType = unwrapMaybeType(lt);
 		const c = makeConditional(cond, val, d.right, loc);
@@ -51,13 +51,13 @@ function lowerNullishNode(node: Node): Node {
 		return c;
 	}
 	const lowered = makeConditional(cond, d.left, d.right, loc);
-	if (node.nodeType !== null) lowered.nodeType = node.nodeType;
+	if (node.nodeType != null) lowered.nodeType = node.nodeType;
 	return lowered;
 }
 
 // ===== Tests =====
-test "nullish coalesce becomes conditional" { assert firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) === NodeKind.ConditionalExpr; }
+test "nullish coalesce becomes conditional" { assert firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) == NodeKind.ConditionalExpr; }
 
-test "other binary unchanged" { assert firstExprKindAfter("x + y;", lowerNullishCoalesce) === NodeKind.BinaryExpr; }
+test "other binary unchanged" { assert firstExprKindAfter("x + y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }
 
-test "logical or unchanged" { assert firstExprKindAfter("x || y;", lowerNullishCoalesce) === NodeKind.BinaryExpr; }
+test "logical or unchanged" { assert firstExprKindAfter("x || y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }

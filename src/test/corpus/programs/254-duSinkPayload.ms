@@ -24,7 +24,7 @@ function mkBeta(n: int32): Beta {
 }
 
 function describe(s: Shape): string {
-	if (s.kind === "alpha") {
+	if (s.kind == "alpha") {
 		return "alpha/" + s.label + "/" + s.count.toString();
 	}
 	return "beta/" + s.label + "/" + s.ratio.toString();
@@ -48,7 +48,7 @@ function main(): void {
 	// 3. assignment into a local declared before the value exists (the JSON
 	//    decode shape: declare, then fill inside a branch).
 	let t: Shape = mkAlpha(0);
-	if (s.kind === "alpha") {
+	if (s.kind == "alpha") {
 		t = mkBeta(5);
 	}
 	console.log("5 " + describe(t));
@@ -56,8 +56,8 @@ function main(): void {
 	// 4. churn so the SAN lane sees real destroy traffic on both variants.
 	let flips = 0;
 	for (let i = 0; i < 20000; i += 1) {
-		s = i % 2 === 0 ? mkAlpha(i) : mkBeta(i);
-		if (s.kind === "alpha") {
+		s = i % 2 == 0 ? mkAlpha(i) : mkBeta(i);
+		if (s.kind == "alpha") {
 			flips += 1;
 		}
 	}

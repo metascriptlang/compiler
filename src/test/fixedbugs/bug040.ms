@@ -42,13 +42,13 @@ function bug040_returnArrayElem(): number {
 }
 
 test "bug040: return obj.field doesn't leak container" {
-	assert bug040_returnFieldNoLeak() === 42;
+	assert bug040_returnFieldNoLeak() == 42;
 }
 
 test "bug040: return nested field doesn't leak intermediate containers" {
-	assert bug040_returnNestedField() === 7;
+	assert bug040_returnNestedField() == 7;
 }
 
 test "bug040: return arr[i] doesn't leak array" {
-	assert bug040_returnArrayElem() === 20;
+	assert bug040_returnArrayElem() == 20;
 }

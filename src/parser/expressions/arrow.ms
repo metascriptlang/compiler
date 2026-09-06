@@ -30,37 +30,37 @@ function scanParenForArrow(state: ParserState): boolean {
 	let i = 0;
 	while (i < limit) {
 		const t = peek(state, i);
-		if (t.kind === TokenKind.Eof) return false;
-		if (t.kind === TokenKind.LParen) {
+		if (t.kind == TokenKind.Eof) return false;
+		if (t.kind == TokenKind.LParen) {
 			pDepth = pDepth + 1;
-		} else if (t.kind === TokenKind.RParen) {
+		} else if (t.kind == TokenKind.RParen) {
 			pDepth = pDepth - 1;
-			if (pDepth === 0) {
+			if (pDepth == 0) {
 				// Closed the outermost paren. Look for '=>' (possibly past return type)
 				let j = i + 1;
-				if (peek(state, j).kind === TokenKind.Colon) {
+				if (peek(state, j).kind == TokenKind.Colon) {
 					// Skip return type annotation: walk until top-level '=>' or terminator
 					j = j + 1;
 					let tDepth = 0;
 					while (j < limit) {
 						const tt = peek(state, j);
-						if (tt.kind === TokenKind.Arrow && tDepth === 0) return true;
-						if (tt.kind === TokenKind.LParen || tt.kind === TokenKind.LBrace ||
-							tt.kind === TokenKind.LBracket || tt.kind === TokenKind.Lt) {
+						if (tt.kind == TokenKind.Arrow && tDepth == 0) return true;
+						if (tt.kind == TokenKind.LParen || tt.kind == TokenKind.LBrace ||
+							tt.kind == TokenKind.LBracket || tt.kind == TokenKind.Lt) {
 							tDepth = tDepth + 1;
-						} else if (tt.kind === TokenKind.RParen || tt.kind === TokenKind.RBrace ||
-							tt.kind === TokenKind.RBracket || tt.kind === TokenKind.Gt) {
+						} else if (tt.kind == TokenKind.RParen || tt.kind == TokenKind.RBrace ||
+							tt.kind == TokenKind.RBracket || tt.kind == TokenKind.Gt) {
 							tDepth = tDepth - 1;
 							if (tDepth < 0) return false;
 						}
-						if (tDepth === 0 &&
-							(tt.kind === TokenKind.Semicolon || tt.kind === TokenKind.Comma ||
-							 tt.kind === TokenKind.Eof)) return false;
+						if (tDepth == 0 &&
+							(tt.kind == TokenKind.Semicolon || tt.kind == TokenKind.Comma ||
+							 tt.kind == TokenKind.Eof)) return false;
 						j = j + 1;
 					}
 					return false;
 				}
-				return peek(state, j).kind === TokenKind.Arrow;
+				return peek(state, j).kind == TokenKind.Arrow;
 			}
 		}
 		i = i + 1;
@@ -70,7 +70,7 @@ function scanParenForArrow(state: ParserState): boolean {
 
 export function isArrowFunction(state: ParserState): boolean {
 	// Must start with (
-	if (current(state).kind !== TokenKind.LParen) { return false; }
+	if (current(state).kind != TokenKind.LParen) { return false; }
 
 	const p1 = peek(state, 1);
 	// () =>  (zero params) — also handle () : Type => via scanParenForArrow,
@@ -78,18 +78,18 @@ export function isArrowFunction(state: ParserState): boolean {
 	// (used by the destructured-params and default-value paths below). Without
 	// the Colon branch, `(): Type =>` falls through to paren-expression
 	// parsing and blows up on the unexpected `:`. Bug F.
-	if (p1.kind === TokenKind.RParen) {
+	if (p1.kind == TokenKind.RParen) {
 		const p2 = peek(state, 2);
-		if (p2.kind === TokenKind.Arrow) return true;
-		if (p2.kind === TokenKind.Colon) return scanParenForArrow(state);
+		if (p2.kind == TokenKind.Arrow) return true;
+		if (p2.kind == TokenKind.Colon) return scanParenForArrow(state);
 	}
 
 	// Rest params: (...args) =>
-	if (p1.kind === TokenKind.DotDotDot) { return true; }
+	if (p1.kind == TokenKind.DotDotDot) { return true; }
 
 	// Destructured params: ({ ... }) => or ([ ... ]) =>
 	// Ambiguous with paren-wrapped object/array literal expression — must verify '=>' follows
-	if (p1.kind === TokenKind.LBrace || p1.kind === TokenKind.LBracket) {
+	if (p1.kind == TokenKind.LBrace || p1.kind == TokenKind.LBracket) {
 		return scanParenForArrow(state);
 	}
 
@@ -98,21 +98,21 @@ export function isArrowFunction(state: ParserState): boolean {
 
 	const p2 = peek(state, 2);
 	// (ident) =>  (single untyped param)
-	if (p2.kind === TokenKind.RParen && peek(state, 3).kind === TokenKind.Arrow) {
+	if (p2.kind == TokenKind.RParen && peek(state, 3).kind == TokenKind.Arrow) {
 		return true;
 	}
 
 	// (ident,  (multiple params — comma is never valid start of paren subexpr)
-	if (p2.kind === TokenKind.Comma) { return true; }
+	if (p2.kind == TokenKind.Comma) { return true; }
 
 	// (ident:  (typed param — colon never valid after bare ident in expression)
-	if (p2.kind === TokenKind.Colon) { return true; }
+	if (p2.kind == TokenKind.Colon) { return true; }
 
 	// (ident = ...) — default param value. Ambiguous with paren-wrapped assignment expr.
-	if (p2.kind === TokenKind.Assign) { return scanParenForArrow(state); }
+	if (p2.kind == TokenKind.Assign) { return scanParenForArrow(state); }
 
 	// (ident?...) — optional param marker (TS-only, currently unsupported but reserved)
-	if (p2.kind === TokenKind.Question) { return scanParenForArrow(state); }
+	if (p2.kind == TokenKind.Question) { return scanParenForArrow(state); }
 
 	return false;
 }
@@ -144,13 +144,13 @@ export function parseArrowFunction(
 	const arrowReturnType = captureOptionalType(state);
 	const arrowRetTypeExpr = getLastTypeExpr();
 
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
+	if (isAtEnd(state) || current(state).kind != TokenKind.Arrow) {
 		return Result.err(`Expected '=>' in arrow function at line ${current(state).line}`);
 	}
 
 	advance(state); // consume =>
 	// Body: block { ... } or expression
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const body = try blockParser(state);
 		const arrowNode1 = createNode(NodeKind.ArrowFunction, {
 			arrowParams,
@@ -195,13 +195,13 @@ export function parseBareIdentArrow(
 	const identToken = current(state);
 	advance(state); // consume Ident
 
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
+	if (isAtEnd(state) || current(state).kind != TokenKind.Arrow) {
 		return Result.err(`Expected '=>' after bare-ident arrow param at line ${identToken.line}`);
 	}
 	advance(state); // consume =>
 
 	// Body: block { ... } or expression
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const blockBody = try blockParser(state);
 		const blockNode = createNode(NodeKind.ArrowFunction, {
 			arrowParams: [identToken.value],
@@ -271,9 +271,9 @@ test "reject paren expr" { assert !checkArrow("(a + b)"); }
 
 test "reject call" { assert !checkArrow("f(a)"); }
 // Param counts
-test "zero params" { assert arrowParamCount("() => 42") === 0; }
+test "zero params" { assert arrowParamCount("() => 42") == 0; }
 
-test "two params" { assert arrowParamCount("(a, b) => a") === 2; }
+test "two params" { assert arrowParamCount("(a, b) => a") == 2; }
 // Integration
 test "arrow as arg" { assert parseOk("f((x) => x)"); }
 

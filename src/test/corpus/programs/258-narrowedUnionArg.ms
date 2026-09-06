@@ -38,7 +38,7 @@ function label(s: Shape): string {
 }
 
 function pick(i: int32): Shape {
-	if (i % 2 === 0) {
+	if (i % 2 == 0) {
 		const c: Circle = mkCircle(i);
 		return c;
 	}
@@ -51,7 +51,7 @@ function main(): void {
 	let total = 0.0;
 	for (let i = 0; i < 50000; i += 1) {
 		const s = pick(i);
-		if (s.kind === "circle") {
+		if (s.kind == "circle") {
 			total += area(s);
 		} else {
 			total += area(s);
@@ -61,20 +61,20 @@ function main(): void {
 
 	// Same reference consumed twice inside one expression, still narrowed.
 	const one = pick(0);
-	if (one.kind === "circle") {
+	if (one.kind == "circle") {
 		console.log("twice=" + label(one) + "/" + area(one).toString());
 	}
 
 	// Narrowed reference re-widened into a fresh union local.
 	const two = pick(1);
-	if (two.kind === "square") {
+	if (two.kind == "square") {
 		const again: Shape = two;
 		console.log("alias=" + label(again));
 	}
 
 	// Narrowed reference through a generic (Result) and back out as the union.
 	const three = pick(2);
-	if (three.kind === "circle") {
+	if (three.kind == "circle") {
 		const wrapped: Result<Shape, string> = Result.ok(three);
 		if (wrapped.ok) {
 			console.log("wrapped=" + label(wrapped.value));
@@ -83,7 +83,7 @@ function main(): void {
 
 	// Negative guard: narrowing in the ELSE branch is the same shape.
 	const four = pick(3);
-	if (four.kind === "circle") {
+	if (four.kind == "circle") {
 		console.log("unreached=" + label(four));
 	} else {
 		console.log("else=" + label(four) + "/" + area(four).toString());

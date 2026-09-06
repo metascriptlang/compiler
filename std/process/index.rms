@@ -37,21 +37,21 @@ export function cwd(): string {
 export function exec(command: string): Result<string, ProcessError> {
 	const stdoutText = msProcessSpawnSync(command);
 	const ok = msProcSpawnGetOk();
-	if (ok === 0) {
+	if (ok == 0) {
 		return Result.err(spawnFailed(command, "fork/exec failed"));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
-	if (pipeOk === 0) {
+	if (pipeOk == 0) {
 		return Result.err(pipeError(command, "failed to drain stdout/stderr from child"));
 	}
 	const signal = msProcSpawnGetSignal();
 	const exitCode = msProcSpawnGetExitCode();
 	const stderrText = msProcSpawnGetStderr();
-	if (signal !== 0) {
+	if (signal != 0) {
 		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
 	}
-	if (exitCode !== 0) {
-		if (exitCode === 127) {
+	if (exitCode != 0) {
+		if (exitCode == 127) {
 			return Result.err(notFound(command));
 		}
 		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
@@ -66,20 +66,20 @@ export function execFile(path: string, args: string[] = []): number {
 export function execFileCapture(path: string, args: string[] = []): Result<string, ProcessError> {
 	const stdoutText = msProcessSpawnSyncArgv(path, args);
 	const ok = msProcSpawnGetOk();
-	if (ok === 0) {
+	if (ok == 0) {
 		return Result.err(spawnFailed(path, "fork/exec failed"));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
-	if (pipeOk === 0) {
+	if (pipeOk == 0) {
 		return Result.err(pipeError(path, "failed to drain stdout/stderr from child"));
 	}
 	const signal = msProcSpawnGetSignal();
 	const exitCode = msProcSpawnGetExitCode();
 	const stderrText = msProcSpawnGetStderr();
-	if (signal !== 0) {
+	if (signal != 0) {
 		return Result.err(signalTerminated(path, signal, stdoutText, stderrText));
 	}
-	if (exitCode !== 0) {
+	if (exitCode != 0) {
 		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
 	}
 	return Result.ok(stdoutText);
@@ -91,11 +91,11 @@ export class env {
 	}
 
 	static set(name: string, value: string): boolean {
-		return msProcessSetEnv(name, value) !== 0.0;
+		return msProcessSetEnv(name, value) != 0.0;
 	}
 
 	static delete(name: string): boolean {
-		return msProcessUnsetEnv(name) !== 0.0;
+		return msProcessUnsetEnv(name) != 0.0;
 	}
 }
 
@@ -107,14 +107,14 @@ function hasWinExeSuffix(cmd: string): boolean {
 	if (cmd.length < 4) return false;
 	const tail = cmd.slice(cmd.length - 4, cmd.length).toLowerCase();
 	for (const ext of WIN_EXE_EXTS) {
-		if (tail === ext) return true;
+		if (tail == ext) return true;
 	}
 	return false;
 }
 
 export function findOnPath(cmd: string): string {
-	if (cmd === "") return "";
-	const isWin = platform === "windows";
+	if (cmd == "") return "";
+	const isWin = platform == "windows";
 
 	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {
 		if (isExecutable(cmd)) return cmd;
@@ -128,11 +128,11 @@ export function findOnPath(cmd: string): string {
 	}
 
 	const pathEnv = env.get("PATH");
-	if (pathEnv === "") return "";
+	if (pathEnv == "") return "";
 	const sep = isWin ? ";" : ":";
 	const alreadyHasExt = isWin && hasWinExeSuffix(cmd);
 	for (const dir of pathEnv.split(sep)) {
-		if (dir === "") continue;
+		if (dir == "") continue;
 		if (isWin) {
 			if (alreadyHasExt) {
 				const candidate = dir + "/" + cmd;
@@ -152,5 +152,5 @@ export function findOnPath(cmd: string): string {
 }
 
 export function cmdExists(cmd: string): boolean {
-	return findOnPath(cmd) !== "";
+	return findOnPath(cmd) != "";
 }

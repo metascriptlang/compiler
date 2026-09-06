@@ -25,49 +25,49 @@ function outer(ref v: int32): void { inner(v); inner(v); }
 function outInt(): boolean {
 	let a: int32 = 0;
 	setInt(out a);
-	return a === 42;
+	return a == 42;
 }
 
 function outStruct(): boolean {
 	let p: Pt2 = { x: 0, y: 0 };
 	setPt(out p);
-	return p.x === 7 && p.y === 8;
+	return p.x == 7 && p.y == 8;
 }
 
 function outString(): boolean {
 	let s: string = "orig";
 	setStr(out s);
-	return s === "written";
+	return s == "written";
 }
 
 function refBareReadWrite(): boolean {
 	let b: int32 = 10;
 	bumpRef(b);
-	return b === 11;
+	return b == 11;
 }
 
 function outReadWrite(): boolean {
 	let b: int32 = 10;
 	bumpOut(out b);
-	return b === 11;
+	return b == 11;
 }
 
 function memberLvalue(): boolean {
 	let b: Box = { val: 0 };
 	setInt(out b.val);
-	return b.val === 42;
+	return b.val == 42;
 }
 
 function elemLvalue(): boolean {
 	let arr: Vec<int32> = [0, 0];
 	setInt(out arr[1]);
-	return arr[1] === 42;
+	return arr[1] == 42;
 }
 
 function refForwarding(): boolean {
 	let x: int32 = 0;
 	outer(x);
-	return x === 2;
+	return x == 2;
 }
 
 function main(): void {

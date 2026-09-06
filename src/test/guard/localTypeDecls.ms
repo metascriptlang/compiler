@@ -57,6 +57,6 @@ function n(): number {
 
 const total = f() + g() + h() + k() + m() + n();
 console.log(total);
-if (total === 84) {
+if (total == 84) {
 	console.log("GUARD-OK");
 }

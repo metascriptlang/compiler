@@ -64,27 +64,27 @@ export function* toItems<T>(this arr: T[]): Iterator<T> {
 // Kept inline because struct.ms is a prelude module loaded before std/hash.
 
 export function hashString(s: string): int64 {
-	if (s.byteLength === 0) return 314159265 as int64;
+	if (s.byteLength == 0) return 314159265 as int64;
 	let h: int64 = 5381;
 	let i: int64 = 0;
 	while (i < s.byteLength) {
 		h = (h * (33 as int64) + (s.byteAt(i) as int64)) & (0xFFFFFFFF as int64);
 		i = i + (1 as int64);
 	}
-	if (h === (0 as int64)) return 314159265 as int64;
+	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
 
 // Hash for number keys — Knuth multiplicative hash.
 export function hashNumber(n: number): int64 {
 	let bits = (n as int64) & (0xFFFFFFFF as int64);
-	if (bits === (0 as int64)) bits = 314159265 as int64;
+	if (bits == (0 as int64)) bits = 314159265 as int64;
 	// Unsigned mixing: bits reaches 2^32-1 and the
 	// product exceeds INT64_MAX, which traps under overflow checks. Nim keeps
 	// hash mixing in uint64 and casts to the signed Hash last (hashes.nim).
 	const mixed = ((bits as uint64) * (2654435761 as uint64)) & (0xFFFFFFFF as uint64);
 	const h = mixed as int64;
-	if (h === (0 as int64)) return 314159265 as int64;
+	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
 
@@ -95,15 +95,15 @@ export function hashNumber(n: number): int64 {
 // 3 for weeks. The two copies are now one — hence the routing assertion below,
 // which is what keeps them from drifting apart again.
 test "hashNumber mixes without signed overflow at the 32-bit boundary" {
-	assert hashNumber(4294967295.0) === (1640531535 as int64);
-	assert hashNumber(4294967294.0) === (3281063070 as int64);
-	assert hashNumber(2147483648.0) === (2147483648 as int64);
-	assert hashNumber(0.0) === (125188177 as int64);
+	assert hashNumber(4294967295.0) == (1640531535 as int64);
+	assert hashNumber(4294967294.0) == (3281063070 as int64);
+	assert hashNumber(2147483648.0) == (2147483648 as int64);
+	assert hashNumber(0.0) == (125188177 as int64);
 	const m = new Map<number, string>();
 	m.set(4294967295.0, "hi");
 	m.set(4294967294.0, "lo");
-	assert (m.get(4294967295.0) ?? "") === "hi";
-	assert (m.get(4294967294.0) ?? "") === "lo";
+	assert (m.get(4294967295.0) ?? "") == "hi";
+	assert (m.get(4294967294.0) ?? "") == "lo";
 }
 
 test "reference hashing routes through the one mixing site" {
@@ -111,18 +111,18 @@ test "reference hashing routes through the one mixing site" {
 	const b = new Map<number, string>();
 	// The pointer path must BE hashNumber(fold), not a second private mix — a
 	// reintroduced copy would drift from this equality even while both "work".
-	assert a.hash() === hashNumber(msPtrFold(a) as number);
-	assert b.hash() === hashNumber(msPtrFold(b) as number);
+	assert a.hash() == hashNumber(msPtrFold(a) as number);
+	assert b.hash() == hashNumber(msPtrFold(b) as number);
 	// Fold is 32-bit, so the mixed result stays inside the masked range and can
 	// never carry the overflowed high bits that used to trap.
 	assert a.hash() >= (0 as int64) && a.hash() <= (0xFFFFFFFF as int64);
 	assert msPtrFold(a) >= (0 as int64) && msPtrFold(a) <= (0xFFFFFFFF as int64);
-	assert a.hash() === a.hash(), "stable for one identity";
+	assert a.hash() == a.hash(), "stable for one identity";
 	const seen = new Map<unknown, string>();
 	seen.set(a, "A");
 	seen.set(b, "B");
-	assert (seen.get(a) ?? "") === "A";
-	assert (seen.get(b) ?? "") === "B";
+	assert (seen.get(a) ?? "") == "A";
+	assert (seen.get(b) ?? "") == "B";
 }
 
 // Overloaded hash — type-dispatched hash(x: int) and hash(x: string).
@@ -179,12 +179,12 @@ export class HashMap<K, V> {
 }
 
 function hashMapRawGet<K, V>(m: HashMap<K, V>, key: K): int32 {
-	if (m.data.length === 0) return -1;
+	if (m.data.length == 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
-	while (m.data[h].hcode !== 0) {
-		if (m.data[h].hcode === hc && m.data[h].key === key) {
+	while (m.data[h].hcode != 0) {
+		if (m.data[h].hcode == hc && m.data[h].key == key) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -199,10 +199,10 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 	m.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
-		if (oldData[i].hcode !== 0) {
+		if (oldData[i].hcode != 0) {
 			const mask: int32 = newCap - 1;
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
-			while (m.data[j].hcode !== 0) { j = (j + 1) & mask; }
+			while (m.data[j].hcode != 0) { j = (j + 1) & mask; }
 			m.data[j].hcode = oldData[i].hcode;
 			m.data[j].key = oldData[i].key;
 			m.data[j].value = oldData[i].value;
@@ -215,7 +215,7 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer hashMapEndWrite(m);
-	if (m.data.length === 0) {
+	if (m.data.length == 0) {
 		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
@@ -229,7 +229,7 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 		}
 		const mask: int32 = m.data.length - 1;
 		let h: int32 = (hc & (mask as int64)) as int32;
-		while (m.data[h].hcode !== 0) { h = (h + 1) & mask; }
+		while (m.data[h].hcode != 0) { h = (h + 1) & mask; }
 		m.data[h].hcode = hc;
 		m.data[h].key = key;
 		m.data[h].value = value;
@@ -263,7 +263,7 @@ export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
 		const j = i;
 		while (true) {
 			i = (i + 1) & mask;
-			if (m.data[i].hcode === 0) return true;
+			if (m.data[i].hcode == 0) return true;
 			const r: int32 = (m.data[i].hcode & (mask as int64)) as int32;
 			if ((i >= r && r > j) || (r > j && j > i) || (j > i && i >= r)) {
 				continue;
@@ -291,7 +291,7 @@ export function keys<K, V>(this m: HashMap<K, V>): K[] {
 	const result: K[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
-		if (m.data[i].hcode !== 0) result.push(m.data[i].key);
+		if (m.data[i].hcode != 0) result.push(m.data[i].key);
 		i = i + 1;
 	}
 	return result;
@@ -302,7 +302,7 @@ export function values<K, V>(this m: HashMap<K, V>): V[] {
 	const result: V[] = [];
 	let i: int32 = 0;
 	while (i < m.data.length) {
-		if (m.data[i].hcode !== 0) result.push(m.data[i].value);
+		if (m.data[i].hcode != 0) result.push(m.data[i].value);
 		i = i + 1;
 	}
 	return result;
@@ -311,7 +311,7 @@ export function values<K, V>(this m: HashMap<K, V>): V[] {
 export function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	for (const entry of m.data) {
-		if (entry.hcode !== 0) fn(entry.value, entry.key);
+		if (entry.hcode != 0) fn(entry.value, entry.key);
 	}
 }
 
@@ -319,7 +319,7 @@ export function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => v
 export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	for (const entry of m.data) {
 		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
-		if (entry.hcode !== 0) yield entry.key;
+		if (entry.hcode != 0) yield entry.key;
 	}
 }
 
@@ -363,12 +363,12 @@ export class HashSet<T> {
 }
 
 function hashSetRawGet<T>(s: HashSet<T>, key: T): int32 {
-	if (s.data.length === 0) return -1;
+	if (s.data.length == 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
-	while (s.data[h].hcode !== 0) {
-		if (s.data[h].hcode === hc && s.data[h].key === key) {
+	while (s.data[h].hcode != 0) {
+		if (s.data[h].hcode == hc && s.data[h].key == key) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -383,10 +383,10 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 	s.data = newData;
 	let i: int32 = 0;
 	while (i < oldData.length) {
-		if (oldData[i].hcode !== 0) {
+		if (oldData[i].hcode != 0) {
 			const mask: int32 = newCap - 1;
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
-			while (s.data[j].hcode !== 0) { j = (j + 1) & mask; }
+			while (s.data[j].hcode != 0) { j = (j + 1) & mask; }
 			s.data[j].hcode = oldData[i].hcode;
 			s.data[j].key = oldData[i].key;
 		}
@@ -398,7 +398,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer hashSetEndWrite(s);
-	if (s.data.length === 0) { s.data = new Array(INITIAL_CAPACITY); }
+	if (s.data.length == 0) { s.data = new Array(INITIAL_CAPACITY); }
 	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
 	const hc = value.hash();
@@ -407,7 +407,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	}
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
-	while (s.data[h].hcode !== 0) { h = (h + 1) & mask; }
+	while (s.data[h].hcode != 0) { h = (h + 1) & mask; }
 	s.data[h].hcode = hc;
 	s.data[h].key = value;
 	s.size = s.size + 1;
@@ -431,7 +431,7 @@ export function delete<T>(this s: HashSet<T>, value: T): boolean {
 		const j = i;
 		while (true) {
 			i = (i + 1) & mask;
-			if (s.data[i].hcode === 0) return true;
+			if (s.data[i].hcode == 0) return true;
 			const r: int32 = (s.data[i].hcode & (mask as int64)) as int32;
 			if ((i >= r && r > j) || (r > j && j > i) || (j > i && i >= r)) continue;
 			break;
@@ -454,14 +454,14 @@ export function clear<T>(this s: HashSet<T>): void {
 export function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): void {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	for (const entry of s.data) {
-		if (entry.hcode !== 0) fn(entry.key);
+		if (entry.hcode != 0) fn(entry.key);
 	}
 }
 
 export function* toItems<T>(this s: HashSet<T>): Iterator<T> {
 	for (const entry of s.data) {
 		if (s.writing) { msMapFatal("concurrent map iteration and map write"); }
-		if (entry.hcode !== 0) yield entry.key;
+		if (entry.hcode != 0) yield entry.key;
 	}
 }
 
@@ -505,21 +505,21 @@ function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
 }
 
 function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
-	if (m.indices.length === 0) return -1;
+	if (m.indices.length == 0) return -1;
 	const mask: int32 = m.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	let firstOpen: int32 = -1;
 	while (true) {
 		const slot = m.indices[h];
-		if (slot === -1) {
+		if (slot == -1) {
 			if (firstOpen >= 0) return -1 - firstOpen;
 			return -1 - h;
 		}
-		if (slot === -2) {
+		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = m.entries[slot];
-			if (e.hcode === hc && e.key === key) return h;
+			if (e.hcode == hc && e.key == key) return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -527,15 +527,15 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
 }
 
 function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
-	const newCap = m.indices.length === 0 ? 32 : m.indices.length * 2;
+	const newCap = m.indices.length == 0 ? 32 : m.indices.length * 2;
 	orderedMapInitIndices(m, newCap);
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < m.entries.length) {
 		const e = m.entries[i];
-		if (e.hcode !== 0) {
+		if (e.hcode != 0) {
 			let h: int32 = (e.hcode & (mask as int64)) as int32;
-			while (m.indices[h] !== -1) { h = (h + 1) & mask; }
+			while (m.indices[h] != -1) { h = (h + 1) & mask; }
 			m.indices[h] = i;
 		}
 		i = i + 1;
@@ -547,7 +547,7 @@ function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	const newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
-		if (oldEntries[i].hcode !== 0) {
+		if (oldEntries[i].hcode != 0) {
 			newEntries.push(oldEntries[i]);
 		}
 		i = i + 1;
@@ -562,7 +562,7 @@ function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	let j: int32 = 0;
 	while (j < m.entries.length) {
 		let h: int32 = (m.entries[j].hcode & (mask as int64)) as int32;
-		while (m.indices[h] !== -1) { h = (h + 1) & mask; }
+		while (m.indices[h] != -1) { h = (h + 1) & mask; }
 		m.indices[h] = j;
 		j = j + 1;
 	}
@@ -572,7 +572,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer mapEndWrite(m);
-	if (m.indices.length === 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
+	if (m.indices.length == 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) {
@@ -588,11 +588,11 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	let firstOpen: int32 = -1;
 	while (true) {
 		const cur = m.indices[h];
-		if (cur === -1) {
+		if (cur == -1) {
 			if (firstOpen >= 0) { h = firstOpen; }
 			break;
 		}
-		if (cur === -2 && firstOpen < 0) { firstOpen = h; }
+		if (cur == -2 && firstOpen < 0) { firstOpen = h; }
 		h = (h + 1) & mask;
 	}
 	const newEntry: OrderedMapEntry<K, V> = { hcode: hc, key: key, value: value };
@@ -603,7 +603,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 
 export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
-	if (m.indices.length === 0) return null;
+	if (m.indices.length == 0) return null;
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
@@ -612,7 +612,7 @@ export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 
 export function has<K, V>(this m: Map<K, V>, key: K): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
-	if (m.indices.length === 0) return false;
+	if (m.indices.length == 0) return false;
 	const hc = key.hash();
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
@@ -621,7 +621,7 @@ export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer mapEndWrite(m);
-	if (m.indices.length === 0) return false;
+	if (m.indices.length == 0) return false;
 	const hc = key.hash();
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot < 0) return false;
@@ -653,7 +653,7 @@ export function keys<K, V>(this m: Map<K, V>): K[] {
 	const result: K[] = [];
 	let i: int32 = 0;
 	while (i < m.entries.length) {
-		if (m.entries[i].hcode !== 0) result.push(m.entries[i].key);
+		if (m.entries[i].hcode != 0) result.push(m.entries[i].key);
 		i = i + 1;
 	}
 	return result;
@@ -664,7 +664,7 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 	const result: V[] = [];
 	let i: int32 = 0;
 	while (i < m.entries.length) {
-		if (m.entries[i].hcode !== 0) result.push(m.entries[i].value);
+		if (m.entries[i].hcode != 0) result.push(m.entries[i].value);
 		i = i + 1;
 	}
 	return result;
@@ -673,14 +673,14 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 export function forEach<K, V>(this m: Map<K, V>, fn: (value: V, key: K) => void): void {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	for (const entry of m.entries) {
-		if (entry.hcode !== 0) fn(entry.value, entry.key);
+		if (entry.hcode != 0) fn(entry.value, entry.key);
 	}
 }
 
 export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	for (const entry of m.entries) {
 		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
-		if (entry.hcode !== 0) yield entry.key;
+		if (entry.hcode != 0) yield entry.key;
 	}
 }
 
@@ -739,21 +739,21 @@ function orderedSetInitIndices<T>(s: Set<T>, cap: int32): void {
 }
 
 function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
-	if (s.indices.length === 0) return -1;
+	if (s.indices.length == 0) return -1;
 	const mask: int32 = s.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	let firstOpen: int32 = -1;
 	while (true) {
 		const slot = s.indices[h];
-		if (slot === -1) {
+		if (slot == -1) {
 			if (firstOpen >= 0) return -1 - firstOpen;
 			return -1 - h;
 		}
-		if (slot === -2) {
+		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = s.entries[slot];
-			if (e.hcode === hc && e.key === key) return h;
+			if (e.hcode == hc && e.key == key) return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -761,15 +761,15 @@ function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
 }
 
 function orderedSetEnlarge<T>(s: Set<T>): void {
-	const newCap = s.indices.length === 0 ? 32 : s.indices.length * 2;
+	const newCap = s.indices.length == 0 ? 32 : s.indices.length * 2;
 	orderedSetInitIndices(s, newCap);
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < s.entries.length) {
 		const e = s.entries[i];
-		if (e.hcode !== 0) {
+		if (e.hcode != 0) {
 			let h: int32 = (e.hcode & (mask as int64)) as int32;
-			while (s.indices[h] !== -1) { h = (h + 1) & mask; }
+			while (s.indices[h] != -1) { h = (h + 1) & mask; }
 			s.indices[h] = i;
 		}
 		i = i + 1;
@@ -781,7 +781,7 @@ function orderedSetCompact<T>(s: Set<T>): void {
 	const newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
-		if (oldEntries[i].hcode !== 0) {
+		if (oldEntries[i].hcode != 0) {
 			// See orderedMapCompact comment: explicit field copy so DRC incref correctly.
 			const e: OrderedSetEntry<T> = {
 				hcode: oldEntries[i].hcode,
@@ -801,7 +801,7 @@ function orderedSetCompact<T>(s: Set<T>): void {
 	let j: int32 = 0;
 	while (j < s.entries.length) {
 		let h: int32 = (s.entries[j].hcode & (mask as int64)) as int32;
-		while (s.indices[h] !== -1) { h = (h + 1) & mask; }
+		while (s.indices[h] != -1) { h = (h + 1) & mask; }
 		s.indices[h] = j;
 		j = j + 1;
 	}
@@ -811,7 +811,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer setEndWrite(s);
-	if (s.indices.length === 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
+	if (s.indices.length == 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
 	const hc = value.hash();
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot >= 0) return;
@@ -823,11 +823,11 @@ export function add<T>(this s: Set<T>, value: T): void {
 	let firstOpen: int32 = -1;
 	while (true) {
 		const cur = s.indices[h];
-		if (cur === -1) {
+		if (cur == -1) {
 			if (firstOpen >= 0) { h = firstOpen; }
 			break;
 		}
-		if (cur === -2 && firstOpen < 0) { firstOpen = h; }
+		if (cur == -2 && firstOpen < 0) { firstOpen = h; }
 		h = (h + 1) & mask;
 	}
 	const newEntry: OrderedSetEntry<T> = { hcode: hc, key: value };
@@ -838,7 +838,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 
 export function has<T>(this s: Set<T>, value: T): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
-	if (s.indices.length === 0) return false;
+	if (s.indices.length == 0) return false;
 	const hc = value.hash();
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
@@ -847,7 +847,7 @@ export function delete<T>(this s: Set<T>, value: T): boolean {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer setEndWrite(s);
-	if (s.indices.length === 0) return false;
+	if (s.indices.length == 0) return false;
 	const hc = value.hash();
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot < 0) return false;
@@ -877,14 +877,14 @@ export function clear<T>(this s: Set<T>): void {
 export function forEach<T>(this s: Set<T>, fn: (value: T) => void): void {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	for (const entry of s.entries) {
-		if (entry.hcode !== 0) fn(entry.key);
+		if (entry.hcode != 0) fn(entry.key);
 	}
 }
 
 export function* toItems<T>(this s: Set<T>): Iterator<T> {
 	for (const entry of s.entries) {
 		if (s.writing) { msMapFatal("concurrent map iteration and map write"); }
-		if (entry.hcode !== 0) yield entry.key;
+		if (entry.hcode != 0) yield entry.key;
 	}
 }
 

@@ -196,15 +196,15 @@ test "statusLine matches statusText for all fast-path codes" {
 	                        500, 501, 502, 503, 504];
 	for (const c of codes) {
 		const expected = "HTTP/1.1 " + c.toString() + " " + statusText(c) + "\r\n";
-		assert statusLine(c) === expected;
+		assert statusLine(c) == expected;
 	}
 }
 
 test "statusLine returns empty string for uncommon codes (triggers fallback)" {
-	assert statusLine(206) === "";    // Partial Content — uncommon
-	assert statusLine(418) === "";    // Teapot — uncommon
-	assert statusLine(999) === "";    // bogus
-	assert statusLine(0) === "";      // bogus
+	assert statusLine(206) == "";    // Partial Content — uncommon
+	assert statusLine(418) == "";    // Teapot — uncommon
+	assert statusLine(999) == "";    // bogus
+	assert statusLine(0) == "";      // bogus
 }
 
 // Internal: build wire response from res.status + res.headers + body.
@@ -224,7 +224,7 @@ test "statusLine returns empty string for uncommon codes (triggers fallback)" {
 function endResponse(res: ServerResponse, data: string): void {
 	if (res._finished) return;
 	const status = res.status;
-	const noBodyAllowed = status === 204 || status === 304 || (status >= 100 && status < 200);
+	const noBodyAllowed = status == 204 || status == 304 || (status >= 100 && status < 200);
 	if (noBodyAllowed) {
 		// Strip body-related headers — even if user set them, they're invalid here.
 		hdrs.removeHeader(res.headers, "content-length");
@@ -328,7 +328,7 @@ export function sendRaw(res: ServerResponse, raw: string): void {
 // AND the overhead of msStaticCachePut would hurt.
 export function sendStatic(res: ServerResponse, slotId: int32, status: int32, contentType: string, body: string): void {
 	const sec = msEpochSec();
-	if (msStaticCacheHit(slotId, sec) === 1) {
+	if (msStaticCacheHit(slotId, sec) == 1) {
 		// HOT PATH — copy cached bytes into per-fd response buffer.
 		// _responseData keeps its own pre-allocated payload (4KB cap via
 		// initClient); the cached msString is literal-flagged so DRC won't
@@ -384,7 +384,7 @@ export function hasHeader(this res: ServerResponse, name: string): boolean {
 // Set status + merge headers, no body sent yet.
 export function writeHead(this res: ServerResponse, status: int32, headers: HttpHeaders | null = null): void {
 	res.status = status;
-	if (headers !== null) {
+	if (headers != null) {
 		let i = 0;
 		while (i < headers._names.length) {
 			hdrs.setHeader(res.headers, headers._names[i], headers._values[i]);
@@ -555,18 +555,18 @@ function parseHeadersInline(data: string, endPos: int32, headers: HttpHeaders): 
 	let lineStart: int32 = 0;
 	while (lineStart < endPos) {
 		let lineEnd = lineStart;
-		while (lineEnd + 1 < endPos && !(data.charCodeAt(lineEnd) === "\r".code && data.charCodeAt(lineEnd + 1) === "\n".code)) {
+		while (lineEnd + 1 < endPos && !(data.charCodeAt(lineEnd) == "\r".code && data.charCodeAt(lineEnd + 1) == "\n".code)) {
 			lineEnd = lineEnd + 1;
 		}
-		if (lineEnd === lineStart) break;  // empty line = end of headers
+		if (lineEnd == lineStart) break;  // empty line = end of headers
 		// Skip first line (request line "METHOD path HTTP/1.1")
 		if (lineStart > 0) {
 			let colon = lineStart;
-			while (colon < lineEnd && data.charCodeAt(colon) !== ":".code) colon = colon + 1;
+			while (colon < lineEnd && data.charCodeAt(colon) != ":".code) colon = colon + 1;
 			if (colon < lineEnd) {
 				const name = data.slice(lineStart, colon);
 				let valStart = colon + 1;
-				while (valStart < lineEnd && (data.charCodeAt(valStart) === " ".code || data.charCodeAt(valStart) === "\t".code)) valStart = valStart + 1;
+				while (valStart < lineEnd && (data.charCodeAt(valStart) == " ".code || data.charCodeAt(valStart) == "\t".code)) valStart = valStart + 1;
 				hdrs.addHeader(headers, name, data.slice(valStart, lineEnd));
 			}
 		}
@@ -611,7 +611,7 @@ function idleSweep(clients: ClientState[], server: HttpServer): void {
 	let i: int32 = 0;
 	while (i < MAX_CLIENT_FDS) {
 		const c = clients[i];
-		if (c.lastActivityMs !== (0 as int64) && c.lastActivityMs < threshold) {
+		if (c.lastActivityMs != (0 as int64) && c.lastActivityMs < threshold) {
 			msIoEngineCancelFd_ms(i);
 			msNetClose(i);
 			c.lastActivityMs = 0 as int64;
@@ -665,7 +665,7 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const port = server.port;
 	const handler = server.handler;
 
-	const useUring = msHasUringEventLoop() === 1;
+	const useUring = msHasUringEventLoop() == 1;
 
 	for (let i = 0; i < n - 1; i += 1) {
 		spawn(() => {
@@ -729,7 +729,7 @@ async function handleConnSync(server: HttpServer, client: ClientState, fd: int32
 				alive = false;
 			} else {
 				const chunk = await recvAsync(fd, server.maxHeaderSize);
-				if (chunk.length === 0) {
+				if (chunk.length == 0) {
 					alive = false;
 				} else {
 					client.data += chunk; client.lastActivityMs = msMonoTimeMs();
@@ -744,7 +744,7 @@ async function handleConnSync(server: HttpServer, client: ClientState, fd: int32
 		const methodInt = msFastParseMethod(client.data);
 		if (methodInt < 0) { alive = false; break; }
 		client.request.path.parsePathInto(client.data);
-		if (client.request.path.length === 0) { alive = false; break; }
+		if (client.request.path.length == 0) { alive = false; break; }
 		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
 		parseHeadersInline(client.data, endPos, client.request.headers);
@@ -752,13 +752,13 @@ async function handleConnSync(server: HttpServer, client: ClientState, fd: int32
 		// 3) Frame body — recv more until ready / reject
 		let bufferAfter = client.data.slice(endPos, client.data.length);
 		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
-		while (alive && frame.kind === "needMore") {
+		while (alive && frame.kind == "needMore") {
 			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
 				const more = await recvAsync(fd, server.maxHeaderSize);
-				if (more.length === 0) {
+				if (more.length == 0) {
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
@@ -768,7 +768,7 @@ async function handleConnSync(server: HttpServer, client: ClientState, fd: int32
 			}
 		}
 		if (!alive) break;
-		if (frame.kind === "reject") {
+		if (frame.kind == "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
 			alive = false;
 			break;
@@ -852,12 +852,12 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		// terminator. (findHeaderEnd validates fast/slow internally — see its
 		// comment for the false-match guard.)
 		let data = msNetRecv(fd, server.maxHeaderSize);
-		if (data.length === 0) return false;  // peer closed
+		if (data.length == 0) return false;  // peer closed
 		let endPos = findHeaderEnd(data);
 		while (endPos < 0) {
 			if (data.length >= server.maxHeaderSize) return false;  // header too large
 			const more = msNetRecv(fd, server.maxHeaderSize);
-			if (more.length === 0) return false;  // peer closed mid-headers
+			if (more.length == 0) return false;  // peer closed mid-headers
 			data = data + more;
 			endPos = findHeaderEnd(data);
 		}
@@ -866,7 +866,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		const methodInt = msFastParseMethod(data);
 		if (methodInt < 0) return false;
 		client.request.path.parsePathInto(data);
-		if (client.request.path.length === 0) return false;
+		if (client.request.path.length == 0) return false;
 
 		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
@@ -884,9 +884,9 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		// memory bound needs an incremental chunked decoder (v2).
 		let bufferAfter = data.slice(endPos, data.length);
 		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
-		while (frame.kind === "needMore") {
+		while (frame.kind == "needMore") {
 			const more = msNetRecv(fd, server.maxHeaderSize);
-			if (more.length === 0) return false;  // peer closed mid-body
+			if (more.length == 0) return false;  // peer closed mid-body
 			bufferAfter = bufferAfter + more;
 			// Byte-oriented cap — see frameRequest for the same rationale.
 			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
@@ -895,7 +895,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 			}
 			frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
 		}
-		if (frame.kind === "reject") {
+		if (frame.kind == "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
 			return false;  // close connection (Connection: close)
 		}
@@ -947,7 +947,7 @@ function dispatchUringRecv(server: HttpServer, client: ClientState, fd: int32, h
 	if (methodInt < 0) { msNetClose(fd); return; }
 
 	client.request.path.parsePathInto(client.data);
-	if (client.request.path.length === 0) { msNetClose(fd); return; }
+	if (client.request.path.length == 0) { msNetClose(fd); return; }
 
 	resetRequest(client, fd, methodInt);
 	resetResponse(client, fd);
@@ -955,7 +955,7 @@ function dispatchUringRecv(server: HttpServer, client: ClientState, fd: int32, h
 
 	const bufferAfter = client.data.slice(client.headersEndPos, client.data.length);
 	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
-	if (frame.kind === "needMore") {
+	if (frame.kind == "needMore") {
 		if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 			msNetSend(fd, buildErrorResponse(413));
 			msNetClose(fd);
@@ -964,7 +964,7 @@ function dispatchUringRecv(server: HttpServer, client: ClientState, fd: int32, h
 		msUringSubmitRecv(fd, "", 4096);
 		return;
 	}
-	if (frame.kind === "reject") {
+	if (frame.kind == "reject") {
 		msNetSend(fd, buildErrorResponse(frame.rejectStatus));
 		msNetClose(fd);
 		return;
@@ -1025,13 +1025,13 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 			const op = msUringEventOp(i);
 			const res = msUringEventRes(i);
 
-			if (op === 0) {
+			if (op == 0) {
 				// ACCEPT — set socket opts, start recv
 				if (res >= 0 && res < maxFds) {
 					msNetSetTcpNoDelay(res);
 					msNetSetNoSigpipe(res);
 					msNetSetNonBlocking(res);
-					if (clients[res] === null as unknown as ClientState) {
+					if (clients[res] == null as unknown as ClientState) {
 						clients[res] = initClient(res);
 					} else {
 						resetClient(clients[res], res);
@@ -1041,7 +1041,7 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 					msNetClose(res);
 				}
 				msUringSubmitAccept(listenFd);
-			} else if (op === 1) {
+			} else if (op == 1) {
 				// RECV — accumulate bytes into client.data, then dispatch via helper.
 				// dispatchUringRecv handles header-end detection, body framing
 				// (Content-Length / chunked), and submitting the next uring op.
@@ -1049,12 +1049,12 @@ function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHan
 					msNetClose(evFd);
 				} else if (evFd >= 0 && evFd < maxFds) {
 					const client = clients[evFd];
-					if (client !== null as unknown as ClientState) {
+					if (client != null as unknown as ClientState) {
 						client.data += msUringRecvData(evFd, res);
 						dispatchUringRecv(server, client, evFd, handler);
 					}
 				}
-			} else if (op === 2) {
+			} else if (op == 2) {
 				// SEND complete — re-arm recv for keep-alive, UNLESS the handler
 				// took over the fd via res.detach() (protocol switch). In the
 				// upgrade case the fd is now owned by the caller's recv loop;
@@ -1114,7 +1114,7 @@ async function handleConnAsync(server: HttpServer, client: ClientState, fd: int3
 				alive = false;
 			} else {
 				const chunk = await recvAsync(fd, server.maxHeaderSize);
-				if (chunk.length === 0) {
+				if (chunk.length == 0) {
 					alive = false;
 				} else {
 					client.data += chunk; client.lastActivityMs = msMonoTimeMs();
@@ -1129,7 +1129,7 @@ async function handleConnAsync(server: HttpServer, client: ClientState, fd: int3
 		const methodInt = msFastParseMethod(client.data);
 		if (methodInt < 0) { alive = false; break; }
 		client.request.path.parsePathInto(client.data);
-		if (client.request.path.length === 0) { alive = false; break; }
+		if (client.request.path.length == 0) { alive = false; break; }
 		resetRequest(client, fd, methodInt);
 		resetResponse(client, fd);
 		parseHeadersInline(client.data, endPos, client.request.headers);
@@ -1137,13 +1137,13 @@ async function handleConnAsync(server: HttpServer, client: ClientState, fd: int3
 		// 3) Frame body
 		let bufferAfter = client.data.slice(endPos, client.data.length);
 		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
-		while (alive && frame.kind === "needMore") {
+		while (alive && frame.kind == "needMore") {
 			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
 				const more = await recvAsync(fd, server.maxHeaderSize);
-				if (more.length === 0) {
+				if (more.length == 0) {
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
@@ -1153,7 +1153,7 @@ async function handleConnAsync(server: HttpServer, client: ClientState, fd: int3
 			}
 		}
 		if (!alive) break;
-		if (frame.kind === "reject") {
+		if (frame.kind == "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
 			alive = false;
 			break;

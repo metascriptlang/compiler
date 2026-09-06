@@ -33,19 +33,19 @@ class Box {
 
 test "bug129: instance method overload dispatches on param type" {
 	const b = new Box();
-	assert b.describe(5) === "int:5";
-	assert b.describe("x") === "str:x";
+	assert b.describe(5) == "int:5";
+	assert b.describe("x") == "str:x";
 }
 
 test "bug129: instance method overload dispatches on arity" {
 	const b = new Box();
-	assert b.add(2) === 2;
-	assert b.add(2, 3) === 5;
+	assert b.add(2) == 2;
+	assert b.add(2, 3) == 5;
 }
 
 test "bug129: static method overload dispatches on param type" {
-	assert Box.make(5) === "static-int:5";
-	assert Box.make("x") === "static-str:x";
+	assert Box.make(5) == "static-int:5";
+	assert Box.make("x") == "static-str:x";
 }
 
 class Slot {
@@ -55,12 +55,12 @@ class Slot {
 
 test "bug129: a static and an instance method may share a name" {
 	const s = new Slot();
-	assert Slot.of(5) === "static:5";
-	assert s.of("x") === "inst:x";
+	assert Slot.of(5) == "static:5";
+	assert s.of("x") == "inst:x";
 }
 
 test "bug129: overloaded methods may differ in return type" {
 	const b = new Box();
-	assert b.pick(4) === 5;
-	assert b.pick("x") === "s:x";
+	assert b.pick(4) == 5;
+	assert b.pick("x") == "s:x";
 }

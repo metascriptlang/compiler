@@ -24,12 +24,12 @@ function main(): void {
 	if (!(a < 10)) { throw "GUARD RED: `as number` did not unwrap value-type Maybe"; }
 
 	const b = pickN(false, 0) ?? 42;
-	if (b !== 42) { throw "GUARD RED: `?? default` did not select default on absent"; }
+	if (b != 42) { throw "GUARD RED: `?? default` did not select default on absent"; }
 	const c = pickN(true, 5) ?? 42;
-	if (c !== 5) { throw "GUARD RED: `?? default` wrong on present value"; }
+	if (c != 5) { throw "GUARD RED: `?? default` wrong on present value"; }
 
 	const d = pickN(true, 9)!;
-	if (d + 1 !== 10) { throw "GUARD RED: postfix `!` did not unwrap value-type Maybe"; }
+	if (d + 1 != 10) { throw "GUARD RED: postfix `!` did not unwrap value-type Maybe"; }
 
 	console.log("maybeValueUnwrap ok");
 }

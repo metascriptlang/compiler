@@ -19,8 +19,8 @@ function loud(tag: string): string {
 
 function main(): void {
 	const flags: int32[] = [1];
-	const condT: boolean = flags[0] === 1;
-	const condF: boolean = flags[0] === 2;
+	const condT: boolean = flags[0] == 1;
+	const condF: boolean = flags[0] == 2;
 
 	console.log(condT ? "taken" : "x" + loud("A"));
 	console.log("pre:" + (condT ? "yes" : "no" + loud("B")));
@@ -30,6 +30,6 @@ function main(): void {
 	console.log("ternary-shortcircuit effects=" + effects);
 
 	const p: P = null as unknown as P;
-	console.log(p !== null ? "has:" + p.name : "none");
+	console.log(p != null ? "has:" + p.name : "none");
 }
 main();

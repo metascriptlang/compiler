@@ -30,7 +30,7 @@ export const MAX_PAYLOAD_BYTES: int32 = 16777216;
 
 // Control frames have the high bit of the 4-bit opcode set (0x8, 0x9, 0xA).
 export function isControlOpcode(op: int32): boolean {
-	return (op & 0x8) !== 0;
+	return (op & 0x8) != 0;
 }
 
 // Opcodes 0x3-0x7 (data) and 0xB-0xF (control) are reserved by the spec.
@@ -89,7 +89,7 @@ export function maskPayload(payload: uint8[], maskKey: uint8[]): uint8[] {
 	const keyLen = maskKey.length;
 	const payloadLen = payload.length;
 	let bytes: uint8[] = [];
-	if (keyLen === 0) {
+	if (keyLen == 0) {
 		// Empty key — return an unchanged copy. This branch is purely
 		// defensive: internal callers always pass a 4-byte key.
 		for (let i: int32 = 0; i < payloadLen; i = i + 1) {
@@ -220,11 +220,11 @@ export function parseFrame(data: uint8[], offset: int32): Result<ParseFrameResul
 	const b0: int32 = data[offset] as int32;
 	const b1: int32 = data[offset + 1] as int32;
 
-	const fin = (b0 & 0x80) !== 0;
+	const fin = (b0 & 0x80) != 0;
 	const rsv = b0 & 0x70;
 	const opcode = b0 & 0x0F;
 
-	if (rsv !== 0) {
+	if (rsv != 0) {
 		return Result.err(wsProtocolError("RSV bits must be 0"));
 	}
 	if (isReservedOpcode(opcode)) {
@@ -234,14 +234,14 @@ export function parseFrame(data: uint8[], offset: int32): Result<ParseFrameResul
 		return Result.err(wsProtocolError("control frame must not be fragmented"));
 	}
 
-	const masked = (b1 & 0x80) !== 0;
+	const masked = (b1 & 0x80) != 0;
 	const lenField = b1 & 0x7F;
 	let cursor = offset + 2;
 	let payloadLen: int32 = 0;
 
 	if (lenField <= 125) {
 		payloadLen = lenField;
-	} else if (lenField === 126) {
+	} else if (lenField == 126) {
 		if (avail < 4) return Result.ok(needMore());
 		payloadLen = ((data[cursor] * 256) + data[cursor + 1]) as int32;
 		cursor = cursor + 2;
@@ -250,8 +250,8 @@ export function parseFrame(data: uint8[], offset: int32): Result<ParseFrameResul
 		if (avail < 10) return Result.ok(needMore());
 		// High 4 bytes (bits 32..63) must be zero — we cap at 16 MB so the
 		// value fits in 32 bits comfortably. Anything beyond is too large.
-		if (data[cursor] !== 0 || data[cursor + 1] !== 0 || data[cursor + 2] !== 0
-		 || data[cursor + 3] !== 0) {
+		if (data[cursor] != 0 || data[cursor + 1] != 0 || data[cursor + 2] != 0
+		 || data[cursor + 3] != 0) {
 			return Result.err(wsPayloadTooLarge(MAX_PAYLOAD_BYTES + 1, MAX_PAYLOAD_BYTES));
 		}
 		// Read the low 4 bytes via multiply-add. Bitwise `<<` would overflow
@@ -338,10 +338,10 @@ export function encodeClosePayload(code: int32, reason: uint8[]): uint8[] {
 
 export function decodeClosePayload(payload: uint8[]): CloseInfo {
 	const empty: uint8[] = [];
-	if (payload.length === 0) {
+	if (payload.length == 0) {
 		return { code: 1000, reason: empty, hasCode: false };
 	}
-	if (payload.length === 1) {
+	if (payload.length == 1) {
 		// Malformed but be lenient — treat as no code.
 		return { code: 1000, reason: empty, hasCode: false };
 	}
@@ -371,7 +371,7 @@ export function decodeClosePayload(payload: uint8[]): CloseInfo {
 // from a peer. Sending the same set is also the conservative client policy.
 export function isWireValidCloseCode(code: int32): boolean {
 	if (code < 1000) return false;
-	if (code === 1004 || code === 1005 || code === 1006 || code === 1015) return false;
+	if (code == 1004 || code == 1005 || code == 1006 || code == 1015) return false;
 	if (code >= 1016 && code <= 2999) return false;
 	if (code >= 5000) return false;
 	return true;
@@ -380,10 +380,10 @@ export function isWireValidCloseCode(code: int32): boolean {
 // ===== Tests =====
 
 function bytesEqual(a: uint8[], b: uint8[]): boolean {
-	if (a.length !== b.length) return false;
+	if (a.length != b.length) return false;
 	let i = 0;
 	while (i < a.length) {
-		if (a[i] !== b[i]) return false;
+		if (a[i] != b[i]) return false;
 		i = i + 1;
 	}
 	return true;
@@ -420,37 +420,37 @@ test "maskPayload empty" {
 	const key: uint8[] = [1, 2, 3, 4];
 	const empty: uint8[] = [];
 	const m = maskPayload(empty, key);
-	assert m.length === 0;
+	assert m.length == 0;
 }
 
 test "maskPayload empty key returns unchanged copy (defensive)" {
 	const empty: uint8[] = [];
 	const payload: uint8[] = [0x10, 0x20, 0x30];
 	const m = maskPayload(payload, empty);
-	assert m.length === 3;
-	assert m[0] === 0x10 && m[1] === 0x20 && m[2] === 0x30;
+	assert m.length == 3;
+	assert m[0] == 0x10 && m[1] == 0x20 && m[2] == 0x30;
 	// Should be a copy, not the same array.
 	m.push(0x99);
-	assert payload.length === 3;
+	assert payload.length == 3;
 }
 
 test "maskPayload 1-byte key cycles (defensive — RFC requires 4)" {
 	const key: uint8[] = [0xAA];
 	const payload: uint8[] = [0x01, 0x02, 0x03];
 	const m = maskPayload(payload, key);
-	assert m[0] === (0x01 ^ 0xAA);
-	assert m[1] === (0x02 ^ 0xAA);
-	assert m[2] === (0x03 ^ 0xAA);
+	assert m[0] == (0x01 ^ 0xAA);
+	assert m[1] == (0x02 ^ 0xAA);
+	assert m[2] == (0x03 ^ 0xAA);
 }
 
 test "maskPayload 2-byte key cycles" {
 	const key: uint8[] = [0xF0, 0x0F];
 	const payload: uint8[] = [0x01, 0x02, 0x03, 0x04];
 	const m = maskPayload(payload, key);
-	assert m[0] === (0x01 ^ 0xF0);
-	assert m[1] === (0x02 ^ 0x0F);
-	assert m[2] === (0x03 ^ 0xF0);
-	assert m[3] === (0x04 ^ 0x0F);
+	assert m[0] == (0x01 ^ 0xF0);
+	assert m[1] == (0x02 ^ 0x0F);
+	assert m[2] == (0x03 ^ 0xF0);
+	assert m[3] == (0x04 ^ 0x0F);
 }
 
 test "buildFrame text round-trip — short payload" {
@@ -462,10 +462,10 @@ test "buildFrame text round-trip — short payload" {
 	assert !r.value.needMore;
 	const f = r.value.frame;
 	assert f.fin;
-	assert f.opcode === OPCODE_TEXT;
+	assert f.opcode == OPCODE_TEXT;
 	assert f.masked;
 	assert bytesEqual(f.payload, payload);
-	assert f.totalSize === frame.length;
+	assert f.totalSize == frame.length;
 }
 
 test "buildFrame header bytes — opcode + FIN + length" {
@@ -473,14 +473,14 @@ test "buildFrame header bytes — opcode + FIN + length" {
 	const payload: uint8[] = [0x41, 0x42, 0x43];  // "ABC"
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
 	// Byte 0: 0x82 = FIN | Binary opcode
-	assert frame[0] === 0x82;
+	assert frame[0] == 0x82;
 	// Byte 1: 0x83 = MASK bit (0x80) | length 3
-	assert frame[1] === 0x83;
+	assert frame[1] == 0x83;
 	// Bytes 2-5: mask key (all zero)
-	assert frame[2] === 0 && frame[3] === 0 && frame[4] === 0 && frame[5] === 0;
+	assert frame[2] == 0 && frame[3] == 0 && frame[4] == 0 && frame[5] == 0;
 	// Bytes 6-8: payload XOR with all-zero key — same as input
-	assert frame[6] === 0x41 && frame[7] === 0x42 && frame[8] === 0x43;
-	assert frame.length === 9;
+	assert frame[6] == 0x41 && frame[7] == 0x42 && frame[8] == 0x43;
+	assert frame.length == 9;
 }
 
 test "buildFrame binary round-trip — 200 byte payload (extended-16 length)" {
@@ -493,11 +493,11 @@ test "buildFrame binary round-trip — 200 byte payload (extended-16 length)" {
 	assert r.ok;
 	assert !r.value.needMore;
 	const f = r.value.frame;
-	assert f.opcode === OPCODE_BINARY;
-	assert f.payload.length === 200;
+	assert f.opcode == OPCODE_BINARY;
+	assert f.payload.length == 200;
 	assert bytesEqual(f.payload, payload);
 	// Header should be 2 (basic) + 2 (uint16 len) + 4 (mask) = 8
-	assert f.headerSize === 8;
+	assert f.headerSize == 8;
 }
 
 test "buildFrame extended-16 length encoding" {
@@ -507,10 +507,10 @@ test "buildFrame extended-16 length encoding" {
 	while (i < 1000) { payload.push(0); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
 	// frame[1] should be 0x80 | 126 = 0xFE
-	assert frame[1] === 0xFE;
+	assert frame[1] == 0xFE;
 	// length 1000 = 0x03E8 → byte 2 = 0x03, byte 3 = 0xE8
-	assert frame[2] === 0x03;
-	assert frame[3] === 0xE8;
+	assert frame[2] == 0x03;
+	assert frame[3] == 0xE8;
 }
 
 test "buildFrame binary round-trip — 70k payload (extended-64 length)" {
@@ -523,10 +523,10 @@ test "buildFrame binary round-trip — 70k payload (extended-64 length)" {
 	assert r.ok;
 	assert !r.value.needMore;
 	const f = r.value.frame;
-	assert f.payload.length === 70000;
+	assert f.payload.length == 70000;
 	assert bytesEqual(f.payload, payload);
 	// Header: 2 (basic) + 8 (uint64 len) + 4 (mask) = 14
-	assert f.headerSize === 14;
+	assert f.headerSize == 14;
 }
 
 test "buildFrame extended-64 length encoding (low 24 bits)" {
@@ -536,13 +536,13 @@ test "buildFrame extended-64 length encoding (low 24 bits)" {
 	while (i < 70000) { payload.push(0); i = i + 1; }
 	const frame = buildFrame(OPCODE_BINARY, true, payload, key);
 	// frame[1] = 0x80 | 127 = 0xFF
-	assert frame[1] === 0xFF;
+	assert frame[1] == 0xFF;
 	// 8-byte BE length for 70000 = 0x00000000_00011170
-	assert frame[2] === 0 && frame[3] === 0 && frame[4] === 0 && frame[5] === 0;
-	assert frame[6] === 0;        // high byte of low-24
-	assert frame[7] === 0x01;
-	assert frame[8] === 0x11;
-	assert frame[9] === 0x70;
+	assert frame[2] == 0 && frame[3] == 0 && frame[4] == 0 && frame[5] == 0;
+	assert frame[6] == 0;        // high byte of low-24
+	assert frame[7] == 0x01;
+	assert frame[8] == 0x11;
+	assert frame[9] == 0x70;
 }
 
 // ----- B1: ext-64 length must encode the full 4 low bytes (≥16 MB boundary) -----
@@ -567,15 +567,15 @@ test "buildFrame ext-64 emits non-zero byte 4 for length 16 MB exactly" {
 	}
 	const frame = buildFrameUnmasked(OPCODE_BINARY, true, payload);
 	// Byte 0: FIN | Binary
-	assert frame[0] === 0x82;
+	assert frame[0] == 0x82;
 	// Byte 1: 127 (ext-64 marker, no mask bit since unmasked)
-	assert frame[1] === 0x7F;
+	assert frame[1] == 0x7F;
 	// 8-byte BE length: 0x00 00 00 00 01 00 00 01
-	assert frame[2] === 0 && frame[3] === 0 && frame[4] === 0 && frame[5] === 0;
-	assert frame[6] === 0x01;  // ← the byte the old emitter zeroed silently
-	assert frame[7] === 0x00;
-	assert frame[8] === 0x00;
-	assert frame[9] === 0x01;
+	assert frame[2] == 0 && frame[3] == 0 && frame[4] == 0 && frame[5] == 0;
+	assert frame[6] == 0x01;  // ← the byte the old emitter zeroed silently
+	assert frame[7] == 0x00;
+	assert frame[8] == 0x00;
+	assert frame[9] == 0x01;
 }
 
 test "parseFrame ext-64 rejects values above MAX_PAYLOAD_BYTES via b4 check" {
@@ -629,7 +629,7 @@ test "fragmented message — two frames of a Text message" {
 	assert r1.ok;
 	assert !r1.value.needMore;
 	const fr1 = r1.value.frame;
-	assert fr1.opcode === OPCODE_TEXT;
+	assert fr1.opcode == OPCODE_TEXT;
 	assert !fr1.fin;
 	assert bytesEqual(fr1.payload, part1);
 
@@ -637,7 +637,7 @@ test "fragmented message — two frames of a Text message" {
 	assert r2.ok;
 	assert !r2.value.needMore;
 	const fr2 = r2.value.frame;
-	assert fr2.opcode === OPCODE_CONTINUATION;
+	assert fr2.opcode == OPCODE_CONTINUATION;
 	assert fr2.fin;
 	assert bytesEqual(fr2.payload, part2);
 }
@@ -694,27 +694,27 @@ test "encodeClosePayload + decodeClosePayload round-trip with reason" {
 	const enc = encodeClosePayload(1000, reason);
 	const dec = decodeClosePayload(enc);
 	assert dec.hasCode;
-	assert dec.code === 1000;
+	assert dec.code == 1000;
 	assert bytesEqual(dec.reason, reason);
 }
 
 test "encodeClosePayload code-only" {
 	const empty: uint8[] = [];
 	const enc = encodeClosePayload(1011, empty);
-	assert enc.length === 2;
-	assert enc[0] === 0x03;
-	assert enc[1] === 0xF3;
+	assert enc.length == 2;
+	assert enc[0] == 0x03;
+	assert enc[1] == 0xF3;
 	const dec = decodeClosePayload(enc);
 	assert dec.hasCode;
-	assert dec.code === 1011;
-	assert dec.reason.length === 0;
+	assert dec.code == 1011;
+	assert dec.reason.length == 0;
 }
 
 test "decodeClosePayload empty payload defaults to 1000 no-code" {
 	const empty: uint8[] = [];
 	const dec = decodeClosePayload(empty);
 	assert !dec.hasCode;
-	assert dec.code === 1000;
+	assert dec.code == 1000;
 }
 
 test "round-trip Close frame via build/parse + close-payload codec" {
@@ -725,10 +725,10 @@ test "round-trip Close frame via build/parse + close-payload codec" {
 	const r = parseFrame(frame, 0);
 	assert r.ok;
 	const f = r.value.frame;
-	assert f.opcode === OPCODE_CLOSE;
+	assert f.opcode == OPCODE_CLOSE;
 	assert f.fin;
 	const info = decodeClosePayload(f.payload);
-	assert info.code === 1001;
+	assert info.code == 1001;
 	assert bytesEqual(info.reason, reason);
 }
 

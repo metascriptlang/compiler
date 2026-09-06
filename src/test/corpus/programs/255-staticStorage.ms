@@ -22,18 +22,18 @@ function b(): int32 { static const t = 2; return t; }
 function main(): void {
 	let ok = true;
 
-	if (once1() !== "A1") ok = false;
-	if (once1() !== "A1") ok = false;
-	if (once1() !== "A1") ok = false;
+	if (once1() != "A1") ok = false;
+	if (once1() != "A1") ok = false;
+	if (once1() != "A1") ok = false;
 
-	if (perCall() !== "B2") ok = false;
-	if (perCall() !== "B3") ok = false;
+	if (perCall() != "B2") ok = false;
+	if (perCall() != "B3") ok = false;
 
-	if (a() !== 1) ok = false;
-	if (b() !== 2) ok = false;
-	if (a() !== 1) ok = false;
+	if (a() != 1) ok = false;
+	if (b() != 2) ok = false;
+	if (a() != 1) ok = false;
 
-	if (builds !== 3) ok = false;
+	if (builds != 3) ok = false;
 
 	if (ok) {
 		console.log("static-storage PASS");

@@ -13,8 +13,8 @@ import { exists } from "std/fs";
 // default — same pattern as cc.ms homeDir / cache.ms globalObjectsDir).
 export function cacheRoot(): string {
 	let home = env.get("HOME");
-	if (home === "") home = env.get("USERPROFILE");
-	if (home === "") return "";
+	if (home == "") home = env.get("USERPROFILE");
+	if (home == "") return "";
 	return home + "/.metascript/cache";
 }
 
@@ -24,14 +24,14 @@ export function cacheRoot(): string {
 // Example: registrySrcPath("cool-json", "1.2.3") → "~/.metascript/cache/extracted/cool-json@v1.2.3"
 export function registrySrcPath(name: string, version: string): string {
 	const root = cacheRoot();
-	if (root === "") return "";
+	if (root == "") return "";
 	return `${root}/extracted/${name}@${version}`;
 }
 
 // Download archive path for a registry package.
 export function registryDownloadPath(name: string, version: string): string {
 	const root = cacheRoot();
-	if (root === "") return "";
+	if (root == "") return "";
 	return `${root}/download/registry/${name}/${version}.zip`;
 }
 
@@ -41,14 +41,14 @@ export function registryDownloadPath(name: string, version: string): string {
 // Example: gitSrcPath("github.com/acme/foo", "abc123def4") → "~/.metascript/cache/extracted/github.com/acme/foo@abc123def4"
 export function gitSrcPath(url: string, commit: string): string {
 	const root = cacheRoot();
-	if (root === "") return "";
+	if (root == "") return "";
 	return `${root}/extracted/${url}@${commit}`;
 }
 
 // Download archive path for a git package.
 export function gitDownloadPath(url: string, commit: string): string {
 	const root = cacheRoot();
-	if (root === "") return "";
+	if (root == "") return "";
 	return `${root}/download/git/${url}/${commit}.zip`;
 }
 
@@ -56,7 +56,7 @@ export function gitDownloadPath(url: string, commit: string): string {
 
 // Check if a package is already extracted in the cache.
 export function isCached(srcPath: string): boolean {
-	if (srcPath === "") return false;
+	if (srcPath == "") return false;
 	return exists(srcPath);
 }
 

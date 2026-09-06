@@ -16,17 +16,17 @@ export function lowerStringLengthJS(program: Node, ctx: TransformContext): Node 
 }
 
 function rewriteStringTsTier(node: Node): Node {
-	if (node.kind === NodeKind.MemberExpr) return rewriteLength(node);
-	if (node.kind === NodeKind.ArrayAccess) return rewriteIndex(node);
+	if (node.kind == NodeKind.MemberExpr) return rewriteLength(node);
+	if (node.kind == NodeKind.ArrayAccess) return rewriteIndex(node);
 	return node;
 }
 
 function rewriteLength(node: Node): Node {
 	const d = node.data as MemberExprData;
-	if (d.property !== "length" && d.property !== "byteLength" && d.property !== "unicodeLength") return node;
+	if (d.property != "length" && d.property != "byteLength" && d.property != "unicodeLength") return node;
 	const objType = d.object.nodeType;
-	if (objType === null || objType.kind !== TypeKind.String) return node;
-	const callee = d.property === "length" ? "msStringLength" : d.property;
+	if (objType == null || objType.kind != TypeKind.String) return node;
+	const callee = d.property == "length" ? "msStringLength" : d.property;
 	const result = makeCall(makeIdent(callee, node.location), [d.object], node.location);
 	result.nodeType = node.nodeType;
 	return result;
@@ -35,10 +35,10 @@ function rewriteLength(node: Node): Node {
 function rewriteIndex(node: Node): Node {
 	const d = node.data as ArrayAccessData;
 	const objType = d.array.nodeType;
-	if (objType === null || objType.kind !== TypeKind.String) return node;
-	if (d.index.kind === NodeKind.BinaryExpr) {
+	if (objType == null || objType.kind != TypeKind.String) return node;
+	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
-		if (bd.operator === ".." || bd.operator === "...") return node;
+		if (bd.operator == ".." || bd.operator == "...") return node;
 	}
 	const result = makeCall(makeIdent("charAt", node.location), [d.array, d.index], node.location);
 	result.nodeType = node.nodeType;

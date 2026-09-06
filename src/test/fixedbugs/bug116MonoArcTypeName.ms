@@ -24,10 +24,10 @@ import { createArc, createRef, createStruct, int32Type } from "../../checker/typ
 
 test "bug116: monoConcreteTypeName keeps the Arc wrapper" {
 	const payload = createStruct("Payload", ["n"], [int32Type()], true);
-	assert monoConcreteTypeName(createArc(payload)) === "Arc<Payload>";
+	assert monoConcreteTypeName(createArc(payload)) == "Arc<Payload>";
 }
 
 test "bug116: plain Ref keeps the class-annotation strip" {
 	const cls = createStruct("SomeClass", [], [], true);
-	assert monoConcreteTypeName(createRef(cls)) === "SomeClass";
+	assert monoConcreteTypeName(createRef(cls)) == "SomeClass";
 }

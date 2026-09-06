@@ -68,7 +68,7 @@ test "bug043: quoted sibling #include resolves via the including file's director
 	const errs: ModuleError[] = [];
 	const inlined = inlineHeaderImports(src, "/tmp/msbug043/main.ms", createFileSystemProvider(), false, errs);
 	assert inlined.indexOf("extern function bug043Sib") >= 0;
-	assert errs.length === 0;
+	assert errs.length == 0;
 }
 
 test "bug043: two headers sharing a typedef import into one module without duplicate decls" {
@@ -82,5 +82,5 @@ test "bug043: two headers sharing a typedef import into one module without dupli
 	assert inlined.indexOf("bug043C2") >= 0;
 	const firstDecl = inlined.indexOf("Bug043TRef =");
 	assert firstDecl >= 0;
-	assert firstDecl === inlined.lastIndexOf("Bug043TRef =");
+	assert firstDecl == inlined.lastIndexOf("Bug043TRef =");
 }

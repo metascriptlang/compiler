@@ -31,7 +31,7 @@ function main(): void {
 	const fl: JsonValue = nv.getDynamicField("f");
 	console.log("f=" + fl.asNumber().toString());
 	const zero: JsonValue = nv.getDynamicField("zero");
-	console.log("zeroKind=" + (zero.kind === JsonKind.Int ? "int" : "num"));
+	console.log("zeroKind=" + (zero.kind == JsonKind.Int ? "int" : "num"));
 
 	const pr = parseJson("{\"a\":[1],\"o\":{\"b\":true}}");
 	if (!pr.ok) { console.log("preFail=" + pr.error); return; }

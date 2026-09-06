@@ -53,7 +53,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		// Emit inter-statement comments: blank line before first, single newline between
 		for (let ci = 0; ci < interComments.length; ci += 1) {
 			parts.push(docHardLine());
-			if (ci === 0) parts.push(docHardLine());
+			if (ci == 0) parts.push(docHardLine());
 			parts.push(docText(interComments[ci].value));
 		}
 	}
@@ -62,7 +62,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 
 export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
-	if (d.statements.length === 0) return docText("{}");
+	if (d.statements.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
 	for (const s of d.statements) {
 		stmts.push(callPrintNode(s, options));
@@ -72,7 +72,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	// printWidth. Multi-stmt blocks always break — flattening multiple
 	// statements onto one line is unreadable. Statements with leading
 	// comments also break, so the comments don't get smushed inline.
-	if (d.statements.length === 1 && d.statements[0].comments.length === 0) {
+	if (d.statements.length == 1 && d.statements[0].comments.length == 0) {
 		return docGroup([
 			docText("{"),
 			docIndent([docLine(), stmts[0]]),
@@ -99,10 +99,10 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 	};
 
 	const parts: Doc[] = [docText(kind + " " + d.declName)];
-	if (d.declType !== "") {
+	if (d.declType != "") {
 		parts.push(docText(": " + d.declType));
 	}
-	if (d.initializer !== null) {
+	if (d.initializer != null) {
 		parts.push(docText(" = "));
 		parts.push(callPrintNode(d.initializer, options));
 	}
@@ -125,7 +125,7 @@ export function printExprStmt(node: Node, options: FormatOptions): Doc {
 export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ReturnStmtData;
 	const parts: Doc[] = [docText("return")];
-	if (d.argument !== null) {
+	if (d.argument != null) {
 		parts.push(docText(" "));
 		parts.push(callPrintNode(d.argument, options));
 	}
@@ -144,11 +144,11 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		callPrintNode(d.consequent, options),
 	];
 	// Skip empty else blocks (parser may create a BlockStmt with 0 statements)
-	if (d.alternate !== null) {
+	if (d.alternate != null) {
 		let isEmpty = false;
-		if (d.alternate.kind === NodeKind.BlockStmt) {
+		if (d.alternate.kind == NodeKind.BlockStmt) {
 			const altData = d.alternate.data as BlockStmtData;
-			if (altData.statements.length === 0) { isEmpty = true; }
+			if (altData.statements.length == 0) { isEmpty = true; }
 		}
 		if (!isEmpty) {
 			parts.push(docText(" else "));
@@ -302,15 +302,15 @@ export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TryCatchStmtData;
 	const parts: Doc[] = [docText("try "), callPrintNode(d.tryBody, options)];
-	if (d.catchBody !== null) {
+	if (d.catchBody != null) {
 		parts.push(docText(" catch"));
-		if (d.catchName !== "") {
+		if (d.catchName != "") {
 			parts.push(docText(" (" + d.catchName + ")"));
 		}
 		parts.push(docText(" "));
 		parts.push(callPrintNode(d.catchBody, options));
 	}
-	if (d.finallyBody !== null) {
+	if (d.finallyBody != null) {
 		parts.push(docText(" finally "));
 		parts.push(callPrintNode(d.finallyBody, options));
 	}
@@ -328,13 +328,13 @@ export function printDeferStmt(node: Node, options: FormatOptions): Doc {
 
 export function printBreakStmt(node: Node): Doc {
 	const d = node.data as { breakLabel: string };
-	if (d.breakLabel !== "") return docText("break " + d.breakLabel + ";");
+	if (d.breakLabel != "") return docText("break " + d.breakLabel + ";");
 	return docText("break;");
 }
 
 export function printContinueStmt(node: Node): Doc {
 	const d = node.data as { continueLabel: string };
-	if (d.continueLabel !== "") return docText("continue " + d.continueLabel + ";");
+	if (d.continueLabel != "") return docText("continue " + d.continueLabel + ";");
 	return docText("continue;");
 }
 
@@ -353,11 +353,11 @@ export function buildParamList(names: string[], types: string[], defaults: (Node
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		let p = names[i];
-		if (i < types.length && types[i] !== "") {
+		if (i < types.length && types[i] != "") {
 			p = p + ": " + types[i];
 		}
 		const def = i < defaults.length ? defaults[i] : null;
-		if (def !== null) {
+		if (def != null) {
 			out.push(docGroup([docText(p + " = "), callPrintNode(def, options)]));
 		} else {
 			out.push(docText(p));
@@ -381,20 +381,20 @@ export function paramListInParens(params: Doc[], options: FormatOptions): Doc[] 
 // `<T, U>` if non-empty, else `""`. Centralises the generic-clause emit
 // pattern used by TypeAlias/Function/Method/Class/Interface decls.
 export function wrapGenerics(names: string): string {
-	return names !== "" ? "<" + names + ">" : "";
+	return names != "" ? "<" + names + ">" : "";
 }
 
 // fnFlags format: pipe-separated tokens, e.g. "async|gen:T,U|ext:string".
 // Returns true if `name` is present as a bare flag.
 export function flagHas(flags: string, name: string): boolean {
-	if (flags === name) return true;
+	if (flags == name) return true;
 	if (flags.length < name.length) return false;
 	let i = 0;
 	while (i < flags.length) {
 		let j = i;
-		while (j < flags.length && flags.charCodeAt(j) !== "|".code) j = j + 1;
+		while (j < flags.length && flags.charCodeAt(j) != "|".code) j = j + 1;
 		const tok = flags.slice(i, j);
-		if (tok === name) return true;
+		if (tok == name) return true;
 		i = j + 1;
 	}
 	return false;
@@ -405,9 +405,9 @@ export function flagGet(flags: string, name: string): string {
 	let i = 0;
 	while (i < flags.length) {
 		let j = i;
-		while (j < flags.length && flags.charCodeAt(j) !== "|".code) j = j + 1;
+		while (j < flags.length && flags.charCodeAt(j) != "|".code) j = j + 1;
 		const tok = flags.slice(i, j);
-		if (tok.length > name.length + 1 && tok.slice(0, name.length) === name && tok.charCodeAt(name.length) === ":".code) {
+		if (tok.length > name.length + 1 && tok.slice(0, name.length) == name && tok.charCodeAt(name.length) == ":".code) {
 			return tok.slice(name.length + 1, tok.length);
 		}
 		i = j + 1;
@@ -431,13 +431,13 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const params = buildParamList(d.params, d.fnParamTypes, d.fnDefaults, options);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 
-	if (d.fnReturnType !== "") {
+	if (d.fnReturnType != "") {
 		parts.push(docText(": " + d.fnReturnType));
 	}
 
 	// Extern functions have no body — emit `;` only.
 	if (isExtern) {
-		if (d.nativeName !== "") {
+		if (d.nativeName != "") {
 			parts.push(docText(" from \"" + d.nativeName + "\""));
 		}
 		parts.push(docText(";"));

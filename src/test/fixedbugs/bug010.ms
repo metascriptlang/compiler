@@ -58,7 +58,7 @@ test "bug010: Map<string, FunctionType> with custom return type" {
 	ops.set("inc", (x) => (x + 1) as int32);
 	assert ops.has("double");
 	assert ops.has("inc");
-	assert ops.size === 2;
+	assert ops.size == 2;
 }
 
 // Round-trip: store, retrieve, INVOKE the closure. Without the bug010 fix
@@ -79,8 +79,8 @@ test "bug010: Map<string, FunctionType> round-trip — retrieve and invoke" {
 	cmps.set("max", (a, b) => (a > b ? a : b) as int32);
 	const minFn = cmps.get("min")!;
 	const maxFn = cmps.get("max")!;
-	assert minFn(3, 7) === 3;
-	assert maxFn(3, 7) === 7;
-	assert minFn(10, 2) === 2;
-	assert maxFn(10, 2) === 10;
+	assert minFn(3, 7) == 3;
+	assert maxFn(3, 7) == 7;
+	assert minFn(10, 2) == 2;
+	assert maxFn(10, 2) == 10;
 }

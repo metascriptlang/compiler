@@ -27,7 +27,7 @@ export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
 // --- Unbox helpers ---
 
 export function unboxString(v: RaiserValue): string {
-	if (v.kind !== RaiserValueKind.String) return "";
+	if (v.kind != RaiserValueKind.String) return "";
 	return v.strVal;
 }
 
@@ -40,14 +40,14 @@ export function unboxInt(v: RaiserValue): number {
 }
 
 export function unboxFloat(v: RaiserValue): number {
-	if (v.kind === RaiserValueKind.Float) return v.floatVal;
-	if (v.kind === RaiserValueKind.Int) return v.intVal;
+	if (v.kind == RaiserValueKind.Float) return v.floatVal;
+	if (v.kind == RaiserValueKind.Int) return v.intVal;
 	return 0.0;
 }
 
 export function unboxBool(v: RaiserValue): boolean {
 	return match (v.kind) {
-		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal !== 0,
+		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
 		RaiserValueKind.Nil => false,
 		_ => true,
 	};
@@ -79,53 +79,53 @@ export function boxBool(b: boolean): RaiserValue {
 
 test "unboxString from string value" {
 	const v = raiserString("hello");
-	assert unboxString(v) === "hello";
+	assert unboxString(v) == "hello";
 }
 
 test "unboxString from non-string returns empty" {
 	const v = raiserInt(42);
-	assert unboxString(v) === "";
+	assert unboxString(v) == "";
 }
 
 test "unboxInt from int value" {
 	const v = raiserInt(7);
-	assert unboxInt(v) === 7;
+	assert unboxInt(v) == 7;
 }
 
 test "unboxInt coerces bool" {
 	const v = raiserBool(true);
-	assert unboxInt(v) === 1;
+	assert unboxInt(v) == 1;
 }
 
 test "unboxBool from bool" {
-	assert unboxBool(raiserBool(true)) === true;
-	assert unboxBool(raiserBool(false)) === false;
+	assert unboxBool(raiserBool(true)) == true;
+	assert unboxBool(raiserBool(false)) == false;
 }
 
 test "unboxBool from int" {
-	assert unboxBool(raiserInt(1)) === true;
-	assert unboxBool(raiserInt(0)) === false;
+	assert unboxBool(raiserInt(1)) == true;
+	assert unboxBool(raiserInt(0)) == false;
 }
 
 test "boxString roundtrip" {
 	const v = boxString("hi");
-	assert v.kind === RaiserValueKind.String;
-	assert v.strVal === "hi";
+	assert v.kind == RaiserValueKind.String;
+	assert v.strVal == "hi";
 }
 
 test "boxInt roundtrip" {
 	const v = boxInt(99);
-	assert v.kind === RaiserValueKind.Int;
-	assert v.intVal === 99;
+	assert v.kind == RaiserValueKind.Int;
+	assert v.intVal == 99;
 }
 
 test "boxBool roundtrip" {
 	const v = boxBool(true);
-	assert v.kind === RaiserValueKind.Bool;
-	assert v.intVal === 1;
+	assert v.kind == RaiserValueKind.Bool;
+	assert v.intVal == 1;
 }
 
 test "boxVoid is nil" {
 	const v = boxVoid();
-	assert v.kind === RaiserValueKind.Nil;
+	assert v.kind == RaiserValueKind.Nil;
 }

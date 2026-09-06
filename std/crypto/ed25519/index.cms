@@ -26,7 +26,7 @@ extern function msEd25519FromSeed(seed: string): string;
 extern function msEd25519ToSeed(secretKey: string): string;
 
 function validateSecretKey(secretKey: string, op: string): Result<boolean, CryptoError> {
-	if (secretKey.byteLength !== 64) {
+	if (secretKey.byteLength != 64) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "secret key must be 64 bytes"));
 	}
 	return Result.ok(true);
@@ -36,30 +36,30 @@ function validateSecretKey(secretKey: string, op: string): Result<boolean, Crypt
 
 export function ed25519Generate(): Result<string, CryptoError> {
 	const sk = msEd25519Generate();
-	if (sk === "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ed25519Generate", "key generation failed"));
+	if (sk == "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ed25519Generate", "key generation failed"));
 	return Result.ok(sk);
 }
 
 export function ed25519FromSeed(seed: string): Result<string, CryptoError> {
-	if (seed.byteLength !== 32) {
+	if (seed.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "seed must be 32 bytes"));
 	}
 	const sk = msEd25519FromSeed(seed);
-	if (sk === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "failed to derive key from seed"));
+	if (sk == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "failed to derive key from seed"));
 	return Result.ok(sk);
 }
 
 export function ed25519PublicKey(secretKey: string): Result<string, CryptoError> {
 	const _v1 = try validateSecretKey(secretKey, "ed25519PublicKey");
 	const pk = msEd25519PublicKey(secretKey);
-	if (pk === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519PublicKey", "failed to extract public key"));
+	if (pk == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519PublicKey", "failed to extract public key"));
 	return Result.ok(pk);
 }
 
 export function ed25519ToSeed(secretKey: string): Result<string, CryptoError> {
 	const _v2 = try validateSecretKey(secretKey, "ed25519ToSeed");
 	const seed = msEd25519ToSeed(secretKey);
-	if (seed === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519ToSeed", "failed to extract seed"));
+	if (seed == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519ToSeed", "failed to extract seed"));
 	return Result.ok(seed);
 }
 
@@ -68,7 +68,7 @@ export function ed25519ToSeed(secretKey: string): Result<string, CryptoError> {
 export function ed25519Sign(secretKey: string, message: string): Result<string, CryptoError> {
 	const _v3 = try validateSecretKey(secretKey, "ed25519Sign");
 	const sig = msEd25519Sign(secretKey, message);
-	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519Sign", "signing failed"));
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519Sign", "signing failed"));
 	return Result.ok(sig);
 }
 

@@ -20,7 +20,7 @@ function pick(): Theme {
 
 function main(): void {
 	const t = pick();
-	if (t.accent !== "blue") { console.log("GUARD-FAIL wrong accent " + t.accent); }
+	if (t.accent != "blue") { console.log("GUARD-FAIL wrong accent " + t.accent); }
 	console.log("GUARD-OK");
 }
 main();

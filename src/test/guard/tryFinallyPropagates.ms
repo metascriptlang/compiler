@@ -58,7 +58,7 @@ function ownedLocalThrows(n: number): string {
 }
 
 function tailRec(n: number): string {
-	if (n === 0) { throw "tail"; }
+	if (n == 0) { throw "tail"; }
 	return tailRec(n - 1);
 }
 
@@ -84,7 +84,7 @@ function main(): void {
 	trace = "";
 	let nested = false;
 	try { nestedOuter(); } catch (e) { nested = true; }
-	const nestedOk = nested && trace === "io";
+	const nestedOk = nested && trace == "io";
 	console.log(nestedOk ? "nested:ok" : "nested:RED");
 
 	let owned = false;
@@ -97,7 +97,7 @@ function main(): void {
 
 	trace = "";
 	const v = normalPath();
-	const normOk = v === 7 && trace === "N";
+	const normOk = v == 7 && trace == "N";
 	console.log(normOk ? "normal:ok" : "normal:RED");
 
 	if (!threw) { throw "GUARD RED: try/finally swallowed a propagating exception"; }

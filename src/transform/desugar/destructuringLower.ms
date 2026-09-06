@@ -22,7 +22,7 @@ export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 // defaults to `double`/void* in the captured env.
 function destrElemType(base: Node, i: int32): Type {
 	const t = destrPositionalElemType(base.nodeType, i as int32);
-	return t !== null ? t : (null as unknown as Type);
+	return t != null ? t : (null as unknown as Type);
 }
 
 // Expand array pattern [a, b, ...rest] → indexed access
@@ -36,19 +36,19 @@ export function expandArrayRet(
 		const elem = apd.patternElements[i];
 
 		// Rest element: last + hasRestElement
-		if (apd.hasRestElement && i === apd.patternElements.length - 1) {
+		if (apd.hasRestElement && i == apd.patternElements.length - 1) {
 			let idNode: Node | null = null as unknown as Node;
-			if (elem.kind === NodeKind.Identifier) idNode = elem;
-			else if (elem.kind === NodeKind.SpreadExpr) idNode = (elem.data as SpreadExprData).spreadArg;
-			if (idNode !== null && idNode.kind === NodeKind.Identifier && (idNode.data as IdentifierData).name !== "_") {
+			if (elem.kind == NodeKind.Identifier) idNode = elem;
+			else if (elem.kind == NodeKind.SpreadExpr) idNode = (elem.data as SpreadExprData).spreadArg;
+			if (idNode != null && idNode.kind == NodeKind.Identifier && (idNode.data as IdentifierData).name != "_") {
 				const id = idNode.data as IdentifierData;
 				const restType = destrRestElemType(base.nodeType);
 				if (ctx.jsBackend) {
 					const sliceCallee = makeMember(base, "slice", loc);
 					const sliceCall = makeCall(sliceCallee, [makeNumber(i, loc), makeMember(base, "length", loc)], loc);
-					if (restType !== null) sliceCall.nodeType = restType;
+					if (restType != null) sliceCall.nodeType = restType;
 					items.push(makeVarDecl(id.name, sliceCall, declKind, loc));
-				} else if (restType !== null) {
+				} else if (restType != null) {
 					// C backend: slice is a std method the checker resolves at check time;
 					// transform-built member calls bypass that, so mirror lowerArraySpread's
 					// accumulator + msGenericArrayPush loop instead.
@@ -94,12 +94,12 @@ export function expandArrayRet(
 		}
 
 		// Simple identifier binding
-		if (elem.kind === NodeKind.Identifier) {
+		if (elem.kind == NodeKind.Identifier) {
 			const id = elem.data as IdentifierData;
-			if (id.name !== "_") {
+			if (id.name != "_") {
 				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
 				const elemType = destrElemType(base, i);
-				if (elemType !== null) access.nodeType = elemType;
+				if (elemType != null) access.nodeType = elemType;
 				items.push(makeVarDecl(id.name, access, declKind, loc));
 			}
 		}
@@ -116,22 +116,22 @@ export function expandObjectRet(
 	const items: Node[] = [];
 	const takenKeys: string[] = [];
 	for (const prop of opd.patternProps) {
-		if (prop.kind === NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
+		if (prop.kind == NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
 	}
 	for (const prop of opd.patternProps) {
-		if (prop.kind === NodeKind.SpreadExpr) {
+		if (prop.kind == NodeKind.SpreadExpr) {
 			const inner = (prop.data as SpreadExprData).spreadArg;
-			if (inner.kind !== NodeKind.Identifier) continue;
+			if (inner.kind != NodeKind.Identifier) continue;
 			const restId = inner.data as IdentifierData;
-			if (restId.name === "_") continue;
+			if (restId.name == "_") continue;
 			const restType = destrObjectRestType(base.nodeType, takenKeys);
-			if (restType === null) continue;
+			if (restType == null) continue;
 			const restNames = destrObjectRestNames(base.nodeType, takenKeys);
 			const restValues: Node[] = [];
 			for (const fieldName of restNames) {
 				const fieldAccess = makeMember(base, fieldName, loc);
 				const ft = destrNamedFieldType(base.nodeType, fieldName);
-				if (ft !== null) fieldAccess.nodeType = ft;
+				if (ft != null) fieldAccess.nodeType = ft;
 				restValues.push(fieldAccess);
 			}
 			const restDecl = makeVarDecl(restId.name, makeTypedObjectLiteral(restNames, restValues, restType, loc), declKind, loc);
@@ -139,13 +139,13 @@ export function expandObjectRet(
 			items.push(restDecl);
 			continue;
 		}
-		if (prop.kind !== NodeKind.ObjectPatternProp) continue;
+		if (prop.kind != NodeKind.ObjectPatternProp) continue;
 		const p = prop.data as ObjectPatternPropData;
-		if (p.propAlias.kind === NodeKind.Identifier) {
+		if (p.propAlias.kind == NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
 			const memberAccess = makeMember(base, p.propKey, loc);
 			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
-			if (fieldType !== null) memberAccess.nodeType = fieldType;
+			if (fieldType != null) memberAccess.nodeType = fieldType;
 			items.push(makeVarDecl(id.name, memberAccess, declKind, loc));
 		}
 	}
@@ -153,7 +153,7 @@ export function expandObjectRet(
 }
 
 function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
-	if (stmt.kind !== NodeKind.DestructuringDecl) return [stmt];
+	if (stmt.kind != NodeKind.DestructuringDecl) return [stmt];
 	const d = stmt.data as DestructuringDeclData;
 	const loc = stmt.location;
 	const result: Node[] = [];
@@ -161,14 +161,14 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	// Simple RHS (identifier/member/access) → skip temp
 	let baseExpr: Node | null = null;
 	const initKind = d.destrInit.kind;
-	if (initKind === NodeKind.Identifier || initKind === NodeKind.MemberExpr || initKind === NodeKind.ArrayAccess) {
+	if (initKind == NodeKind.Identifier || initKind == NodeKind.MemberExpr || initKind == NodeKind.ArrayAccess) {
 		baseExpr = d.destrInit;
 	} else {
-		const sym = freshTempSym(ctx, "destr", d.destrInit.nodeType !== null ? d.destrInit.nodeType : noneType());
+		const sym = freshTempSym(ctx, "destr", d.destrInit.nodeType != null ? d.destrInit.nodeType : noneType());
 		const tempDecl = makeVarDecl(sym.name, d.destrInit, DeclKind.Const, loc);
 		tempDecl.resolvedSym = sym;
 		// Propagate type so nativeLower can rewrite tuple access (t[0] → t._0)
-		if (d.destrInit.nodeType !== null) {
+		if (d.destrInit.nodeType != null) {
 			tempDecl.nodeType = d.destrInit.nodeType;
 		}
 		result.push(tempDecl);
@@ -176,13 +176,13 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	}
 
 	const dk = boolToDeclKind(d.destrIsConst);
-	if (d.destrPattern.kind === NodeKind.ArrayPattern) {
+	if (d.destrPattern.kind == NodeKind.ArrayPattern) {
 		const expanded = expandArrayRet(d.destrPattern, baseExpr, dk, loc, ctx);
 		for (const node of expanded) {
 			result.push(node);
 		}
 	}
-	if (d.destrPattern.kind === NodeKind.ObjectPattern) {
+	if (d.destrPattern.kind == NodeKind.ObjectPattern) {
 		const expanded = expandObjectRet(d.destrPattern, baseExpr, dk, loc, ctx);
 		for (const node of expanded) {
 			result.push(node);
@@ -193,14 +193,14 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Tests =====
-test "array 2 elements" { assert stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3; }
+test "array 2 elements" { assert stmtCountAfter("const [a, b] = f();", lowerDestructuring) == 3; }
 
-test "first stmt is temp VarDecl" { assert firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl; }
+test "first stmt is temp VarDecl" { assert firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) == NodeKind.VariableDecl; }
 
-test "object destructuring" { assert stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3; }
+test "object destructuring" { assert stmtCountAfter("const { x, y } = f();", lowerDestructuring) == 3; }
 
-test "simple RHS skips temp" { assert stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2; }
+test "simple RHS skips temp" { assert stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) == 2; }
 
-test "non-destructuring passthrough" { assert stmtCountAfter("const x = 1;", lowerDestructuring) === 1; }
+test "non-destructuring passthrough" { assert stmtCountAfter("const x = 1;", lowerDestructuring) == 1; }
 
-test "preserves surrounding stmts" { assert stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5; }
+test "preserves surrounding stmts" { assert stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) == 5; }

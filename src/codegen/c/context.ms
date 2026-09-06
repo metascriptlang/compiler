@@ -184,18 +184,18 @@ export class CProc {
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
 export function isIndirectParam(p: CProc, name: string): boolean {
-	if (p === null) return false;
+	if (p == null) return false;
 	for (const param of p.indirectParams) {
-		if (param === name) return true;
+		if (param == name) return true;
 	}
 	return false;
 }
 
 // Check if a local variable is an indirect union variant pointer — auto-deref as (*name)
 export function isIndirectLocal(p: CProc, name: string): boolean {
-	if (p === null) return false;
+	if (p == null) return false;
 	for (const local of p.indirectLocals) {
-		if (local === name) return true;
+		if (local == name) return true;
 	}
 	return false;
 }
@@ -229,13 +229,13 @@ export function createProc(name: string, returnType: Type | null): CProc {
 // Uses per-name conflict counter: first `result` → `result_1_`, second → `result_2_`.
 // Temps ($ prefix) keep original name (already unique from freshTemp).
 export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): string {
-	if (p === null) return mangledName;
+	if (p == null) return mangledName;
 	// Find or create counter for this name
 	let counter = 0;
 	let found = false;
 	let i = 0;
 	while (i < p.sigConflicts.length) {
-		if (p.sigConflicts[i] === mangledName) {
+		if (p.sigConflicts[i] == mangledName) {
 			counter = parseInt(p.sigConflicts[i + 1]);
 			counter = counter + 1;
 			p.sigConflicts[i + 1] = counter.toString();
@@ -257,7 +257,7 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 		result = `${mangledName}_${counter}_`;
 	}
 	// Record mapping so DRC-generated identifiers (without resolvedSym) can resolve the name
-	if (result !== mangledName) {
+	if (result != mangledName) {
 		p.localNameMap.push(mangledName);
 		p.localNameMap.push(result);
 	}
@@ -266,12 +266,12 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 
 // Look up unique local name for DRC-generated identifiers without resolvedSym.
 export function lookupLocalName(p: CProc, mangledName: string): string {
-	if (p === null) return "";
+	if (p == null) return "";
 	let i = p.localNameMap.length;
 	// Search backwards — last mapping wins (handles re-declarations in nested scopes)
 	while (i > 0) {
 		i = i - 2;
-		if (p.localNameMap[i] === mangledName) return p.localNameMap[i + 1];
+		if (p.localNameMap[i] == mangledName) return p.localNameMap[i + 1];
 	}
 	return "";
 }
@@ -279,10 +279,10 @@ export function lookupLocalName(p: CProc, mangledName: string): string {
 // Reference parity (scopeMangledParam): register parameter names so VarDecls
 // with the same name get unique suffixes.
 export function scopeMangledParam(p: CProc, mangledName: string): void {
-	if (p === null) return;
+	if (p == null) return;
 	let i = 0;
 	while (i < p.sigConflicts.length) {
-		if (p.sigConflicts[i] === mangledName) {
+		if (p.sigConflicts[i] == mangledName) {
 			const c = parseInt(p.sigConflicts[i + 1]);
 			p.sigConflicts[i + 1] = (c + 1).toString();
 			return;
@@ -466,14 +466,14 @@ export function createTypeCache(): TypeCache {
 
 export function typeCacheGet(cache: TypeCache, key: string): string {
 	for (let i = 0; i < cache.keys.length; i += 1) {
-		if (cache.keys[i] === key) return cache.values[i];
+		if (cache.keys[i] == key) return cache.values[i];
 	}
 	return "";
 }
 
 export function typeCacheSet(cache: TypeCache, key: string, cTypeName: string): void {
 	for (let i = 0; i < cache.keys.length; i += 1) {
-		if (cache.keys[i] === key) {
+		if (cache.keys[i] == key) {
 			cache.values[i] = cTypeName;
 			return;
 		}
@@ -483,7 +483,7 @@ export function typeCacheSet(cache: TypeCache, key: string, cTypeName: string): 
 }
 
 export function typeCacheHas(cache: TypeCache, key: string): boolean {
-	return typeCacheGet(cache, key) !== "";
+	return typeCacheGet(cache, key) != "";
 }
 
 // ===== StringPoolEntry — interned string literals =====
@@ -505,7 +505,7 @@ export function createStringPool(): StringPool {
 // Intern a string — returns C name. Deduplicates.
 export function internString(pool: StringPool, value: string): string {
 	for (let i = 0; i < pool.entries.length; i += 1) {
-		if (pool.entries[i].value === value) return pool.entries[i].cName;
+		if (pool.entries[i].value == value) return pool.entries[i].cName;
 	}
 	pool.counter += 1;
 	const cName = "TMP_STR_" + pool.counter;
@@ -558,7 +558,7 @@ export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string
 // Check if any alive symbol belongs to a given module.
 // Used for module-level DCE: skip entire modules with zero reachable symbols.
 export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boolean {
-	if (aliveSet.entries.length === 0) return true;  // DCE disabled
+	if (aliveSet.entries.length == 0) return true;  // DCE disabled
 	return aliveSet._modules.has(modulePath);
 }
 
@@ -657,10 +657,10 @@ export function moduleTemp(g: CGen): string {
 // Windows accepts either separator and the C preprocessor
 // is happy with forward slashes in #line paths.
 export function emitLineDir(g: CGen, p: CProc, node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	const loc = node.location;
 	if (loc.line <= 0) return;
-	if (loc.line === g.lastLineLine && g.modulePath === g.lastLineFile) return;
+	if (loc.line == g.lastLineLine && g.modulePath == g.lastLineFile) return;
 	g.lastLineLine = loc.line;
 	g.lastLineFile = g.modulePath;
 	const safePath = g.modulePath.replaceAll("\\", "/");
@@ -688,14 +688,14 @@ export function assembleOutput(g: CGen): string {
 // Only depends on CGen/CSection/Symbol — no type-mapping logic.
 
 export function useHeader(g: CGen, sym: Symbol): void {
-	if (sym === null || sym.headerPath === "") return;
+	if (sym == null || sym.headerPath == "") return;
 	emitIncludeDirectives(g, sym.headerPath);
 }
 
 export function emitIncludeDirectives(g: CGen, directives: string): void {
 	let start = 0;
 	for (let pos = 0; pos < directives.length; pos += 1) {
-		if (directives.charAt(pos) === "\n") {
+		if (directives.charAt(pos) == "\n") {
 			const header = directives.slice(start, pos);
 			if (header.length > 0) {
 				emitOneInclude(g, header);
@@ -722,72 +722,72 @@ test "add and extract" {
 	const b = createBuilder();
 	add(b, "hello");
 	add(b, " world");
-	assert extract(b) === "hello world";
+	assert extract(b) == "hello world";
 }
 
 test "addLine with indent" {
 	const b = createBuilder();
 	b.indent = 1;
 	addLine(b, "int x;");
-	assert extract(b) === "  int x;\n";
+	assert extract(b) == "  int x;\n";
 }
 
 test "addLine no indent" {
 	const b = createBuilder();
 	addLine(b, "int x;");
-	assert extract(b) === "int x;\n";
+	assert extract(b) == "int x;\n";
 }
 
 test "noLoc" {
 	const loc = noLoc();
-	assert loc.kind === CLocKind.None;
-	assert loc.snippet === "";
+	assert loc.kind == CLocKind.None;
+	assert loc.snippet == "";
 }
 
 test "initLoc" {
 	const loc = initLoc(CLocKind.Temp, CStorageLoc.Stack);
 	loc.snippet = "T1_";
-	assert rdLoc(loc) === "T1_";
-	assert addrLoc(loc) === "(&T1_)";
+	assert rdLoc(loc) == "T1_";
+	assert addrLoc(loc) == "(&T1_)";
 }
 
 test "rdLoc indirect" {
 	const loc = initLoc(CLocKind.Param, CStorageLoc.Stack);
 	loc.snippet = "p";
 	loc.isIndirect = true;
-	assert rdLoc(loc) === "(*p)";
-	assert addrLoc(loc) === "p";
+	assert rdLoc(loc) == "(*p)";
+	assert addrLoc(loc) == "p";
 }
 
 test "create proc" {
 	const p = createProc("test_fn", null);
-	assert p.name === "test_fn";
-	assert p.labels === 0;
-	assert p.blocks.length === 1;
+	assert p.name == "test_fn";
+	assert p.labels == 0;
+	assert p.blocks.length == 1;
 }
 
 test "getTemp" {
 	const p = createProc("test_fn", null);
 	const t1 = getTemp(p, "int32_t");
-	assert t1.snippet === "T1_";
-	assert t1.kind === CLocKind.Temp;
+	assert t1.snippet == "T1_";
+	assert t1.kind == CLocKind.Temp;
 	const t2 = getTemp(p, "double");
-	assert t2.snippet === "T2_";
+	assert t2.snippet == "T2_";
 	const locals = readProcLocals(p);
-	assert locals === "int32_t T1_;\ndouble T2_;\n";
+	assert locals == "int32_t T1_;\ndouble T2_;\n";
 }
 
 test "push and pop block" {
 	const p = createProc("test_fn", null);
 	pushBlock(p, true);
-	assert p.blocks.length === 2;
-	assert p.withinLoop === 1;
+	assert p.blocks.length == 2;
+	assert p.withinLoop == 1;
 	emitStmts(p, "x = 1;");
 	popBlock(p);
-	assert p.blocks.length === 1;
-	assert p.withinLoop === 0;
+	assert p.blocks.length == 1;
+	assert p.withinLoop == 0;
 	const stmts = readProcStmts(p);
-	assert stmts === "x = 1;";
+	assert stmts == "x = 1;";
 }
 
 test "nested blocks" {
@@ -798,25 +798,25 @@ test "nested blocks" {
 	popBlock(p);
 	emitStmts(p, "after;\n");
 	const stmts = readProcStmts(p);
-	assert stmts === "outer;\ninner;\nafter;\n";
+	assert stmts == "outer;\ninner;\nafter;\n";
 }
 
 test "get miss" {
 	const cache = createTypeCache();
-	assert typeCacheGet(cache, "Foo") === "";
+	assert typeCacheGet(cache, "Foo") == "";
 }
 
 test "set and get" {
 	const cache = createTypeCache();
 	typeCacheSet(cache, "number", "double");
-	assert typeCacheGet(cache, "number") === "double";
+	assert typeCacheGet(cache, "number") == "double";
 }
 
 test "overwrite" {
 	const cache = createTypeCache();
 	typeCacheSet(cache, "x", "int");
 	typeCacheSet(cache, "x", "int32_t");
-	assert typeCacheGet(cache, "x") === "int32_t";
+	assert typeCacheGet(cache, "x") == "int32_t";
 }
 
 test "has" {
@@ -829,24 +829,24 @@ test "has" {
 test "intern new string" {
 	const pool = createStringPool();
 	const name = internString(pool, "hello");
-	assert name === "TMP_STR_1";
+	assert name == "TMP_STR_1";
 }
 
 test "deduplicate" {
 	const pool = createStringPool();
 	const n1 = internString(pool, "hello");
 	const n2 = internString(pool, "hello");
-	assert n1 === n2;
-	assert pool.entries.length === 1;
+	assert n1 == n2;
+	assert pool.entries.length == 1;
 }
 
 test "different strings get different names" {
 	const pool = createStringPool();
 	const n1 = internString(pool, "hello");
 	const n2 = internString(pool, "world");
-	assert n1 === "TMP_STR_1";
-	assert n2 === "TMP_STR_2";
-	assert pool.entries.length === 2;
+	assert n1 == "TMP_STR_1";
+	assert n2 == "TMP_STR_2";
+	assert pool.entries.length == 2;
 }
 
 test "empty set" {
@@ -865,20 +865,20 @@ test "no duplicates" {
 	const ns = createNameSet();
 	nameSetAdd(ns, "foo");
 	nameSetAdd(ns, "foo");
-	assert ns.size === 1;
+	assert ns.size == 1;
 }
 
 test "create with 10 sections" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
-	assert g.sections.length === 10;
+	assert g.sections.length == 10;
 }
 
 test "section accessor" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
-	assert extract(sec(g, CSection.Headers)) === "#include <stdint.h>\n";
-	assert extract(sec(g, CSection.Procs)) === "void foo() {}\n";
+	assert extract(sec(g, CSection.Headers)) == "#include <stdint.h>\n";
+	assert extract(sec(g, CSection.Procs)) == "void foo() {}\n";
 }
 
 test "assembleOutput" {
@@ -886,13 +886,13 @@ test "assembleOutput" {
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	const output = assembleOutput(g);
-	assert output === "#include <stdint.h>\n\nvoid foo() {}\n";
+	assert output == "#include <stdint.h>\n\nvoid foo() {}\n";
 }
 
 test "moduleTemp" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	const t1 = moduleTemp(g);
 	const t2 = moduleTemp(g);
-	assert t1 === "TM1_";
-	assert t2 === "TM2_";
+	assert t1 == "TM1_";
+	assert t2 == "TM2_";
 }

@@ -14,5 +14,5 @@ function pendingDedup<T>(x: T | null): int32 {
 
 test "bug059helper: same-named generic instantiates in the first module" {
 	const w: int32 | null = null;
-	assert pendingDedup(w) === 1;
+	assert pendingDedup(w) == 1;
 }

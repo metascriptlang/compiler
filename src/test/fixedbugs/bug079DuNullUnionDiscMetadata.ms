@@ -31,9 +31,9 @@ test "bug079: enum-disc DU decodes through a `| null` witness" {
 	assert pr.ok;
 	const errs: string[] = [];
 	const e: B79Event = jsonValueToStructE(pr.value, null as B79Event | null, errs, "");
-	assert errs.length === 0;
-	assert e.kind === B79Kind.Beta;
-	if (e.kind === B79Kind.Beta) {
-		assert e.note === "n";
+	assert errs.length == 0;
+	assert e.kind == B79Kind.Beta;
+	if (e.kind == B79Kind.Beta) {
+		assert e.note == "n";
 	}
 }

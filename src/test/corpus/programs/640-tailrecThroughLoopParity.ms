@@ -9,7 +9,7 @@ function f(n: int64, acc: int64): int64 {
 	let steps: int64 = 0;
 	while (steps < 5) {
 		steps += 1;
-		if (steps === 3 && n > 0) {
+		if (steps == 3 && n > 0) {
 			return f(n - 1, acc + 1);
 		}
 	}
@@ -20,7 +20,7 @@ function g(n: int64, acc: int64): int64 {
 	let i: int64 = 0;
 	do {
 		i += 1;
-		if (i === 2 && n > 0) {
+		if (i == 2 && n > 0) {
 			return g(n - 1, acc + 2);
 		}
 	} while (i < 3);

@@ -36,10 +36,10 @@ function takeWitness<T>(x: T | null): int32 {
 test "bug007: typed witness var passed to <T>(x: T | null) for value T" {
 	const w: Color | null = null;
 	const r = takeWitness<Color>(w);
-	assert r === 42;
+	assert r == 42;
 }
 
 test "bug007: inline TypeAssertion witness for value T" {
 	const r = takeWitness<Color>(null as Color | null);
-	assert r === 42;
+	assert r == 42;
 }

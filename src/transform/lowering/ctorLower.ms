@@ -24,17 +24,17 @@ import { parseInput, getStmts } from "../testUtil";
 function fieldInitStatements(classNode: Node, cd: ClassDeclData): Node[] {
 	const stmts: Node[] = [];
 	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.PropertyDecl) {
+		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
-			if (!pd.propIsStatic && pd.propInitializer !== null) {
+			if (!pd.propIsStatic && pd.propInitializer != null) {
 				// Untyped initializers (an empty array literal) codegen by their
 				// declared field type, not by a guessed default.
-				if (pd.propInitializer.nodeType === null && member.nodeType !== null) {
+				if (pd.propInitializer.nodeType == null && member.nodeType != null) {
 					pd.propInitializer.nodeType = member.nodeType;
 				}
 				const receiver = makeTypedIdent("this", classNode.nodeType, member.location);
 				const target = makeMember(receiver, pd.propName, member.location);
-				if (target.nodeType === null && member.nodeType !== null) {
+				if (target.nodeType == null && member.nodeType != null) {
 					target.nodeType = member.nodeType;
 				}
 				const assign = makeAssign(target, pd.propInitializer, member.location);
@@ -49,19 +49,19 @@ function fieldInitStatements(classNode: Node, cd: ClassDeclData): Node[] {
 }
 
 function isSuperCallStmt(stmt: Node): boolean {
-	if (stmt === null || stmt.kind !== NodeKind.ExprStmt) return false;
+	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return false;
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr === null || ed.expr.kind !== NodeKind.CallExpr) return false;
+	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return false;
 	const call = ed.expr.data as CallExprData;
-	if (call.callee === null || call.callee.kind !== NodeKind.Identifier) return false;
-	return (call.callee.data as IdentifierData).name === "super";
+	if (call.callee == null || call.callee.kind != NodeKind.Identifier) return false;
+	return (call.callee.data as IdentifierData).name == "super";
 }
 
 function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void {
 	const ctorData = ctorNode.data as ConstructorDeclData;
-	if (ctorData.ctorBody === null || ctorData.ctorBody.kind !== NodeKind.BlockStmt) return;
+	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const inits = fieldInitStatements(classNode, cd);
-	if (inits.length === 0) return;
+	if (inits.length == 0) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	let at = 0;
 	if (body.statements.length > 0 && isSuperCallStmt(body.statements[0])) at = 1;
@@ -84,12 +84,12 @@ function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void
 // identifier with no resolvedSym is worse than none: both backends fall through
 // to their generic call path and emit a call to an undefined symbol.
 function implicitSuperStmt(classNode: Node, cd: ClassDeclData): Node {
-	if (cd.classExtends === "") return null as unknown as Node;
-	if (classNode.resolvedSym === null) return null as unknown as Node;
+	if (cd.classExtends == "") return null as unknown as Node;
+	if (classNode.resolvedSym == null) return null as unknown as Node;
 	const parentSym = parentClassSymOf(classNode.resolvedSym);
-	if (parentSym === null) return null as unknown as Node;
+	if (parentSym == null) return null as unknown as Node;
 	const parentParams = getCtorParamTypes(parentSym);
-	if (parentParams !== null && parentParams.length > 0) return null as unknown as Node;
+	if (parentParams != null && parentParams.length > 0) return null as unknown as Node;
 	const loc = classNode.location;
 	const callee = makeIdent("super", loc);
 	callee.resolvedSym = parentSym;
@@ -102,7 +102,7 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
 	const loc = classNode.location;
 	const stmts: Node[] = [];
 	const superStmt = implicitSuperStmt(classNode, cd);
-	if (superStmt !== null) stmts.push(superStmt);
+	if (superStmt != null) stmts.push(superStmt);
 	for (const s of fieldInitStatements(classNode, cd)) { stmts.push(s); }
 	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, {
 		ctorParams: [],
@@ -118,11 +118,11 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
 
 function ensureImplicitSuper(classNode: Node, cd: ClassDeclData, ctorNode: Node): void {
 	const ctorData = ctorNode.data as ConstructorDeclData;
-	if (ctorData.ctorBody === null || ctorData.ctorBody.kind !== NodeKind.BlockStmt) return;
+	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	if (body.statements.length > 0 && isSuperCallStmt(body.statements[0])) return;
 	const superStmt = implicitSuperStmt(classNode, cd);
-	if (superStmt === null) return;
+	if (superStmt == null) return;
 	const merged: Node[] = [superStmt];
 	for (const s of body.statements) { merged.push(s); }
 	body.statements = merged;
@@ -132,16 +132,16 @@ function lowerClassNode(classNode: Node): void {
 	const cd = classNode.data as ClassDeclData;
 	let ctorNode: Node | null = null;
 	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.ConstructorDecl) {
+		if (member.kind == NodeKind.ConstructorDecl) {
 			ctorNode = member;
-		} else if (member.kind === NodeKind.DecoratedDecl) {
+		} else if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
-			if (dd.decoratedNode !== null && dd.decoratedNode.kind === NodeKind.ConstructorDecl) {
+			if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.ConstructorDecl) {
 				ctorNode = dd.decoratedNode;
 			}
 		}
 	}
-	if (ctorNode === null) {
+	if (ctorNode == null) {
 		synthesizeCtor(classNode, cd);
 		return;
 	}
@@ -150,19 +150,19 @@ function lowerClassNode(classNode: Node): void {
 }
 
 export function lowerCtorInit(program: Node, ctx: TransformContext): Node {
-	if (program.kind !== NodeKind.Program) return program;
+	if (program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		let target = stmt;
-		if (target.kind === NodeKind.ExportDecl) {
+		if (target.kind == NodeKind.ExportDecl) {
 			target = (target.data as ExportDeclData).exportedDecl;
 		}
-		if (target !== null && target.kind === NodeKind.ClassDecl) {
+		if (target != null && target.kind == NodeKind.ClassDecl) {
 			// Callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
 			// name resolves to a Function, not a type — there is no instance
 			// to construct, so synthesizing/lifting a ctor would emit a
 			// bogus <Name>_init with unresolved receiver types.
-			if (target.resolvedSym !== null && target.resolvedSym.symbolKind === SymbolKind.Function) {
+			if (target.resolvedSym != null && target.resolvedSym.symbolKind == SymbolKind.Function) {
 				continue;
 			}
 			lowerClassNode(target);
@@ -178,10 +178,10 @@ function ctorStmtKinds(input: string): string {
 	if (!result.ok) return "PARSE_ERROR";
 	const prog = lowerCtorInit(result.value, null as unknown as TransformContext);
 	const stmts = getStmts(prog);
-	if (stmts.length === 0) return "NO_STMTS";
+	if (stmts.length == 0) return "NO_STMTS";
 	const cd = stmts[0].data as ClassDeclData;
 	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.ConstructorDecl) {
+		if (member.kind == NodeKind.ConstructorDecl) {
 			const body = (member.data as ConstructorDeclData).ctorBody.data as BlockStmtData;
 			let out = "";
 			for (const s of body.statements) {
@@ -201,7 +201,7 @@ function liftedInitNames(input: string): string {
 	prog = lowerMethodToFunction(prog, ctx);
 	let out = "";
 	for (const stmt of getStmts(prog)) {
-		if (stmt.kind === NodeKind.FunctionDecl) {
+		if (stmt.kind == NodeKind.FunctionDecl) {
 			out = out + (stmt.data as FunctionDeclData).fnName + ",";
 		}
 	}
@@ -216,7 +216,7 @@ function remainingInitializers(input: string): number {
 	const cd = stmts[0].data as ClassDeclData;
 	let n = 0;
 	for (const member of cd.classBody) {
-		if (member.kind === NodeKind.PropertyDecl && (member.data as PropertyDeclData).propInitializer !== null) {
+		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propInitializer != null) {
 			n += 1;
 		}
 	}
@@ -226,37 +226,37 @@ function remainingInitializers(input: string): number {
 // ===== Tests =====
 
 test "field initializers move into the constructor" {
-	assert ctorStmtKinds("class A { x: number = 1; constructor() { foo(); } }") === "stmt,stmt,";
+	assert ctorStmtKinds("class A { x: number = 1; constructor() { foo(); } }") == "stmt,stmt,";
 }
 
 test "field initializers land after an explicit super call" {
-	assert ctorStmtKinds("class A extends B { x: number = 1; constructor() { super(); foo(); } }") === "super,stmt,stmt,";
+	assert ctorStmtKinds("class A extends B { x: number = 1; constructor() { super(); foo(); } }") == "super,stmt,stmt,";
 }
 
 test "the initializer is left in exactly one place" {
-	assert remainingInitializers("class A { x: number = 1; constructor() {} }") === 0;
+	assert remainingInitializers("class A { x: number = 1; constructor() {} }") == 0;
 }
 
 test "a static field is not moved into the constructor" {
-	assert remainingInitializers("class A { static x: number = 1; constructor() {} }") === 1;
+	assert remainingInitializers("class A { static x: number = 1; constructor() {} }") == 1;
 }
 
 test "a class without a constructor gets one" {
-	assert ctorStmtKinds("class A { x: number = 1; }") === "stmt,";
+	assert ctorStmtKinds("class A { x: number = 1; }") == "stmt,";
 }
 
 test "the synthesized constructor takes the initializer with it" {
-	assert remainingInitializers("class A { x: number = 1; }") === 0;
+	assert remainingInitializers("class A { x: number = 1; }") == 0;
 }
 
 test "a class with no initializers keeps its body" {
-	assert ctorStmtKinds("class A { x: number; constructor() { foo(); } }") === "stmt,";
+	assert ctorStmtKinds("class A { x: number; constructor() { foo(); } }") == "stmt,";
 }
 
 test "a synthesized constructor lifts to <Class>_init" {
-	assert liftedInitNames("class A { x: number = 1; }") === "A_init,";
+	assert liftedInitNames("class A { x: number = 1; }") == "A_init,";
 }
 
 test "every class in a chain gets an _init to call" {
-	assert liftedInitNames("class A { x: number = 1; } class B extends A { y: number = 2; }") === "A_init,B_init,";
+	assert liftedInitNames("class A { x: number = 1; } class B extends A { y: number = 2; }") == "A_init,B_init,";
 }

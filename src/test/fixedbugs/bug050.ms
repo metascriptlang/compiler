@@ -27,23 +27,23 @@
 //             literals, ratios, plus the spec edge cases) with zero mismatches.
 
 test "bug050: floats print their shortest round-trip form" {
-    assert `${3.14}` === "3.14";
-    assert `${0.1}` === "0.1";
-    assert `${-3.14}` === "-3.14";
-    assert `${1.0 / 3.0}` === "0.3333333333333333";
+    assert `${3.14}` == "3.14";
+    assert `${0.1}` == "0.1";
+    assert `${-3.14}` == "-3.14";
+    assert `${1.0 / 3.0}` == "0.3333333333333333";
 }
 
 test "bug050: integral doubles print without a fraction" {
-    assert `${100.0}` === "100";
-    assert `${0.0}` === "0";
+    assert `${100.0}` == "100";
+    assert `${0.0}` == "0";
 }
 
 test "bug050: large magnitudes format instead of trapping" {
-    assert `${1e21}` === "1e+21";
-    assert `${1e20}` === "100000000000000000000";
+    assert `${1e21}` == "1e+21";
+    assert `${1e20}` == "100000000000000000000";
 }
 
 test "bug050: the exponential threshold follows the spec, unpadded" {
-    assert `${0.000001}` === "0.000001";
-    assert `${1e-7}` === "1e-7";
+    assert `${0.000001}` == "0.000001";
+    assert `${1e-7}` == "1e-7";
 }

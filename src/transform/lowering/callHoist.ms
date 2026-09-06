@@ -59,7 +59,7 @@ interface CondLower { pre: Node[]; expr: Node; }
 // (Phase 3) must not depend on the analyzer (Phase 4). Conservative: only the
 // unambiguous owned-heap kinds. Ptr (borrow) and Struct (value type) are excluded.
 function isRcReturning(t: Type | null): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	// Awaitables (Promise<T> from async / spawn / actor CALL) are managed by the
 	// await / spawn / actor lowering, NOT by plain scope-exit destroy. Hoisting an
 	// awaited call out of its `await` breaks that machinery (PARALOCK). Never hoist.
@@ -89,10 +89,10 @@ function isRcReturning(t: Type | null): boolean {
 export function containsConditionalEval(expr: Node): boolean {
 	let found = false;
 	replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind === NodeKind.ConditionalExpr) { found = true; }
-		if (node.kind === NodeKind.BinaryExpr) {
+		if (node.kind == NodeKind.ConditionalExpr) { found = true; }
+		if (node.kind == NodeKind.BinaryExpr) {
 			const op = (node.data as BinaryExprData).operator;
-			if (op === "&&" || op === "||") { found = true; }
+			if (op == "&&" || op == "||") { found = true; }
 		}
 		return node;
 	});
@@ -104,9 +104,9 @@ export function containsConditionalEval(expr: Node): boolean {
 // reference to its temp. Returns the rewritten expression.
 function hoistFreshRcCalls(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	return replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind !== NodeKind.CallExpr && node.kind !== NodeKind.NewExpr) return node;
+		if (node.kind != NodeKind.CallExpr && node.kind != NodeKind.NewExpr) return node;
 		if (!isRcReturning(node.nodeType)) return node;
-		const ty = node.nodeType !== null ? node.nodeType : noneType();
+		const ty = node.nodeType != null ? node.nodeType : noneType();
 		const loc = node.location;
 		const sym = freshTempSym(ctx, "hoist", ty);
 		const decl = makeVarDecl(sym.name, node, DeclKind.Const, loc);
@@ -130,7 +130,7 @@ function plainHoist(expr: Node, ctx: TransformContext): CondLower {
 function containsFreshRcCall(expr: Node): boolean {
 	let found = false;
 	replaceInExpr(expr, (node: Node): Node => {
-		if ((node.kind === NodeKind.CallExpr || node.kind === NodeKind.NewExpr) && isRcReturning(node.nodeType)) {
+		if ((node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) && isRcReturning(node.nodeType)) {
 			found = true;
 		}
 		return node;
@@ -143,7 +143,7 @@ function containsFreshRcCall(expr: Node): boolean {
 // a statement-list entry, so expandStmt never reaches it directly — this drives the
 // block-wrap in the IfStmt branch that brings it under the walker.
 function altChainHasFreshCond(node: Node): boolean {
-	if (node === null || node.kind !== NodeKind.IfStmt) return false;
+	if (node == null || node.kind != NodeKind.IfStmt) return false;
 	const d = node.data as IfStmtData;
 	if (containsFreshRcCall(d.condition)) return true;
 	return altChainHasFreshCond(d.alternate);
@@ -156,7 +156,7 @@ function altChainHasFreshCond(node: Node): boolean {
 function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	for (const s of lowered.pre) { stmts.push(s); }
-	if (lowered.expr.nodeType !== null && lowered.expr.nodeType.kind === TypeKind.Never) {
+	if (lowered.expr.nodeType != null && lowered.expr.nodeType.kind == TypeKind.Never) {
 		stmts.push(makeExprStmt(lowered.expr, loc));
 		return makeBlock(stmts, loc);
 	}
@@ -181,11 +181,11 @@ function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocat
 // non-short-circuit/non-ternary leaf (e.g. `(c ? f() : g()).ok`) returns null (caller
 // leaves the statement untouched).
 function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null {
-	if (cond.kind === NodeKind.BinaryExpr) {
+	if (cond.kind == NodeKind.BinaryExpr) {
 		const bd = cond.data as BinaryExprData;
-		if (bd.operator === "&&" || bd.operator === "||") {
+		if (bd.operator == "&&" || bd.operator == "||") {
 			const left = lowerShortCircuit(bd.left, ctx);
-			if (left === null) return null;
+			if (left == null) return null;
 			const loc = cond.location;
 			// RHS has no fresh call → keep it inline; C's `&&`/`||` short-circuits it.
 			if (!containsFreshRcCall(bd.right)) {
@@ -193,8 +193,8 @@ function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null 
 			}
 			// RHS has a fresh call → evaluate it only on the branch that reaches it.
 			const right = lowerShortCircuit(bd.right, ctx);
-			if (right === null) return null;
-			const isAnd = bd.operator === "&&";
+			if (right == null) return null;
+			const isAnd = bd.operator == "&&";
 			const flagSym = freshTempSym(ctx, "sc", booleanType());
 			const pre: Node[] = [];
 			for (const s of left.pre) { pre.push(s); }
@@ -209,7 +209,7 @@ function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null 
 			return { pre, expr: flagRef };
 		}
 	}
-	if (cond.kind === NodeKind.ConditionalExpr) return lowerTernary(cond, ctx);
+	if (cond.kind == NodeKind.ConditionalExpr) return lowerTernary(cond, ctx);
 	// Leaf (no top-level short-circuit or ternary). A nested ternary with a fresh call
 	// (e.g. `(c ? f() : g()).ok`) can't be plain-hoisted without eager-evaluating both
 	// branches — bail.
@@ -226,14 +226,14 @@ function lowerShortCircuit(cond: Node, ctx: TransformContext): CondLower | null 
 function lowerTernary(cond: Node, ctx: TransformContext): CondLower | null {
 	const cd = cond.data as ConditionalExprData;
 	const loc = cond.location;
-	const ty = cond.nodeType !== null ? cond.nodeType : booleanType();
+	const ty = cond.nodeType != null ? cond.nodeType : booleanType();
 	if (isRcReturning(ty)) return null;
 	const condL = lowerShortCircuit(cd.ternaryCondition, ctx);
-	if (condL === null) return null;
+	if (condL == null) return null;
 	const thenL = lowerShortCircuit(cd.ternaryConsequent, ctx);
-	if (thenL === null) return null;
+	if (thenL == null) return null;
 	const elseL = lowerShortCircuit(cd.ternaryAlternate, ctx);
-	if (elseL === null) return null;
+	if (elseL == null) return null;
 	const resSym = freshTempSym(ctx, "tern", ty);
 	const decl = makeVarDecl(resSym.name, makeDefaultValue(ty, loc), DeclKind.Let, loc);
 	decl.resolvedSym = resSym;
@@ -264,12 +264,12 @@ function lowerBoolCond(cond: Node, ctx: TransformContext): CondLower | null {
 // when the binding's own type is RC (the analyzer already SINKs it).
 function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as VariableDeclData;
-	if (d.initializer === null || isRcReturning(stmt.nodeType)) return [stmt];
+	if (d.initializer == null || isRcReturning(stmt.nodeType)) return [stmt];
 	// Plain once-eval fresh calls are captured by the analyzer (processVarDecl Normal-walk +
 	// processNode wrapper recursion). callHoist only keeps the conditional-eval cases.
 	if (!containsConditionalEval(d.initializer)) return [stmt];
 	const lowered = lowerBoolCond(d.initializer, ctx);
-	if (lowered === null) return [stmt];
+	if (lowered == null) return [stmt];
 	d.initializer = lowered.expr;
 	lowered.pre.push(stmt);
 	return lowered.pre;
@@ -279,14 +279,14 @@ function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
 // LHS (`obj.f =`, `arr[i] =`) are left to the analyzer's own reassignment path.
 function expandAssign(stmt: Node, ctx: TransformContext): Node[] {
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr === null || ed.expr.kind !== NodeKind.BinaryExpr) return [stmt];
+	if (ed.expr == null || ed.expr.kind != NodeKind.BinaryExpr) return [stmt];
 	const bd = ed.expr.data as BinaryExprData;
-	if (bd.operator !== "=" || bd.left.kind !== NodeKind.Identifier || isRcReturning(bd.left.nodeType)) return [stmt];
+	if (bd.operator != "=" || bd.left.kind != NodeKind.Identifier || isRcReturning(bd.left.nodeType)) return [stmt];
 	// Plain once-eval fresh calls in the RHS are captured by the analyzer. callHoist only keeps
 	// the conditional-eval cases.
 	if (!containsConditionalEval(bd.right)) return [stmt];
 	const lowered = lowerBoolCond(bd.right, ctx);
-	if (lowered === null) return [stmt];
+	if (lowered == null) return [stmt];
 	bd.right = lowered.expr;
 	lowered.pre.push(stmt);
 	return lowered.pre;
@@ -299,7 +299,7 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	// `else if (f().ok)` is the `.alternate`, never a statement-list entry, so expandStmt
 	// can't reach its condition. Wrap a fresh-cond else-if in a block so the walker
 	// descends and lowers the now-listed inner if; deeper else-ifs cascade the same way.
-	if (ifd.alternate !== null && ifd.alternate.kind === NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
+	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
 		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
 	}
 	// Plain once-eval conditions are captured by the analyzer (processIf walks the condition).
@@ -307,7 +307,7 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	// still routes a short-circuit else-if through the walker while a plain one falls to the analyzer.
 	if (!containsConditionalEval(ifd.condition)) return [stmt];
 	const lowered = lowerBoolCond(ifd.condition, ctx);
-	if (lowered === null) return [stmt];
+	if (lowered == null) return [stmt];
 	ifd.condition = lowered.expr;
 	lowered.pre.push(stmt);
 	return lowered.pre;
@@ -322,7 +322,7 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
 	const lowered = lowerBoolCond(wd.whileCondition, ctx);
-	if (lowered === null) return [stmt];
+	if (lowered == null) return [stmt];
 	const loc = stmt.location;
 	const body = lowered.pre;
 	body.push(makeIf(makeUnary("!", lowered.expr, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));

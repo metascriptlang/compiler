@@ -32,15 +32,15 @@ function apply2(f: (a: number, b: number) => boolean): boolean {
 
 function main(): void {
 	// member-access receiver: g(arrow).toString()
-	const memberChain = apply2((a, b) => a !== b).toString();
+	const memberChain = apply2((a, b) => a != b).toString();
 	// ternary operand
-	const tern = (1.0 > 0.0) ? apply2((a, b) => a === b) : false;
+	const tern = (1.0 > 0.0) ? apply2((a, b) => a == b) : false;
 	// as-cast operand
-	const cast = apply2((a, b) => a !== b) as boolean;
+	const cast = apply2((a, b) => a != b) as boolean;
 
-	if (memberChain !== "true") { throw "GUARD RED: arrow in member-chain not lifted"; }
-	if (tern !== false) { throw "GUARD RED: arrow in ternary not lifted/ran wrong"; }
-	if (cast !== true) { throw "GUARD RED: arrow in as-cast not lifted"; }
+	if (memberChain != "true") { throw "GUARD RED: arrow in member-chain not lifted"; }
+	if (tern != false) { throw "GUARD RED: arrow in ternary not lifted/ran wrong"; }
+	if (cast != true) { throw "GUARD RED: arrow in as-cast not lifted"; }
 	console.log("inlineArrowMemberLift ok");
 }
 

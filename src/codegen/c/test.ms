@@ -25,7 +25,7 @@ import { escapeCString } from "./literals";
 export function genTestDeclNode(g: CGen, node: Node): void {
 	if (!g.isTestBuild) return;
 	const d = node.data as TestDeclData;
-	if (d.testBody === null) return;
+	if (d.testBody == null) return;
 
 	const funcName = `__ms_test_${g.nextTestId.toString()}`;
 	g.nextTestId = g.nextTestId + 1;
@@ -33,7 +33,7 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 	const procs = sec(g, CSection.Procs);
 	addLine(procs, `static void ${funcName}(void) {`);
 
-	if (d.testBody.kind === NodeKind.BlockStmt) {
+	if (d.testBody.kind == NodeKind.BlockStmt) {
 		const bd = d.testBody.data as BlockStmtData;
 		const p = createProc(funcName, null);
 		g.currentProc = p;

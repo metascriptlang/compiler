@@ -29,7 +29,7 @@ export function markClosureCalls(program: Node, ctx: TransformContext): Node {
 }
 
 function markCall(node: Node): Node {
-	if (node.kind !== NodeKind.CallExpr) return node;
+	if (node.kind != NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
 
 	// Reference parity (genAsgnCall): dispatch on the callee's callConv, never on
@@ -56,17 +56,17 @@ function wrapFuncArgsAsThunks(node: Node): void {
 	const cd = node.data as CallExprData;
 	// Need callee's function type to know parameter types
 	const calleeType = getCalleeType(cd);
-	if (calleeType === null) return;
-	if (calleeType.kind !== TypeKind.Function) return;
-	if (calleeType.typeChildren === null) return;
+	if (calleeType == null) return;
+	if (calleeType.kind != TypeKind.Function) return;
+	if (calleeType.typeChildren == null) return;
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		const arg = cd.arguments[i];
-		if (arg.kind !== NodeKind.Identifier) continue;
+		if (arg.kind != NodeKind.Identifier) continue;
 		const argSym = arg.resolvedSym;
-		if (argSym === null) continue;
+		if (argSym == null) continue;
 		// Only wrap named functions (not variables/parameters which are already closures)
-		if (argSym.symbolKind !== SymbolKind.Function) continue;
+		if (argSym.symbolKind != SymbolKind.Function) continue;
 		// In MetaScript, all function-typed parameters are closures (msClosure in C).
 		// A named function passed as argument always needs wrapping into { fn, env: null }.
 		const loc = arg.location;
@@ -74,7 +74,7 @@ function wrapFuncArgsAsThunks(node: Node): void {
 		const thunk = makeObjectLiteral(["fn", "env"], [arg, nullNode], loc);
 		thunk.flags = thunk.flags | NodeFlag.Closure;
 		// Set closure type from the function's own symbol type
-		if (argSym.symbolType !== null) {
+		if (argSym.symbolType != null) {
 			thunk.nodeType = argSym.symbolType;
 		}
 		cd.arguments[i] = thunk;
@@ -82,16 +82,16 @@ function wrapFuncArgsAsThunks(node: Node): void {
 }
 
 function isClosureTypedCallee(callee: Node): boolean {
-	if (callee.nodeType === null) return false;
-	if (callee.nodeType.kind !== TypeKind.Function) return false;
-	return callee.nodeType.callConv === CallingConvention.CcClosure;
+	if (callee.nodeType == null) return false;
+	if (callee.nodeType.kind != TypeKind.Function) return false;
+	return callee.nodeType.callConv == CallingConvention.CcClosure;
 }
 
 function getCalleeType(cd: CallExprData): Type | null {
-	if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+	if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
 		return cd.callee.nodeType;
 	}
-	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null) {
+	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.symbolType != null) {
 		return cd.callee.resolvedSym.symbolType;
 	}
 	return null;
@@ -116,10 +116,10 @@ function wrapProgram(stmts: Node[]): Node {
 function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
 	const callee = makeIdent(calleeName, loc);
-	if (sym !== null) {
+	if (sym != null) {
 		callee.resolvedSym = sym;
 	}
-	if (calleeType !== null) {
+	if (calleeType != null) {
 		callee.nodeType = calleeType;
 	}
 	const callNode = makeCall(callee, [], loc);
@@ -158,13 +158,13 @@ test "MemberExpr holding a closure is a closure call" {
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	const prog = wrapProgram([exprStmt]);
 	markClosureCalls(prog, makeCtx());
-	assert isDirect(callNode) === false;
+	assert isDirect(callNode) == false;
 }
 
 test "MemberExpr without Function type stays direct" {
 	const t = makeMemberTestCall();
 	markClosureCalls(t.prog, makeCtx());
-	assert isDirect(t.call) === true;
+	assert isDirect(t.call) == true;
 }
 
 test "Closure-typed variable callee is a closure call" {
@@ -172,7 +172,7 @@ test "Closure-typed variable callee is a closure call" {
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	assert isDirect(t.call) === false;
+	assert isDirect(t.call) == false;
 }
 
 test "Named function callee stays direct" {
@@ -180,7 +180,7 @@ test "Named function callee stays direct" {
 	const sym = makeSymbol("helper", SymbolKind.Function, fnType, false);
 	const t = makeTestCall("helper", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	assert isDirect(t.call) === true;
+	assert isDirect(t.call) == true;
 }
 
 test "Synthesized callee without a symbol stays direct" {
@@ -192,7 +192,7 @@ test "Synthesized callee without a symbol stays direct" {
 	const callNode = makeCall(callee, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
-	assert isDirect(callNode) === true;
+	assert isDirect(callNode) == true;
 }
 
 test "Closure symbol without a node type stays direct" {
@@ -203,7 +203,7 @@ test "Closure symbol without a node type stays direct" {
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, null as unknown as Type);
 	markClosureCalls(t.prog, makeCtx());
-	assert isDirect(t.call) === true;
+	assert isDirect(t.call) == true;
 }
 
 test "Callee produced by another call is a closure call" {
@@ -215,5 +215,5 @@ test "Callee produced by another call is a closure call" {
 	const outer = makeCall(inner, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: outer }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
-	assert isDirect(outer) === false;
+	assert isDirect(outer) == false;
 }

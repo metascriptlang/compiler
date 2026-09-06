@@ -63,7 +63,7 @@ function main(): void {
 	}
 
 	const tag = await acc.getTag();
-	if (tag !== "paralock-room") { console.log(`FAIL tag=[${tag}]`); return; }
+	if (tag != "paralock-room") { console.log(`FAIL tag=[${tag}]`); return; }
 	console.log(`paralock-nested check=${check} total=${await acc.get()}`);
 }
 

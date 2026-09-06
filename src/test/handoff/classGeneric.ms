@@ -12,17 +12,17 @@ import { lookupSymbol } from "../../checker/symbol";
 
 test "checker: generic class method has this param" {
 	const ctx = checkSource("class Box<T> { value: T; get(): T { return this.value; } }");
-	assert ctx !== null;
+	assert ctx != null;
 	// Methods live in the extension registry keyed by (receiver, name), not as flat
 	// module symbols; codegen later lowers them to Box_get free functions.
 	let found = false;
 	for (const m of ctx.extensionRegistry.methods) {
-		if (m.receiverTypeName === "Box" && m.methodName === "get") {
+		if (m.receiverTypeName == "Box" && m.methodName == "get") {
 			found = true;
-			assert m.sym !== null;
-			assert m.sym.symbolType.kind === TypeKind.Function;
+			assert m.sym != null;
+			assert m.sym.symbolType.kind == TypeKind.Function;
 			assert m.sym.symbolType.typeNames.length >= 1;
-			assert m.sym.symbolType.typeNames[0] === "this";
+			assert m.sym.symbolType.typeNames[0] == "this";
 		}
 	}
 	assert found;
@@ -30,15 +30,15 @@ test "checker: generic class method has this param" {
 
 test "checker: generic class method with T param has 2 params" {
 	const ctx = checkSource("class Box<T> { value: T; set(v: T): void { this.value = v; } }");
-	assert ctx !== null;
+	assert ctx != null;
 	let found = false;
 	for (const m of ctx.extensionRegistry.methods) {
-		if (m.receiverTypeName === "Box" && m.methodName === "set") {
+		if (m.receiverTypeName == "Box" && m.methodName == "set") {
 			found = true;
-			assert m.sym !== null;
-			assert m.sym.symbolType.kind === TypeKind.Function;
+			assert m.sym != null;
+			assert m.sym.symbolType.kind == TypeKind.Function;
 			// params: [this: Box, v: T]
-			assert m.sym.symbolType.typeChildren.length === 2;
+			assert m.sym.symbolType.typeChildren.length == 2;
 		}
 	}
 	assert found;
@@ -46,7 +46,7 @@ test "checker: generic class method with T param has 2 params" {
 
 test "checker: non-generic class method works" {
 	const n = errorCount("class Dog { name: string; bark(): string { return this.name; } }\nconst d = new Dog(\"Rex\");\nconst s = d.bark();");
-	assert n === 0;
+	assert n == 0;
 }
 
 test "E2E C: non-generic class method compiles" {
@@ -77,27 +77,27 @@ test "E2E C: charCodeAt receiver BEFORE generics" {
 
 test "checker: new Box<number>(42) no errors" {
 	const n = errorCount("class Box<T> { value: T; }\nconst b = new Box<number>(42);");
-	assert n === 0;
+	assert n == 0;
 }
 
 test "checker: generic class field type is substituted" {
 	const ctx = checkSource("class Box<T> { value: T; }\nconst b = new Box<number>(42);");
-	assert ctx !== null;
+	assert ctx != null;
 	const sym = lookupSymbol(ctx.table, "b");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Ref;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Ref;
 	const inner = sym.symbolType.typeReturn;
-	assert inner !== null;
+	assert inner != null;
 	// Checker keeps the generic name + type-arg children; name mangling (Box__number)
 	// happens in the monomorphize pass, which checkSource does not run.
-	assert inner.typeName === "Box";
-	assert inner.typeChildren.length === 1;
-	assert inner.typeChildren[0].kind === TypeKind.Number;
+	assert inner.typeName == "Box";
+	assert inner.typeChildren.length == 1;
+	assert inner.typeChildren[0].kind == TypeKind.Number;
 }
 
 test "checker: two different instantiations no errors" {
 	const n = errorCount("class Pair<T> { a: T; b: T; }\nconst x = new Pair<number>(1, 2);\nconst y = new Pair<string>(\"a\", \"b\");");
-	assert n === 0;
+	assert n == 0;
 }
 
 test "E2E C: generic class instantiation compiles" {
@@ -131,23 +131,23 @@ test "E2E C: trim keeps receiver" {
 
 test "checker: two-param generic class no errors" {
 	const n = errorCount("class KV<K, V> { key: K; val: V; }\nconst m = new KV<string, number>(\"a\", 1);");
-	assert n === 0;
+	assert n == 0;
 }
 
 test "checker: two-param generic field types substituted" {
 	const ctx = checkSource("class KV<K, V> { key: K; val: V; }\nconst m = new KV<string, number>(\"a\", 1);");
-	assert ctx !== null;
+	assert ctx != null;
 	const sym = lookupSymbol(ctx.table, "m");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Ref;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Ref;
 	const inner = sym.symbolType.typeReturn;
-	assert inner !== null;
+	assert inner != null;
 	// Checker keeps the generic name + type-arg children; mangling to KV__string,number
 	// happens in the monomorphize pass, which checkSource does not run.
-	assert inner.typeName === "KV";
-	assert inner.typeChildren.length === 2;
-	assert inner.typeChildren[0].kind === TypeKind.String;
-	assert inner.typeChildren[1].kind === TypeKind.Number;
+	assert inner.typeName == "KV";
+	assert inner.typeChildren.length == 2;
+	assert inner.typeChildren[0].kind == TypeKind.String;
+	assert inner.typeChildren[1].kind == TypeKind.Number;
 }
 
 test "E2E C: two-param generic compiles" {

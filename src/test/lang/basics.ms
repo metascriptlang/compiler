@@ -20,11 +20,11 @@ function isAlpha(ch: number): boolean {
 }
 
 test "arithmetic" {
-	assert 2 + 3 === 5;
-	assert 10 - 4 === 6;
-	assert 3 * 7 === 21;
-	assert 15 / 3 === 5;
-	assert 17 % 5 === 2;
+	assert 2 + 3 == 5;
+	assert 10 - 4 == 6;
+	assert 3 * 7 == 21;
+	assert 15 / 3 == 5;
+	assert 17 % 5 == 2;
 }
 
 test "comparison" {
@@ -32,7 +32,7 @@ test "comparison" {
 	assert 5 > 3;
 	assert 3 <= 3;
 	assert 5 >= 4;
-	assert 3 !== 4;
+	assert 3 != 4;
 }
 
 test "boolean" {
@@ -44,38 +44,38 @@ test "boolean" {
 }
 
 test "strings" {
-	assert "hello".length === 5;
-	assert "".length === 0;
-	assert "a" + "b" === "ab";
-	assert "hello" === "hello";
-	assert "hello" !== "world";
+	assert "hello".length == 5;
+	assert "".length == 0;
+	assert "a" + "b" == "ab";
+	assert "hello" == "hello";
+	assert "hello" != "world";
 }
 
 test "variables" {
 	const y = 42;
-	assert y === 42;
+	assert y == 42;
 	let x = 10;
-	assert x === 10;
+	assert x == 10;
 	x = 20;
-	assert x === 20;
+	assert x == 20;
 	x += 5;
-	assert x === 25;
+	assert x == 25;
 }
 
 test "if/else" {
-	assert myAbs(5) === 5;
-	assert myAbs(-3) === 3;
-	assert myAbs(0) === 0;
-	assert clamp(5, 0, 10) === 5;
-	assert clamp(-3, 0, 10) === 0;
-	assert clamp(15, 0, 10) === 10;
+	assert myAbs(5) == 5;
+	assert myAbs(-3) == 3;
+	assert myAbs(0) == 0;
+	assert clamp(5, 0, 10) == 5;
+	assert clamp(-3, 0, 10) == 0;
+	assert clamp(15, 0, 10) == 10;
 }
 
 test "ternary" {
 	const sign = 5 > 0 ? "pos" : "neg";
-	assert sign === "pos";
+	assert sign == "pos";
 	const sign2 = -3 > 0 ? "pos" : "neg";
-	assert sign2 === "neg";
+	assert sign2 == "neg";
 }
 
 test "char codes" {

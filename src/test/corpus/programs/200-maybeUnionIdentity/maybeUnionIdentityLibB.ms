@@ -7,7 +7,7 @@ export interface BoxB {
 
 export function readB(b: BoxB): float32 {
 	const v = b.w;
-	if (v === null) return -1.0 as float32;
-	if (typeof v === "string") return -2.0 as float32;
+	if (v == null) return -1.0 as float32;
+	if (typeof v == "string") return -2.0 as float32;
 	return v as float32;
 }

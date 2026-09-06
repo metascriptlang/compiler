@@ -45,5 +45,5 @@ test "bug041: async chain pattern compiles + lowers to state machine" {
 	// path → env leaked. Post-fix the lowering compiles to a correctly cleaned-up
 	// state machine. Runtime leak verification is in /tmp probe (probeAwaitSlow).
 	const fut = bug041_mid();
-	assert fut !== null;
+	assert fut != null;
 }

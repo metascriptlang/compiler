@@ -16,12 +16,12 @@ import { parseHeader, defaultOptions } from "../cimport/index";
 
 test "end-to-end skeleton runs without crashing" {
 	const out = parseHeader("", "empty.h", defaultOptions());
-	assert out.objs.length === 0;
-	assert out.diagnostics.length === 0;
+	assert out.objs.length == 0;
+	assert out.diagnostics.length == 0;
 }
 
 test "end-to-end function declaration parses" {
 	const out = parseHeader("int add(int a, int b);", "add.h", defaultOptions());
-	assert out.diagnostics.length === 0;
+	assert out.diagnostics.length == 0;
 	assert out.objs.length > 0;
 }

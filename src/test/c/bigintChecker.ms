@@ -134,9 +134,9 @@ test "bigint literal beyond int64 survives to JS verbatim" {
 test "bridge maps bigint Type to Identifier 'bigint'" {
 	const t = createPrimitive(TypeKind.BigInt);
 	const ast = mapTypeToAst(t, makeLoc(0, 0));
-	assert ast.kind === NodeKind.Identifier;
+	assert ast.kind == NodeKind.Identifier;
 	const d = ast.data as IdentifierData;
-	assert d.name === "bigint";
+	assert d.name == "bigint";
 }
 
 test "JSON.stringify accepts bigint via explicit toString" {

@@ -159,7 +159,7 @@ function runBench(name: string, mod: RaiserModule): void {
 	console.log(`  vmFast (untag)       : ${fmtMs(ms2)}ms  result=${got2}`);
 	console.log(`  vmPacked (untag+pak) : ${fmtMs(ms3)}ms  result=${got3}`);
 
-	if (got1 !== got2 || got2 !== got3) {
+	if (got1 != got2 || got2 != got3) {
 		console.log(`  MISMATCH: vm.ms=${got1} vmFast=${got2} vmPacked=${got3}`);
 		return;
 	}

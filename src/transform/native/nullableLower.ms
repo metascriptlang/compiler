@@ -28,8 +28,8 @@ import { isNullExpr } from "../lowering/operatorLower";
 //                               typed as wrapper. Direct struct construction
 //                               (Nim parity).
 export function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation): Node {
-	if (init.nodeType !== null && isMaybeType(init.nodeType)) return init;
-	if (init.kind === NodeKind.NullLiteral) {
+	if (init.nodeType != null && isMaybeType(init.nodeType)) return init;
+	if (init.kind == NodeKind.NullLiteral) {
 		init.nodeType = maybeType;
 		return init;
 	}
@@ -51,7 +51,7 @@ export function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation)
 // downstream lowering (as-cast extraction, typeof tag-switch) must see the
 // union, not the flow-narrowed member.
 function maybePayloadType(maybeT: Type | null, narrowed: Type): Type {
-	if (maybeT === null || maybeT.typeReturn === null) return narrowed;
+	if (maybeT == null || maybeT.typeReturn == null) return narrowed;
 	// Tagged primitive unions only — all-strlit payloads are msString-carried
 	// and keep the narrowed type (identity at the C level).
 	if (isTagCarriedUnion(maybeT.typeReturn)) return maybeT.typeReturn;
@@ -62,15 +62,15 @@ function maybePayloadType(maybeT: Type | null, narrowed: Type): Type {
 // field via the object's declared field type) — flow narrowing never changes
 // these, unlike nodeType.
 function maybeSlotType(n: Node): Type | null {
-	if (n === null) return null;
-	if (n.kind === NodeKind.Identifier && n.resolvedSym !== null
+	if (n == null) return null;
+	if (n.kind == NodeKind.Identifier && n.resolvedSym != null
 		&& isMaybeType(n.resolvedSym.symbolType)) {
 		return n.resolvedSym.symbolType;
 	}
-	if (n.kind === NodeKind.MemberExpr) {
+	if (n.kind == NodeKind.MemberExpr) {
 		const d = n.data as MemberExprData;
-		if (d.object !== null && d.object.nodeType !== null
-			&& d.property !== "value" && d.property !== "present") {
+		if (d.object != null && d.object.nodeType != null
+			&& d.property != "value" && d.property != "present") {
 			const ft = getProperty(d.object.nodeType, d.property);
 			if (isMaybeType(ft)) return ft;
 		}
@@ -86,25 +86,25 @@ export function lowerNullable(program: Node, ctx: TransformContext): Node {
 }
 
 function lowerNullableNode(node: Node): Node {
-	if (node === null) return node;
+	if (node == null) return node;
 	const loc = node.location;
 
 	// 1. Narrowed identifier: symbolType=Maybe_T, nodeType=T (narrowed by checker)
 	//    → replace x with x.value so codegen accesses the inner struct
-	if (node.kind === NodeKind.Identifier && node.resolvedSym !== null
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null
 		&& isMaybeType(node.resolvedSym.symbolType)
-		&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
+		&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 		const member = makeMember(node, "value", loc);
 		member.nodeType = maybePayloadType(node.resolvedSym.symbolType, node.nodeType);
 		return member;
 	}
 
 	// 1c. Type assertion peeling a Maybe: `maybeExpr as V` (V = payload) → maybeExpr.value
-	if (node.kind === NodeKind.TypeAssertion) {
+	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		if (d.asExpr !== null && d.asExpr.nodeType !== null
+		if (d.asExpr != null && d.asExpr.nodeType != null
 			&& isMaybeType(d.asExpr.nodeType)
-			&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
+			&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 			const member = makeMember(d.asExpr, "value", loc);
 			member.nodeType = node.nodeType;
 			return member;
@@ -118,12 +118,12 @@ function lowerNullableNode(node: Node): Node {
 	//     Skip when property is "value"/"present" (already accessing the wrapper
 	//     directly) or when accessing through an already-Maybe object (handled
 	//     by rule 2 below).
-	if (node.kind === NodeKind.MemberExpr) {
+	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		if (d.object !== null && d.object.nodeType !== null
-				&& d.property !== "value" && d.property !== "present"
+		if (d.object != null && d.object.nodeType != null
+				&& d.property != "value" && d.property != "present"
 				&& !isMaybeType(d.object.nodeType)
-				&& node.nodeType !== null && !isMaybeType(node.nodeType)) {
+				&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 			const fieldType = getProperty(d.object.nodeType, d.property);
 			if (isMaybeType(fieldType)) {
 				const member = makeMember(node, "value", loc);
@@ -135,18 +135,18 @@ function lowerNullableNode(node: Node): Node {
 
 	// 2. Member access on Maybe object: x.field → x.value.field
 	//    Skip .present and .value (direct Maybe struct fields)
-	if (node.kind === NodeKind.MemberExpr) {
+	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		if (d.object !== null && d.property !== "present" && d.property !== "value"
-			&& d.object.nodeType !== null && isMaybeType(d.object.nodeType)) {
+		if (d.object != null && d.property != "present" && d.property != "value"
+			&& d.object.nodeType != null && isMaybeType(d.object.nodeType)) {
 			d.object = makeMember(d.object, "value", loc);
 		}
 	}
 
 	// 3. Null expression unwrap: null as unknown as InterfaceType → NullLiteral
 	//    Codegen's existing {0} handler works for NullLiteral + struct type
-	if (isNullExpr(node) && node.kind !== NodeKind.NullLiteral
-		&& node.nodeType !== null && isStructType(node.nodeType)) {
+	if (isNullExpr(node) && node.kind != NodeKind.NullLiteral
+		&& node.nodeType != null && isStructType(node.nodeType)) {
 		const nullNode = makeNull(loc);
 		nullNode.nodeType = node.nodeType;
 		return nullNode;
@@ -154,9 +154,9 @@ function lowerNullableNode(node: Node): Node {
 
 	// 4. Value wrapping: Maybe var initialized with non-Maybe value
 	//    const x: Token | null = tok → const x = { value: tok, present: true }
-	if (node.kind === NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (d.initializer !== null && node.nodeType !== null && isMaybeType(node.nodeType)) {
+		if (d.initializer != null && node.nodeType != null && isMaybeType(node.nodeType)) {
 			d.initializer = wrapMaybeValue(d.initializer, node.nodeType, loc);
 		}
 	}
@@ -166,21 +166,21 @@ function lowerNullableNode(node: Node): Node {
 	//    Bottom-up walk order means a flow-narrowed LHS was ALREADY rewritten
 	//    to `slot.value` by rules 1/1b — assignment targets the SLOT, so peel
 	//    that rewrite back before wrapping the RHS.
-	if (node.kind === NodeKind.BinaryExpr) {
+	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator === "=") {
-			if (d.left.kind === NodeKind.MemberExpr) {
+		if (d.operator == "=") {
+			if (d.left.kind == NodeKind.MemberExpr) {
 				const ld = d.left.data as MemberExprData;
-				if (ld.property === "value" && ld.object !== null) {
+				if (ld.property == "value" && ld.object != null) {
 					const slotT = maybeSlotType(ld.object);
-					if (slotT !== null) {
+					if (slotT != null) {
 						d.left = ld.object;
 						d.left.nodeType = slotT;
 					}
 				}
 			}
 			const mt = maybeSlotType(d.left);
-			if (mt !== null) {
+			if (mt != null) {
 				d.right = wrapMaybeValue(d.right, mt, loc);
 			}
 		}

@@ -30,5 +30,5 @@ export function stdinDisableBuffering(): void {
 }
 
 export function stdinHasData(): boolean {
-	return msStdinHasData() === 1;
+	return msStdinHasData() == 1;
 }

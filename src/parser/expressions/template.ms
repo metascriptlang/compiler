@@ -25,7 +25,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 	parts.push(firstExpr);
 
 	// Parse remaining middle parts
-	while (!isAtEnd(state) && current(state).kind === TokenKind.TemplateMiddle) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.TemplateMiddle) {
 		const midToken = current(state);
 		advance(state);
 		if (midToken.value.length > 0) {
@@ -36,7 +36,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 	}
 
 	// Handle tail
-	if (!isAtEnd(state) && current(state).kind === TokenKind.TemplateTail) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.TemplateTail) {
 		const tailToken = current(state);
 		if (tailToken.value.length > 0) {
 			parts.push(createNode(NodeKind.StringLiteral, { value: tailToken.value }, tailToken));
@@ -45,13 +45,13 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 	}
 
 	// Build left-associative concatenation tree
-	if (parts.length === 0) {
+	if (parts.length == 0) {
 		return Result.ok(createNode(NodeKind.StringLiteral, { value: "" }, headToken));
 	}
 
 	// Single non-string interpolation (`${expr}`) — prepend "" so concat flatten
 	// generates toString coercion. Without this, `${num}` collapses to just `num`.
-	if (parts.length === 1 && parts[0].kind !== NodeKind.StringLiteral) {
+	if (parts.length == 1 && parts[0].kind != NodeKind.StringLiteral) {
 		const empty = createNode(NodeKind.StringLiteral, { value: "" }, headToken);
 		return Result.ok(createNode(NodeKind.BinaryExpr, { operator: "+", left: empty, right: parts[0] }, headToken));
 	}

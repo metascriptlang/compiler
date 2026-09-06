@@ -40,9 +40,9 @@ test "bug109: an assignment initializer is rejected" {
 }
 
 test "bug109: statement-position assignment stays legal" {
-	assert strictErrorCount("class B { v: string = \"\"; } function f(): void { let x = \"a\"; x = \"b\"; x += \"c\"; const arr: string[] = [\"p\"]; arr[0] = \"z\"; const b = new B(); b.v = \"w\"; }") === 0;
+	assert strictErrorCount("class B { v: string = \"\"; } function f(): void { let x = \"a\"; x = \"b\"; x += \"c\"; const arr: string[] = [\"p\"]; arr[0] = \"z\"; const b = new B(); b.v = \"w\"; }") == 0;
 }
 
 test "bug109: for-update assignment stays legal" {
-	assert strictErrorCount("function f(): int32 { let n = 0; for (let i = 0; i < 3; i = i + 1) { n = n + i; } for (let j = 0; j < 3; j += 1) { n = n + j; } return n; }") === 0;
+	assert strictErrorCount("function f(): int32 { let n = 0; for (let i = 0; i < 3; i = i + 1) { n = n + i; } for (let j = 0; j < 3; j += 1) { n = n + j; } return n; }") == 0;
 }

@@ -22,7 +22,7 @@ function main3(): void {
 
 test "inferred-from-return: no checker errors" {
 	const result = checkOnly(SRC_BACKWARD);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "inferred-from-return: global invariant — no GenericParam leakage" {

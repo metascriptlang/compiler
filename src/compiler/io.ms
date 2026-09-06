@@ -81,7 +81,7 @@ export function atomicWriteFile(path: string, content: string): boolean {
 // -- Platform-dependent file suffixes --
 
 export function exeSuffix(): string {
-	return platform === "windows" ? ".exe" : "";
+	return platform == "windows" ? ".exe" : "";
 }
 
 export function soSuffix(): string {
@@ -139,14 +139,14 @@ export function printErrorsAndExit(ctx: CheckerContext, prefix: string, maxError
 
 // Write generated code to outputPath or derive from filePath.
 export function emitOutput(code: string, filePath: string, outputPath: string, ext: string): void {
-	const outFile = outputPath !== "" ? outputPath : replaceExt(filePath, ext);
+	const outFile = outputPath != "" ? outputPath : replaceExt(filePath, ext);
 	writeOutput(outFile, code);
 	console.log(green("Wrote") + " " + bold(outFile));
 }
 
 // ===== Tests =====
-test "replaceExt .ms to .js" { assert replaceExt("foo.ms", ".js") === "foo.js"; }
+test "replaceExt .ms to .js" { assert replaceExt("foo.ms", ".js") == "foo.js"; }
 
-test "replaceExt .ms to empty" { assert replaceExt("foo.ms", "") === "foo"; }
+test "replaceExt .ms to empty" { assert replaceExt("foo.ms", "") == "foo"; }
 
-test "replaceExt no .ms" { assert replaceExt("foo", ".js") === "foo.js"; }
+test "replaceExt no .ms" { assert replaceExt("foo", ".js") == "foo.js"; }

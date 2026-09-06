@@ -18,12 +18,12 @@ import { createTransformContext, createTransformContextWithChecker } from "../co
 // ===== Visitor =====
 
 function lowerExtNode(node: Node, ctx: TransformContext): Node {
-	if (node.kind !== NodeKind.CallExpr) return node;
+	if (node.kind != NodeKind.CallExpr) return node;
 	// NF_ExtCall set by checker — no registry lookup needed
-	if ((node.flags & NodeFlag.ExtCall) === 0) return node;
+	if ((node.flags & NodeFlag.ExtCall) == 0) return node;
 
 	const call = node.data as CallExprData;
-	if (call.callee.kind !== NodeKind.MemberExpr) return node;
+	if (call.callee.kind != NodeKind.MemberExpr) return node;
 
 	const member = call.callee.data as MemberExprData;
 	const loc = node.location;
@@ -34,26 +34,26 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// fires. Mangled-name backends (C) MUST still rewrite to the direct-call form
 	// that member codegen depends on — so this skip is gated on that capability.
 	if (ctx.keepBuiltinMemberCalls) {
-		if (member.object.kind === NodeKind.Identifier) {
+		if (member.object.kind == NodeKind.Identifier) {
 			const objId = member.object.data as IdentifierData;
-			if (objId.name === "console") return node;
+			if (objId.name == "console") return node;
 		}
-		if (sym !== null && sym.nativeName !== "") return node;
+		if (sym != null && sym.nativeName != "") return node;
 	}
 
 	// JS backend keeps class instance methods as native member calls.
 	// Static extensions (Math.floor) and true extension methods still get rewritten.
 	if (ctx.jsBackend
-		&& (node.flags & NodeFlag.ExtStatic) === 0
-		&& sym !== null && sym.declNode !== null
-		&& sym.declNode.kind === NodeKind.MethodDecl) {
+		&& (node.flags & NodeFlag.ExtStatic) == 0
+		&& sym != null && sym.declNode != null
+		&& sym.declNode.kind == NodeKind.MethodDecl) {
 		return node;
 	}
 	// Use mangled name from resolved sym (e.g. Greeter_greet), fall back to property name
-	const callName = (sym !== null && sym.name !== "") ? sym.name : member.property;
+	const callName = (sym != null && sym.name != "") ? sym.name : member.property;
 
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
-	if ((node.flags & NodeFlag.ExtStatic) !== 0) {
+	if ((node.flags & NodeFlag.ExtStatic) != 0) {
 		const staticIdent = makeIdent(callName, loc);
 		staticIdent.resolvedSym = sym;
 		const newCall = makeCall(staticIdent, call.arguments, loc);
@@ -94,7 +94,7 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 	const stmts = getStmts(result.value);
 	if (stmts.length > 0) {
 		const callNode = (stmts[0].data as ExprStmtData).expr;
-		if (callNode !== null && callNode.kind === NodeKind.CallExpr) {
+		if (callNode != null && callNode.kind == NodeKind.CallExpr) {
 			callNode.flags = callNode.flags | NodeFlag.ExtCall;
 			if (ext.isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
 			callNode.resolvedSym = sym;
@@ -132,7 +132,7 @@ function makePushExt(): ExtensionMethod {
 
 test "extension call rewritten to direct call" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	assert firstCalleeKind(prog) === NodeKind.Identifier;
+	assert firstCalleeKind(prog) == NodeKind.Identifier;
 }
 
 test "non-extension call unchanged" {
@@ -141,7 +141,7 @@ test "non-extension call unchanged" {
 	const cc = createContext();
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
-	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
+	assert firstCalleeKind(prog) == NodeKind.MemberExpr;
 }
 
 test "no flag no rewrite" {
@@ -149,17 +149,17 @@ test "no flag no rewrite" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerExtensionMethod(result.value, ctx);
-	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
+	assert firstCalleeKind(prog) == NodeKind.MemberExpr;
 }
 
 test "extension with args prepends receiver" {
 	const prog = setupExtensionCtx("a.push(1);", makePushExt());
-	assert firstCallArgCount(prog) === 2;
+	assert firstCallArgCount(prog) == 2;
 }
 
 test "extension no args gets receiver only" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	assert firstCallArgCount(prog) === 1;
+	assert firstCallArgCount(prog) == 1;
 }
 
 test "class member takes priority over extension" {
@@ -170,12 +170,12 @@ test "class member takes priority over extension" {
 	const ctx = createTransformContextWithChecker(cc);
 	// No NF_ExtCall flag → unchanged
 	const prog = lowerExtensionMethod(result.value, ctx);
-	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
+	assert firstCalleeKind(prog) == NodeKind.MemberExpr;
 }
 
 test "regular function call unchanged" {
 	const prog = setupExtensionCtx("trim();", makeTrimExt());
-	assert firstCalleeKind(prog) === NodeKind.Identifier;
+	assert firstCalleeKind(prog) == NodeKind.Identifier;
 }
 
 test "non-matching method unchanged" {
@@ -184,7 +184,7 @@ test "non-matching method unchanged" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerExtensionMethod(result.value, ctx);
-	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
+	assert firstCalleeKind(prog) == NodeKind.MemberExpr;
 }
 
 test "static extension no receiver prepend" {
@@ -210,5 +210,5 @@ test "static extension no receiver prepend" {
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
 	// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
-	assert firstCalleeKind(prog) === NodeKind.Identifier;
+	assert firstCalleeKind(prog) == NodeKind.Identifier;
 }

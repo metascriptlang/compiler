@@ -74,7 +74,7 @@ export function varDecl(t: InitTracker, name: string): void {
 export function getDeclBlock(t: InitTracker, name: string): number {
 	let i = t.declScopes.length - 1;
 	while (i >= 0) {
-		if (t.declScopes[i] === name) return t.declBlocks[i];
+		if (t.declScopes[i] == name) return t.declBlocks[i];
 		i = i - 1;
 	}
 	return -1;
@@ -84,30 +84,30 @@ export function getDeclBlock(t: InitTracker, name: string): number {
 
 // Reference parity: breaksBlock — walks to last statement and determines exit state.
 export function breaksBlock(node: Node): BreakState {
-	if (node === null) return BreakState.BsNone;
+	if (node == null) return BreakState.BsNone;
 	let it = node;
-	while (it.kind === NodeKind.BlockStmt) {
+	while (it.kind == NodeKind.BlockStmt) {
 		const bd = it.data as BlockStmtData;
-		if (bd.statements.length === 0) return BreakState.BsNone;
+		if (bd.statements.length == 0) return BreakState.BsNone;
 		it = bd.statements[bd.statements.length - 1];
 	}
-	if (it.kind === NodeKind.BreakStmt || it.kind === NodeKind.ReturnStmt) {
+	if (it.kind == NodeKind.BreakStmt || it.kind == NodeKind.ReturnStmt) {
 		return BreakState.BsBreakOrReturn;
 	}
-	if (it.kind === NodeKind.ThrowStmt || it.kind === NodeKind.UnreachableStmt) {
+	if (it.kind == NodeKind.ThrowStmt || it.kind == NodeKind.UnreachableStmt) {
 		return BreakState.BsNoReturn;
 	}
 	// Ref parity: check for noreturn call (exit(), abort(), etc.)
 	// ExprStmt wrapping a CallExpr whose callee returns Never
-	if (it.kind === NodeKind.ExprStmt) {
+	if (it.kind == NodeKind.ExprStmt) {
 		const ed = it.data as ExprStmtData;
-		if (ed.expr !== null && ed.expr.kind === NodeKind.CallExpr) {
+		if (ed.expr != null && ed.expr.kind == NodeKind.CallExpr) {
 			const cd = ed.expr.data as CallExprData;
-			if (cd.callee !== null && cd.callee.resolvedSym !== null) {
+			if (cd.callee != null && cd.callee.resolvedSym != null) {
 				const calleeSym = cd.callee.resolvedSym;
 				if (hasFlag(calleeSym, SymbolFlag.NoReturn)) return BreakState.BsNoReturn;
 				const retType = calleeSym.symbolType;
-				if (retType !== null && retType.typeReturn !== null && retType.typeReturn.kind === TypeKind.Never) {
+				if (retType != null && retType.typeReturn != null && retType.typeReturn.kind == TypeKind.Never) {
 					return BreakState.BsNoReturn;
 				}
 			}
@@ -138,8 +138,8 @@ export function collectNewInits(t: InitTracker, oldState: int32): string[] {
 
 // Reference parity: check for `while (true)` literal
 export function isAlwaysTrue(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.BooleanLiteral) {
+	if (node == null) return false;
+	if (node.kind == NodeKind.BooleanLiteral) {
 		const d = node.data as BooleanLiteralData;
 		return d.boolValue;
 	}
@@ -174,7 +174,7 @@ test "no duplicate init" {
 	const t = createInitTracker();
 	markInitialized(t, "x");
 	markInitialized(t, "x");
-	assert t.initialized.length === 1;
+	assert t.initialized.length == 1;
 }
 
 test "merge exhaustive both init" {
@@ -231,28 +231,28 @@ test "collectNewInits" {
 	markInitialized(t, "b");
 	markInitialized(t, "c");
 	const newInits = collectNewInits(t, snap);
-	assert newInits.length === 2;
+	assert newInits.length == 2;
 }
 
 test "varDecl records block" {
 	const t = createInitTracker();
 	varDecl(t, "x");
-	assert getDeclBlock(t, "x") === 0;
+	assert getDeclBlock(t, "x") == 0;
 	t.currentBlock = t.currentBlock + 1;
 	varDecl(t, "y");
-	assert getDeclBlock(t, "y") === 1;
-	assert getDeclBlock(t, "x") === 0;
+	assert getDeclBlock(t, "y") == 1;
+	assert getDeclBlock(t, "x") == 0;
 }
 
 test "getDeclBlock returns -1 for unknown" {
 	const t = createInitTracker();
-	assert getDeclBlock(t, "nonexistent") === -1;
+	assert getDeclBlock(t, "nonexistent") == -1;
 }
 
 test "varDecl same block as currentBlock enables firstWrite" {
 	const t = createInitTracker();
 	varDecl(t, "x");
-	assert getDeclBlock(t, "x") === t.currentBlock;
+	assert getDeclBlock(t, "x") == t.currentBlock;
 	t.currentBlock = t.currentBlock + 1;
-	assert getDeclBlock(t, "x") !== t.currentBlock;
+	assert getDeclBlock(t, "x") != t.currentBlock;
 }

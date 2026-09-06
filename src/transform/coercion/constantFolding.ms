@@ -48,7 +48,7 @@ function foldBinary(node: Node): Node {
 	// Use d.operator directly everywhere instead.
 
 	// Both operands must be the same literal kind
-	if (d.left.kind !== d.right.kind) return node;
+	if (d.left.kind != d.right.kind) return node;
 
 	const result = match (d.left.kind) {
 		NodeKind.NumberLiteral => {
@@ -74,7 +74,7 @@ function foldBinary(node: Node): Node {
 	};
 	// Preserve checker-stamped type through constant folding.
 	// Reference parity: constant folding preserves original type on folded literals.
-	if (result !== node && node.nodeType !== null) {
+	if (result != node && node.nodeType != null) {
 		result.nodeType = node.nodeType;
 	}
 	return result;
@@ -83,12 +83,12 @@ function foldBinary(node: Node): Node {
 // True when the literal's exact value survives a round trip through a double.
 function fitsDouble(d: NumberLiteralData): boolean {
 	if (d.isFloat) return true;
-	return ((d.intVal as number) as int64) === d.intVal;
+	return ((d.intVal as number) as int64) == d.intVal;
 }
 
 function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocation, fallback: Node): Node {
 	// Guard: division by zero — leave as runtime
-	if (rv === 0 && (op === "/" || op === "%")) return fallback;
+	if (rv == 0 && (op == "/" || op == "%")) return fallback;
 
 	return match (op) {
 		"+" => makeNumber(lv + rv, loc),
@@ -100,8 +100,8 @@ function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocatio
 		"<=" => makeBool(lv <= rv, loc),
 		">" => makeBool(lv > rv, loc),
 		">=" => makeBool(lv >= rv, loc),
-		"===" => makeBool(lv === rv, loc),
-		"!==" => makeBool(lv !== rv, loc),
+		"===" => makeBool(lv == rv, loc),
+		"!==" => makeBool(lv != rv, loc),
 		_ => fallback,
 	};
 }
@@ -109,16 +109,16 @@ function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocatio
 function foldStringBinary(op: string, lv: string, rv: string, loc: SourceLocation, fallback: Node): Node {
 	return match (op) {
 		"+" => makeString(lv + rv, loc),
-		"===" => makeBool(lv === rv, loc),
-		"!==" => makeBool(lv !== rv, loc),
+		"===" => makeBool(lv == rv, loc),
+		"!==" => makeBool(lv != rv, loc),
 		_ => fallback,
 	};
 }
 
 function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: SourceLocation, fallback: Node): Node {
 	return match (op) {
-		"===" => makeBool(lb === rb, loc),
-		"!==" => makeBool(lb !== rb, loc),
+		"===" => makeBool(lb == rb, loc),
+		"!==" => makeBool(lb != rb, loc),
 		"&&" => makeBool(lb && rb, loc),
 		"||" => makeBool(lb || rb, loc),
 		_ => fallback,
@@ -134,7 +134,7 @@ function foldUnary(node: Node): Node {
 
 	match (d.operand.kind) {
 		NodeKind.BooleanLiteral => {
-			if (d.unaryOp === "!") {
+			if (d.unaryOp == "!") {
 				const bv = (d.operand.data as BooleanLiteralData).boolValue;
 				return makeBool(!bv, loc);
 			}
@@ -149,7 +149,7 @@ function foldUnary(node: Node): Node {
 			};
 			// Preserve checker-stamped type through constant folding.
 			// Reference parity: constant folding preserves original type on folded literals.
-			if (result !== node && node.nodeType !== null) {
+			if (result != node && node.nodeType != null) {
 				result.nodeType = node.nodeType;
 			}
 			return result;
@@ -165,7 +165,7 @@ function foldUnary(node: Node): Node {
 
 function foldMember(node: Node): Node {
 	const d = node.data as MemberExprData;
-	if (d.property === "code" && d.object.kind === NodeKind.StringLiteral) {
+	if (d.property == "code" && d.object.kind == NodeKind.StringLiteral) {
 		const sd = d.object.data as StringLiteralData;
 		if (sd.value.byteLength > 0) {
 			const cc = sd.value.charCodeAt(0);
@@ -176,18 +176,18 @@ function foldMember(node: Node): Node {
 }
 
 // ===== Tests =====
-test "number addition" { assert firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral; }
+test "number addition" { assert firstExprKindAfter("2 + 3;", lowerConstFold) == NodeKind.NumberLiteral; }
 
-test "string concat" { assert firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral; }
+test "string concat" { assert firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) == NodeKind.StringLiteral; }
 
-test "boolean negation" { assert firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral; }
+test "boolean negation" { assert firstExprKindAfter("!true;", lowerConstFold) == NodeKind.BooleanLiteral; }
 
-test "comparison" { assert firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral; }
+test "comparison" { assert firstExprKindAfter("5 > 3;", lowerConstFold) == NodeKind.BooleanLiteral; }
 
-test "non-constant unchanged" { assert firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr; }
+test "non-constant unchanged" { assert firstExprKindAfter("x + y;", lowerConstFold) == NodeKind.BinaryExpr; }
 
-test "nested constant folds bottom-up" { assert firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral; }
+test "nested constant folds bottom-up" { assert firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) == NodeKind.NumberLiteral; }
 
-test "mixed types unchanged" { assert firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr; }
+test "mixed types unchanged" { assert firstExprKindAfter("1 + x;", lowerConstFold) == NodeKind.BinaryExpr; }
 
-test "division by zero unchanged" { assert firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr; }
+test "division by zero unchanged" { assert firstExprKindAfter("1 / 0;", lowerConstFold) == NodeKind.BinaryExpr; }

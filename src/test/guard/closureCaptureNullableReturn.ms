@@ -15,7 +15,7 @@ function apply(cb: (n: int32) => void): void {
 function findCaptured(): Thing | null {
 	let found: Thing | null = null;
 	apply((n: int32): void => {
-		if (found === null) { found = { v: n }; }
+		if (found == null) { found = { v: n }; }
 	});
 	return found;
 }
@@ -25,11 +25,11 @@ function main(): void {
 	const results: Thing[] = [seed];
 	for (let i = 0; i < 8; i += 1) {
 		const r = findCaptured();
-		if (r !== null) { results.push(r); }
+		if (r != null) { results.push(r); }
 	}
 	let sum: int32 = 0;
 	for (const t of results) { sum += t.v; }
-	if (sum !== 9) { throw "GUARD RED: expected sum 9, got " + sum; }
+	if (sum != 9) { throw "GUARD RED: expected sum 9, got " + sum; }
 	console.log("GUARD-OK");
 }
 

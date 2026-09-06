@@ -26,14 +26,14 @@ export function normalizeDefineName(name: string): string {
 	let out = "";
 	for (let i = 0; i < name.length; i += 1) {
 		const c = name.charAt(i);
-		out = out + (c === "-" ? "_" : c);
+		out = out + (c == "-" ? "_" : c);
 	}
 	return out;
 }
 
 export function defineSymbol(t: DefineTable, name: string, value: string): void {
 	const key = normalizeDefineName(name);
-	if (key === "") return;
+	if (key == "") return;
 	if (!t.symbols.has(key)) { t.names.push(key); }
 	t.symbols.set(key, value);
 }
@@ -43,7 +43,7 @@ export function undefSymbol(t: DefineTable, name: string): void {
 	if (!t.symbols.has(key)) return;
 	t.symbols.delete(key);
 	const kept: string[] = [];
-	for (const n of t.names) { if (n !== key) kept.push(n); }
+	for (const n of t.names) { if (n != key) kept.push(n); }
 	t.names = kept;
 }
 
@@ -55,7 +55,7 @@ export function hasSymbol(t: DefineTable, name: string): boolean {
 // (semfold.nim:526 foldDefine) converts at the READ site; the table stays strings.
 export function definedValue(t: DefineTable, name: string): string {
 	const v = t.symbols.get(normalizeDefineName(name));
-	return v !== null ? v : "";
+	return v != null ? v : "";
 }
 
 // Tiered lookup, shape of options.nim:634-684: stored symbols first, then the
@@ -67,9 +67,9 @@ export function isDefined(t: DefineTable, name: string): boolean {
 	if (t.symbols.has(key)) return true;
 	const os = definedValue(t, "os");
 	return match (key) {
-		"posix" | "unix" => os === "linux" || os === "macos" || os === "ios"
-			|| os === "android" || os === "freebsd",
-		"bsd" => os === "freebsd",
+		"posix" | "unix" => os == "linux" || os == "macos" || os == "ios"
+			|| os == "android" || os == "freebsd",
+		"bsd" => os == "freebsd",
 		_ => false,
 	};
 }
@@ -79,8 +79,8 @@ export function isDefined(t: DefineTable, name: string): boolean {
 // the seeding runs after it and skips any name the user already set — same
 // precedence, reached from the other side.
 export function initDefines(t: DefineTable, backendName: string, targetOs: string, gcMode: string, mode: number): void {
-	const os = targetOs === "darwin" ? "macos" : targetOs;
-	const modeName = mode === 2 ? "danger" : (mode === 1 ? "release" : "debug");
+	const os = targetOs == "darwin" ? "macos" : targetOs;
+	const modeName = mode == 2 ? "danger" : (mode == 1 ? "release" : "debug");
 
 	seed(t, "msc", "true");
 	seed(t, backendName, "true");
@@ -107,7 +107,7 @@ export function applyDefineSwitch(t: DefineTable, arg: string): void {
 	else if (body.startsWith("--define=")) { body = body.slice(9, body.length); }
 	else if (body.startsWith("-d:")) { body = body.slice(3, body.length); }
 	else if (body.startsWith("-d=")) { body = body.slice(3, body.length); }
-	if (body === "") return;
+	if (body == "") return;
 	const eq = body.indexOf("=");
 	if (eq >= 0) {
 		defineSymbol(t, body.slice(0, eq), body.slice(eq + 1, body.length));
@@ -122,7 +122,7 @@ export function formatDefines(t: DefineTable): string {
 	let out = "";
 	for (const n of t.names) {
 		const v = definedValue(t, n);
-		out = out + "  " + n + (v === "true" ? "" : "=" + v) + "\n";
+		out = out + "  " + n + (v == "true" ? "" : "=" + v) + "\n";
 	}
 	return out;
 }
@@ -131,13 +131,13 @@ test "define: bare flag stores true" {
 	const t = createDefineTable();
 	defineSymbol(t, "myFlag", "true");
 	assert isDefined(t, "myFlag");
-	assert definedValue(t, "myFlag") === "true";
+	assert definedValue(t, "myFlag") == "true";
 }
 
 test "define: unknown flag is false, never an error" {
 	const t = createDefineTable();
 	assert !isDefined(t, "maccos");
-	assert definedValue(t, "maccos") === "";
+	assert definedValue(t, "maccos") == "";
 }
 
 test "define: dash normalizes to underscore (Haxe rule)" {
@@ -150,14 +150,14 @@ test "define: dash normalizes to underscore (Haxe rule)" {
 test "define: -d carries a value" {
 	const t = createDefineTable();
 	applyDefineSwitch(t, "-d:tier=3");
-	assert definedValue(t, "tier") === "3";
+	assert definedValue(t, "tier") == "3";
 	assert isDefined(t, "tier");
 }
 
 test "define: --define: long form" {
 	const t = createDefineTable();
 	applyDefineSwitch(t, "--define:featureX=on");
-	assert definedValue(t, "featureX") === "on";
+	assert definedValue(t, "featureX") == "on";
 }
 
 test "define: undef removes" {
@@ -174,17 +174,17 @@ test "initDefines seeds backend, os, gc and mode" {
 	assert isDefined(t, "macos");
 	assert isDefined(t, "orc");
 	assert isDefined(t, "debug");
-	assert definedValue(t, "backend") === "js";
-	assert definedValue(t, "os") === "macos";
-	assert definedValue(t, "gc") === "orc";
-	assert definedValue(t, "mode") === "debug";
+	assert definedValue(t, "backend") == "js";
+	assert definedValue(t, "os") == "macos";
+	assert definedValue(t, "gc") == "orc";
+	assert definedValue(t, "mode") == "debug";
 }
 
 test "initDefines never overwrites a user -d" {
 	const t = createDefineTable();
 	applyDefineSwitch(t, "-d:os=custom");
 	initDefines(t, "c", "linux", "drc", 1);
-	assert definedValue(t, "os") === "custom";
+	assert definedValue(t, "os") == "custom";
 	assert isDefined(t, "linux");
 }
 

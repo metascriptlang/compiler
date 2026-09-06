@@ -31,14 +31,14 @@ export function detectHost(url: string): HostConfig {
 	let slashIdx = -1;
 	let i = 0;
 	while (i < url.length) {
-		if (url.charAt(i) === "/") { slashIdx = i; i = url.length; }
+		if (url.charAt(i) == "/") { slashIdx = i; i = url.length; }
 		i = i + 1;
 	}
 	if (slashIdx < 0) return null as unknown as HostConfig;
 	const host = url.slice(0, slashIdx);
 
 	for (const hc of KNOWN_HOSTS) {
-		if (hc.host === host) return hc;
+		if (hc.host == host) return hc;
 	}
 	return null as unknown as HostConfig;
 }
@@ -50,7 +50,7 @@ function extractRepoName(url: string): string {
 	let lastSlash = -1;
 	let i = 0;
 	while (i < url.length) {
-		if (url.charAt(i) === "/") lastSlash = i;
+		if (url.charAt(i) == "/") lastSlash = i;
 		i = i + 1;
 	}
 	if (lastSlash < 0) return url;
@@ -62,7 +62,7 @@ function extractPath(url: string): string {
 	let slashIdx = -1;
 	let i = 0;
 	while (i < url.length) {
-		if (url.charAt(i) === "/") { slashIdx = i; i = url.length; }
+		if (url.charAt(i) == "/") { slashIdx = i; i = url.length; }
 		i = i + 1;
 	}
 	if (slashIdx < 0) return "";
@@ -77,7 +77,7 @@ function replaceFirst(s: string, from: string, to: string): string {
 		let match = true;
 		let j = 0;
 		while (j < from.length) {
-			if (s.charAt(i + j) !== from.charAt(j)) { match = false; j = from.length; }
+			if (s.charAt(i + j) != from.charAt(j)) { match = false; j = from.length; }
 			j = j + 1;
 		}
 		if (match) { idx = i; i = s.length; }
@@ -106,70 +106,70 @@ export function archiveUrl(hostConfig: HostConfig, url: string, gitRef: string):
 
 test "detectHost github" {
 	const h = detectHost("github.com/acme/foo");
-	assert h !== null;
-	assert h.host === "github.com";
+	assert h != null;
+	assert h.host == "github.com";
 }
 
 test "detectHost gitlab" {
 	const h = detectHost("gitlab.com/group/project");
-	assert h !== null;
-	assert h.host === "gitlab.com";
+	assert h != null;
+	assert h.host == "gitlab.com";
 }
 
 test "detectHost bitbucket" {
 	const h = detectHost("bitbucket.org/team/repo");
-	assert h !== null;
-	assert h.host === "bitbucket.org";
+	assert h != null;
+	assert h.host == "bitbucket.org";
 }
 
 test "detectHost codeberg" {
 	const h = detectHost("codeberg.org/user/repo");
-	assert h !== null;
-	assert h.host === "codeberg.org";
+	assert h != null;
+	assert h.host == "codeberg.org";
 }
 
 test "detectHost unknown returns null" {
-	assert detectHost("example.com/foo/bar") === null;
+	assert detectHost("example.com/foo/bar") == null;
 }
 
 test "detectHost no slash returns null" {
-	assert detectHost("github.com") === null;
+	assert detectHost("github.com") == null;
 }
 
 test "archiveUrl github tag" {
 	const h = detectHost("github.com/acme/foo");
 	const url = archiveUrl(h, "github.com/acme/foo", "1.2.3");
-	assert url === "https://codeload.github.com/acme/foo/tar.gz/1.2.3";
+	assert url == "https://codeload.github.com/acme/foo/tar.gz/1.2.3";
 }
 
 test "archiveUrl github SHA" {
 	const h = detectHost("github.com/acme/foo");
 	const url = archiveUrl(h, "github.com/acme/foo", "abc123");
-	assert url === "https://codeload.github.com/acme/foo/tar.gz/abc123";
+	assert url == "https://codeload.github.com/acme/foo/tar.gz/abc123";
 }
 
 test "archiveUrl gitlab" {
 	const h = detectHost("gitlab.com/group/project");
 	const url = archiveUrl(h, "gitlab.com/group/project", "2.0.0");
-	assert url === "https://gitlab.com/group/project/-/archive/2.0.0/project-2.0.0.tar.gz";
+	assert url == "https://gitlab.com/group/project/-/archive/2.0.0/project-2.0.0.tar.gz";
 }
 
 test "archiveUrl bitbucket" {
 	const h = detectHost("bitbucket.org/team/repo");
 	const url = archiveUrl(h, "bitbucket.org/team/repo", "1.0.0");
-	assert url === "https://bitbucket.org/team/repo/get/1.0.0.tar.gz";
+	assert url == "https://bitbucket.org/team/repo/get/1.0.0.tar.gz";
 }
 
 test "archiveUrl codeberg" {
 	const h = detectHost("codeberg.org/user/repo");
 	const url = archiveUrl(h, "codeberg.org/user/repo", "0.1.0");
-	assert url === "https://codeberg.org/user/repo/archive/0.1.0.tar.gz";
+	assert url == "https://codeberg.org/user/repo/archive/0.1.0.tar.gz";
 }
 
 test "extractRepoName simple" {
-	assert extractRepoName("github.com/acme/foo") === "foo";
+	assert extractRepoName("github.com/acme/foo") == "foo";
 }
 
 test "extractRepoName deep path" {
-	assert extractRepoName("gitlab.com/org/subgroup/repo") === "repo";
+	assert extractRepoName("gitlab.com/org/subgroup/repo") == "repo";
 }

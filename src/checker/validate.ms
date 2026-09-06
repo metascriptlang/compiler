@@ -41,13 +41,13 @@ export function validateTypedAST(ctx: CheckerContext, node: Node): void {
 // Preserves the pre-Phase-B behavior: skip function/method/ctor/macro
 // bodies; only check top-level identifiers.
 function validateInvariant1TopLevel(ctx: CheckerContext, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl) return;
-	if (node.kind === NodeKind.MethodDecl) return;
-	if (node.kind === NodeKind.ConstructorDecl) return;
-	if (node.kind === NodeKind.MacroDecl) return;
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl) return;
+	if (node.kind == NodeKind.MethodDecl) return;
+	if (node.kind == NodeKind.ConstructorDecl) return;
+	if (node.kind == NodeKind.MacroDecl) return;
 
-	if (node.kind === NodeKind.Identifier && node.nodeType === null) {
+	if (node.kind == NodeKind.Identifier && node.nodeType == null) {
 		const d = node.data as IdentifierData;
 		const first = d.name.length > 0 ? d.name.slice(0, 1) : "";
 		if (first < "A" || first > "Z") {
@@ -67,19 +67,19 @@ function validateInvariant1TopLevel(ctx: CheckerContext, node: Node): void {
 // GenericParam in nodeType is silent corruption — emitted as warning so
 // downstream sees a clear signal without breaking the build.
 function validateInvariant2Full(ctx: CheckerContext, node: Node, inTemplate: boolean): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	// Macro bodies are handled by raiser VM, not regular Pass 3 — skip.
-	if (node.kind === NodeKind.MacroDecl) return;
+	if (node.kind == NodeKind.MacroDecl) return;
 
 	// Determine template scope. Methods inside generic classes inherit
 	// gen:... flag from class collection, so the methodFlags check covers
 	// generic-class methods correctly without needing to inspect ClassDecl.
 	let nextInTemplate = inTemplate;
-	if (node.kind === NodeKind.FunctionDecl) {
+	if (node.kind == NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		if (isGenericFn(fd.fnFlags)) nextInTemplate = true;
-	} else if (node.kind === NodeKind.MethodDecl) {
+	} else if (node.kind == NodeKind.MethodDecl) {
 		const md = node.data as MethodDeclData;
 		if (isGenericFn(md.methodFlags)) nextInTemplate = true;
 	}
@@ -90,14 +90,14 @@ function validateInvariant2Full(ctx: CheckerContext, node: Node, inTemplate: boo
 	// may legitimately carry GenericParam in nodeType because they represent
 	// callable references whose instantiation happens at the call site, not
 	// at the reference point. Mirrors src/test/checker3pass/invariant.ms.
-	const isClosureLiteral = node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr;
-	if (!nextInTemplate && isClosureLiteral && node.nodeType !== null) {
+	const isClosureLiteral = node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr;
+	if (!nextInTemplate && isClosureLiteral && node.nodeType != null) {
 		const leak = findGenericParamInType(node.nodeType, "");
 		if (leak.found) {
 			addWarning(ctx,
 				`GenericParam leakage: '${leak.name}' at ${leak.path} on node kind=${node.kind} (post-Pass-3 invariant violation — likely missing type substitution in checkCallExpr or related path)`,
-				node.location !== null ? node.location.line : 0,
-				node.location !== null ? node.location.column : 0);
+				node.location != null ? node.location.line : 0,
+				node.location != null ? node.location.column : 0);
 		}
 	}
 
@@ -116,34 +116,34 @@ interface LeakResult {
 // diagnostics. See `Type Storage Schema` block in src/checker/types.ms for
 // field semantics.
 function findGenericParamInType(t: Type, path: string): LeakResult {
-	if (t === null) return { found: false, path: "", name: "" };
+	if (t == null) return { found: false, path: "", name: "" };
 
-	if (t.kind === TypeKind.GenericParam) {
-		return { found: true, path: path === "" ? "<self>" : path, name: t.typeName };
+	if (t.kind == TypeKind.GenericParam) {
+		return { found: true, path: path == "" ? "<self>" : path, name: t.typeName };
 	}
 
 	// Nominal struct (typeName set): skip recursion. Inner generic params
 	// are bound via typeChildren at the type's instantiation site, not at
 	// this reference point. GenericInstance and unnamed Union/Tuple still
 	// need recursion — their typeChildren ARE the type args / variants.
-	if ((t.kind === TypeKind.Struct) && t.typeName !== "") {
+	if ((t.kind == TypeKind.Struct) && t.typeName != "") {
 		return { found: false, path: "", name: "" };
 	}
 
-	if (t.typeReturn !== null) {
-		const r = findGenericParamInType(t.typeReturn, path === "" ? "typeReturn" : path + ".typeReturn");
+	if (t.typeReturn != null) {
+		const r = findGenericParamInType(t.typeReturn, path == "" ? "typeReturn" : path + ".typeReturn");
 		if (r.found) return r;
 	}
 
-	if (t.typeExtra !== null) {
-		const r = findGenericParamInType(t.typeExtra, path === "" ? "typeExtra" : path + ".typeExtra");
+	if (t.typeExtra != null) {
+		const r = findGenericParamInType(t.typeExtra, path == "" ? "typeExtra" : path + ".typeExtra");
 		if (r.found) return r;
 	}
 
-	if (t.typeChildren !== null) {
+	if (t.typeChildren != null) {
 		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			const child = t.typeChildren[i];
-			const childPath = (path === "" ? "typeChildren[" : path + ".typeChildren[") + i.toString() + "]";
+			const childPath = (path == "" ? "typeChildren[" : path + ".typeChildren[") + i.toString() + "]";
 			const r = findGenericParamInType(child, childPath);
 			if (r.found) return r;
 		}

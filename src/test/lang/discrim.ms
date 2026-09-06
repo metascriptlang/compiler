@@ -23,20 +23,20 @@ interface SquareD { kind: "square"; side: number }
 type ShapeD = CircleD | SquareD;
 
 function areaD(s: ShapeD): number {
-	if (s.kind === "circle") return s.radius * s.radius * 3;
+	if (s.kind == "circle") return s.radius * s.radius * 3;
 	return s.side * s.side;
 }
 
 test "TS-style string DU narrowing" {
 	const c: ShapeD = { kind: "circle", radius: 5 };
 	const sq: ShapeD = { kind: "square", side: 4 };
-	assert areaD(c) === 75;
-	assert areaD(sq) === 16;
+	assert areaD(c) == 75;
+	assert areaD(sq) == 16;
 }
 
 test "TS-style string DU disc field readable" {
 	const c: ShapeD = { kind: "circle", radius: 5 };
-	assert c.kind === "circle";
+	assert c.kind == "circle";
 }
 
 // =====================================================================
@@ -54,19 +54,19 @@ function unwrapB(r: ResB): number {
 
 test "TS-style boolean DU narrowing true branch" {
 	const r: ResB = { ok: true, value: 42 };
-	assert unwrapB(r) === 42;
+	assert unwrapB(r) == 42;
 }
 
 test "TS-style boolean DU narrowing false branch" {
 	const r: ResB = { ok: false, error: "boom" };
-	assert unwrapB(r) === -1;
+	assert unwrapB(r) == -1;
 }
 
 test "TS-style boolean DU disc field is real boolean" {
 	const r: ResB = { ok: true, value: 7 };
-	assert r.ok === true;
+	assert r.ok == true;
 	const e: ResB = { ok: false, error: "x" };
-	assert e.ok === false;
+	assert e.ok == false;
 }
 
 // =====================================================================
@@ -81,23 +81,23 @@ type NodeD = match (kind: NodeK) {
 };
 
 function evalNode(n: NodeD): number {
-	if (n.kind === NodeK.Num) return n.numVal;
-	if (n.kind === NodeK.Str) return -1;
-	if (n.kind === NodeK.Bin) return n.left + n.right;
+	if (n.kind == NodeK.Num) return n.numVal;
+	if (n.kind == NodeK.Str) return -1;
+	if (n.kind == NodeK.Bin) return n.left + n.right;
 	return 0;
 }
 
 test "match-type enum disc narrowing" {
 	const a: NodeD = { kind: NodeK.Num, numVal: 42 };
 	const b: NodeD = { kind: NodeK.Bin, left: 10, right: 20 };
-	assert evalNode(a) === 42;
-	assert evalNode(b) === 30;
+	assert evalNode(a) == 42;
+	assert evalNode(b) == 30;
 }
 
 test "match-type enum disc string variant" {
 	const s: NodeD = { kind: NodeK.Str, strVal: "hello" };
-	if (s.kind === NodeK.Str) {
-		assert s.strVal === "hello";
+	if (s.kind == NodeK.Str) {
+		assert s.strVal == "hello";
 	}
 }
 
@@ -118,8 +118,8 @@ function unwrapEitherBool(r: EitherBool): number {
 test "match-type bool disc narrowing" {
 	const a: EitherBool = { ok: true, value: 100 };
 	const b: EitherBool = { ok: false, error: "fail" };
-	assert unwrapEitherBool(a) === 100;
-	assert unwrapEitherBool(b) === -1;
+	assert unwrapEitherBool(a) == 100;
+	assert unwrapEitherBool(b) == -1;
 }
 
 // =====================================================================
@@ -132,25 +132,25 @@ type Either<L, R> = match (ok: boolean) {
 };
 
 function eitherDivStr(a: number, b: number): Either<string, number> {
-	if (b === 0) return { ok: false, error: "div0" };
+	if (b == 0) return { ok: false, error: "div0" };
 	return { ok: true, value: a / b };
 }
 
 function eitherDivInt(a: number, b: number): Either<number, number> {
-	if (b === 0) return { ok: false, error: -1 };
+	if (b == 0) return { ok: false, error: -1 };
 	return { ok: true, value: a / b };
 }
 
 test "Generic DU — single instantiation Either<string, number>" {
 	const r = eitherDivStr(20, 4);
-	assert r.ok === true;
-	if (r.ok) assert r.value === 5;
+	assert r.ok == true;
+	if (r.ok) assert r.value == 5;
 }
 
 test "Generic DU — error variant Either<string, number>" {
 	const r = eitherDivStr(10, 0);
-	assert r.ok === false;
-	if (!r.ok) assert r.error === "div0";
+	assert r.ok == false;
+	if (!r.ok) assert r.error == "div0";
 }
 
 test "Generic DU — multiple instantiations coexist" {
@@ -159,17 +159,17 @@ test "Generic DU — multiple instantiations coexist" {
 	// Either__number_number.
 	const a = eitherDivStr(10, 2);
 	const b = eitherDivInt(10, 0);
-	assert a.ok === true;
-	if (a.ok) assert a.value === 5;
-	assert b.ok === false;
-	if (!b.ok) assert b.error === -1;
+	assert a.ok == true;
+	if (a.ok) assert a.value == 5;
+	assert b.ok == false;
+	if (!b.ok) assert b.error == -1;
 }
 
 test "Generic DU — same type for both type params Either<number, number>" {
 	const ok = eitherDivInt(10, 2);
 	const err = eitherDivInt(10, 0);
-	if (ok.ok) assert ok.value === 5;
-	if (!err.ok) assert err.error === -1;
+	if (ok.ok) assert ok.value == 5;
+	if (!err.ok) assert err.error == -1;
 }
 
 // =====================================================================
@@ -182,7 +182,7 @@ test "Generic DU — same type for both type params Either<number, number>" {
 // This test exercises both in the same module — must compile and run.
 
 function resultDiv(a: number, b: number): Result<number, string> {
-	if (b === 0) return Result.err("div0");
+	if (b == 0) return Result.err("div0");
 	return Result.ok(a / b);
 }
 
@@ -190,16 +190,16 @@ test "Either + Result with identical shape coexist (structural-key regression)" 
 	const e = eitherDivStr(20, 4);
 	const r = resultDiv(20, 4);
 	assert e.ok && r.ok;
-	if (e.ok) assert e.value === 5;
-	if (r.ok) assert r.value === 5;
+	if (e.ok) assert e.value == 5;
+	if (r.ok) assert r.value == 5;
 }
 
 test "Either err + Result err with identical shape coexist" {
 	const e = eitherDivStr(10, 0);
 	const r = resultDiv(10, 0);
 	assert !e.ok && !r.ok;
-	if (!e.ok) assert e.error === "div0";
-	if (!r.ok) assert r.error === "div0";
+	if (!e.ok) assert e.error == "div0";
+	if (!r.ok) assert r.error == "div0";
 }
 
 // =====================================================================
@@ -227,8 +227,8 @@ function dErr(e: string): DRef<number, string> {
 test "Ref<GI<DU>> mono name preserved (Ref<GI> regression)" {
 	const ok = dOk(99);
 	const err = dErr("boom");
-	if (ok.kind === DBodyK.Ok) assert ok.value === 99;
-	if (err.kind === DBodyK.Err) assert err.error === "boom";
+	if (ok.kind == DBodyK.Ok) assert ok.value == 99;
+	if (err.kind == DBodyK.Err) assert err.error == "boom";
 }
 
 // =====================================================================
@@ -248,13 +248,13 @@ function makeStr(s: string, isOk: boolean): StrRes {
 test "DU with string payload — ok variant" {
 	const r = makeStr("hello", true);
 	assert r.ok;
-	if (r.ok) assert r.value === "hello";
+	if (r.ok) assert r.value == "hello";
 }
 
 test "DU with string payload — err variant" {
 	const r = makeStr("oops", false);
 	assert !r.ok;
-	if (!r.ok) assert r.error === "oops";
+	if (!r.ok) assert r.error == "oops";
 }
 
 test "DU with string payload — multiple in same scope" {
@@ -262,9 +262,9 @@ test "DU with string payload — multiple in same scope" {
 	const a = makeStr("x", true);
 	const b = makeStr("y", false);
 	const c = makeStr("z", true);
-	if (a.ok) assert a.value === "x";
-	if (!b.ok) assert b.error === "y";
-	if (c.ok) assert c.value === "z";
+	if (a.ok) assert a.value == "x";
+	if (!b.ok) assert b.error == "y";
+	if (c.ok) assert c.value == "z";
 }
 
 // =====================================================================
@@ -280,8 +280,8 @@ test "Variant struct sharing across distinct outer DUs" {
 	const e = eitherDivStr(8, 2);
 	const r = resultDiv(8, 2);
 	if (e.ok && r.ok) {
-		assert e.value === 4;
-		assert r.value === 4;
+		assert e.value == 4;
+		assert r.value == 4;
 	}
 }
 
@@ -305,28 +305,28 @@ function fmOk(): FmBoolDU { return { ok: true, value: 5 }; }
 function fmErr(): FmBoolDU { return { ok: false, error: "no" }; }
 
 function fmAfterAnd(d: FmEnumDU): int32 {
-	const probe = (d.kind === FmK.Alpha) && true;
-	if (d.kind === FmK.Beta) return 2;
+	const probe = (d.kind == FmK.Alpha) && true;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
 function fmAfterOr(d: FmEnumDU): int32 {
-	const probe = (d.kind === FmK.Alpha) || false;
-	if (d.kind === FmK.Beta) return 2;
+	const probe = (d.kind == FmK.Alpha) || false;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
 function fmAfterTernary(d: FmEnumDU): int32 {
-	const probe = d.kind === FmK.Alpha ? 1 : 0;
-	if (d.kind === FmK.Beta) return 2;
+	const probe = d.kind == FmK.Alpha ? 1 : 0;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
 function fmAfterIf(d: FmEnumDU): int32 {
-	if (d.kind === FmK.Alpha) {
+	if (d.kind == FmK.Alpha) {
 		const inner = d.a;
 	}
-	if (d.kind === FmK.Beta) return 2;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
@@ -337,29 +337,29 @@ function fmBoolAfterAnd(e: FmBoolDU): int32 {
 }
 
 test "flow merge: && does not leak the narrowed variant" {
-	assert fmAfterAnd(fmBeta()) === 2;
-	assert fmAfterAnd(fmAlpha()) === 1;
+	assert fmAfterAnd(fmBeta()) == 2;
+	assert fmAfterAnd(fmAlpha()) == 1;
 }
 
 test "flow merge: || does not leak the narrowed variant" {
-	assert fmAfterOr(fmBeta()) === 2;
-	assert fmAfterOr(fmAlpha()) === 1;
+	assert fmAfterOr(fmBeta()) == 2;
+	assert fmAfterOr(fmAlpha()) == 1;
 }
 
 test "flow merge: ternary condition does not leak" {
-	assert fmAfterTernary(fmBeta()) === 2;
-	assert fmAfterTernary(fmAlpha()) === 1;
+	assert fmAfterTernary(fmBeta()) == 2;
+	assert fmAfterTernary(fmAlpha()) == 1;
 }
 
 test "flow merge: if-without-return does not leak past the block" {
-	assert fmAfterIf(fmBeta()) === 2;
-	assert fmAfterIf(fmAlpha()) === 1;
+	assert fmAfterIf(fmBeta()) == 2;
+	assert fmAfterIf(fmAlpha()) == 1;
 }
 
 // Coverage only — NOT red-capable: both bool-disc variants carry `ok` at the
 // same offset, so a leaked narrow still emits valid, correct C. The enum-disc
 // cases above are the ones that fail when the merge collapses.
 test "flow merge: bool-disc && does not leak" {
-	assert fmBoolAfterAnd(fmErr()) === -1;
-	assert fmBoolAfterAnd(fmOk()) === 5;
+	assert fmBoolAfterAnd(fmErr()) == -1;
+	assert fmBoolAfterAnd(fmOk()) == 5;
 }

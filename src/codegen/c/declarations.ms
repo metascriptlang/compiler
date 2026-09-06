@@ -44,7 +44,7 @@ function markInstanceEmitted(name: string): void {
 // DCE: check if a function declaration is alive (reachable).
 // Empty aliveSet means no DCE filtering (DCE disabled).
 function isDeclAlive(g: CGen, node: Node): boolean {
-	if (g.aliveSet.entries.length === 0) return true;
+	if (g.aliveSet.entries.length == 0) return true;
 	const d = node.data as FunctionDeclData;
 	const name = d.fnName;
 	// Compiler-generated functions: always alive.
@@ -58,13 +58,13 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	// of un-instantiated generic templates (T=unknown env/body that won't compile) are dropped.
 	// Other $-prefixed functions ($Env_*Destroy etc. DRC hooks) are referenced by DRC-injected
 	// code the walker can't trace — keep them unconditionally alive.
-	const isLiftedClosure = (name.length >= 8 && name.slice(0, 8) === "$lifted_")
-		|| (name.length >= 4 && name.slice(0, 4) === "$fn_");
+	const isLiftedClosure = (name.length >= 8 && name.slice(0, 8) == "$lifted_")
+		|| (name.length >= 4 && name.slice(0, 4) == "$fn_");
 	if (isLiftedClosure) return aliveSetHas(g.aliveSet, g.modulePath, name);
-	if (name.length > 0 && name.slice(0, 1) === "$") return true;
+	if (name.length > 0 && name.slice(0, 1) == "$") return true;
 	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
 		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
-	const isRuntimeArrayHook = name === "msStringArrayDestroy" || name === "msRefArrayDestroy" || name === "msNumberArrayDestroy";
+	const isRuntimeArrayHook = name == "msStringArrayDestroy" || name == "msRefArrayDestroy" || name == "msNumberArrayDestroy";
 	if (isSeqHookSuffix && !isRuntimeArrayHook) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
@@ -73,14 +73,14 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 // Array sequence hooks are generated per-module (each module that uses sequence gets its own).
 // They need static linkage to avoid duplicate symbols at link time.
 function isArraySeqHook(name: string): boolean {
-	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
+	if (name.slice(0, 13) == "msStringArray" || name.slice(0, 10) == "msRefArray") return true;
 	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
 		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
 }
 
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
@@ -122,7 +122,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 function genExternDecl(g: CGen, node: Node): void {
 	const d = node.data as ExternDeclData;
 
-	if (d.externKind === ExternKind.Class || d.externKind === ExternKind.Type) {
+	if (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type) {
 		// Opaque type forward decl for classes/types without @include definition
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.externName} ${d.externName};`);
 	}
@@ -139,12 +139,12 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
 	// The implementation (same name, no 'overload' flag) emits the actual C function.
-	if (sym !== null && hasFlag(sym, SymbolFlag.OverloadSig)) return;
+	if (sym != null && hasFlag(sym, SymbolFlag.OverloadSig)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isMain = d.fnName === "main";
-	const isExternFn = (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
-	const ovIdx = sym !== null ? sym.overloadIdx : 0;
+	const isMain = d.fnName == "main";
+	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
+	const ovIdx = sym != null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
 	// Track whether we already emitted the proto or the body
@@ -153,11 +153,11 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
-	if (fnType === null) return;
+	if (fnType == null) return;
 	if (hasGenericParams(fnType)) return;
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn
-	if (fnType.typeReturn === null) cRetType = "void";
+	if (fnType.typeReturn == null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
 	// Build parameter list — NRVO adds out-param as first parameter
@@ -173,25 +173,25 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// anonymous structs emitted as `msAnon_<hash>Destroy`). markGeneratedOp
 	// only flags real lifecycle hooks, so the suffix re-check is unnecessary.
 	const isDrcHookFn = isDrcLifecycleName(name)
-		|| (sym !== null && hasFlag(sym, SymbolFlag.GeneratedOp));
-	const protoMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
+		|| (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp));
+	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
-		const protoMut = (protoMutBits & (1 << (i as int32))) !== 0;
+		const protoMut = (protoMutBits & (1 << (i as int32))) != 0;
 		// DRC hooks: use ccgIntroducedPtr only (skip struct-aware mutation logic)
 		// Regular functions: use shouldIndirectParam (struct-aware + mutation)
 		const promote = i < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[i]) : shouldIndirectParam(fnType.typeChildren[i], protoMut));
-		if (promote && pType.charAt(pType.byteLength - 1) !== "*") {
+		if (promote && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!isDrcHookFn && shouldConstParam(fnType.typeChildren[i], protoMut)) ? "const " + pType + "*" : pType + "*";
 		}
 		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
 	}
-	if (paramList === "") paramList = "void";
+	if (paramList == "") paramList = "void";
 
 	// Generic instance deduplication (reference parity).
 	// First module to codegen an instance emits the body; others get forward decl only.
-	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym !== null && sym.name.indexOf("__") >= 0;
+	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
 	const instanceAlreadyEmitted = isGenericInstance && isInstanceEmitted(name);
 	if (isGenericInstance && !instanceAlreadyEmitted) {
 		markInstanceEmitted(name);
@@ -202,7 +202,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Lifted functions (sym === null) are always static
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
-	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
+	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported));
 	const prefix = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
@@ -211,7 +211,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Extern functions with 'from' clause bind to existing C functions — header provides declaration.
 	// Extern functions without 'from' use mangled name and need our prototype.
-	const hasNativeName = (sym !== null && sym.nativeName !== "") || (d.nativeName !== null && d.nativeName !== "");
+	const hasNativeName = (sym != null && sym.nativeName != "") || (d.nativeName != null && d.nativeName != "");
 	if (isExternFn && hasNativeName) return;
 
 	// DRC hooks: ensureDrcProto handles their forward decls with correct pointer convention.
@@ -226,17 +226,17 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Emit function body to Procs
 	// Skip body for duplicate generic instances — forward decl already emitted above.
 	if (instanceAlreadyEmitted) return;
-	if (d.fnBody !== null) {
+	if (d.fnBody != null) {
 		const p = createProc(name, fnType.typeReturn);
-		const isActorDispatch = name.length > 9 && name.slice(name.length - 9, name.length) === "_dispatch";
+		const isActorDispatch = name.length > 9 && name.slice(name.length - 9, name.length) == "_dispatch";
 		p.suppressRaiseCheck = isDrcHookFn || isActorDispatch;
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
-		const mutBits: int32 = sym !== null ? sym.mutatedParams : 0;
+		const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
 			p.params.push(d.params[pi]);
 			scopeMangledParam(p, safeName(d.params[pi]));
-			const isMutated = (mutBits & (1 << (pi as int32))) !== 0;
+			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[pi]) : shouldIndirectParam(fnType.typeChildren[pi], isMutated));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
@@ -248,7 +248,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		emitProcBody(p, procs);
 		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
 		// to satisfy C compiler's control flow analysis for non-void functions.
-		if (!nrvo && actualRetType !== "void") {
+		if (!nrvo && actualRetType != "void") {
 			addLine(procs, `  return (${actualRetType}){0};`);
 		}
 		addLine(procs, "}");
@@ -263,7 +263,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 // Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
 function declTypeSym(node: Node): Symbol | null {
 	const t = node.nodeType;
-	if (t !== null && t.sym !== null) return t.sym;
+	if (t != null && t.sym != null) return t.sym;
 	return node.resolvedSym;
 }
 
@@ -273,19 +273,19 @@ function declTypeSym(node: Node): Symbol | null {
 // proto can be requested before its type materializes — bug100 union hooks).
 export function registerDeclCName(g: CGen, node: Node): void {
 	let n = node;
-	if (n.kind === NodeKind.ExportDecl) {
+	if (n.kind == NodeKind.ExportDecl) {
 		n = (n.data as ExportDeclData).exportedDecl;
 	}
-	if (n !== null && n.kind === NodeKind.DecoratedDecl) {
+	if (n != null && n.kind == NodeKind.DecoratedDecl) {
 		n = (n.data as DecoratedDeclData).decoratedNode;
 	}
-	if (n === null) return;
+	if (n == null) return;
 	const k = n.kind;
-	if (k !== NodeKind.InterfaceDecl && k !== NodeKind.ClassDecl && k !== NodeKind.EnumDecl
-		&& k !== NodeKind.StructDecl && k !== NodeKind.TypeAliasDecl) return;
-	if ((n.flags & NodeFlag.ExternC) !== 0) return;
+	if (k != NodeKind.InterfaceDecl && k != NodeKind.ClassDecl && k != NodeKind.EnumDecl
+		&& k != NodeKind.StructDecl && k != NodeKind.TypeAliasDecl) return;
+	if ((n.flags & NodeFlag.ExternC) != 0) return;
 	const sym = declTypeSym(n);
-	if (sym === null) return;
+	if (sym == null) return;
 	const cn = mangledTypeName(sym, sym.name);
 	typeCacheSet(g.typeCache, "cname:" + sym.name, cn);
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
@@ -295,7 +295,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 	const d = node.data as EnumDeclData;
 
 	// Extern enum: defined in C header — skip emission entirely.
-	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+	if ((node.flags & NodeFlag.ExternC) != 0) return;
 
 	const name = mangledTypeName(declTypeSym(node), d.enumName);
 
@@ -311,7 +311,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 	const types = sec(g, CSection.Types);
 	addLine(types, "typedef int32_t " + name + ";");
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
+		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		addLine(types, `#define ${name}_${d.enumMembers[i]} (((${name})${val}))`);
 	}
 	addNewline(types);
@@ -324,11 +324,11 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 
 	// Extern interface: type defined externally — skip struct emission.
 	// Reference parity: isImportedType() skips forward decl + struct body.
-	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+	if ((node.flags & NodeFlag.ExternC) != 0) return;
 
 	// Skip uninstantiated generic interfaces (prelude templates with K, V, T params)
 	const declType = node.nodeType;
-	if (declType !== null && hasGenericParams(declType)) return;
+	if (declType != null && hasGenericParams(declType)) return;
 
 	const name = mangledTypeName(declTypeSym(node), d.interfaceName);
 
@@ -349,13 +349,13 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	// fields inherited via `extends` / `= A & B` after Phase 2 field merging in
 	// resolveInterface. d.interfaceFields holds only own-declared fields.
 	let ifaceType = node.nodeType;
-	if (ifaceType !== null && ifaceType.kind === TypeKind.Ref && ifaceType.typeReturn !== null) {
+	if (ifaceType != null && ifaceType.kind == TypeKind.Ref && ifaceType.typeReturn != null) {
 		ifaceType = ifaceType.typeReturn;
 	}
-	const fieldNames: string[] = ifaceType !== null && ifaceType.typeNames !== null ? ifaceType.typeNames : d.interfaceFields;
+	const fieldNames: string[] = ifaceType != null && ifaceType.typeNames != null ? ifaceType.typeNames : d.interfaceFields;
 	const fieldTypes: string[] = [];
 	for (let i = 0; i < fieldNames.length; i += 1) {
-		const ft = (ifaceType !== null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";
+		const ft = (ifaceType != null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";
 		fieldTypes.push(ft);
 	}
 
@@ -378,13 +378,13 @@ function genClassDecl(g: CGen, node: Node): void {
 	// name is a Function — no struct type exists, so emit only the constant
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
-	if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Function) {
+	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
 		genStaticFieldGlobals(g, d);
 		return;
 	}
 
 	// Extern class: type defined externally — emit typedef forward decl only.
-	if ((node.flags & NodeFlag.ExternC) !== 0) {
+	if ((node.flags & NodeFlag.ExternC) != 0) {
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.className} ${d.className};`);
 		return;
 	}
@@ -415,10 +415,10 @@ function genClassDecl(g: CGen, node: Node): void {
 		const fieldTypes: string[] = [];
 		const fieldNames: string[] = [];
 		let classStructType = node.nodeType;
-		if (classStructType !== null && classStructType.kind === TypeKind.Ref && classStructType.typeReturn !== null) {
+		if (classStructType != null && classStructType.kind == TypeKind.Ref && classStructType.typeReturn != null) {
 			classStructType = classStructType.typeReturn;
 		}
-		if (classStructType !== null && classStructType.typeNames !== null && classStructType.typeChildren !== null) {
+		if (classStructType != null && classStructType.typeNames != null && classStructType.typeChildren != null) {
 			for (let i = 0; i < classStructType.typeNames.length; i += 1) {
 				fieldNames.push(mangleFieldName(classStructType.typeNames[i]));
 				fieldTypes.push(getTypeDesc(g, classStructType.typeChildren[i]));
@@ -442,7 +442,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// never reaches this loop — methodToFunction lifts it out of classBody into a
 	// top-level `<Class>_init` FunctionDecl (mono instances included).
 	for (const member of d.classBody) {
-		if (member.kind === NodeKind.MethodDecl) {
+		if (member.kind == NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
 		}
 	}
@@ -452,13 +452,13 @@ function genClassDecl(g: CGen, node: Node): void {
 // normal class path and the merged callable-namespace attachment.
 function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
 	for (const member of d.classBody) {
-		if (member.kind !== NodeKind.PropertyDecl) { continue; }
+		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
-		const cType = member.nodeType !== null ? getTypeDesc(g, member.nodeType) : "double";
+		const cType = member.nodeType != null ? getTypeDesc(g, member.nodeType) : "double";
 		const globalName = staticFieldCName(d.className + "." + pd.propName);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
-		if (pd.propInitializer !== null) {
+		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
 					const nv = (pd.propInitializer.data as NumberLiteralData).value;
@@ -496,8 +496,8 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
 	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
 	const fallbackName = `${className}_${safeName(d.methodName)}`;
-	const methodOvIdx = node.resolvedSym !== null ? node.resolvedSym.overloadIdx : 0;
-	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
+	const methodOvIdx = node.resolvedSym != null ? node.resolvedSym.overloadIdx : 0;
+	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym != null && node.resolvedSym.name != "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
 	const methodType = node.nodeType;
 	// Skip emission of generic method bodies (mirror the same guard in
 	// genFunctionDecl). When a generic static method is mono-instantiated for
@@ -509,8 +509,8 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	// tree) plus flag-level (`gen:` marker on methodFlags) — either skips.
 	if (hasGenericParams(methodType)) return;
 	if (isGenericFn(d.methodFlags)) return;
-	if (d.methodFlags === "extern" || d.methodFlags.indexOf("extern", 0) >= 0) return;
-	if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.ImportC)) return;
+	if (d.methodFlags == "extern" || d.methodFlags.indexOf("extern", 0) >= 0) return;
+	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC)) return;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 	// NRVO: methods returning large value-types (Result<T,E>, struct, tuple)
 	// must be emitted with `void` return + first param `Type* __result`. Caller
@@ -538,12 +538,12 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 		const pType = getTypeDesc(g, methodType.typeChildren[i]);
 		paramList = paramList + `${pType} ${safeName(d.methodParams[i])}`;
 	}
-	if (paramList === "") paramList = "void";
+	if (paramList == "") paramList = "void";
 
 	const proto = `${actualRetType} ${methodName}(${paramList})`;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
-	if (d.methodBody !== null) {
+	if (d.methodBody != null) {
 		const p = createProc(methodName, null);
 		if (nrvo) p.isNrvo = true;
 		genStmt(g, p, d.methodBody);
@@ -569,7 +569,7 @@ function genTopLevelEmit(g: CGen, mi: MacroInvocationData): void {
 	let start = 0;
 	let pos = 0;
 	while (pos < code.length) {
-		if (code.charAt(pos) === "\n") {
+		if (code.charAt(pos) == "\n") {
 			const line = code.slice(start, pos);
 			if (line.length > 0) emitToSection(g, line);
 			start = pos + 1;
@@ -593,22 +593,22 @@ function emitToSection(g: CGen, code: string): void {
 
 function genTopLevelStmt(g: CGen, node: Node): void {
 	// Global variable declarations go to GlobalVars section
-	if (node.kind === NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl) {
 		genGlobalVar(g, node);
 		return;
 	}
 	// Handle top-level directives
-	if (node.kind === NodeKind.ExprStmt) {
+	if (node.kind == NodeKind.ExprStmt) {
 		const esd = node.data as ExprStmtData;
-		if (esd.expr.kind === NodeKind.MacroInvocation) {
+		if (esd.expr.kind == NodeKind.MacroInvocation) {
 			const mi = esd.expr.data as MacroInvocationData;
 			// @emit: codegen handles directly (Reference genEmit parity — p.prc == nil path)
-			if (mi.macroName === "emit" && mi.macroArgs.length > 0) {
+			if (mi.macroName == "emit" && mi.macroArgs.length > 0) {
 				genTopLevelEmit(g, mi);
 				return;
 			}
 			// @include/@compile/@link/@passC/@passL: already handled by checker directives
-			if (mi.macroName === "include" || mi.macroName === "compile" || mi.macroName === "link" || mi.macroName === "passC" || mi.macroName === "passL") {
+			if (mi.macroName == "include" || mi.macroName == "compile" || mi.macroName == "link" || mi.macroName == "passC" || mi.macroName == "passL") {
 				return;
 			}
 		}
@@ -650,7 +650,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// e.g. `MyCustomTypeInfo` would also bypass mangling. Rare in practice (the suffix
 	// convention is ORC-internal); revisit if collision reports surface.
 	const nameLen = d.declName.length;
-	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo";
+	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) == "TypeInfo";
 	const varName = isTypeInfo ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
@@ -662,12 +662,12 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
 	if (isTypeInfo) {
 		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
-		if (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) return;
+		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 		if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
 			const skipBase = d.declName.slice(0, nameLen - 8);
 			markTypeInfoSkipped(skipBase);
 			const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
-			if (skipCBase !== "") markTypeInfoSkipped(skipCBase);
+			if (skipCBase != "") markTypeInfoSkipped(skipCBase);
 			return;
 		}
 		genTypeInfoVar(g, d, varName);
@@ -678,42 +678,42 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// Symbols without a modulePath (DRC/transform temps hoisted to top level) mangle to a
 	// bare name that repeats across modules (per-module tempCounter) — static linkage is
 	// what makes them collision-free; nothing outside this module can reference them.
-	const staticPfx = (node.resolvedSym === null || node.resolvedSym.modulePath === "") ? "static " : "";
+	const staticPfx = (node.resolvedSym == null || node.resolvedSym.modulePath == "") ? "static " : "";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.
 	// Critical for things like `const INITIAL_CAPACITY: int32 = 32;` — if left to
 	// Init000 and another module's Init000 runs first and reads INITIAL_CAPACITY
 	// (e.g. via HashSet constructor), it reads 0 and loops forever.
-	if (d.initializer !== null) {
+	if (d.initializer != null) {
 		const init = d.initializer;
-		if (init.kind === NodeKind.NumberLiteral) {
+		if (init.kind == NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
 			const litStr = formatCNumberLit(nd, node.nodeType);
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
-			const castedLit = (node.nodeType !== null && isIntegerType(node.nodeType))
+			const castedLit = (node.nodeType != null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
 				: litStr;
 			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${castedLit};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
-		if (init.kind === NodeKind.BooleanLiteral) {
+		if (init.kind == NodeKind.BooleanLiteral) {
 			const bd = init.data as BooleanLiteralData;
 			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${cBoolLiteral(bd.boolValue)};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
-		if (init.kind === NodeKind.StringLiteral && node.nodeType !== null && node.nodeType.kind === TypeKind.String) {
+		if (init.kind == NodeKind.StringLiteral && node.nodeType != null && node.nodeType.kind == TypeKind.String) {
 			const sd = init.data as StringLiteralData;
 			const poolName = internString(g.stringPool, sd.value);
 			addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${msStringPoolRef(poolName, cStringByteLen(sd.value))};`);
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
-		if (init.kind === NodeKind.ObjectLiteral && node.nodeType !== null && isBakeableAggregateConst(node)) {
+		if (init.kind == NodeKind.ObjectLiteral && node.nodeType != null && isBakeableAggregateConst(node)) {
 			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
 		}
-		if ((init.kind === NodeKind.ArrayLiteral || init.kind === NodeKind.CallExpr) && node.nodeType !== null && isBakeableAggregateConst(node)) {
+		if ((init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) && node.nodeType != null && isBakeableAggregateConst(node)) {
 			if (genBakedConstArrayCell(g, node, varName, staticPfx, cType)) return;
 		}
 	}
@@ -730,22 +730,22 @@ function genGlobalVar(g: CGen, node: Node): void {
 	// this, matchLower's `let x = null` placeholder for top-level `const x: T =
 	// match(...){...}` (where T is a value type — Struct/Union/Array/Tuple)
 	// emits invalid C.
-	if (d.initializer !== null
-			&& d.initializer.kind === NodeKind.NullLiteral
-			&& node.nodeType !== null
+	if (d.initializer != null
+			&& d.initializer.kind == NodeKind.NullLiteral
+			&& node.nodeType != null
 			&& isNilableValueType(node.nodeType)) {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType}){0};`);
 		return;
 	}
-	if (d.initializer !== null
-			&& d.initializer.kind === NodeKind.NullLiteral
-			&& node.nodeType !== null
-			&& (isNumeric(node.nodeType) || node.nodeType.kind === TypeKind.Boolean)) {
+	if (d.initializer != null
+			&& d.initializer.kind == NodeKind.NullLiteral
+			&& node.nodeType != null
+			&& (isNumeric(node.nodeType) || node.nodeType.kind == TypeKind.Boolean)) {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = 0;`);
 		return;
 	}
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
-	if (d.initializer !== null) {
+	if (d.initializer != null) {
 		const p = g.initProc;
 		const initSnippet = genExpr(g, p, d.initializer);
 		const locals = readProcLocals(p);
@@ -763,7 +763,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 }
 
 function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
-	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) !== "*") return false;
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
 	const body = cType.slice(0, cType.length - 1);
@@ -774,7 +774,7 @@ function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: stri
 	let i = 0;
 	for (const prop of od.properties) {
 		const snippet = genExpr(g, p, prop);
-		if (prop.kind === NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
+		if (prop.kind == NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
 		if (braced.length > 0) braced = braced + ", ";
 		braced = braced + "." + mangleFieldName(od.keys[i]) + " = " + snippet;
 		i = i + 1;
@@ -792,11 +792,11 @@ function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: stri
 }
 
 function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
-	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) !== "*") return false;
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const t0 = node.nodeType;
-	if (t0 === null) return false;
-	const arrT = t0.kind === TypeKind.Ref ? t0.typeReturn : t0;
-	if (arrT === null || arrT.kind !== TypeKind.Array) return false;
+	if (t0 == null) return false;
+	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
+	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
@@ -821,10 +821,10 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	// (qualified C name via mangledTypeName) — the decl arm registered it
 	// in typeCache before destructorLifting's TypeInfo var reaches codegen.
 	const cBase = typeCacheGet(g.typeCache, "cname:" + baseName);
-	const infoName = (cBase !== "") ? cBase + "TypeInfo" : varName;
+	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
-	if (cBase !== "") {
+	if (cBase != "") {
 		typeCacheSet(g.forwTypeCache, "typeInfoDef:" + cBase, cBase);
 	}
 
@@ -835,39 +835,39 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
 
 	// Emit field assignments to DatInit (runs before user code)
-	if (d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
+	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
 		const od = d.initializer.data as ObjectLiteralData;
 		const datInit = sec(g, CSection.DatInit);
 		const p = createProc("__datinit", null);
 
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
-			if (key === "name") {
+			if (key == "name") {
 				// name field: emit C string literal (const char*), not msString
 				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
-			} else if (key === "destroyFn") {
+			} else if (key == "destroyFn") {
 				// destroyFn: cast to msDestroyProc (void(*)(void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
-				if (val === "MS_NIL" || val === "NULL") {
+				if (val == "MS_NIL" || val == "NULL") {
 					addLine(datInit, `  ${infoName}.destroyFn = NULL;`);
 				} else {
 					addLine(datInit, `  ${infoName}.destroyFn = (msDestroyProc)${val};`);
 				}
-			} else if (key === "traceFn") {
+			} else if (key == "traceFn") {
 				// traceFn: cast to msTraceProc (void(*)(void*, void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
-				if (val === "MS_NIL" || val === "NULL") {
+				if (val == "MS_NIL" || val == "NULL") {
 					addLine(datInit, `  ${infoName}.traceFn = NULL;`);
 				} else {
 					addLine(datInit, `  ${infoName}.traceFn = (msTraceProc)${val};`);
 				}
-			} else if (key === "base") {
+			} else if (key == "base") {
 				const bn = od.properties[i];
 				let rawBase = "";
-				if (bn.kind === NodeKind.StringLiteral) rawBase = (bn.data as StringLiteralData).value;
-				if (rawBase !== "") {
+				if (bn.kind == NodeKind.StringLiteral) rawBase = (bn.data as StringLiteralData).value;
+				if (rawBase != "") {
 					const cParent = typeCacheGet(g.typeCache, "cname:" + rawBase);
-					const parentName = (cParent !== "") ? cParent : rawBase;
+					const parentName = (cParent != "") ? cParent : rawBase;
 					ensureTypeInfo(g, parentName);
 					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
 				}

@@ -16,7 +16,7 @@ import { Node, NodeKind } from "std/meta";
 export macro mgClassify(n: Node): Node {
 	let out = "";
 	for (const a of n.jsxAttrs) {
-		if (a.kind === NodeKind.JSXAttribute) {
+		if (a.kind == NodeKind.JSXAttribute) {
 			const c = a.jsxAttrName.startsWith("on") ? "evt" : "attr";
 			out = out + c + ";";
 		}
@@ -30,10 +30,10 @@ export macro mgTag(n: Node): Node {
 
 test "macro flat startsWith chain is typed (evt/attr classification)" {
 	const cls = mgClassify(<div onClick="x" class="box">hi</div>);
-	assert cls === "evt;attr;", "got: " + cls;
+	assert cls == "evt;attr;", "got: " + cls;
 }
 
 test "macro flat direct read returns the true field value" {
 	const tag = mgTag(<div onClick="x" class="box">hi</div>);
-	assert tag === "div", "got: " + tag;
+	assert tag == "div", "got: " + tag;
 }

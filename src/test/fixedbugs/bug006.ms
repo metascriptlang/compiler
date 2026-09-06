@@ -42,13 +42,13 @@ function pickFirst<T>(arr: T[]): T {
 test "bug006: macro on T[] element inside generic body" {
 	const a: int32[] = [10, 20, 30];
 	const x = pickFirst<int32>(a);
-	assert x === 10;
+	assert x == 10;
 }
 
 test "bug006: macro on multi-element T[] with computed index" {
 	const a: int32[] = [100, 200, 300];
 	const x = pickFirst<int32>(a);
-	assert x === 100;
+	assert x == 100;
 }
 
 import { Node } from "std/meta";

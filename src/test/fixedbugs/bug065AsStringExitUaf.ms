@@ -39,10 +39,10 @@ test "bug065: returned asString survives the builder scope" {
 		junk.push(88);
 		j = j + 1;
 	}
-	assert s1.length === 64;
-	assert s1.charCodeAt(0) === 65;
-	assert s1.charCodeAt(63) === 76;
-	assert s1.charCodeAt(25) === 90;
+	assert s1.length == 64;
+	assert s1.charCodeAt(0) == 65;
+	assert s1.charCodeAt(63) == 76;
+	assert s1.charCodeAt(25) == 90;
 }
 
 // Proven-red shape: growing the source past its cap reallocs the payload
@@ -60,8 +60,8 @@ test "bug065: asString result survives source realloc and heap reuse" {
 		k = k + 1;
 	}
 	const spoil = "abc" + "d";
-	assert spoil.length === 4;
-	assert s.length === 2;
-	assert s === "hi";
-	assert s.charCodeAt(0) === 104;
+	assert spoil.length == 4;
+	assert s.length == 2;
+	assert s == "hi";
+	assert s.charCodeAt(0) == 104;
 }

@@ -23,7 +23,7 @@ export interface ParsedVersion {
 // A single "0" is allowed; "01" or "007" are not.
 function parseDigitsStrict(s: string, start: number, end: number): number {
 	if (end <= start) return -1;
-	if (end - start > 1 && s.charAt(start) === "0") return -1;
+	if (end - start > 1 && s.charAt(start) == "0") return -1;
 	let result = 0;
 	let i = start;
 	while (i < end) {
@@ -39,7 +39,7 @@ function parseDigitsStrict(s: string, start: number, end: number): number {
 function findDot(s: string, start: number, end: number): number {
 	let i = start;
 	while (i < end) {
-		if (s.charAt(i) === ".") return i;
+		if (s.charAt(i) == ".") return i;
 		i = i + 1;
 	}
 	return -1;
@@ -48,7 +48,7 @@ function findDot(s: string, start: number, end: number): number {
 // Detect range operators at the start of a version string. We reject these
 // unambiguously to protect MVS semantics — every dep must be an exact minimum.
 function hasRangeOperator(s: string): boolean {
-	if (s.length === 0) return false;
+	if (s.length == 0) return false;
 	return match (s.charAt(0)) {
 		"^" | "~" | ">" | "<" | "=" | "*" => true,
 		_ => false,
@@ -58,12 +58,12 @@ function hasRangeOperator(s: string): boolean {
 // Validate a pre-release string: one or more dot-separated identifiers,
 // each matching [0-9A-Za-z-]+, none empty, numeric identifiers have no leading zero.
 function isValidPrerelease(s: string): boolean {
-	if (s.length === 0) return false;
+	if (s.length == 0) return false;
 	let start = 0;
 	let i = 0;
 	while (i <= s.length) {
-		if (i === s.length || s.charAt(i) === ".") {
-			if (i === start) return false;  // empty identifier
+		if (i == s.length || s.charAt(i) == ".") {
+			if (i == start) return false;  // empty identifier
 			let allDigitsSeen = true;
 			let j = start;
 			while (j < i) {
@@ -71,13 +71,13 @@ function isValidPrerelease(s: string): boolean {
 				const isDigit = c >= "0".code && c <= "9".code;
 				const isLower = c >= "a".code && c <= "z".code;
 				const isUpper = c >= "A".code && c <= "Z".code;
-				const isDash = c === "-".code;
+				const isDash = c == "-".code;
 				if (!isDigit && !isLower && !isUpper && !isDash) return false;
 				if (!isDigit) allDigitsSeen = false;
 				j = j + 1;
 			}
 			// Numeric identifier must not have a leading zero (unless it IS "0")
-			if (allDigitsSeen && (i - start) > 1 && s.charAt(start) === "0") return false;
+			if (allDigitsSeen && (i - start) > 1 && s.charAt(start) == "0") return false;
 			start = i + 1;
 		}
 		i = i + 1;
@@ -87,7 +87,7 @@ function isValidPrerelease(s: string): boolean {
 
 // Check if all characters in s are ASCII digits. Empty string returns false.
 function allDigits(s: string): boolean {
-	if (s.length === 0) return false;
+	if (s.length == 0) return false;
 	let i = 0;
 	while (i < s.length) {
 		const c = s.byteAt(i);
@@ -100,7 +100,7 @@ function allDigits(s: string): boolean {
 // Return the index of the next `.` in s at or after start, or s.length if none.
 function nextIdEnd(s: string, start: int32): int32 {
 	let i = start;
-	while (i < s.length && s.charAt(i) !== ".") i = i + 1;
+	while (i < s.length && s.charAt(i) != ".") i = i + 1;
 	return i;
 }
 
@@ -127,7 +127,7 @@ function comparePrerelease(a: string, b: string): number {
 		if (aNum && bNum) {
 			const an = parseDigitsStrict(aId, 0, aId.length);
 			const bn = parseDigitsStrict(bId, 0, bId.length);
-			if (an !== bn) return an < bn ? -1 : 1;
+			if (an != bn) return an < bn ? -1 : 1;
 		} else if (aNum) {
 			return -1;  // numeric < alphanumeric
 		} else if (bNum) {
@@ -154,7 +154,7 @@ export function parseVersion(s: string): ParsedVersion {
 	if (hasRangeOperator(s)) return invalid;
 
 	// No "v" prefix allowed — versions are bare semver: "1.2.3", not "v1.2.3"
-	if (s.charAt(0) === "v") return invalid;
+	if (s.charAt(0) == "v") return invalid;
 	let start = 0;
 
 	const len = s.length;
@@ -164,7 +164,7 @@ export function parseVersion(s: string): ParsedVersion {
 	let preStart = -1;
 	let scan = start;
 	while (scan < len) {
-		if (s.charAt(scan) === "-") {
+		if (s.charAt(scan) == "-") {
 			versionEnd = scan;
 			preStart = scan + 1;
 			scan = len;
@@ -207,13 +207,13 @@ export function isValidVersion(s: string): boolean {
 // Compare two parsed versions. Returns -1, 0, or 1.
 // Release > pre-release (v1.2.3 > v1.2.3-rc1).
 export function compareVersions(a: ParsedVersion, b: ParsedVersion): number {
-	if (a.major !== b.major) return a.major < b.major ? -1 : 1;
-	if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
-	if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
+	if (a.major != b.major) return a.major < b.major ? -1 : 1;
+	if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
+	if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
 
-	if (a.pre === "" && b.pre === "") return 0;
-	if (a.pre === "") return 1;       // release > pre-release
-	if (b.pre === "") return -1;
+	if (a.pre == "" && b.pre == "") return 0;
+	if (a.pre == "") return 1;       // release > pre-release
+	if (b.pre == "") return -1;
 	return comparePrerelease(a.pre, b.pre);
 }
 
@@ -228,7 +228,7 @@ export function compareVersionStrings(a: string, b: string): number {
 // MVS helper: returns the largest version string from the list.
 // Returns empty string if the list is empty or contains any invalid version.
 export function maxVersion(versions: string[]): string {
-	if (versions.length === 0) return "";
+	if (versions.length == 0) return "";
 	let best = parseVersion(versions[0]);
 	if (!best.isValid) return "";
 	let bestStr = versions[0];
@@ -263,14 +263,14 @@ const KNOWN_GIT_HOSTS: string[] = ["github.com", "gitlab.com", "bitbucket.org", 
 
 function isKnownHost(host: string): boolean {
 	for (const kh of KNOWN_GIT_HOSTS) {
-		if (host === kh) return true;
+		if (host == kh) return true;
 	}
 	return false;
 }
 
 // Check if a string is a valid 40-character hex SHA.
 function isHexSha40(s: string): boolean {
-	if (s.length !== 40) return false;
+	if (s.length != 40) return false;
 	let i = 0;
 	while (i < 40) {
 		const c = s.byteAt(i);
@@ -287,7 +287,7 @@ function findLastAt(s: string): number {
 	let last = -1;
 	let i = 0;
 	while (i < s.length) {
-		if (s.charAt(i) === "@") last = i;
+		if (s.charAt(i) == "@") last = i;
 		i = i + 1;
 	}
 	return last;
@@ -298,7 +298,7 @@ function findLastAt(s: string): number {
 function extractHost(url: string): string {
 	let i = 0;
 	while (i < url.length) {
-		if (url.charAt(i) === "/") return url.slice(0, i);
+		if (url.charAt(i) == "/") return url.slice(0, i);
 		i = i + 1;
 	}
 	return url;
@@ -312,7 +312,7 @@ export function parseGitSpec(s: string): ParsedGitSpec {
 	const invalid: ParsedGitSpec = { url: "", ref: "", isValid: false };
 	if (s.length < 5) return invalid;
 	// Must start with "git:"
-	if (s.slice(0, 4) !== "git:") return invalid;
+	if (s.slice(0, 4) != "git:") return invalid;
 
 	const rest = s.slice(4, s.length);  // "github.com/owner/repo@v1.2.3"
 	// Split on LAST @ — URL may contain slashes but not @
@@ -321,7 +321,7 @@ export function parseGitSpec(s: string): ParsedGitSpec {
 
 	const url = rest.slice(0, atIdx);
 	const gitRef = rest.slice(atIdx + 1, rest.length);
-	if (url.length === 0 || gitRef.length === 0) return invalid;
+	if (url.length == 0 || gitRef.length == 0) return invalid;
 
 	// Validate host is well-known
 	const host = extractHost(url);
@@ -337,7 +337,7 @@ export function parseGitSpec(s: string): ParsedGitSpec {
 
 // Top-level dispatcher: classify a dependency version string as registry or git source.
 export function parseSourceSpec(s: string): { kind: SourceKind, version: ParsedVersion, git: ParsedGitSpec } {
-	if (s.length >= 4 && s.slice(0, 4) === "git:") {
+	if (s.length >= 4 && s.slice(0, 4) == "git:") {
 		const git = parseGitSpec(s);
 		const emptyVer: ParsedVersion = { major: -1, minor: -1, patch: -1, pre: "", isValid: false };
 		return { kind: SourceKind.Git, version: emptyVer, git };
@@ -352,47 +352,47 @@ export function parseSourceSpec(s: string): { kind: SourceKind, version: ParsedV
 test "parseVersion v1.2.3" {
 	const v = parseVersion("1.2.3");
 	assert v.isValid;
-	assert v.major === 1;
-	assert v.minor === 2;
-	assert v.patch === 3;
-	assert v.pre === "";
+	assert v.major == 1;
+	assert v.minor == 2;
+	assert v.patch == 3;
+	assert v.pre == "";
 }
 
 test "parseVersion 0.0.0" {
 	const v = parseVersion("0.0.0");
 	assert v.isValid;
-	assert v.major === 0;
-	assert v.minor === 0;
-	assert v.patch === 0;
+	assert v.major == 0;
+	assert v.minor == 0;
+	assert v.patch == 0;
 }
 
 test "parseVersion large numbers" {
 	const v = parseVersion("123.456.789");
 	assert v.isValid;
-	assert v.major === 123;
-	assert v.minor === 456;
-	assert v.patch === 789;
+	assert v.major == 123;
+	assert v.minor == 456;
+	assert v.patch == 789;
 }
 
 test "parseVersion with prerelease" {
 	const v = parseVersion("1.2.3-rc1");
 	assert v.isValid;
-	assert v.major === 1;
-	assert v.pre === "rc1";
+	assert v.major == 1;
+	assert v.pre == "rc1";
 }
 
 test "parseVersion prerelease with dots" {
 	const v = parseVersion("1.2.3-alpha.4");
 	assert v.isValid;
-	assert v.pre === "alpha.4";
+	assert v.pre == "alpha.4";
 }
 
 test "parseVersion bare version without v prefix" {
 	const v = parseVersion("1.2.3");
 	assert v.isValid;
-	assert v.major === 1;
-	assert v.minor === 2;
-	assert v.patch === 3;
+	assert v.major == 1;
+	assert v.minor == 2;
+	assert v.patch == 3;
 }
 
 test "parseVersion rejects v prefix" {
@@ -466,71 +466,71 @@ test "parseVersion allows prerelease single 0" {
 }
 
 test "compareVersions equal" {
-	assert compareVersionStrings("1.2.3", "1.2.3") === 0;
+	assert compareVersionStrings("1.2.3", "1.2.3") == 0;
 }
 
 test "compareVersions major order" {
-	assert compareVersionStrings("1.0.0", "2.0.0") === -1;
-	assert compareVersionStrings("2.0.0", "1.0.0") === 1;
+	assert compareVersionStrings("1.0.0", "2.0.0") == -1;
+	assert compareVersionStrings("2.0.0", "1.0.0") == 1;
 }
 
 test "compareVersions minor order" {
-	assert compareVersionStrings("1.2.0", "1.3.0") === -1;
+	assert compareVersionStrings("1.2.0", "1.3.0") == -1;
 }
 
 test "compareVersions patch order" {
-	assert compareVersionStrings("1.2.3", "1.2.4") === -1;
+	assert compareVersionStrings("1.2.3", "1.2.4") == -1;
 }
 
 test "compareVersions prerelease less than release" {
-	assert compareVersionStrings("1.2.3-rc1", "1.2.3") === -1;
-	assert compareVersionStrings("1.2.3", "1.2.3-rc1") === 1;
+	assert compareVersionStrings("1.2.3-rc1", "1.2.3") == -1;
+	assert compareVersionStrings("1.2.3", "1.2.3-rc1") == 1;
 }
 
 test "compareVersions prerelease numeric order" {
-	assert compareVersionStrings("1.0.0-1", "1.0.0-2") === -1;
-	assert compareVersionStrings("1.0.0-10", "1.0.0-2") === 1;
+	assert compareVersionStrings("1.0.0-1", "1.0.0-2") == -1;
+	assert compareVersionStrings("1.0.0-10", "1.0.0-2") == 1;
 }
 
 test "compareVersions prerelease alphanumeric order" {
-	assert compareVersionStrings("1.0.0-alpha", "1.0.0-beta") === -1;
+	assert compareVersionStrings("1.0.0-alpha", "1.0.0-beta") == -1;
 }
 
 test "compareVersions numeric lower than alphanumeric" {
-	assert compareVersionStrings("1.0.0-1", "1.0.0-alpha") === -1;
+	assert compareVersionStrings("1.0.0-1", "1.0.0-alpha") == -1;
 }
 
 test "compareVersions prerelease fewer ids first" {
-	assert compareVersionStrings("1.0.0-alpha", "1.0.0-alpha.1") === -1;
+	assert compareVersionStrings("1.0.0-alpha", "1.0.0-alpha.1") == -1;
 }
 
 test "compareVersions invalid returns sentinel" {
-	assert compareVersionStrings("1.2.3", "bad") === -2;
+	assert compareVersionStrings("1.2.3", "bad") == -2;
 }
 
 test "maxVersion picks highest" {
 	const vs: string[] = ["1.0.0", "1.2.3", "1.2.0"];
-	assert maxVersion(vs) === "1.2.3";
+	assert maxVersion(vs) == "1.2.3";
 }
 
 test "maxVersion prefers release over prerelease" {
 	const vs: string[] = ["1.2.3-rc1", "1.2.3"];
-	assert maxVersion(vs) === "1.2.3";
+	assert maxVersion(vs) == "1.2.3";
 }
 
 test "maxVersion empty list" {
 	const vs: string[] = [];
-	assert maxVersion(vs) === "";
+	assert maxVersion(vs) == "";
 }
 
 test "maxVersion single entry" {
 	const vs: string[] = ["1.2.3"];
-	assert maxVersion(vs) === "1.2.3";
+	assert maxVersion(vs) == "1.2.3";
 }
 
 test "maxVersion rejects any invalid entry" {
 	const vs: string[] = ["1.2.3", "not-a-version"];
-	assert maxVersion(vs) === "";
+	assert maxVersion(vs) == "";
 }
 
 test "isValidVersion convenience" {
@@ -545,20 +545,20 @@ test "isValidVersion convenience" {
 test "parseGitSpec valid tag" {
 	const g = parseGitSpec("git:github.com/acme/foo@v1.2.3");
 	assert g.isValid;
-	assert g.url === "github.com/acme/foo";
-	assert g.ref === "v1.2.3";  // git ref preserves the original tag name
+	assert g.url == "github.com/acme/foo";
+	assert g.ref == "v1.2.3";  // git ref preserves the original tag name
 }
 
 test "parseGitSpec valid SHA" {
 	const g = parseGitSpec("git:github.com/acme/foo@abcdef1234567890abcdef1234567890abcdef12");
 	assert g.isValid;
-	assert g.ref === "abcdef1234567890abcdef1234567890abcdef12";
+	assert g.ref == "abcdef1234567890abcdef1234567890abcdef12";
 }
 
 test "parseGitSpec gitlab host" {
 	const g = parseGitSpec("git:gitlab.com/group/project@v2.0.0");
 	assert g.isValid;
-	assert g.url === "gitlab.com/group/project";
+	assert g.url == "gitlab.com/group/project";
 }
 
 test "parseGitSpec bitbucket host" {
@@ -578,13 +578,13 @@ test "parseGitSpec rejects unknown host" {
 test "parseGitSpec accepts branch ref" {
 	const g = parseGitSpec("git:github.com/acme/foo@main");
 	assert g.isValid;
-	assert g.ref === "main";
+	assert g.ref == "main";
 }
 
 test "parseGitSpec accepts short ref" {
 	const g = parseGitSpec("git:github.com/acme/foo@abc123");
 	assert g.isValid;
-	assert g.ref === "abc123";
+	assert g.ref == "abc123";
 }
 
 test "parseGitSpec rejects missing git: prefix" {
@@ -603,26 +603,26 @@ test "parseGitSpec rejects no @" {
 
 test "parseSourceSpec registry" {
 	const s = parseSourceSpec("1.2.3");
-	assert s.kind === SourceKind.Registry;
+	assert s.kind == SourceKind.Registry;
 	assert s.version.isValid;
-	assert s.version.major === 1;
+	assert s.version.major == 1;
 }
 
 test "parseSourceSpec git" {
 	const s = parseSourceSpec("git:github.com/acme/foo@v1.2.3");
-	assert s.kind === SourceKind.Git;
+	assert s.kind == SourceKind.Git;
 	assert s.git.isValid;
-	assert s.git.url === "github.com/acme/foo";
+	assert s.git.url == "github.com/acme/foo";
 }
 
 test "parseSourceSpec invalid registry" {
 	const s = parseSourceSpec("not-a-version");
-	assert s.kind === SourceKind.Registry;
+	assert s.kind == SourceKind.Registry;
 	assert !s.version.isValid;
 }
 
 test "parseSourceSpec invalid git" {
 	const s = parseSourceSpec("git:example.com/foo@v1.0.0");
-	assert s.kind === SourceKind.Git;
+	assert s.kind == SourceKind.Git;
 	assert !s.git.isValid;
 }

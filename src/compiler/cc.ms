@@ -52,12 +52,12 @@ let _sbfClang = "";
 let _sbfClangChecked = false;
 
 function exeSuffix(): string {
-	return platform === "windows" ? ".exe" : "";
+	return platform == "windows" ? ".exe" : "";
 }
 
 function homeDir(): string {
 	const h = env.get("HOME");
-	if (h !== "") return h;
+	if (h != "") return h;
 	return env.get("USERPROFILE");
 }
 
@@ -72,7 +72,7 @@ function hasSbfTarget(binary: string): boolean {
 		// Rows read "    sbf        - SBF new (little endian)". Match the name
 		// column exactly so `bpf` and `bpfel` are not mistaken for a hit.
 		const name = line.trim().split(" ")[0];
-		if (name === "sbf") return true;
+		if (name == "sbf") return true;
 	}
 	return false;
 }
@@ -87,8 +87,8 @@ function isNewerVersionDir(a: string, b: string): boolean {
 	for (let i = 0; i < shared; i++) {
 		const x = ap[i];
 		const y = bp[i];
-		if (x.length !== y.length) return x.length > y.length;
-		if (x !== y) return x > y;
+		if (x.length != y.length) return x.length > y.length;
+		if (x != y) return x > y;
 	}
 	return ap.length > bp.length;
 }
@@ -98,7 +98,7 @@ function isNewerVersionDir(a: string, b: string): boolean {
 // passes hasSbfTarget can build; the ordering only picks a recent one.
 function cachedPlatformToolsClang(): string {
 	const home = homeDir();
-	if (home === "") return "";
+	if (home == "") return "";
 	const cacheRoot = join(home, ".cache/solana");
 	if (!exists(cacheRoot)) return "";
 	let best = "";
@@ -106,10 +106,10 @@ function cachedPlatformToolsClang(): string {
 	for (const entry of readDir(cacheRoot)) {
 		let name = entry;
 		if (name.endsWith("/")) name = name.slice(0, name.length - 1);
-		if (name === "") continue;
+		if (name == "") continue;
 		const candidate = join(cacheRoot, `${name}/platform-tools/llvm/bin/clang${exeSuffix()}`);
 		if (!exists(candidate)) continue;
-		if (bestName === "" || isNewerVersionDir(name, bestName)) {
+		if (bestName == "" || isNewerVersionDir(name, bestName)) {
 			best = candidate;
 			bestName = name;
 		}
@@ -122,19 +122,19 @@ export function resolveBpfClang(): string {
 	_sbfClangChecked = true;
 
 	const override = env.get("MSC_SBF_CLANG");
-	if (override !== "" && hasSbfTarget(override)) {
+	if (override != "" && hasSbfTarget(override)) {
 		_sbfClang = override;
 		return _sbfClang;
 	}
 
 	const cached = cachedPlatformToolsClang();
-	if (cached !== "" && hasSbfTarget(cached)) {
+	if (cached != "" && hasSbfTarget(cached)) {
 		_sbfClang = cached;
 		return _sbfClang;
 	}
 
 	const onPath = findOnPath("clang");
-	if (onPath !== "" && hasSbfTarget(onPath)) {
+	if (onPath != "" && hasSbfTarget(onPath)) {
 		_sbfClang = onPath;
 		return _sbfClang;
 	}
@@ -146,7 +146,7 @@ export function resolveBpfClang(): string {
 // produced the objects, and platform-tools always ships the pair together.
 export function resolveSbfLinker(): string {
 	const clang = resolveBpfClang();
-	if (clang === "") return "";
+	if (clang == "") return "";
 	const lld = join(dirname(clang), `ld.lld${exeSuffix()}`);
 	if (exists(lld)) return lld;
 	return "";
@@ -206,7 +206,7 @@ SECTIONS
 // `entrypoint` symbol via --entry.
 export function linkSolana(oFileList: string, outBinary: string): Result<void, ProcessError> {
 	const lld = resolveSbfLinker();
-	if (lld === "") {
+	if (lld == "") {
 		return Result.err({
 			kind: ProcessErrorKind.NotFound,
 			command: "ld.lld",
@@ -246,15 +246,15 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
 	// Explicit binary overrides everything (--cc=x86_64-linux-gnu-gcc)
-	if (ccBinary !== "") return ccBinary;
-	if (ccOption === 1) return "clang";
-	if (ccOption === 2) return "gcc";
+	if (ccBinary != "") return ccBinary;
+	if (ccOption == 1) return "clang";
+	if (ccOption == 2) return "gcc";
 	// auto-detect: zig cc > clang > gcc > cc
 	// zig cc preferred: unified experience, cross-compile ready, bundled sysroots.
 	// Override with --cc=clang or --cc=gcc if needed.
-	if (detectedCC === 0) {
+	if (detectedCC == 0) {
 		const mz = managedZigCompiler();
-		if (mz !== "") {
+		if (mz != "") {
 			managedCC = mz;
 			detectedCC = 4;
 		} else if (checkZigCC()) {
@@ -267,14 +267,14 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 			detectedCC = 3;
 		}
 	}
-	if (detectedCC === 4) return managedCC !== "" ? managedCC : "zig cc";
-	if (detectedCC === 1) return "clang";
-	if (detectedCC === 2) return "gcc";
+	if (detectedCC == 4) return managedCC != "" ? managedCC : "zig cc";
+	if (detectedCC == 1) return "clang";
+	if (detectedCC == 2) return "gcc";
 	return "cc";
 }
 
 function isZigCC(cc: string): boolean {
-	return cc === "zig cc" || cc.endsWith(" cc");
+	return cc == "zig cc" || cc.endsWith(" cc");
 }
 
 // -- C++ source support: per-file extension detection drives compiler + std-flag
@@ -316,9 +316,9 @@ export function markCppCompile(path: string): void {
 // Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
 function toCppCompiler(cName: string): string {
 	if (cName.endsWith(" cc")) return cName.slice(0, cName.length - 2) + "c++";
-	if (cName === "clang")  return "clang++";
-	if (cName === "gcc")    return "g++";
-	if (cName === "cc")     return "c++";
+	if (cName == "clang")  return "clang++";
+	if (cName == "gcc")    return "g++";
+	if (cName == "cc")     return "c++";
 	if (cName.endsWith("-gcc"))   return cName.slice(0, cName.length - 4) + "-g++";
 	if (cName.endsWith("-clang")) return cName + "++";
 	return cName;
@@ -330,9 +330,9 @@ function toCppCompiler(cName: string): string {
 
 // Normalize Go-style CPU name to clang triple format.
 function normalizeCpu(cpu: string): string {
-	if (cpu === "amd64") return "x86_64";
-	if (cpu === "arm64") return "aarch64";
-	if (cpu === "386") return "i386";
+	if (cpu == "amd64") return "x86_64";
+	if (cpu == "arm64") return "aarch64";
+	if (cpu == "386") return "i386";
 	return cpu;  // riscv64, mips64, etc. pass through
 }
 
@@ -342,29 +342,29 @@ function normalizeCpu(cpu: string): string {
 // Caller is responsible for only invoking when actually cross-compiling
 // (targetOs !== platform || cpuTarget !== "").
 export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
-	const cpu = normalizeCpu(cpuTarget !== "" ? cpuTarget : "amd64");
+	const cpu = normalizeCpu(cpuTarget != "" ? cpuTarget : "amd64");
 	if (useZig) {
 		// zig cc target format: cpu-os[-abi]
 		let zigOs = targetOs;
-		if (targetOs === "macos" || targetOs === "darwin") zigOs = "macos";
-		if (targetOs === "windows") return `-target ${cpu}-windows-gnu`;
-		if (targetOs === "linux") return `-target ${cpu}-linux-gnu`;
-		if (targetOs === "android") return `-target ${cpu}-linux-android`;
+		if (targetOs == "macos" || targetOs == "darwin") zigOs = "macos";
+		if (targetOs == "windows") return `-target ${cpu}-windows-gnu`;
+		if (targetOs == "linux") return `-target ${cpu}-linux-gnu`;
+		if (targetOs == "android") return `-target ${cpu}-linux-android`;
 		return `-target ${cpu}-${zigOs}`;
 	}
 	// Android/iOS: the toolchain owns the triple + sysroot (NDK API-specific clang
 	// wrapper, or Xcode -isysroot). Emitting our own --target shadows the wrapper's
 	// API level and breaks libc-header/sysroot resolution.
-	if (targetOs === "android" || targetOs === "ios") return "";
+	if (targetOs == "android" || targetOs == "ios") return "";
 	// clang/gcc target format: cpu-vendor-os[-abi]
 	let triple = cpu;
-	if (targetOs === "linux") {
+	if (targetOs == "linux") {
 		triple = `${cpu}-unknown-linux-gnu`;
-	} else if (targetOs === "macos" || targetOs === "darwin") {
+	} else if (targetOs == "macos" || targetOs == "darwin") {
 		triple = `${cpu}-apple-darwin`;
-	} else if (targetOs === "windows") {
+	} else if (targetOs == "windows") {
 		triple = `${cpu}-pc-windows-gnu`;
-	} else if (targetOs === "freebsd") {
+	} else if (targetOs == "freebsd") {
 		triple = `${cpu}-unknown-freebsd`;
 	} else {
 		triple = `${cpu}-unknown-${targetOs}`;
@@ -394,7 +394,7 @@ export function modeFlags(mode: number): string {
 // /usr/bin/gcc is a clang shim, but auto-detection never resolves to the name
 // "gcc" unless clang and zig are both absent, so this stays accurate.
 function isGnuGcc(cc: string): boolean {
-	return cc === "gcc" || cc === "g++" || cc.endsWith("-gcc") || cc.endsWith("-g++");
+	return cc == "gcc" || cc == "g++" || cc.endsWith("-gcc") || cc.endsWith("-g++");
 }
 
 // Proven-broken pairs — an LTO link can NEVER succeed here, so even an
@@ -408,8 +408,8 @@ function isGnuGcc(cc: string): boolean {
 //   every opt level. (Zig 0.16.0.)
 export function ltoBroken(cc: string, targetOs: string): boolean {
 	if (!isZigCC(cc)) return false;
-	if (targetOs === "windows") return true;
-	return targetOs === "darwin" || targetOs === "macos";
+	if (targetOs == "windows") return true;
+	return targetOs == "darwin" || targetOs == "macos";
 }
 
 // Should --danger reach for LTO by default? Practicality on top of
@@ -429,19 +429,19 @@ function ltoDefaultOn(cc: string, targetOs: string): boolean {
 export function resolveLto(opts: CliOptions): void {
 	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
 	const ccName = isZigCC(cc) ? "zig cc" : cc;
-	if (opts.lto === "") {
-		if (opts.mode === MODE_DANGER && ltoDefaultOn(cc, opts.targetOs)) {
+	if (opts.lto == "") {
+		if (opts.mode == MODE_DANGER && ltoDefaultOn(cc, opts.targetOs)) {
 			opts.lto = "thin";
 		} else {
 			opts.lto = "off";
-			if (opts.mode === MODE_DANGER) {
+			if (opts.mode == MODE_DANGER) {
 				writeStderr(`note: --danger builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
 			}
 		}
 		return;
 	}
-	if (opts.lto !== "off" && ltoBroken(cc, opts.targetOs)) {
-		const mac = opts.targetOs === "darwin" || opts.targetOs === "macos";
+	if (opts.lto != "off" && ltoBroken(cc, opts.targetOs)) {
+		const mac = opts.targetOs == "darwin" || opts.targetOs == "macos";
 		const hint = mac ? "re-run with --cc=clang, or drop --lto" : "drop --lto";
 		writeStderr(`error: ${ccName} cannot link with LTO targeting ${opts.targetOs}.\n`);
 		writeStderr(`  → ${hint}.\n`);
@@ -456,8 +456,8 @@ export function resolveLto(opts: CliOptions): void {
 // Spelling is per-compiler: -flto=thin is an LLVM spelling; GNU gcc calls its
 // parallel variant -flto=auto and rejects "thin" outright.
 export function ltoFlags(lto: string, cc: string): string {
-	if (lto === "thin") return isGnuGcc(cc) ? " -flto=auto" : " -flto=thin";
-	if (lto === "full") return " -flto";
+	if (lto == "thin") return isGnuGcc(cc) ? " -flto=auto" : " -flto=thin";
+	if (lto == "full") return " -flto";
 	return "";
 }
 
@@ -465,7 +465,7 @@ export function ltoFlags(lto: string, cc: string): string {
 
 // Append a flag to a space-separated flag string. No-op if flag is empty.
 export function appendFlag(base: string, flag: string): string {
-	if (flag === "") return base;
+	if (flag == "") return base;
 	if (base.length > 0) return `${base} ${flag}`;
 	return flag;
 }
@@ -473,7 +473,7 @@ export function appendFlag(base: string, flag: string): string {
 // Build compile-phase flags from CLI options (sanitize + passC + cross-compile target).
 // Is this a cross-compilation using zig cc?
 function isCrossZig(opts: CliOptions): boolean {
-	return opts.targetOs !== platform && opts.ccBinary === "" && checkZigCC();
+	return opts.targetOs != platform && opts.ccBinary == "" && checkZigCC();
 }
 
 export function cliCompileFlags(opts: CliOptions): string {
@@ -483,7 +483,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// different ABI the Solana VM will not run. `sbpfv3-solana-solana` is the
 	// current network target (platform-tools >= v1.53 — earlier releases shipped
 	// the name with a different LLVM definition; see the platform-tools README).
-	if (opts.targetOs === "solana") {
+	if (opts.targetOs == "solana") {
 		flags = appendFlag(flags, `-target ${SBF_TARGET}`);
 		flags = appendFlag(flags, "-fno-builtin");
 		flags = appendFlag(flags, "-fPIC");
@@ -491,20 +491,20 @@ export function cliCompileFlags(opts: CliOptions): string {
 		// the program does not reach.
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		const rtDir = resolveRuntimeDir();
-		if (rtDir !== "") flags = appendFlag(flags, `-isystem ${rtDir}/runtime/freestanding`);
-		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+		if (rtDir != "") flags = appendFlag(flags, `-isystem ${rtDir}/runtime/freestanding`);
+		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
 	// Emscripten (browser WASM): emcc handles everything
-	if (opts.targetOs === "emcc") {
-		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+	if (opts.targetOs == "emcc") {
+		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
 	// WASM32-WASI: zig cc handles sysroot + libc automatically
-	if (opts.targetOs === "wasm") {
+	if (opts.targetOs == "wasm") {
 		flags = appendFlag(flags, "-target wasm32-wasi");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
-		if (opts.passC !== "") flags = appendFlag(flags, opts.passC);
+		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
 	// Cross-compilation target triple
@@ -512,20 +512,20 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// clang/gcc: --target=cpu-vendor-os-abi
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
-	if ((opts.targetOs !== platform && opts.targetOs !== "bare") || opts.cpuTarget !== "") {
+	if ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "") {
 		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
 		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
-		if (ct !== "") flags = appendFlag(flags, ct);
+		if (ct != "") flags = appendFlag(flags, ct);
 	}
 	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
-	if (opts.targetOs === "linux") {
+	if (opts.targetOs == "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.targetOs === "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
-	if (opts.gcMode === "orc") flags = appendFlag(flags, "-DMSGC_ORC");
-	if (opts.sanitize !== "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
+	if (opts.gcMode == "orc") flags = appendFlag(flags, "-DMSGC_ORC");
+	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
@@ -534,7 +534,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// link enables the parallel ThinLTO backend. opts.lto is final here:
 	// resolveLto ran right after resolveCC.
 	flags = appendFlag(flags, ltoFlags(opts.lto, getCompilerName(opts.ccCompiler, opts.ccBinary)));
-	if (opts.isHcr || opts.appMode === "lib" || opts.appMode === "staticlib") flags = appendFlag(flags, "-fPIC");
+	if (opts.isHcr || opts.appMode == "lib" || opts.appMode == "staticlib") flags = appendFlag(flags, "-fPIC");
 	flags = appendFlag(flags, opts.passC);
 	return flags;
 }
@@ -548,15 +548,15 @@ export function cliCompileFlags(opts: CliOptions): string {
 export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean = false): string {
 	// Solana: linkSolana drives ld.lld with its own flag set (linker script,
 	// entry symbol, gc-sections) — none of the cc-driver flags apply.
-	if (opts.targetOs === "solana") return appendFlag(base, opts.passL);
+	if (opts.targetOs == "solana") return appendFlag(base, opts.passL);
 	// Emscripten: emcc links to .js + .wasm bundle
-	if (opts.targetOs === "emcc") {
+	if (opts.targetOs == "emcc") {
 		let eflags = appendFlag(base, "-sWASM=1 -sALLOW_MEMORY_GROWTH=1");
 		eflags = appendFlag(eflags, opts.passL);
 		return eflags;
 	}
 	// WASM: zig cc links with -target wasm32-wasi, strip dead sections + debug info
-	if (opts.targetOs === "wasm") {
+	if (opts.targetOs == "wasm") {
 		let wflags = appendFlag(base, "-target wasm32-wasi");
 		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
 		wflags = appendFlag(wflags, opts.passL);
@@ -565,18 +565,18 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");
-	if (!forceExe && (opts.isHcr || opts.appMode === "lib")) {
+	if (!forceExe && (opts.isHcr || opts.appMode == "lib")) {
 		flags = appendFlag(flags, "-shared");
 	} else {
-		if (opts.targetOs === "linux") {
+		if (opts.targetOs == "linux") {
 			flags = appendFlag(flags, "-Wl,--gc-sections");
 			flags = appendFlag(flags, "-lpthread");
-		} else if (opts.targetOs === "windows") {
+		} else if (opts.targetOs == "windows") {
 			flags = appendFlag(flags, "-Wl,--gc-sections");
 			flags = appendFlag(flags, "-lws2_32");
 			flags = appendFlag(flags, "-lmswsock");
 			flags = appendFlag(flags, "-lbcrypt");
-		} else if (opts.targetOs === "darwin" || opts.targetOs === "macos") {
+		} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
 			flags = appendFlag(flags, "-Wl,-dead_strip");
 		}
 	}
@@ -602,12 +602,12 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
-	if (rtDir !== "") {
+	if (rtDir != "") {
 		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
 	cmd = `${cmd} ${cFile} -o ${outBinary} -lm`;
-	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
+	if (extraFlags != "") cmd = `${cmd} ${extraFlags}`;
 	return cmd;
 }
 
@@ -631,13 +631,13 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 function shellUnquote(tok: string): string {
 	let hasQuote = false;
 	for (let i = 0; i < tok.length; i++) {
-		if (tok.charAt(i) === "\"") { hasQuote = true; break; }
+		if (tok.charAt(i) == "\"") { hasQuote = true; break; }
 	}
 	if (!hasQuote) return tok;
 	let out = "";
 	for (let i = 0; i < tok.length; i++) {
 		const c = tok.charAt(i);
-		if (c === "\\") {
+		if (c == "\\") {
 			// Backslash escapes the next char (incl. a quote) — keep both.
 			if (i + 1 < tok.length) {
 				out = out + tok.charAt(i) + tok.charAt(i + 1);
@@ -647,7 +647,7 @@ function shellUnquote(tok: string): string {
 			}
 			continue;
 		}
-		if (c === "\"") continue;
+		if (c == "\"") continue;
 		out = out + c;
 	}
 	return out;
@@ -656,11 +656,11 @@ function shellUnquote(tok: string): string {
 function runCc(cmd: string): Result<string, ProcessError> {
 	const parts: string[] = [];
 	for (const raw of cmd.split(" ")) {
-		if (raw === "") continue;
+		if (raw == "") continue;
 		const tok = shellUnquote(raw);
-		if (tok !== "") parts.push(tok);
+		if (tok != "") parts.push(tok);
 	}
-	if (parts.length === 0) return Result.err(spawnFailed(cmd, "empty command"));
+	if (parts.length == 0) return Result.err(spawnFailed(cmd, "empty command"));
 	const rest: string[] = [];
 	for (let i = 1; i < parts.length; i++) {
 		rest.push(parts[i]);
@@ -689,7 +689,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
-	if (rtDir !== "") {
+	if (rtDir != "") {
 		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
@@ -699,11 +699,11 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	// object or hits a missing file (the pre-fix direct -o raced readers).
 	const tmp = `${oFile}.tmp.${performance.now()}`;
 	cmd = `${cmd} -c ${cFile} -o ${tmp}`;
-	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
+	if (extraFlags != "") cmd = `${cmd} ${extraFlags}`;
 	const r = runCc(cmd);
 	if (!r.ok) {
 		remove(tmp);
-		if (env.get("MSC_DEBUG_CC") !== "") {
+		if (env.get("MSC_DEBUG_CC") != "") {
 			console.log(`[cc-fail] len=${cmd.length} kind=${r.error.kind} exit=${r.error.exitCode} msg=${r.error.message}`);
 			console.log(`[cc-fail] ${cmd}`);
 		}
@@ -738,8 +738,8 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 	// builds keep the existing C-driver behavior (no behavior change).
 	const compiler = _hasCppCompile ? toCppCompiler(baseCompiler) : baseCompiler;
 	const rtDir = resolveRuntime();
-	const rtFlag = rtDir !== "" ? ` -iquote${dirname(dirname(rtDir))}` : "";
-	const bulk = extraFlags !== "" ? `${oFileList} ${extraFlags}` : oFileList;
+	const rtFlag = rtDir != "" ? ` -iquote${dirname(dirname(rtDir))}` : "";
+	const bulk = extraFlags != "" ? `${oFileList} ${extraFlags}` : oFileList;
 	const cmd = `${compiler}${rtFlag} ${bulk} -o ${outBinary} -lm`;
 
 	let r: Result<string, ProcessError>;

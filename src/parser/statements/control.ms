@@ -16,7 +16,7 @@ type NodeResult = Result<Node, string>;
 // if (x) doSomething(); — wraps single stmt in BlockStmt for uniform downstream handling
 
 function parseBodyOrStmt(state: ParserState): NodeResult {
-	if (current(state).kind === TokenKind.LBrace) {
+	if (current(state).kind == TokenKind.LBrace) {
 		return callBlockParser(state);
 	}
 	const tok = current(state);
@@ -30,22 +30,22 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
 	advance(state);
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'if' at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const condition = try callExprParser(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after if condition at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Else) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
 		advance(state);
-		if (current(state).kind === TokenKind.If) {
+		if (current(state).kind == TokenKind.If) {
 			return Result.ok(createNode(NodeKind.IfStmt, {
 				condition,
 				consequent,
@@ -73,13 +73,13 @@ export function parseIfStmt(state: ParserState): NodeResult {
 export function parseWhileStmt(state: ParserState): NodeResult {
 	const whileToken = current(state);
 	advance(state);
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'while' at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const condition = try callExprParser(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after while condition at line ${current(state).line}`);
 	}
 
@@ -99,30 +99,30 @@ export function parseWhileStmt(state: ParserState): NodeResult {
 export function parseForStmt(state: ParserState): NodeResult {
 	const forToken = current(state);
 	advance(state);
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'for' at line ${current(state).line}`);
 	}
 
 	advance(state);
 	// Check for for-of: for (const/let x of expr) or for (const/let { } of expr)
 	const bindingToken = current(state);
-	if (bindingToken.kind === TokenKind.Const || bindingToken.kind === TokenKind.Let || bindingToken.kind === TokenKind.Var) {
-		const forIsConst = bindingToken.kind === TokenKind.Const;
+	if (bindingToken.kind == TokenKind.Const || bindingToken.kind == TokenKind.Let || bindingToken.kind == TokenKind.Var) {
+		const forIsConst = bindingToken.kind == TokenKind.Const;
 		advance(state);
 
 		// Destructured for-of: for (const [a, b] of items) or for (const { a, b } of items)
-		if (current(state).kind === TokenKind.LBracket || current(state).kind === TokenKind.LBrace) {
+		if (current(state).kind == TokenKind.LBracket || current(state).kind == TokenKind.LBrace) {
 			let pattern: Node = null as unknown as Node;
-			if (current(state).kind === TokenKind.LBracket) {
+			if (current(state).kind == TokenKind.LBracket) {
 				pattern = try parseArrayPattern(state);
 			} else {
 				pattern = try parseObjectPattern(state);
 			}
 			// Now expect 'of' or 'in'
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Of) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Of) {
 				advance(state); // consume 'of'
 				const iterable = try callExprParser(state);
-				if (current(state).kind !== TokenKind.RParen) {
+				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-of iterable at line ${current(state).line}`);
 				}
 				advance(state);
@@ -136,10 +136,10 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfLabel: "",
 				}, forToken));
 			}
-			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.In) {
 				advance(state); // consume 'in'
 				const obj = try callExprParser(state);
-				if (current(state).kind !== TokenKind.RParen) {
+				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-in object at line ${current(state).line}`);
 				}
 				advance(state);
@@ -158,12 +158,12 @@ export function parseForStmt(state: ParserState): NodeResult {
 		if (isIdentLike(nameToken)) {
 			// Peek ahead: is this "name of" (for-of), "name in" (for-in), or "name =" (C-style for)?
 			const afterName = state.position + 1;
-			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.Of) {
+			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.Of) {
 				// for-of loop
 				advance(state); // consume name
 				advance(state); // consume 'of'
 				const iterable = try callExprParser(state);
-				if (current(state).kind !== TokenKind.RParen) {
+				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-of iterable at line ${current(state).line}`);
 				}
 
@@ -178,12 +178,12 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfLabel: "",
 				}, forToken));
 			}
-			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {
+			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.In) {
 				// for-in loop
 				advance(state); // consume name
 				advance(state); // consume 'in'
 				const obj = try callExprParser(state);
-				if (current(state).kind !== TokenKind.RParen) {
+				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-in object at line ${current(state).line}`);
 				}
 
@@ -208,7 +208,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		// Optional type annotation
 		skipOptionalType(state);
 
-		if (current(state).kind !== TokenKind.Assign) {
+		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' in for init at line ${current(state).line}`);
 		}
 
@@ -220,19 +220,19 @@ export function parseForStmt(state: ParserState): NodeResult {
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
-		if (current(state).kind !== TokenKind.Semicolon) {
+		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 		}
 
 		advance(state);
 		const cond = try callExprParser(state);
-		if (current(state).kind !== TokenKind.Semicolon) {
+		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for condition at line ${current(state).line}`);
 		}
 
 		advance(state);
 		const update = try callExprParser(state);
-		if (current(state).kind !== TokenKind.RParen) {
+		if (current(state).kind != TokenKind.RParen) {
 			return Result.err(`Expected ')' after for clauses at line ${current(state).line}`);
 		}
 
@@ -249,19 +249,19 @@ export function parseForStmt(state: ParserState): NodeResult {
 	// C-style for with expression init: for (i = 0; ...)
 	const exprInit = try callExprParser(state);
 	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, forToken);
-	if (current(state).kind !== TokenKind.Semicolon) {
+	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const exprCond = try callExprParser(state);
-	if (current(state).kind !== TokenKind.Semicolon) {
+	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for condition at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const exprUpdate = try callExprParser(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after for clauses at line ${current(state).line}`);
 	}
 
@@ -299,8 +299,8 @@ export function parseReturnStmt(state: ParserState): NodeResult {
 	const retToken = current(state);
 	advance(state);
 	// Bare return (no expression): return; or return at end of block
-	if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.RBrace)) {
-		if (current(state).kind === TokenKind.Semicolon) {
+	if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.RBrace)) {
+		if (current(state).kind == TokenKind.Semicolon) {
 			consumeSemicolon(state);
 		}
 		return Result.ok(createNode(NodeKind.ReturnStmt, { argument: null as unknown as Node }, retToken));
@@ -318,18 +318,18 @@ export function parseDoWhileStmt(state: ParserState): NodeResult {
 	advance(state); // consume 'do'
 	const body = try callBlockParser(state);
 
-	if (isAtEnd(state) || current(state).kind !== TokenKind.While) {
+	if (isAtEnd(state) || current(state).kind != TokenKind.While) {
 		return Result.err(`Expected 'while' after 'do' body at line ${doToken.line}`);
 	}
 
 	advance(state); // consume 'while'
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'while' in do-while at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const condition = try callExprParser(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after do-while condition at line ${current(state).line}`);
 	}
 
@@ -351,29 +351,29 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 	const switchToken = current(state);
 	advance(state); // consume 'switch'
 
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'switch' at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const disc = try callExprParser(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after switch discriminant at line ${current(state).line}`);
 	}
 
 	advance(state);
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' to start switch body at line ${current(state).line}`);
 	}
 
 	advance(state);
 	const cases: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const caseNode = try parseSwitchCase(state);
 		cases.push(caseNode);
 	}
 
-	if (current(state).kind === TokenKind.RBrace) {
+	if (current(state).kind == TokenKind.RBrace) {
 		advance(state);
 	}
 
@@ -387,9 +387,9 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 function parseSwitchCase(state: ParserState): NodeResult {
 	const caseToken = current(state);
 
-	if (caseToken.kind === TokenKind.Default) {
+	if (caseToken.kind == TokenKind.Default) {
 		advance(state); // consume 'default'
-		if (current(state).kind === TokenKind.Colon) {
+		if (current(state).kind == TokenKind.Colon) {
 			advance(state);
 		}
 		const stmts = try parseCaseBody(state);
@@ -400,7 +400,7 @@ function parseSwitchCase(state: ParserState): NodeResult {
 		}, caseToken));
 	}
 
-	if (caseToken.kind !== TokenKind.Case) {
+	if (caseToken.kind != TokenKind.Case) {
 		return Result.err(`Expected 'case' or 'default' in switch at line ${caseToken.line}`);
 	}
 
@@ -408,7 +408,7 @@ function parseSwitchCase(state: ParserState): NodeResult {
 	const tests: Node[] = [];
 	const firstTest = try callExprParser(state);
 	tests.push(firstTest);
-	if (current(state).kind === TokenKind.Colon) {
+	if (current(state).kind == TokenKind.Colon) {
 		advance(state);
 	}
 
@@ -425,10 +425,10 @@ type NodesResult = Result<Node[], string>;
 function parseCaseBody(state: ParserState): NodesResult {
 	const stmts: Node[] = [];
 	while (!isAtEnd(state) &&
-		current(state).kind !== TokenKind.Case &&
-		current(state).kind !== TokenKind.Default &&
-		current(state).kind !== TokenKind.RBrace) {
-		if (current(state).kind === TokenKind.Semicolon) {
+		current(state).kind != TokenKind.Case &&
+		current(state).kind != TokenKind.Default &&
+		current(state).kind != TokenKind.RBrace) {
+		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
 		}
@@ -446,7 +446,7 @@ function parseCaseBody(state: ParserState): NodesResult {
 export function parseDeferStmt(state: ParserState): NodeResult {
 	const deferToken = current(state);
 	advance(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const body = try callBlockParser(state);
 		return Result.ok(createNode(NodeKind.DeferStmt, { deferExpr: body }, deferToken));
 	}
@@ -462,13 +462,13 @@ export function parseUnreachableStmt(state: ParserState): NodeResult {
 	const unreachableToken = current(state);
 	advance(state);
 	let msg = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
 		advance(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.String) {
 			msg = current(state).value;
 			advance(state);
 		}
-		if (!isAtEnd(state) && current(state).kind === TokenKind.RParen) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.RParen) {
 			advance(state);
 		}
 	}
@@ -483,7 +483,7 @@ export function parseTestDecl(state: ParserState): NodeResult {
 	const testToken = current(state);
 	advance(state); // consume 'test'
 
-	if (isAtEnd(state) || current(state).kind !== TokenKind.String) {
+	if (isAtEnd(state) || current(state).kind != TokenKind.String) {
 		return Result.err(`Expected string literal after 'test' at line ${testToken.line}`);
 	}
 	const name = current(state).value;
@@ -519,10 +519,10 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 	// A string literal takes the static fast path; any other expression is evaluated at runtime.
 	let message = "";
 	let messageExpr: Node | null = null;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) {
 		advance(state); // consume ','
 		const msgNode = try callExprParser(state);
-		if (msgNode.kind === NodeKind.StringLiteral) {
+		if (msgNode.kind == NodeKind.StringLiteral) {
 			message = (msgNode.data as StringLiteralData).value;
 		} else {
 			messageExpr = msgNode;
@@ -564,7 +564,7 @@ test "switch multi case" { assert programOk("switch (x) { case 1: a; break; case
 
 test "switch return" { assert programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }"); }
 // For-in
-test "for-in const" { assert stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt; }
+test "for-in const" { assert stmtKind("for (const key in obj) {}") == NodeKind.ForInStmt; }
 
 test "for-in let" { assert programOk("for (let k in obj) { console.log(k); }"); }
 
@@ -586,7 +586,7 @@ test "test decl basic" { assert programOk("test \"basic\" { const x = 1; }"); }
 
 test "test decl with assert" { assert programOk("test \"math\" { assert 1 === 1; }"); }
 
-test "test is TestDecl" { assert stmtKind("test \"x\" { }") === NodeKind.TestDecl; }
+test "test is TestDecl" { assert stmtKind("test \"x\" { }") == NodeKind.TestDecl; }
 
 test "test no string rejects" { assert !programOk("test { }"); }
 
@@ -601,7 +601,7 @@ test "assert stmt basic" { assert programOk("assert x;"); }
 
 test "assert stmt binary" { assert programOk("assert a === b;"); }
 
-test "assert stmt kind" { assert stmtKind("assert x;") === NodeKind.AssertStmt; }
+test "assert stmt kind" { assert stmtKind("assert x;") == NodeKind.AssertStmt; }
 
 test "assert stmt member" { assert programOk("assert obj.prop;"); }
 
@@ -614,7 +614,7 @@ test "assert stmt message parsed" {
 	assert pr.ok;
 	const pd = pr.value.data as ProgramData;
 	const d = pd.programStmts[0].data as AssertStmtData;
-	assert d.assertMessage === "hello";
+	assert d.assertMessage == "hello";
 }
 
 test "assert stmt no message" {
@@ -622,5 +622,5 @@ test "assert stmt no message" {
 	assert pr.ok;
 	const pd = pr.value.data as ProgramData;
 	const d = pd.programStmts[0].data as AssertStmtData;
-	assert d.assertMessage === "";
+	assert d.assertMessage == "";
 }

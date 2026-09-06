@@ -61,7 +61,7 @@ export function compileToC(source: string): CompileResult {
 	const preludeCtx = getPreludeContext();
 
 	const mod = findModule(graph, modPath);
-	if (mod === null) return Result.err("module not found");
+	if (mod == null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
 	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
@@ -103,7 +103,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	// real filesystem (entries win first, so the in-memory entry still shadows).
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
@@ -111,7 +111,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const preludeCtx = getPreludeContext();
 
 	const mod = findModule(graph, modPath);
-	if (mod === null) return Result.err("module not found");
+	if (mod == null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
 	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
@@ -151,7 +151,7 @@ export function compileToJS(source: string): CompileResult {
 	const preludeCtx = getPreludeContext();
 
 	const mod = findModule(graph, modPath);
-	if (mod === null) return Result.err("module not found");
+	if (mod == null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
 	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
@@ -173,7 +173,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	const provider = createMapProvider(entries);
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.JS, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
@@ -181,7 +181,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	const preludeCtx = getPreludeContext();
 
 	const mod = findModule(graph, modPath);
-	if (mod === null) return Result.err("module not found");
+	if (mod == null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
 	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
@@ -230,7 +230,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const monoed_paths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
@@ -245,7 +245,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	let combined = "";
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
@@ -278,7 +278,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 
 function isEntryPath(entries: MapEntry[], modPath: string): boolean {
 	for (const e of entries) {
-		if (e.entryPath === modPath) return true;
+		if (e.entryPath == modPath) return true;
 	}
 	return false;
 }
@@ -298,7 +298,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const provider = createMapProvider(canonEntries);
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
 	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
 	if (graph.errors.length > 0) {
@@ -317,7 +317,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	for (const modPath of graph.loadOrder) {
 		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
@@ -332,7 +332,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	for (const modPath of graph.loadOrder) {
 		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
@@ -400,9 +400,9 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
-		if (entryFilter !== null && !isEntryPath(canonEntries, modPath)) continue;
+		if (entryFilter != null && !isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
@@ -432,16 +432,16 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 
 	const pendingInsts = drainPendingInstances();
 	for (const instNode of pendingInsts) {
-		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
 		let owner = "";
-		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
 		let targetIdx: int32 = -1;
 		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] === owner) { targetIdx = pi; }
+			if (unitPaths[pi] == owner) { targetIdx = pi; }
 		}
 		if (targetIdx < 0) { targetIdx = unitPaths.length - 1; }
 		if (targetIdx >= 0) {
@@ -469,7 +469,7 @@ export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string
 	const provider = createMapProvider(canonEntries);
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.JS, stdPath);
 	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
 	if (graph.errors.length > 0) {

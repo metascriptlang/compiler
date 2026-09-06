@@ -21,21 +21,21 @@ const API_BASE = "https://" + REGISTRY_HOST;
 function credentialsPath(): string {
 	let home = env.get("HOME");
 	// Windows fallback — HOME isn't set by default there.
-	if (home === "") home = env.get("USERPROFILE");
-	if (home === "") return "";
+	if (home == "") home = env.get("USERPROFILE");
+	if (home == "") return "";
 	return join(join(home, ".metascript"), "credentials");
 }
 
 export function loadToken(): string {
 	const path = credentialsPath();
-	if (path === "" || !exists(path)) return "";
+	if (path == "" || !exists(path)) return "";
 	const content = try readFile(path) catch "";
 	return content.trim();
 }
 
 export function saveToken(token: string): boolean {
 	const path = credentialsPath();
-	if (path === "") return false;
+	if (path == "") return false;
 	const result = writeFile(path, token + "\n");
 	if (!result.ok) return false;
 	// Tighten perms to 0600 (owner rw only) — 384 decimal.
@@ -47,7 +47,7 @@ export function saveToken(token: string): boolean {
 
 export function deleteToken(): boolean {
 	const path = credentialsPath();
-	if (path === "" || !exists(path)) return true;
+	if (path == "" || !exists(path)) return true;
 	const result = writeFile(path, "");
 	return result.ok;
 }
@@ -58,16 +58,16 @@ function parseUrlEncoded(response: string, key: string): string {
 	while (pos < response.length) {
 		// Find next &
 		let end = pos;
-		while (end < response.length && response.charAt(end) !== "&") end = end + 1;
+		while (end < response.length && response.charAt(end) != "&") end = end + 1;
 
 		const pair = response.slice(pos, end);
 		// Find = in this pair
 		let eq = 0;
-		while (eq < pair.length && pair.charAt(eq) !== "=") eq = eq + 1;
+		while (eq < pair.length && pair.charAt(eq) != "=") eq = eq + 1;
 		if (eq < pair.length) {
 			const k = pair.slice(0, eq);
 			const v = pair.slice(eq + 1, pair.length);
-			if (k === key) return v;
+			if (k == key) return v;
 		}
 		pos = end + 1;
 	}
@@ -79,13 +79,13 @@ function percentDecode(s: string): string {
 	let result = "";
 	let i = 0;
 	while (i < s.length) {
-		if (s.charAt(i) === "%" && i + 2 < s.length) {
+		if (s.charAt(i) == "%" && i + 2 < s.length) {
 			const hi = s.charAt(i + 1);
 			const lo = s.charAt(i + 2);
-			if (hi === "3" && lo === "A") { result = result + ":"; i = i + 3; }
-			else if (hi === "2" && lo === "F") { result = result + "/"; i = i + 3; }
-			else if (hi === "3" && lo === "D") { result = result + "="; i = i + 3; }
-			else if (hi === "2" && lo === "6") { result = result + "&"; i = i + 3; }
+			if (hi == "3" && lo == "A") { result = result + ":"; i = i + 3; }
+			else if (hi == "2" && lo == "F") { result = result + "/"; i = i + 3; }
+			else if (hi == "3" && lo == "D") { result = result + "="; i = i + 3; }
+			else if (hi == "2" && lo == "6") { result = result + "&"; i = i + 3; }
 			else { result = result + s.charAt(i); i = i + 1; }
 		} else {
 			result = result + s.charAt(i);
@@ -121,7 +121,7 @@ function sleepMs(ms: number): void {
 export function cmdLogin(projectRoot: string): boolean {
 	const _pr = projectRoot;
 	const existing = loadToken();
-	if (existing !== "") {
+	if (existing != "") {
 		console.log("already logged in (token at ~/.metascript/credentials)");
 		console.log("run `msc logout` first to re-authenticate");
 		return true;
@@ -141,7 +141,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	}
 
 	const deviceResp = deviceResult.value;
-	if (deviceResp.status !== 200) {
+	if (deviceResp.status != 200) {
 		console.log(`error: GitHub returned HTTP ${deviceResp.status}`);
 		return false;
 	}
@@ -151,9 +151,9 @@ export function cmdLogin(projectRoot: string): boolean {
 	const verificationUri = percentDecode(parseUrlEncoded(deviceResp.body, "verification_uri"));
 	let interval = 5;
 	const intervalStr = parseUrlEncoded(deviceResp.body, "interval");
-	if (intervalStr !== "") interval = 8; // conservative default
+	if (intervalStr != "") interval = 8; // conservative default
 
-	if (deviceCode === "" || userCode === "") {
+	if (deviceCode == "" || userCode == "") {
 		console.log("error: invalid response from GitHub");
 		console.log(deviceResp.body);
 		return false;
@@ -162,7 +162,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	// Step 2: Display instructions
 	console.log("");
 	console.log("1. Open this URL in your browser:");
-	const uri = verificationUri !== "" ? verificationUri : "https://github.com/login/device";
+	const uri = verificationUri != "" ? verificationUri : "https://github.com/login/device";
 	console.log(`   ${uri}`);
 	console.log("");
 	console.log("2. Enter this code:");
@@ -175,24 +175,24 @@ export function cmdLogin(projectRoot: string): boolean {
 	const maxAttempts = 60;
 	let githubToken = "";
 
-	while (attempts < maxAttempts && githubToken === "") {
+	while (attempts < maxAttempts && githubToken == "") {
 		sleepMs(interval * 1000);
 
 		const pollBody = "client_id=" + GITHUB_CLIENT_ID + "&device_code=" + deviceCode + "&grant_type=urn:ietf:params:oauth:grant-type:device_code";
 		const pollResult = httpsPost("github.com", "/login/oauth/access_token", pollBody, "application/x-www-form-urlencoded");
 
-		if (pollResult.ok && pollResult.value.status === 200) {
+		if (pollResult.ok && pollResult.value.status == 200) {
 			const body = pollResult.value.body;
 			const token = parseUrlEncoded(body, "access_token");
-			if (token !== "") {
+			if (token != "") {
 				githubToken = token;
 			} else {
 				const err = parseUrlEncoded(body, "error");
-				if (err === "slow_down") { interval = interval + 5; }
-				else if (err === "expired_token") {
+				if (err == "slow_down") { interval = interval + 5; }
+				else if (err == "expired_token") {
 					console.log("\nerror: device code expired — please try again");
 					return false;
-				} else if (err === "access_denied") {
+				} else if (err == "access_denied") {
 					console.log("\nerror: authorization denied");
 					return false;
 				}
@@ -202,7 +202,7 @@ export function cmdLogin(projectRoot: string): boolean {
 		attempts = attempts + 1;
 	}
 
-	if (githubToken === "") {
+	if (githubToken == "") {
 		console.log("\nerror: timed out waiting for authorization");
 		return false;
 	}
@@ -218,7 +218,7 @@ export function cmdLogin(projectRoot: string): boolean {
 		return false;
 	}
 
-	if (authResult.value.status !== 200) {
+	if (authResult.value.status != 200) {
 		console.log(`error: registry returned HTTP ${authResult.value.status}`);
 		return false;
 	}
@@ -226,7 +226,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	const registryToken = extractJsonField(authResult.value.body, "token");
 	const username = extractJsonField(authResult.value.body, "username");
 
-	if (registryToken === "") {
+	if (registryToken == "") {
 		console.log("error: invalid response from registry");
 		return false;
 	}
@@ -238,7 +238,7 @@ export function cmdLogin(projectRoot: string): boolean {
 		return false;
 	}
 
-	const user = username !== "" ? username : "unknown";
+	const user = username != "" ? username : "unknown";
 	console.log(`\nLogged in as @${user}`);
 	console.log("You can now publish packages with `msc publish`");
 	return true;
@@ -246,7 +246,7 @@ export function cmdLogin(projectRoot: string): boolean {
 
 export function cmdLogout(): boolean {
 	const existing = loadToken();
-	if (existing === "") {
+	if (existing == "") {
 		console.log("not logged in");
 		return true;
 	}
@@ -267,9 +267,9 @@ export function cmdLogout(): boolean {
 	});
 
 	let revoked = false;
-	if (meResult.ok && meResult.value.status === 200) {
+	if (meResult.ok && meResult.value.status == 200) {
 		const tokenId = extractJsonField(meResult.value.body, "tokenId");
-		if (tokenId !== "") {
+		if (tokenId != "") {
 			const delHeaders = createHeaders();
 			setHeader(delHeaders, "authorization", "Bearer " + existing);
 			const delResult = fetch(API_BASE + "/auth/tokens/" + tokenId, {
@@ -311,7 +311,7 @@ export function cmdLogout(): boolean {
 //   --json    Print the full user object instead of just the username.
 export function cmdWhoami(args: string[]): boolean {
 	const token = loadToken();
-	if (token === "") {
+	if (token == "") {
 		console.log("not logged in");
 		console.log("run `msc login` to authenticate");
 		return false;
@@ -320,7 +320,7 @@ export function cmdWhoami(args: string[]): boolean {
 	let jsonOutput = false;
 	let i = 0;
 	while (i < args.length) {
-		if (args[i] === "--json") jsonOutput = true;
+		if (args[i] == "--json") jsonOutput = true;
 		i = i + 1;
 	}
 
@@ -339,13 +339,13 @@ export function cmdWhoami(args: string[]): boolean {
 		return false;
 	}
 
-	if (result.value.status === 401) {
+	if (result.value.status == 401) {
 		console.log("error: token rejected by registry (expired or revoked)");
 		console.log("run `msc login` to re-authenticate");
 		return false;
 	}
 
-	if (result.value.status !== 200) {
+	if (result.value.status != 200) {
 		console.log("error: registry returned HTTP " + result.value.status.toString());
 		return false;
 	}
@@ -362,12 +362,12 @@ export function cmdWhoami(args: string[]): boolean {
 		let j = userStart;
 		while (j < body.length) {
 			const ch = body.charAt(j);
-			if (ch === "{") {
+			if (ch == "{") {
 				if (objStart < 0) objStart = j;
 				depth = depth + 1;
-			} else if (ch === "}") {
+			} else if (ch == "}") {
 				depth = depth - 1;
-				if (depth === 0) {
+				if (depth == 0) {
 					console.log(body.slice(objStart, j + 1));
 					return true;
 				}
@@ -379,7 +379,7 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 
 	const username = extractJsonField(body, "username");
-	if (username === "") {
+	if (username == "") {
 		console.log("error: unexpected response from registry");
 		return false;
 	}

@@ -26,7 +26,7 @@ function main7(): void {
 
 test "recursive-generic: no checker errors" {
 	const result = checkOnly(SRC_RECURSIVE);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "recursive-generic: global invariant — leakage exempted in template body, none outside" {

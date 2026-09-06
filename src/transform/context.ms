@@ -54,7 +54,7 @@ export function createNameSet(): NameSet {
 
 export function nameSetContains(ns: NameSet, name: string): boolean {
 	for (const n of ns.items) {
-		if (n === name) return true;
+		if (n == name) return true;
 	}
 	return false;
 }
@@ -86,7 +86,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 // Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
 export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
 	const name = freshTemp(ctx, prefix);
-	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : noneType(), false);
+	return makeSymbol(name, SymbolKind.Variable, t != null ? t : noneType(), false);
 }
 
 // Owned long-lived synthetic local. Must NOT be $-prefixed: the DRC injector
@@ -96,5 +96,5 @@ export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | n
 	const n = ctx.tempCounter;
 	ctx.tempCounter += 1;
 	const name = "__" + prefix + "_" + n.toString();
-	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : noneType(), false);
+	return makeSymbol(name, SymbolKind.Variable, t != null ? t : noneType(), false);
 }

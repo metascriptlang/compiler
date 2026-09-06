@@ -75,15 +75,15 @@ export function raiserToInt(v: RaiserValue): number {
 }
 
 export function raiserToFloat(v: RaiserValue): number {
-	if (v.kind === RaiserValueKind.Float) return v.floatVal;
+	if (v.kind == RaiserValueKind.Float) return v.floatVal;
 	return v.intVal + 0.0;
 }
 
 export function raiserToBool(v: RaiserValue): boolean {
 	return match (v.kind) {
 		RaiserValueKind.Nil => false,
-		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal !== 0,
-		RaiserValueKind.Float => v.floatVal !== 0.0,
+		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
+		RaiserValueKind.Float => v.floatVal != 0.0,
 		RaiserValueKind.String => v.strVal.length > 0,
 		RaiserValueKind.Array | RaiserValueKind.Object => true,
 		_ => false,
@@ -91,18 +91,18 @@ export function raiserToBool(v: RaiserValue): boolean {
 }
 
 export function raiserIsNil(v: RaiserValue): boolean {
-	return v.kind === RaiserValueKind.Nil;
+	return v.kind == RaiserValueKind.Nil;
 }
 
 // --- Equality ---
 
 export function raiserEqual(a: RaiserValue, b: RaiserValue): boolean {
-	if (a.kind !== b.kind) return false;
+	if (a.kind != b.kind) return false;
 	return match (a.kind) {
 		RaiserValueKind.Nil => true,
-		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Array | RaiserValueKind.Object => a.intVal === b.intVal,
-		RaiserValueKind.Float => a.floatVal === b.floatVal,
-		RaiserValueKind.String => a.strVal === b.strVal,
+		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Array | RaiserValueKind.Object => a.intVal == b.intVal,
+		RaiserValueKind.Float => a.floatVal == b.floatVal,
+		RaiserValueKind.String => a.strVal == b.strVal,
 		_ => false,
 	};
 }
@@ -112,7 +112,7 @@ export function raiserEqual(a: RaiserValue, b: RaiserValue): boolean {
 export function raiserToString(v: RaiserValue): string {
 	return match (v.kind) {
 		RaiserValueKind.Nil => "nil",
-		RaiserValueKind.Bool => { if (v.intVal !== 0) { return "true"; } else { return "false"; } },
+		RaiserValueKind.Bool => { if (v.intVal != 0) { return "true"; } else { return "false"; } },
 		RaiserValueKind.Int => `${v.intVal}`,
 		RaiserValueKind.Float => `${v.floatVal}`,
 		RaiserValueKind.String => v.strVal,
@@ -125,29 +125,29 @@ export function raiserToString(v: RaiserValue): string {
 // --- Tests ---
 test "nil" {
 	const v = raiserNil();
-	assert v.kind === RaiserValueKind.Nil;
+	assert v.kind == RaiserValueKind.Nil;
 	assert raiserIsNil(v);
 	assert !raiserToBool(v);
 }
 
 test "bool true" {
 	const v = raiserBool(true);
-	assert v.kind === RaiserValueKind.Bool;
-	assert v.intVal === 1;
+	assert v.kind == RaiserValueKind.Bool;
+	assert v.intVal == 1;
 	assert raiserToBool(v);
 }
 
 test "bool false" {
 	const v = raiserBool(false);
-	assert v.kind === RaiserValueKind.Bool;
-	assert v.intVal === 0;
+	assert v.kind == RaiserValueKind.Bool;
+	assert v.intVal == 0;
 	assert !raiserToBool(v);
 }
 
 test "int" {
 	const v = raiserInt(42);
-	assert v.kind === RaiserValueKind.Int;
-	assert raiserToInt(v) === 42;
+	assert v.kind == RaiserValueKind.Int;
+	assert raiserToInt(v) == 42;
 	assert raiserToBool(v);
 }
 
@@ -158,13 +158,13 @@ test "int zero is falsy" {
 
 test "float" {
 	const v = raiserFloat(3.14);
-	assert v.kind === RaiserValueKind.Float;
-	assert v.floatVal === 3.14;
+	assert v.kind == RaiserValueKind.Float;
+	assert v.floatVal == 3.14;
 }
 
 test "int to float conversion" {
 	const v = raiserInt(5);
-	assert raiserToFloat(v) === 5.0;
+	assert raiserToFloat(v) == 5.0;
 }
 
 test "nil equals nil" { assert raiserEqual(raiserNil(), raiserNil()); }
@@ -183,15 +183,15 @@ test "bool equality" {
 	assert !raiserEqual(raiserBool(true), raiserBool(false));
 }
 
-test "nil" { assert raiserToString(raiserNil()) === "nil"; }
+test "nil" { assert raiserToString(raiserNil()) == "nil"; }
 
-test "true" { assert raiserToString(raiserBool(true)) === "true"; }
+test "true" { assert raiserToString(raiserBool(true)) == "true"; }
 
-test "false" { assert raiserToString(raiserBool(false)) === "false"; }
+test "false" { assert raiserToString(raiserBool(false)) == "false"; }
 
-test "int" { assert raiserToString(raiserInt(42)) === "42"; }
+test "int" { assert raiserToString(raiserInt(42)) == "42"; }
 
-test "array" { assert raiserToString(raiserArray(0)) === "[array]"; }
+test "array" { assert raiserToString(raiserArray(0)) == "[array]"; }
 
 // --- Array Heap ---
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
@@ -268,8 +268,8 @@ export function heapArraySetLen(heap: RaiserArrayHeap, handle: number, newLen: n
 test "alloc empty array" {
 	const heap = createArrayHeap();
 	const h = heapAllocArray(heap);
-	assert h === 0;
-	assert heapArrayLen(heap, h) === 0;
+	assert h == 0;
+	assert heapArrayLen(heap, h) == 0;
 }
 
 test "push and get" {
@@ -279,9 +279,9 @@ test "push and get" {
 	const v2 = raiserInt(20);
 	heapArrayPush(heap, h, v1);
 	heapArrayPush(heap, h, v2);
-	assert heapArrayLen(heap, h) === 2;
-	assert heapArrayGet(heap, h, 0).intVal === 10;
-	assert heapArrayGet(heap, h, 1).intVal === 20;
+	assert heapArrayLen(heap, h) == 2;
+	assert heapArrayGet(heap, h, 0).intVal == 10;
+	assert heapArrayGet(heap, h, 1).intVal == 20;
 }
 
 test "set element" {
@@ -291,7 +291,7 @@ test "set element" {
 	heapArrayPush(heap, h, v0);
 	const v42 = raiserInt(42);
 	heapArraySet(heap, h, 0, v42);
-	assert heapArrayGet(heap, h, 0).intVal === 42;
+	assert heapArrayGet(heap, h, 0).intVal == 42;
 }
 
 test "multiple arrays independent" {
@@ -302,14 +302,14 @@ test "multiple arrays independent" {
 	const v2 = raiserInt(2);
 	heapArrayPush(heap, h1, v1);
 	heapArrayPush(heap, h2, v2);
-	assert heapArrayGet(heap, h1, 0).intVal === 1;
-	assert heapArrayGet(heap, h2, 0).intVal === 2;
+	assert heapArrayGet(heap, h1, 0).intVal == 1;
+	assert heapArrayGet(heap, h2, 0).intVal == 2;
 }
 
 test "array value kind" {
 	const v = raiserArray(3);
-	assert v.kind === RaiserValueKind.Array;
-	assert v.intVal === 3;
+	assert v.kind == RaiserValueKind.Array;
+	assert v.intVal == 3;
 	assert raiserToBool(v);
 }
 
@@ -372,11 +372,11 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 	const h = heapAllocObject(heap);
 	heapObjectSetField(heap, h, "kind", raiserInt(5));
 	heapObjectSetField(heap, h, "left", raiserString("L"));
-	assert heapObjectFieldNameAt(heap, h, 0) === "kind";
-	assert heapObjectFieldNameAt(heap, h, 1) === "left";
-	assert heapObjectFieldValueAt(heap, h, 1).strVal === "L";
-	assert heapObjectFieldNameAt(heap, h, 2) === "";
-	assert heapObjectFieldValueAt(heap, h, 9).kind === RaiserValueKind.Nil;
+	assert heapObjectFieldNameAt(heap, h, 0) == "kind";
+	assert heapObjectFieldNameAt(heap, h, 1) == "left";
+	assert heapObjectFieldValueAt(heap, h, 1).strVal == "L";
+	assert heapObjectFieldNameAt(heap, h, 2) == "";
+	assert heapObjectFieldValueAt(heap, h, 9).kind == RaiserValueKind.Nil;
 }
 
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: number, index: number): RaiserValue {
@@ -388,7 +388,7 @@ export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: number, i
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name: string): RaiserValue {
 	const obj = heap.objects[handle];
 	for (const field of obj.fields) {
-		if (field.name === name) {
+		if (field.name == name) {
 			return field.value;
 		}
 	}
@@ -400,7 +400,7 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name:
 	const obj = heap.objects[handle];
 	// Check if field already exists
 	for (const field of obj.fields) {
-		if (field.name === name) {
+		if (field.name == name) {
 			// Update existing field (deep copy)
 			copyValueInto(field.value, val);
 			return;
@@ -417,19 +417,19 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name:
 // heaps are threaded through. Destroy is generic (the heap object is self-describing).
 
 export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
-	if (val.kind === RaiserValueKind.Array) {
+	if (val.kind == RaiserValueKind.Array) {
 		arrHeap.arrays[val.intVal].rc = arrHeap.arrays[val.intVal].rc + 1;
-	} else if (val.kind === RaiserValueKind.Object) {
+	} else if (val.kind == RaiserValueKind.Object) {
 		objHeap.objects[val.intVal].rc = objHeap.objects[val.intVal].rc + 1;
 	}
 }
 
 export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
-	if (val.kind === RaiserValueKind.Array) {
+	if (val.kind == RaiserValueKind.Array) {
 		const data = arrHeap.arrays[val.intVal];
 		data.rc = data.rc - 1;
 		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, val.intVal); }
-	} else if (val.kind === RaiserValueKind.Object) {
+	} else if (val.kind == RaiserValueKind.Object) {
 		const data = objHeap.objects[val.intVal];
 		data.rc = data.rc - 1;
 		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, val.intVal); }
@@ -482,9 +482,9 @@ export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dst
 }
 
 export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	if (val.kind === RaiserValueKind.Array) {
+	if (val.kind == RaiserValueKind.Array) {
 		for (let i = 0; i < map.arrSrc.length; i = i + 1) {
-			if (map.arrSrc[i] === val.intVal) return raiserArray(map.arrDst[i]);
+			if (map.arrSrc[i] == val.intVal) return raiserArray(map.arrDst[i]);
 		}
 		if (val.intVal < 0 || val.intVal >= srcArr.arrays.length) return raiserNil();
 		const dstHandle = heapAllocArray(dstArr);
@@ -498,9 +498,9 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		}
 		return raiserArray(dstHandle);
 	}
-	if (val.kind === RaiserValueKind.Object) {
+	if (val.kind == RaiserValueKind.Object) {
 		for (let i = 0; i < map.objSrc.length; i = i + 1) {
-			if (map.objSrc[i] === val.intVal) return raiserObject(map.objDst[i]);
+			if (map.objSrc[i] == val.intVal) return raiserObject(map.objDst[i]);
 		}
 		if (val.intVal < 0 || val.intVal >= srcObj.objects.length) return raiserNil();
 		const dstHandle = heapAllocObject(dstObj);
@@ -532,12 +532,12 @@ test "copyGraph materializes a nested graph in the destination heap" {
 	heapObjectSetField(sObj, outer, "tag", raiserString("t"));
 
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(outer));
-	assert copied.kind === RaiserValueKind.Object;
-	assert heapObjectGetString(dObj, copied.intVal, "tag") === "t";
+	assert copied.kind == RaiserValueKind.Object;
+	assert heapObjectGetString(dObj, copied.intVal, "tag") == "t";
 	const kids = heapObjectGetField(dObj, copied.intVal, "kids");
-	assert kids.kind === RaiserValueKind.Array;
-	assert heapArrayLen(dArr, kids.intVal) === 1;
-	assert heapArrayGet(dArr, kids.intVal, 0).intVal === 7;
+	assert kids.kind == RaiserValueKind.Array;
+	assert heapArrayLen(dArr, kids.intVal) == 1;
+	assert heapArrayGet(dArr, kids.intVal, 0).intVal == 7;
 }
 
 test "copyGraph leaves the source heap untouched by destination writes" {
@@ -549,8 +549,8 @@ test "copyGraph leaves the source heap untouched by destination writes" {
 	heapObjectSetField(sObj, src, "n", raiserInt(1));
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(src));
 	heapObjectSetField(dObj, copied.intVal, "n", raiserInt(99));
-	assert heapObjectGetInt(sObj, src, "n") === 1;
-	assert heapObjectGetInt(dObj, copied.intVal, "n") === 99;
+	assert heapObjectGetInt(sObj, src, "n") == 1;
+	assert heapObjectGetInt(dObj, copied.intVal, "n") == 99;
 }
 
 test "copyGraph preserves sharing instead of duplicating" {
@@ -567,8 +567,8 @@ test "copyGraph preserves sharing instead of duplicating" {
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(holder));
 	const a = heapArrayGet(dArr, copied.intVal, 0);
 	const b = heapArrayGet(dArr, copied.intVal, 1);
-	assert a.intVal === b.intVal;
-	assert dObj.objects.length === 1;
+	assert a.intVal == b.intVal;
+	assert dObj.objects.length == 1;
 }
 
 test "copyGraph terminates on a cycle" {
@@ -582,10 +582,10 @@ test "copyGraph terminates on a cycle" {
 	heapObjectSetField(sObj, b, "back", raiserObject(a));
 
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(a));
-	assert dObj.objects.length === 2;
+	assert dObj.objects.length == 2;
 	const next = heapObjectGetField(dObj, copied.intVal, "next");
 	const back = heapObjectGetField(dObj, next.intVal, "back");
-	assert back.intVal === copied.intVal;
+	assert back.intVal == copied.intVal;
 }
 
 test "copyGraph passes scalars and future handles through" {
@@ -593,13 +593,13 @@ test "copyGraph passes scalars and future handles through" {
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
-	assert copyGraph(sArr, sObj, dArr, dObj, raiserInt(3)).intVal === 3;
-	assert copyGraph(sArr, sObj, dArr, dObj, raiserString("s")).strVal === "s";
+	assert copyGraph(sArr, sObj, dArr, dObj, raiserInt(3)).intVal == 3;
+	assert copyGraph(sArr, sObj, dArr, dObj, raiserString("s")).strVal == "s";
 	const fut = copyGraph(sArr, sObj, dArr, dObj, raiserFuture(4));
-	assert fut.kind === RaiserValueKind.Future;
-	assert fut.intVal === 4;
-	assert dArr.arrays.length === 0;
-	assert dObj.objects.length === 0;
+	assert fut.kind == RaiserValueKind.Future;
+	assert fut.intVal == 4;
+	assert dArr.arrays.length == 0;
+	assert dObj.objects.length == 0;
 }
 
 test "copyGraph refcounts the destination edges" {
@@ -612,8 +612,8 @@ test "copyGraph refcounts the destination edges" {
 	heapArrayPush(sArr, parent, raiserArray(child));
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(parent));
 	const kid = heapArrayGet(dArr, copied.intVal, 0);
-	assert dArr.arrays[kid.intVal].rc === 1;
-	assert dArr.arrays[copied.intVal].rc === 0;
+	assert dArr.arrays[kid.intVal].rc == 1;
+	assert dArr.arrays[copied.intVal].rc == 0;
 }
 
 // --- ORC refcount tests ---
@@ -623,14 +623,14 @@ test "rc incref/decref frees at zero" {
 	const h = heapAllocArray(arr);
 	const v = raiserArray(h);
 	rcIncref(arr, obj, v);
-	assert arr.arrays[h].rc === 1;
+	assert arr.arrays[h].rc == 1;
 	rcIncref(arr, obj, v);
-	assert arr.arrays[h].rc === 2;
+	assert arr.arrays[h].rc == 2;
 	rcDecref(arr, obj, v);
-	assert arr.arrays[h].rc === 1;
+	assert arr.arrays[h].rc == 1;
 	rcDecref(arr, obj, v);
-	assert arr.freeList.length === 1;
-	assert arr.freeList[0] === h;
+	assert arr.freeList.length == 1;
+	assert arr.freeList[0] == h;
 }
 
 test "rc destroy decrefs children" {
@@ -643,9 +643,9 @@ test "rc destroy decrefs children" {
 	heapArrayPush(arr, parent, childVal);
 	const parentVal = raiserArray(parent);
 	rcIncref(arr, obj, parentVal);
-	assert arr.arrays[child].rc === 1;
+	assert arr.arrays[child].rc == 1;
 	rcDecref(arr, obj, parentVal);
-	assert arr.freeList.length === 2;
+	assert arr.freeList.length == 2;
 }
 
 test "alloc reuses free-list slot" {
@@ -656,8 +656,8 @@ test "alloc reuses free-list slot" {
 	rcIncref(arr, obj, v);
 	rcDecref(arr, obj, v);
 	const h2 = heapAllocArray(arr);
-	assert h2 === h1;
-	assert arr.freeList.length === 0;
+	assert h2 == h1;
+	assert arr.freeList.length == 0;
 }
 
 test "rc object destroy decrefs field refs" {
@@ -670,10 +670,10 @@ test "rc object destroy decrefs field refs" {
 	heapObjectSetField(obj, o, "kids", childVal);
 	const oVal = raiserObject(o);
 	rcIncref(arr, obj, oVal);
-	assert arr.arrays[childArr].rc === 1;
+	assert arr.arrays[childArr].rc == 1;
 	rcDecref(arr, obj, oVal);
-	assert obj.freeList.length === 1;
-	assert arr.freeList.length === 1;
+	assert obj.freeList.length == 1;
+	assert arr.freeList.length == 1;
 }
 
 // --- Object field convenience accessors ---
@@ -691,7 +691,7 @@ export function heapObjectGetInt(heap: RaiserObjectHeap, handle: number, field: 
 
 export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: number, field: string): number {
 	const val = heapObjectGetField(heap, handle, field);
-	if (val.kind === RaiserValueKind.Object) return val.intVal;
+	if (val.kind == RaiserValueKind.Object) return val.intVal;
 	return -1;
 }
 
@@ -710,8 +710,8 @@ export function clearObjectHeap(heap: RaiserObjectHeap): void {
 test "alloc empty object" {
 	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
-	assert h === 0;
-	assert heapObjectFieldCount(heap, h) === 0;
+	assert h == 0;
+	assert heapObjectFieldCount(heap, h) == 0;
 }
 
 test "set and get field" {
@@ -719,8 +719,8 @@ test "set and get field" {
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);
-	assert heapObjectFieldCount(heap, h) === 1;
-	assert heapObjectGetField(heap, h, "x").intVal === 42;
+	assert heapObjectFieldCount(heap, h) == 1;
+	assert heapObjectGetField(heap, h, "x").intVal == 42;
 }
 
 test "multiple fields" {
@@ -730,9 +730,9 @@ test "multiple fields" {
 	const v2 = raiserInt(20);
 	heapObjectSetField(heap, h, "x", v1);
 	heapObjectSetField(heap, h, "y", v2);
-	assert heapObjectFieldCount(heap, h) === 2;
-	assert heapObjectGetField(heap, h, "x").intVal === 10;
-	assert heapObjectGetField(heap, h, "y").intVal === 20;
+	assert heapObjectFieldCount(heap, h) == 2;
+	assert heapObjectGetField(heap, h, "x").intVal == 10;
+	assert heapObjectGetField(heap, h, "y").intVal == 20;
 }
 
 test "update existing field" {
@@ -742,21 +742,21 @@ test "update existing field" {
 	heapObjectSetField(heap, h, "x", v1);
 	const v2 = raiserInt(99);
 	heapObjectSetField(heap, h, "x", v2);
-	assert heapObjectFieldCount(heap, h) === 1;
-	assert heapObjectGetField(heap, h, "x").intVal === 99;
+	assert heapObjectFieldCount(heap, h) == 1;
+	assert heapObjectGetField(heap, h, "x").intVal == 99;
 }
 
 test "get missing field returns nil" {
 	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const val = heapObjectGetField(heap, h, "missing");
-	assert val.kind === RaiserValueKind.Nil;
+	assert val.kind == RaiserValueKind.Nil;
 }
 
 test "object value kind" {
 	const v = raiserObject(5);
-	assert v.kind === RaiserValueKind.Object;
-	assert v.intVal === 5;
+	assert v.kind == RaiserValueKind.Object;
+	assert v.intVal == 5;
 	assert raiserToBool(v);
 }
 
@@ -765,12 +765,12 @@ test "clearArrayHeap resets storage" {
 	const h = heapAllocArray(heap);
 	const v = raiserInt(1);
 	heapArrayPush(heap, h, v);
-	assert heap.arrays.length === 1;
+	assert heap.arrays.length == 1;
 	clearArrayHeap(heap);
-	assert heap.arrays.length === 0;
+	assert heap.arrays.length == 0;
 	// Re-allocate works after clear
 	const h2 = heapAllocArray(heap);
-	assert h2 === 0;
+	assert h2 == 0;
 }
 
 test "clearObjectHeap resets storage" {
@@ -778,10 +778,10 @@ test "clearObjectHeap resets storage" {
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);
-	assert heap.objects.length === 1;
+	assert heap.objects.length == 1;
 	clearObjectHeap(heap);
-	assert heap.objects.length === 0;
+	assert heap.objects.length == 0;
 	// Re-allocate works after clear
 	const h2 = heapAllocObject(heap);
-	assert h2 === 0;
+	assert h2 == 0;
 }

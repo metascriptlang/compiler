@@ -179,20 +179,20 @@ export function parseMethod(s: string): HttpMethod {
 
 // ===== Tests =====
 
-test "statusText 200" { assert statusText(200) === "OK"; }
-test "statusText 404" { assert statusText(404) === "Not Found"; }
-test "statusText 500" { assert statusText(500) === "Internal Server Error"; }
-test "statusText unknown" { assert statusText(999) === "Unknown"; }
+test "statusText 200" { assert statusText(200) == "OK"; }
+test "statusText 404" { assert statusText(404) == "Not Found"; }
+test "statusText 500" { assert statusText(500) == "Internal Server Error"; }
+test "statusText unknown" { assert statusText(999) == "Unknown"; }
 
-test "methodToString GET" { assert methodToString(HttpMethod.GET) === "GET"; }
-test "methodToString POST" { assert methodToString(HttpMethod.POST) === "POST"; }
-test "methodToString DELETE" { assert methodToString(HttpMethod.DELETE) === "DELETE"; }
-test "methodToString OPTIONS" { assert methodToString(HttpMethod.OPTIONS) === "OPTIONS"; }
+test "methodToString GET" { assert methodToString(HttpMethod.GET) == "GET"; }
+test "methodToString POST" { assert methodToString(HttpMethod.POST) == "POST"; }
+test "methodToString DELETE" { assert methodToString(HttpMethod.DELETE) == "DELETE"; }
+test "methodToString OPTIONS" { assert methodToString(HttpMethod.OPTIONS) == "OPTIONS"; }
 
-test "parseMethod GET" { assert parseMethod("GET") === HttpMethod.GET; }
-test "parseMethod POST" { assert parseMethod("POST") === HttpMethod.POST; }
-test "parseMethod PATCH" { assert parseMethod("PATCH") === HttpMethod.PATCH; }
-test "parseMethod unknown defaults to GET" { assert parseMethod("INVALID") === HttpMethod.GET; }
+test "parseMethod GET" { assert parseMethod("GET") == HttpMethod.GET; }
+test "parseMethod POST" { assert parseMethod("POST") == HttpMethod.POST; }
+test "parseMethod PATCH" { assert parseMethod("PATCH") == HttpMethod.PATCH; }
+test "parseMethod unknown defaults to GET" { assert parseMethod("INVALID") == HttpMethod.GET; }
 
 test "isSuccess 200" { assert isSuccess(200); }
 test "isSuccess 204" { assert isSuccess(204); }

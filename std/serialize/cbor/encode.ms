@@ -33,7 +33,7 @@ import { encode } from "./encoder";
 export macro cborValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
 	let tt = t.nodeType;
-	if (tt.kind === NodeKind.TypeGeneric) {
+	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
 
@@ -43,25 +43,25 @@ export macro cborValueOf(t: Node): Node {
 	// Builtin elements → per-type fast helpers (cborArrayOfX).
 	// Non-builtin Identifier (enum / type alias) → `_cborArrayOfInts<T>` generic.
 	// TypeObject element (struct/interface) → `_cborArrayOfStructs<T>` generic.
-	if (tt.kind === NodeKind.TypeArray) {
+	if (tt.kind == NodeKind.TypeArray) {
 		const elemType: Node = tt.typExprElement;
 		let en: string = "";
 		let elemIsStruct: boolean = false;
-		if (elemType.kind === NodeKind.Identifier) {
+		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
-		} else if (elemType.kind === NodeKind.TypeObject) {
+		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
-			if (en === "") {
+			if (en == "") {
 				error("cborValueOf: anonymous struct element arrays unsupported (must name struct via interface/class)", t);
 			}
-		} else if (elemType.kind === NodeKind.TypeGeneric) {
+		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element.
 			const peeled: Node = elemType.typExprArgs[0];
-			if (peeled.kind === NodeKind.TypeObject) {
+			if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
-				if (en === "") {
+				if (en == "") {
 					error("cborValueOf: anonymous struct element arrays unsupported", t);
 				}
 			} else {
@@ -70,10 +70,10 @@ export macro cborValueOf(t: Node): Node {
 		} else {
 			error("cborValueOf: unsupported array element kind=" + elemType.kind + " (only Identifier or TypeObject supported)", t);
 		}
-		const isBuiltin: boolean = en === "string" || en === "boolean"
-			|| en === "number" || en === "float32" || en === "float64"
-			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
-			|| en === "uint8" || en === "uint16" || en === "uint32";
+		const isBuiltin: boolean = en == "string" || en == "boolean"
+			|| en == "number" || en == "float32" || en == "float64"
+			|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
+			|| en == "uint8" || en == "uint16" || en == "uint32";
 
 		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
 		if (elemIsStruct) {
@@ -108,18 +108,18 @@ export macro cborValueOf(t: Node): Node {
 		// Builtin atomic element → per-element-type fast helper.
 		// IF-ELSE not match: macro VM string-match dispatch always picks `_`.
 		let helperName: string = "cborArrayOfInt64";
-		if (en === "string") helperName = "cborArrayOfStrings";
-		else if (en === "boolean") helperName = "cborArrayOfBooleans";
-		else if (en === "number") helperName = "cborArrayOfNumbers";
-		else if (en === "float64") helperName = "cborArrayOfNumbers";
-		else if (en === "float32") helperName = "cborArrayOfFloat32";
-		else if (en === "int8") helperName = "cborArrayOfInt8";
-		else if (en === "int16") helperName = "cborArrayOfInt16";
-		else if (en === "int32") helperName = "cborArrayOfInt32";
-		else if (en === "int64") helperName = "cborArrayOfInt64";
-		else if (en === "uint8") helperName = "cborArrayOfUint8";
-		else if (en === "uint16") helperName = "cborArrayOfUint16";
-		else if (en === "uint32") helperName = "cborArrayOfUint32";
+		if (en == "string") helperName = "cborArrayOfStrings";
+		else if (en == "boolean") helperName = "cborArrayOfBooleans";
+		else if (en == "number") helperName = "cborArrayOfNumbers";
+		else if (en == "float64") helperName = "cborArrayOfNumbers";
+		else if (en == "float32") helperName = "cborArrayOfFloat32";
+		else if (en == "int8") helperName = "cborArrayOfInt8";
+		else if (en == "int16") helperName = "cborArrayOfInt16";
+		else if (en == "int32") helperName = "cborArrayOfInt32";
+		else if (en == "int64") helperName = "cborArrayOfInt64";
+		else if (en == "uint8") helperName = "cborArrayOfUint8";
+		else if (en == "uint16") helperName = "cborArrayOfUint16";
+		else if (en == "uint32") helperName = "cborArrayOfUint32";
 		return {
 			kind: NodeKind.CallExpr,
 			line: t.line,
@@ -141,13 +141,13 @@ export macro cborValueOf(t: Node): Node {
 	//   "boolean" → BooleanLiteral pattern, cborBool disc value
 	//   "enum"    → MemberExpr(EnumName, MemberName) pattern, cborText member name
 	//   default   → StringLiteral pattern, cborText variantKey value
-	if (tt.kind === NodeKind.TypeUnion) {
+	if (tt.kind == NodeKind.TypeUnion) {
 		const info = detectUnionDisc(tt);
 		const discField: string = info.discField;
 		const discKind: string = info.discKind;
 		const variants = info.variants;
 
-		if (discField === "" || variants.length === 0) {
+		if (discField == "" || variants.length == 0) {
 			error("cborValueOf: cannot determine discriminator for union type — variants must share a literal-typed disc field", t);
 		}
 
@@ -155,7 +155,7 @@ export macro cborValueOf(t: Node): Node {
 		for (const variant of variants) {
 			const variantKey: string = variant.key;
 			const v: Node = variant.member;
-			if (v.kind !== NodeKind.TypeObject) {
+			if (v.kind != NodeKind.TypeObject) {
 				error("cborValueOf: union variants must be struct types (got kind=" + v.kind + ")", t);
 			}
 
@@ -164,14 +164,14 @@ export macro cborValueOf(t: Node): Node {
 			const dp = parseDiscKey(discKind, variantKey);
 			let pattern: Node;
 			let discValueNode: Node;
-			if (discKind === "boolean") {
+			if (discKind == "boolean") {
 				pattern = { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue };
 				discValueNode = {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
 					callee: bindSym("cborBool"),
 					arguments: [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue }],
 				};
-			} else if (discKind === "enum") {
+			} else if (discKind == "enum") {
 				pattern = {
 					kind: NodeKind.MemberExpr, line: t.line, column: t.column,
 					object: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: dp.enumName },
@@ -198,7 +198,7 @@ export macro cborValueOf(t: Node): Node {
 			for (let fi = 0; fi < v.typExprFieldNames.length; fi = fi + 1) {
 				const fname: string = v.typExprFieldNames[fi];
 				const ft: Node = v.typExprFieldTypes[fi];
-				if (fname === discField) continue;
+				if (fname == discField) continue;
 				vKeyNodes.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fname });
 				const memberExpr: Node = {
 					kind: NodeKind.MemberExpr, line: t.line, column: t.column,
@@ -237,7 +237,7 @@ export macro cborValueOf(t: Node): Node {
 	}
 
 	// Non-struct (atomic) types — emit a direct builder call on `t`.
-	if (tt.kind !== NodeKind.TypeObject) {
+	if (tt.kind != NodeKind.TypeObject) {
 		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
 		// Bridge emits StringLiteral/BooleanLiteral nodes for these — runtime
 		// value is just a regular string/bool, so route to cborText/cborBool.
@@ -249,8 +249,8 @@ export macro cborValueOf(t: Node): Node {
 			NodeKind.BooleanLiteral => "cborBool",
 			_ => "",
 		};
-		if (literalBuilder !== "") {
-			const litCallee: Node = literalBuilder === "cborText"
+		if (literalBuilder != "") {
+			const litCallee: Node = literalBuilder == "cborText"
 				? bindSym("cborText")
 				: bindSym("cborBool");
 			return {
@@ -261,7 +261,7 @@ export macro cborValueOf(t: Node): Node {
 		}
 		// V1 supports atomic types and atomic-element arrays. Unions /
 		// Functions land as TypeUnion / TypeFunction kinds (not Identifier).
-		if (tt.kind !== NodeKind.Identifier) {
+		if (tt.kind != NodeKind.Identifier) {
 			error("cborValueOf: unsupported field type — only atomic types, atomic arrays, and structs are supported in V1", t);
 		}
 		const tn: string = tt.name;
@@ -279,10 +279,10 @@ export macro cborValueOf(t: Node): Node {
 		// cborText/cborBool/cborFloat-with-float64 accept their input directly.
 		const castType: string = match (builderName) {
 			"cborInt" => "int64",
-			"cborFloat" when (tn === "float32") => "float64",
+			"cborFloat" when (tn == "float32") => "float64",
 			_ => "",
 		};
-		const argNode: Node = castType === ""
+		const argNode: Node = castType == ""
 			? t
 			: {
 				kind: NodeKind.TypeAssertion,
@@ -294,9 +294,9 @@ export macro cborValueOf(t: Node): Node {
 		// bindSym is bake-time static — select the pre-bound callee in static
 		// branches rather than emitting the computed name unqualified.
 		let builderCallee: Node = bindSym("cborInt");
-		if (builderName === "cborText") { builderCallee = bindSym("cborText"); }
-		else if (builderName === "cborBool") { builderCallee = bindSym("cborBool"); }
-		else if (builderName === "cborFloat") { builderCallee = bindSym("cborFloat"); }
+		if (builderName == "cborText") { builderCallee = bindSym("cborText"); }
+		else if (builderName == "cborBool") { builderCallee = bindSym("cborBool"); }
+		else if (builderName == "cborFloat") { builderCallee = bindSym("cborFloat"); }
 		return {
 			kind: NodeKind.CallExpr,
 			line: t.line,

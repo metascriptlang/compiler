@@ -25,15 +25,15 @@ extern function msFsReadDirEntries(path: string): string from "msFsReadDirEntrie
 export function readFile(path: string): Result<string, IoError> {
 	const raw = msFsReadFile(path);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {
 	const ok = msFsWriteFileMode(path, content, "wb");
-	if (ok !== 1) {
+	if (ok != 1) {
 		const err = msFsLastErrno();
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "write failed"));
 	}
 	return Result.ok(null);
@@ -41,39 +41,39 @@ export function writeFile(path: string, content: string): Result<void, IoError> 
 
 export function appendFile(path: string, content: string): Result<void, IoError> {
 	const ok = msFsWriteFileMode(path, content, "ab");
-	if (ok !== 1) {
+	if (ok != 1) {
 		const err = msFsLastErrno();
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "append failed"));
 	}
 	return Result.ok(null);
 }
 
 export function chmod(path: string, mode: int32): Result<void, IoError> {
-	if (msFsChmod(path, mode) === 1) return Result.ok(null);
+	if (msFsChmod(path, mode) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "chmod failed"));
 }
 
 export function mkdir(path: string): Result<void, IoError> {
-	if (msFsMkdir(path) === 1) return Result.ok(null);
+	if (msFsMkdir(path) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "mkdir failed"));
 }
 
 export function rmdir(path: string): Result<void, IoError> {
-	if (msFsRmdir(path) === 1) return Result.ok(null);
+	if (msFsRmdir(path) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "rmdir failed"));
 }
 
 export function remove(path: string): Result<void, IoError> {
-	if (msFsRemove(path) === 1) return Result.ok(null);
+	if (msFsRemove(path) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.err(writeFailed(path, "remove failed"));
 }
 
@@ -91,16 +91,16 @@ export function removeAll(path: string): Result<void, IoError> {
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
-	if (msFsRename(oldPath, newPath) === 1) return Result.ok(null);
+	if (msFsRename(oldPath, newPath) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
-	if (err !== 0) return Result.err(ioErrorFromErrno(err, oldPath));
+	if (err != 0) return Result.err(ioErrorFromErrno(err, oldPath));
 	return Result.err(writeFailed(oldPath, "rename failed"));
 }
 
-export function exists(path: string): boolean { return msFsExists(path) === 1; }
-export function isFile(path: string): boolean { return msFsIsFile(path) === 1; }
-export function isDir(path: string): boolean { return msFsIsDir(path) === 1; }
-export function isExecutable(path: string): boolean { return msFsIsExecutable(path) === 1; }
+export function exists(path: string): boolean { return msFsExists(path) == 1; }
+export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
+export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
+export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
 export extern function fileSize(path: string): number from "msFsFileSize";
 
 // readDir: entries are newline-joined by the bridge; directories carry a
@@ -109,17 +109,17 @@ export extern function fileSize(path: string): number from "msFsFileSize";
 export function readDir(path: string): string[] {
 	const joined = msFsReadDirEntries(path);
 	const result: string[] = [];
-	if (joined === "") return result;
+	if (joined == "") return result;
 	const lines = joined.split("\n");
 	for (const line of lines) {
-		if (line !== "") result.push(line);
+		if (line != "") result.push(line);
 	}
 	return result;
 }
 
 export function readLines(path: string): Result<string[], IoError> {
 	const content = try readFile(path);
-	if (content.length === 0) return Result.ok([]);
+	if (content.length == 0) return Result.ok([]);
 	return Result.ok(content.split("\n"));
 }
 
@@ -133,13 +133,13 @@ export function copyFile(src: string, dst: string): Result<void, IoError> {
 }
 
 export function ensureDir(path: string): Result<void, IoError> {
-	if (msFsExists(path) === 1) return Result.ok(null);
+	if (msFsExists(path) == 1) return Result.ok(null);
 	let i = 0;
 	while (i < path.length) {
-		if (path.charCodeAt(i) === "/".code) {
+		if (path.charCodeAt(i) == "/".code) {
 			if (i > 0) {
 				const prefix = path.slice(0, i);
-				if (msFsExists(prefix) !== 1) {
+				if (msFsExists(prefix) != 1) {
 					const mkResult = mkdir(prefix);
 					if (!mkResult.ok) return mkResult;
 				}
@@ -147,7 +147,7 @@ export function ensureDir(path: string): Result<void, IoError> {
 		}
 		i = i + 1;
 	}
-	if (msFsExists(path) !== 1) {
+	if (msFsExists(path) != 1) {
 		return mkdir(path);
 	}
 	return Result.ok(null);

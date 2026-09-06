@@ -29,5 +29,5 @@ function bug049MayRaise(x: int32): int32 {
 
 test "bug049: no-try raising call in a test block compiles and runs" {
     const a = bug049MayRaise(1);
-    assert a === 2;
+    assert a == 2;
 }

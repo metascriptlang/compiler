@@ -27,27 +27,27 @@ import {
 } from "../util";
 
 function isLowerableSpreadLiteral(node: Node): boolean {
-	if (node.kind !== NodeKind.ArrayLiteral) return false;
+	if (node.kind != NodeKind.ArrayLiteral) return false;
 	const t = node.nodeType;
-	if (t === null) return false;
+	if (t == null) return false;
 	let bare = t;
-	if (bare.kind === TypeKind.Ref && bare.typeReturn !== null) bare = bare.typeReturn;
-	if (bare.kind !== TypeKind.Array) return false;
+	if (bare.kind == TypeKind.Ref && bare.typeReturn != null) bare = bare.typeReturn;
+	if (bare.kind != TypeKind.Array) return false;
 	const d = node.data as ArrayLiteralData;
 	for (const e of d.elements) {
-		if (e !== null && e.kind === NodeKind.SpreadExpr) return true;
+		if (e != null && e.kind == NodeKind.SpreadExpr) return true;
 	}
 	return false;
 }
 
 function collectSpreadLiterals(node: Node, out: Node[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	forEachChild(node, (c: Node): void => {
-		if (c === null) return;
+		if (c == null) return;
 		const k = c.kind;
-		if (k === NodeKind.ArrowFunction || k === NodeKind.FunctionExpr
-			|| k === NodeKind.FunctionDecl || k === NodeKind.MethodDecl
-			|| k === NodeKind.BlockStmt) return;
+		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
+			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
+			|| k == NodeKind.BlockStmt) return;
 		collectSpreadLiterals(c, out);
 	});
 	if (isLowerableSpreadLiteral(node)) out.push(node);
@@ -60,12 +60,12 @@ function typedRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 }
 
 function isRefArray(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.Ref && t.typeReturn !== null && t.typeReturn.kind === TypeKind.Array;
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
 }
 
 function bareArrayType(t: Type | null): Type | null {
-	if (t === null) return null;
-	return t.kind === TypeKind.Ref && t.typeReturn !== null ? t.typeReturn : t;
+	if (t == null) return null;
+	return t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
 }
 
 function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
@@ -98,8 +98,8 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 	accDecl.nodeType = litT;
 	out.push(accDecl);
 	for (const e of d.elements) {
-		if (e === null) continue;
-		if (e.kind !== NodeKind.SpreadExpr) {
+		if (e == null) continue;
+		if (e.kind != NodeKind.SpreadExpr) {
 			out.push(pushStmt(accSym, litT, e, loc));
 			continue;
 		}
@@ -117,7 +117,7 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 		out.push(iDecl);
 		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, int32Type(), loc), loc);
 		const bareSrc = bareArrayType(srcT);
-		elemAccess.nodeType = bareSrc !== null ? bareSrc.typeReturn : null;
+		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
 		const bodyStmts: Node[] = [];
 		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc));
 		bodyStmts.push(makeExprStmt(makeAssign(
@@ -138,7 +138,7 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const lits: Node[] = [];
 	collectSpreadLiterals(stmt, lits);
-	if (lits.length === 0) return [stmt];
+	if (lits.length == 0) return [stmt];
 	const out: Node[] = [];
 	for (const lit of lits) buildExpansion(lit, ctx, out);
 	out.push(stmt);

@@ -27,11 +27,11 @@ function anyChildReferences(nodes: Node[], targetSym: Symbol): boolean {
 }
 
 export function nodeReferencesVar(node: Node | null, targetSym: Symbol): boolean {
-	if (node === null || targetSym === null) return false;
+	if (node == null || targetSym == null) return false;
 
 	return match (node.kind) {
 		// Expression nodes
-		NodeKind.Identifier => node.resolvedSym === targetSym,
+		NodeKind.Identifier => node.resolvedSym == targetSym,
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			return nodeReferencesVar(d.left, targetSym) || nodeReferencesVar(d.right, targetSym);
@@ -137,18 +137,18 @@ export function isLastReadInBlock(targetSym: Symbol, stmtIndex: number, stmts: N
 // and exhaustive if/else where both branches terminate.
 
 function isTerminatingStmt(node: Node): boolean {
-	if (node === null) return false;
+	if (node == null) return false;
 	const k = node.kind;
-	return k === NodeKind.ReturnStmt
-		|| k === NodeKind.ThrowStmt
-		|| k === NodeKind.BreakStmt
-		|| k === NodeKind.ContinueStmt;
+	return k == NodeKind.ReturnStmt
+		|| k == NodeKind.ThrowStmt
+		|| k == NodeKind.BreakStmt
+		|| k == NodeKind.ContinueStmt;
 }
 
 // Returns true if block contents definitely terminate (never fall through).
 function blockDefinitelyTerminates(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind !== NodeKind.BlockStmt) return isTerminatingStmt(node);
+	if (node == null) return false;
+	if (node.kind != NodeKind.BlockStmt) return isTerminatingStmt(node);
 	const stmts = (node.data as BlockStmtData).statements;
 	return stmtsDefinitelyTerminate(stmts, 0);
 }
@@ -158,16 +158,16 @@ function stmtsDefinitelyTerminate(stmts: Node[], fromIndex: number): boolean {
 	let i = fromIndex;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
-		if (stmt === null) {
+		if (stmt == null) {
 			i = i + 1;
 			continue;
 		}
 		// Direct terminating statement
 		if (isTerminatingStmt(stmt)) return true;
 		// If-else: terminates if BOTH branches terminate
-		if (stmt.kind === NodeKind.IfStmt) {
+		if (stmt.kind == NodeKind.IfStmt) {
 			const d = stmt.data as IfStmtData;
-			if (d.alternate !== null && !isEmptyBlock(d.alternate)) {
+			if (d.alternate != null && !isEmptyBlock(d.alternate)) {
 				if (blockDefinitelyTerminates(d.consequent)
 					&& blockDefinitelyTerminates(d.alternate)) {
 					return true;
@@ -236,9 +236,9 @@ function getStmts(input: string): Node[] {
 
 function getExpr(input: string): Node {
 	const stmts = getStmts(input);
-	if (stmts.length === 0) return null as unknown as Node;
+	if (stmts.length == 0) return null as unknown as Node;
 	const stmt = stmts[0];
-	if (stmt.kind !== NodeKind.ExprStmt) return null as unknown as Node;
+	if (stmt.kind != NodeKind.ExprStmt) return null as unknown as Node;
 	const d = stmt.data as ExprStmtData;
 	return d.expr;
 }
@@ -250,15 +250,15 @@ function makeTestSym(name: string): Symbol {
 }
 
 function attachSymToNode(node: Node, name: string, sym: Symbol): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
-		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		if ((node.data as IdentifierData).name == name) node.resolvedSym = sym;
 		return;
 	}
 	// Scope boundary: don't recurse into nested function bodies.
-	if (node.kind === NodeKind.FunctionDecl
-		|| node.kind === NodeKind.ArrowFunction
-		|| node.kind === NodeKind.FunctionExpr) return;
+	if (node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr) return;
 	forEachChild(node, (c: Node): void => { attachSymToNode(c, name, sym); });
 }
 

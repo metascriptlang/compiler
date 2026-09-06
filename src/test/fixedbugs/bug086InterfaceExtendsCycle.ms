@@ -28,17 +28,17 @@ test "bug086: direct self-cycle still errors" {
 
 test "bug086: a straight extends chain stays legal" {
 	const src = "interface C { c: number; }\ninterface B extends C { b: number; }\ninterface A extends B { a: number; }\nconst x: A = { a: 1, b: 2, c: 3 };";
-	assert strictErrorCount(src) === 0;
+	assert strictErrorCount(src) == 0;
 }
 
 test "bug086: a diamond is not a false cycle" {
 	// D is reached twice (via B and via C) — a revisit must not read as a cycle.
 	// D stays empty so the duplicate-field rule cannot fire and mask the answer.
 	const src = "interface D { }\ninterface B extends D { b: number; }\ninterface C extends D { c: number; }\ninterface A extends B, C { a: number; }";
-	assert strictErrorCount(src) === 0;
+	assert strictErrorCount(src) == 0;
 }
 
 test "bug086: a generic parent chain stays legal" {
 	const src = "interface Box<T> { item: T; }\ninterface Tagged extends Box<number> { tag: string; }";
-	assert strictErrorCount(src) === 0;
+	assert strictErrorCount(src) == 0;
 }

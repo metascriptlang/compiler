@@ -29,7 +29,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 	const uri = lspGetField(textDoc, "uri");
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
-	if (source === "") return lspResponse(id, "[]");
+	if (source == "") return lspResponse(id, "[]");
 
 	// Get requested range (cursor line)
 	const rangeObj = lspGetObjectField(params, "range");
@@ -45,7 +45,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 
 	// Check if this line has a format violation
 	const options = getFormatOptions(db, path);
-	const isCommentCont = info.indentEnd > 0 && info.indentEnd < line.length && line.byteAt(info.indentEnd) === "*".code;
+	const isCommentCont = info.indentEnd > 0 && info.indentEnd < line.length && line.byteAt(info.indentEnd) == "*".code;
 	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length && !isCommentCont
 		&& (info.isMixed || (options.useTabs && info.hasSpace && !info.hasTab) || (!options.useTabs && info.hasTab && !info.hasSpace));
 	const hasTrailingWs = info.trailStart < line.length && info.trailStart > 0;
@@ -54,7 +54,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 		// Use the formatter as source of truth — get the correctly formatted version of this line.
 		// This ensures the fix is identical to what "Format Document" would produce.
 		// Cache: reuse formatted output if source unchanged
-		if (_codeActionFmtSource !== source) {
+		if (_codeActionFmtSource != source) {
 			if (!_fmtParsersRegistered) {
 				registerCoreParsers();
 				_fmtParsersRegistered = true;
@@ -71,7 +71,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 		if (_codeActionFmtResult.length > 0) {
 			const fmtLines = splitLines(_codeActionFmtResult);
 
-			if (startLine < fmtLines.length && fmtLines[startLine] !== line) {
+			if (startLine < fmtLines.length && fmtLines[startLine] != line) {
 				// Single-line fix: replace this line with the formatted version
 				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
 				const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
@@ -90,11 +90,11 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const uri = lspGetField(textDoc, "uri");
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
-	if (source === "") return lspResponse(id, "[]");
+	if (source == "") return lspResponse(id, "[]");
 
 	const t1 = performance.now();
 	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "[]");
+	if (program == null) return lspResponse(id, "[]");
 	const t2 = performance.now();
 
 	const options = getFormatOptions(db, path);
@@ -106,12 +106,12 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t3 - t2}ms layout=${t4 - t3}ms source=${source.byteLength}b\n`);
 
-	if (formatted.byteLength === source.byteLength && formatted === source) return lspResponse(id, "[]");
+	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 
 	let lineCount = 0;
 	let lastNl = -1;
 	for (let i = 0; i < source.byteLength; i = i + 1) {
-		if (source.byteAt(i) === "\n".code) { lineCount = lineCount + 1; lastNl = i; }
+		if (source.byteAt(i) == "\n".code) { lineCount = lineCount + 1; lastNl = i; }
 	}
 	const lastLineLen = source.byteLength - lastNl - 1;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);

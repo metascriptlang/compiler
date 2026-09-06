@@ -40,36 +40,36 @@ function main(): void {
 
 test "BUG#2 repro: explicit type args + untyped closure — no checker errors" {
 	const result = checkOnly(SRC_BASIC);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "BUG#2 invariant: arrow inside main has no GenericParam leakage" {
 	const result = checkOnly(SRC_BASIC);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 
 	const main_fn = findFnDecl(result.program, "main");
-	assert main_fn !== null, "main fn not found";
+	assert main_fn != null, "main fn not found";
 
 	const arrow = findFirstArrow(main_fn);
-	assert arrow !== null, "arrow inside main not found";
-	assert arrow.nodeType !== null, "arrow has null nodeType";
+	assert arrow != null, "arrow inside main not found";
+	assert arrow.nodeType != null, "arrow has null nodeType";
 
 	// CRITICAL ASSERTION: arrow's first param type must be Int32 (substituted), NOT GenericParam.
-	assert arrow.nodeType.typeChildren !== null, "arrow.nodeType.typeChildren is null";
+	assert arrow.nodeType.typeChildren != null, "arrow.nodeType.typeChildren is null";
 	assert arrow.nodeType.typeChildren.length > 0, "arrow.nodeType.typeChildren is empty";
 
 	const firstParamKind = arrow.nodeType.typeChildren[0].kind;
-	if (firstParamKind === TypeKind.GenericParam) {
+	if (firstParamKind == TypeKind.GenericParam) {
 		const name = arrow.nodeType.typeChildren[0].typeName;
 		assert false, "arrow.nodeType.typeChildren[0] is GenericParam('" + name + "') — should be Int32";
 	}
-	assert firstParamKind === TypeKind.Int32,
+	assert firstParamKind == TypeKind.Int32,
 		"arrow.nodeType.typeChildren[0].kind = " + firstParamKind.toString() + " (expected Int32 = 10)";
 }
 
 test "BUG#2 global invariant: no GenericParam leakage outside templates" {
 	const result = checkOnly(SRC_BASIC);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 
 	const violations = checkNoGenericParamLeakage(result.program);
 	if (violations.length > 0) {

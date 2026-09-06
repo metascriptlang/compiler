@@ -69,10 +69,10 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 // Check if filePath starts with db.stdPath prefix (set via dbSetStdPath).
 // When stdPath is empty (tests, unconfigured), returns false — no files get High durability.
 function isStdPathFor(db: TransAmDb, filePath: string): boolean {
-	if (db.stdPath.length === 0) return false;
+	if (db.stdPath.length == 0) return false;
 	if (filePath.length < db.stdPath.length) return false;
 	for (let i = 0; i < db.stdPath.length; i = i + 1) {
-		if (filePath[i] !== db.stdPath[i]) return false;
+		if (filePath[i] != db.stdPath[i]) return false;
 	}
 	return true;
 }
@@ -84,7 +84,7 @@ export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 
 
 export function dbEnsurePrelude(db: TransAmDb): void {
-	if (db.preludeCtx === null && db.stdPath.length > 0) {
+	if (db.preludeCtx == null && db.stdPath.length > 0) {
 		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 		// Pre-register exports from top-level std modules (e.g., std/build.ms)
 		// so auto-import suggestions work even without explicit imports.
@@ -95,7 +95,7 @@ export function dbEnsurePrelude(db: TransAmDb): void {
 // Parse a single file and register its exports into the registry.
 function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
 	const source = try readStdFile(filePath) catch "";
-	if (source.length === 0) return;
+	if (source.length == 0) return;
 	const pr = parseSourceLenient(source);
 	if (!pr.ok) return;
 	const tmpCtx = createTempCollectContext();
@@ -180,19 +180,19 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 // G3: Skip std/ paths — their exports are immutable for the session
 function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
 	const path = getFilePath(db.fileInput, fileId);
-	if (path !== "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
+	if (path != "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
 	resetRegisteredAt(db.moduleDeps, fileId);
 	const deps = getTransitiveDependents(db.moduleDeps, fileId);
 	for (let i = 0; i < deps.length; i = i + 1) {
 		const depPath = getFilePath(db.fileInput, deps[i]);
-		if (depPath !== "" && !isStdPathFor(db, depPath)) removeExportEntry(db.exportRegistry, depPath);
+		if (depPath != "" && !isStdPathFor(db, depPath)) removeExportEntry(db.exportRegistry, depPath);
 		resetRegisteredAt(db.moduleDeps, deps[i]);
 	}
 }
 
 function removeExportEntry(registry: ExportRegistry, path: string): void {
 	for (let i = 0; i < registry.entries.length; i = i + 1) {
-		if (registry.entries[i].modulePath === path) {
+		if (registry.entries[i].modulePath == path) {
 			removeFromNameIndex(registry, registry.entries[i].symbols);
 			for (let j = i; j < registry.entries.length - 1; j = j + 1) {
 				registry.entries[j] = registry.entries[j + 1];
@@ -309,7 +309,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	// Parse depends on Preprocess (for this file).
 	const preprocessKey = createQueryKey(TaQueryKind.Preprocess, fileId);
 	const preprocessEntry = cacheGet(db.cache, preprocessKey);
-	const preprocessHash = preprocessEntry !== null ? preprocessEntry.outputHash : 0;
+	const preprocessHash = preprocessEntry != null ? preprocessEntry.outputHash : 0;
 	recordDependency(db.depStack, preprocessKey, preprocessHash);
 	// G2: Propagate durability so std/ parse queries inherit High durability
 	const fileDur = getFileDurability(db.fileInput, fileId);
@@ -335,7 +335,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
 	const raw = try readStdFile(filePath) catch "";
-	if (raw.byteLength === 0) return;
+	if (raw.byteLength == 0) return;
 	dbSetFileText(db, filePath, raw);
 }
 
@@ -360,17 +360,17 @@ export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: str
 function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): void {
 	const depFileId = getFileId(db.fileInput, depPath);
 	if (depFileId < 0) return;
-	if (depProgram === null || depProgram.kind !== NodeKind.Program) return;
+	if (depProgram == null || depProgram.kind != NodeKind.Program) return;
 	const pd = depProgram.data as ProgramData;
 	for (const rawStmt of pd.programStmts) {
 		let stmt = rawStmt;
-		if (stmt.kind === NodeKind.ExportDecl) {
+		if (stmt.kind == NodeKind.ExportDecl) {
 			stmt = (stmt.data as ExportDeclData).exportedDecl;
 		}
-		if (stmt.kind !== NodeKind.ImportDecl) continue;
+		if (stmt.kind != NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
 		const targetPath = dbResolveImport(db, depPath, imp.importSource);
-		if (targetPath === "") continue;
+		if (targetPath == "") continue;
 		dbEnsureFileLoaded(db, targetPath);
 		const targetId = getFileId(db.fileInput, targetPath);
 		if (targetId >= 0) {
@@ -395,17 +395,17 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		if (checkCancel(db.cancelCtx, startVersion)) return;
 
 		const depPath = getFilePath(db.fileInput, depId);
-		if (depPath === "") continue;
+		if (depPath == "") continue;
 
 		// Skip if registered at current revision (reference: incremental cache hit)
 		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
 
 		// Skip if already registered (but still recurse for transitive deps).
-		if (findModuleExports(db.exportRegistry, depPath) !== null) {
+		if (findModuleExports(db.exportRegistry, depPath) != null) {
 			// Ensure dep's import edges are recorded before recursing
 			if (!visited.has(depPath)) {
 				const regProgram = dbParse(db, depPath);
-				if (regProgram !== null) dbRecordDepImports(db, depPath, regProgram);
+				if (regProgram != null) dbRecordDepImports(db, depPath, regProgram);
 			}
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 			continue;
@@ -413,7 +413,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Phase 1: parse dep, record its import edges, then depth-first recurse.
 		const depProgram = dbParse(db, depPath);
-		if (depProgram === null) continue;
+		if (depProgram == null) continue;
 
 		// Record dep's own import edges so depth-first recursion can traverse them
 		dbRecordDepImports(db, depPath, depProgram);
@@ -446,9 +446,9 @@ function createTempCollectContext(): CheckerContext {
 // Register a single file's exports into the ExportRegistry.
 // Used by import completion when the target module hasn't been processed as a dependency yet.
 export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
-	if (findModuleExports(db.exportRegistry, filePath) !== null) return;
+	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
-	if (program === null) return;
+	if (program == null) return;
 	const tmpCtx = createTempCollectContext();
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
@@ -465,23 +465,23 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
 function buildImportEntries(db: TransAmDb, filePath: string, program: Node): ImportEntry[] {
 	const entries: ImportEntry[] = [];
-	if (program === null) return entries;
-	if (program.kind !== NodeKind.Program) return entries;
+	if (program == null) return entries;
+	if (program.kind != NodeKind.Program) return entries;
 	const pd = program.data as ProgramData;
 	const fileId = getFileId(db.fileInput, filePath);
 
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		let stmt = pd.programStmts[i];
 		// Unwrap ExportDecl (re-exports)
-		if (stmt.kind === NodeKind.ExportDecl) {
+		if (stmt.kind == NodeKind.ExportDecl) {
 			const ed = stmt.data as ExportDeclData;
 			stmt = ed.exportedDecl;
 		}
-		if (stmt.kind !== NodeKind.ImportDecl) continue;
+		if (stmt.kind != NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
 		// .h imports are handled by inlineHeaderImports; their ImportDecl survives
 		// for unused-import detection only — don't create a module import entry.
-		if (imp.importSource.length >= 2 && imp.importSource.slice(imp.importSource.length - 2, imp.importSource.length) === ".h") continue;
+		if (imp.importSource.length >= 2 && imp.importSource.slice(imp.importSource.length - 2, imp.importSource.length) == ".h") continue;
 
 		// Resolve import specifier using the same resolver as everything else
 		const resolvedPath = dbResolveImport(db, filePath, imp.importSource);
@@ -495,19 +495,19 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 // Hash checker result for Salsa early cutoff. If error count + exported symbol
 // signatures are unchanged, dependents stay GREEN (comment-only edits, etc.).
 function hashCheckerResult(ctx: CheckerContext): number {
-	if (ctx === null) return 0;
+	if (ctx == null) return 0;
 	// Only hash Error-severity errors (hints/warnings don't affect dependents)
 	let errorCount = 0;
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Error) errorCount = errorCount + 1;
+		if (err.severity == Severity.Error) errorCount = errorCount + 1;
 	}
 	let h: number = errorCount;
-	if (ctx.table !== null && ctx.table.current !== null) {
+	if (ctx.table != null && ctx.table.current != null) {
 		const scope = ctx.table.current;
 		for (const sym of scope.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				// Hash name + type kind so type changes invalidate dependents
-				const typeKind = sym.symbolType !== null ? sym.symbolType.kind : 0;
+				const typeKind = sym.symbolType != null ? sym.symbolType.kind : 0;
 				h = (h * 31 + taHashString(sym.name) + typeKind) % 2147483647;
 			}
 		}
@@ -527,7 +527,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	// Get the cached parse tree (needed for dependency hash tracking + to source the clone).
 	const cachedProgram = dbParse(db, filePath);
-	if (cachedProgram === null) return null as unknown as CheckerContext;
+	if (cachedProgram == null) return null as unknown as CheckerContext;
 
 	// Clone the parse tree before type-checking. The checker mutates nodeType/resolvedSym
 	// in-place; cloning keeps dbParse's cached tree immutable so other consumers
@@ -550,13 +550,13 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
 	for (const ie of imports) {
-		if (ie.sourcePath === "" || ie.sourcePath === filePath) continue;
+		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
 		if (db.checkInProgress.has(ie.sourcePath)) continue;
 		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
-		if (depExports === null) continue;
+		if (depExports == null) continue;
 		let depHasMacro = false;
 		for (const es of depExports.symbols) {
-			if (es.kind === SymbolKind.Macro) {
+			if (es.kind == SymbolKind.Macro) {
 				depHasMacro = true;
 				break;
 			}
@@ -570,7 +570,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
 	// Record Parse dep with actual output hash (Salsa early cutoff)
 	const parseEntry = cacheGet(db.cache, pKey);
-	const parseHash = parseEntry !== null ? parseEntry.outputHash : 0;
+	const parseHash = parseEntry != null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
 
 	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
@@ -582,10 +582,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		const depId = importDepIds[di];
 		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
 		const depParseEntry = cacheGet(db.cache, depParseKey);
-		recordDependency(db.depStack, depParseKey, depParseEntry !== null ? depParseEntry.outputHash : 0);
+		recordDependency(db.depStack, depParseKey, depParseEntry != null ? depParseEntry.outputHash : 0);
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
 		const depCheckEntry = cacheGet(db.cache, depCheckKey);
-		recordDependency(db.depStack, depCheckKey, depCheckEntry !== null ? depCheckEntry.outputHash : 0);
+		recordDependency(db.depStack, depCheckKey, depCheckEntry != null ? depCheckEntry.outputHash : 0);
 	}
 
 	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
@@ -593,7 +593,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	mod.imports = imports;
 	const graph = createModuleGraph();
 	addModule(graph, mod);
-	if (db.preludeCtx === null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion
@@ -620,7 +620,7 @@ export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
 	const checked = nodeCacheGet(checkNodeKey(fileId));
-	if (checked !== null) return checked;
+	if (checked != null) return checked;
 	return dbParse(db, filePath);
 }
 
@@ -636,7 +636,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 
 	// Ensure upstream queries are computed
 	const _cachedProg = dbParse(db, filePath);
-	if (_cachedProg === null) return null as unknown as Node;
+	if (_cachedProg == null) return null as unknown as Node;
 	const checkerCtx = dbTypeCheck(db, filePath);
 
 	// Fresh parse for transform — checker already mutated its own copy
@@ -644,12 +644,12 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const analyzeSrc = getFileText(db.fileInput, fileId);
 	const analyzeParse = parseSource(analyzeSrc);
 	const program = analyzeParse.ok ? analyzeParse.value : null as unknown as Node;
-	if (program === null) return null as unknown as Node;
+	if (program == null) return null as unknown as Node;
 
 	pushFrame(db.depStack, key);
 	const ckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	const ckEntry = cacheGet(db.cache, ckKey);
-	recordDependency(db.depStack, ckKey, ckEntry !== null ? ckEntry.outputHash : 0);
+	recordDependency(db.depStack, ckKey, ckEntry != null ? ckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx);
@@ -670,19 +670,19 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	}
 
 	const _cachedProg2 = dbParse(db, filePath);
-	if (_cachedProg2 === null) return null as unknown as Node;
+	if (_cachedProg2 == null) return null as unknown as Node;
 	const checkerCtx = dbTypeCheck(db, filePath);
 
 	// Fresh parse — checker mutates AST, transforms also mutate
 	const txSrc = getFileText(db.fileInput, fileId);
 	const txParse = parseSource(txSrc);
 	const program = txParse.ok ? txParse.value : null as unknown as Node;
-	if (program === null) return null as unknown as Node;
+	if (program == null) return null as unknown as Node;
 
 	pushFrame(db.depStack, key);
 	const tckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	const tckEntry = cacheGet(db.cache, tckKey);
-	recordDependency(db.depStack, tckKey, tckEntry !== null ? tckEntry.outputHash : 0);
+	recordDependency(db.depStack, tckKey, tckEntry != null ? tckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	nodeCacheStore(transformNodeKey(fileId), transformed);
@@ -743,43 +743,43 @@ export {
 // ===== Integration Tests =====
 
 function isValidProgram(program: Node): boolean {
-	if (program === null) return false;
-	return program.kind === NodeKind.Program;
+	if (program == null) return false;
+	return program.kind == NodeKind.Program;
 }
 
 test "create db" {
 	const db = createTransAmDb(100);
-	assert db.revision.value === 0;
-	assert db.cache.capacity === 100;
+	assert db.revision.value == 0;
+	assert db.cache.capacity == 100;
 }
 
 test "set file text increments revision" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	assert db.revision.value === 1;
+	assert db.revision.value == 1;
 }
 
 test "same content does not increment" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	assert db.revision.value === 1;
+	assert db.revision.value == 1;
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	assert db.revision.value === 1;  // no change
+	assert db.revision.value == 1;  // no change
 }
 
 test "parse produces AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1;");
 	const result = dbParse(db, "test.ms");
-	assert result !== null;
-	assert result.kind === NodeKind.Program;
+	assert result != null;
+	assert result.kind == NodeKind.Program;
 }
 
 test "parse caches result" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const y = 2;");
 	const r1 = dbParse(db, "test.ms");
-	assert r1 !== null;
+	assert r1 != null;
 	// Second call should hit cache
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	assert cacheContains(db.cache, key);
@@ -794,15 +794,15 @@ test "file change invalidates parse" {
 	// Cache entry should be RED
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = cacheGet(db.cache, key);
-	assert entry !== null;
-	assert entry.state === TaQueryState.Red;
+	assert entry != null;
+	assert entry.state == TaQueryState.Red;
 }
 
 test "preprocess query passes through non-header files" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "plain.ms", "const x = 1;");
 	const out = dbPreprocess(db, "plain.ms");
-	assert out === "const x = 1;";
+	assert out == "const x = 1;";
 }
 
 test "preprocess query caches result" {
@@ -810,13 +810,13 @@ test "preprocess query caches result" {
 	dbSetFileText(db, "plain.ms", "const x = 1;");
 	const out1 = dbPreprocess(db, "plain.ms");
 	const out2 = dbPreprocess(db, "plain.ms");
-	assert out1 === out2;
+	assert out1 == out2;
 	// Second call should be a cache hit — Preprocess query state is Green
 	const fileId = getFileId(db.fileInput, "plain.ms");
 	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
 	const entry = cacheGet(db.cache, key);
-	assert entry !== null;
-	assert entry.state === TaQueryState.Green;
+	assert entry != null;
+	assert entry.state == TaQueryState.Green;
 }
 
 test "preprocess query invalidates on file change" {
@@ -827,66 +827,66 @@ test "preprocess query invalidates on file change" {
 	const fileId = getFileId(db.fileInput, "plain.ms");
 	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
 	const entry = cacheGet(db.cache, key);
-	assert entry !== null;
-	assert entry.state === TaQueryState.Red;
+	assert entry != null;
+	assert entry.state == TaQueryState.Red;
 }
 
 test "full pipeline produces analyzed AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1; const y = 2;");
 	const result = dbAnalyze(db, "test.ms");
-	assert result !== null;
+	assert result != null;
 	assert isValidProgram(result);
 }
 
 test "unknown file returns null" {
 	const db = createTransAmDb(100);
 	const result = dbParse(db, "nonexistent.ms");
-	assert result === null;
+	assert result == null;
 }
 
 test "dbTransform produces transformed AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "t.ms", "const x = 1;");
 	const result = dbTransform(db, "t.ms");
-	assert result !== null;
-	assert result.kind === NodeKind.Program;
+	assert result != null;
+	assert result.kind == NodeKind.Program;
 }
 
 test "dbCompileSource runs full pipeline" {
 	const db = createTransAmDb(100);
 	const result = dbCompileSource(db, "const a = 1; const b = 2;");
-	assert result !== null;
+	assert result != null;
 	assert isValidProgram(result);
 }
 
 test "dbCompileToJS runs without analyzer" {
 	const db = createTransAmDb(100);
 	const result = dbCompileToJS(db, "const x = 42;");
-	assert result !== null;
-	assert result.kind === NodeKind.Program;
+	assert result != null;
+	assert result.kind == NodeKind.Program;
 }
 
 test "dbCompileSource caches on same input" {
 	const db = createTransAmDb(100);
 	dbCompileSource(db, "const z = 1;");
-	assert db.revision.value === 1;
+	assert db.revision.value == 1;
 	// Same input should not increment revision
 	dbCompileSource(db, "const z = 1;");
-	assert db.revision.value === 1;
+	assert db.revision.value == 1;
 }
 
 test "db has cancel context" {
 	const db = createTransAmDb(100);
-	assert db.cancelCtx.version === 0;
+	assert db.cancelCtx.version == 0;
 	assert !db.cancelCtx.cancelled;
 }
 
 test "db has string interner" {
 	const db = createTransAmDb(100);
 	const id = internString(db.interner, "hello");
-	assert id === 0;
-	assert lookupInterned(db.interner, id) === "hello";
+	assert id == 0;
+	assert lookupInterned(db.interner, id) == "hello";
 }
 
 test "unused .h import identifier gets warning via Phase B" {
@@ -905,13 +905,13 @@ test "unused .h import identifier gets warning via Phase B" {
 		"import { CpuInfo, msOsHostname } from \"fake/os.h\";\n" +
 		"export function getCpu(): CpuInfo { return null as unknown as CpuInfo; }\n");
 	const ctx = dbTypeCheck(db, "consumer.cms");
-	assert ctx !== null;
+	assert ctx != null;
 	let foundUnusedHostname = false;
 	let foundUnusedCpuInfo = false;
 	for (const err of ctx.errors) {
 		if (err.message.indexOf("msOsHostname") >= 0 && err.message.indexOf("imported but never used") >= 0) {
 			foundUnusedHostname = true;
-			assert err.line === 3;
+			assert err.line == 3;
 		}
 		if (err.message.indexOf("CpuInfo") >= 0 && err.message.indexOf("imported but never used") >= 0) {
 			foundUnusedCpuInfo = true;
@@ -930,18 +930,18 @@ test "comment-only edit keeps typecheck cache green" {
 	dbTypeCheck(db, "test.ms");
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const before = cacheGet(db.cache, checkKey);
-	assert before !== null;
-	assert before.state === TaQueryState.Green;
+	assert before != null;
+	assert before.state == TaQueryState.Green;
 	const computedBefore = before.computedAt;
 
 	// Edit: add comment only (no semantic change)
 	dbSetFileText(db, "test.ms", "const x = 1; // comment");
-	assert db.revision.value === 2;
+	assert db.revision.value == 2;
 
 	// Parse must recompute (file hash changed)
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const parseEntry = cacheGet(db.cache, parseKey);
-	assert parseEntry.state === TaQueryState.Red;
+	assert parseEntry.state == TaQueryState.Red;
 
 	// Force parse recompute
 	dbParse(db, "test.ms");
@@ -949,9 +949,9 @@ test "comment-only edit keeps typecheck cache green" {
 	// TypeCheck should verify GREEN via early cutoff (parse output hash unchanged)
 	assert tryMarkGreen(db.cache, db.fileInput, checkKey, db.revision.value);
 	const after = cacheGet(db.cache, checkKey);
-	assert after.state === TaQueryState.Green;
+	assert after.state == TaQueryState.Green;
 	// computedAt should NOT change (wasn't recomputed, just verified)
-	assert after.computedAt === computedBefore;
+	assert after.computedAt == computedBefore;
 }
 
 test "real code edit invalidates typecheck" {
@@ -975,9 +975,9 @@ test "parse stores real output hash" {
 
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = cacheGet(db.cache, parseKey);
-	assert entry !== null;
+	assert entry != null;
 	// outputHash should be non-zero (real AST hash)
-	assert entry.outputHash !== 0;
+	assert entry.outputHash != 0;
 }
 
 test "same source produces same parse hash" {
@@ -990,7 +990,7 @@ test "same source produces same parse hash" {
 	dbParse(db, "b.ms");
 	const hashB = cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, 1)).outputHash;
 
-	assert hashA === hashB;
+	assert hashA == hashB;
 }
 
 test "dbTypeCheck records parse dep with real hash" {
@@ -1000,7 +1000,7 @@ test "dbTypeCheck records parse dep with real hash" {
 
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const entry = cacheGet(db.cache, checkKey);
-	assert entry !== null;
+	assert entry != null;
 	assert entry.dependencies.length > 0;
 
 	// Find Parse dependency and verify it has a real hash
@@ -1011,7 +1011,7 @@ test "dbTypeCheck records parse dep with real hash" {
 		if (queryKeysEqual(entry.dependencies[i].depKey, parseKey)) {
 			// expectedHash should match parse entry's outputHash
 			const parseEntry = cacheGet(db.cache, parseKey);
-			assert entry.dependencies[i].expectedHash === parseEntry.outputHash;
+			assert entry.dependencies[i].expectedHash == parseEntry.outputHash;
 			foundParseDep = true;
 		}
 		i = i + 1;
@@ -1037,8 +1037,8 @@ test "whitespace-only edit keeps typecheck green" {
 	const checkEntry = cacheGet(db.cache, checkKey);
 
 	// Parse was recomputed (file changed)
-	assert parseEntry.state === TaQueryState.Green;
-	assert parseEntry.computedAt === 2;
+	assert parseEntry.state == TaQueryState.Green;
+	assert parseEntry.computedAt == 2;
 }
 
 test "syntax error parse still stores hash" {
@@ -1048,9 +1048,9 @@ test "syntax error parse still stores hash" {
 
 	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = cacheGet(db.cache, parseKey);
-	assert entry !== null;
+	assert entry != null;
 	// Even failed parse stores a hash (of null node → 0)
-	assert entry.state === TaQueryState.Green;
+	assert entry.state == TaQueryState.Green;
 }
 
 test "cross-module interface field resolution" {
@@ -1068,16 +1068,16 @@ test "cross-module interface field resolution" {
 
 	// Foo should be registered with resolved fields
 	const fooInfo = findExportedSymbol(db.exportRegistry, "/test/b.ms", "Foo");
-	assert fooInfo !== null;
+	assert fooInfo != null;
 	const fooType = fooInfo.symType;
-	assert fooType !== null;
+	assert fooType != null;
 	// Interface = Ref<Struct>. Unwrap Ref to get inner Struct.
-	const inner = fooType.typeReturn !== null ? fooType.typeReturn : fooType;
-	assert inner.typeNames !== null;
-	assert inner.typeNames.length === 2;
-	assert inner.typeNames[0] === "x";
-	assert inner.typeNames[1] === "count";
+	const inner = fooType.typeReturn != null ? fooType.typeReturn : fooType;
+	assert inner.typeNames != null;
+	assert inner.typeNames.length == 2;
+	assert inner.typeNames[0] == "x";
+	assert inner.typeNames[1] == "count";
 	// Field types should be resolved — x: Bar is Ref<Struct(Bar)>
-	assert inner.typeChildren !== null;
-	assert inner.typeChildren.length === 2;
+	assert inner.typeChildren != null;
+	assert inner.typeChildren.length == 2;
 }

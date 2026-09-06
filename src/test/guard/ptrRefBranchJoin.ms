@@ -25,12 +25,12 @@ class Tok {
 }
 
 function pick(tok: Tok): Tok {
-	const rest = tok.kind === 0 ? tok : tok.next;
+	const rest = tok.kind == 0 ? tok : tok.next;
 	return rest;
 }
 
 function pickPair(tok: Tok): Tok[] {
-	const rest = tok.kind === 0 ? tok : tok.next;
+	const rest = tok.kind == 0 ? tok : tok.next;
 	return [tok.next, rest];
 }
 
@@ -40,9 +40,9 @@ function main(): void {
 	const t = new Tok();
 	t.kind = 1;
 	t.next = e;
-	if (pick(t).kind !== 99) { throw "GUARD RED: ternary Ref/Ptr join wrong value"; }
+	if (pick(t).kind != 99) { throw "GUARD RED: ternary Ref/Ptr join wrong value"; }
 	const pair = pickPair(t);
-	if (pair[1].kind !== 99) { throw "GUARD RED: array-literal Ref/Ptr join wrong value"; }
+	if (pair[1].kind != 99) { throw "GUARD RED: array-literal Ref/Ptr join wrong value"; }
 	console.log("ptrRefBranchJoin ok");
 }
 main();

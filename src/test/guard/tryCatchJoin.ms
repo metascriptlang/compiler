@@ -20,7 +20,7 @@ type IR = Result<int32, string>;
 class Tok { kind: int32 = 0; }
 
 function divide(a: int32, b: int32): IR {
-	if (b === 0) return Result.err("boom");
+	if (b == 0) return Result.err("boom");
 	return Result.ok(a / b);
 }
 
@@ -33,26 +33,26 @@ function boom(): int32 { throw "fail"; }
 
 function main(): void {
 	const n = try divide(1, 0) catch null;
-	if (n !== null) { throw "GUARD RED: value-type `catch null` did not yield null"; }
+	if (n != null) { throw "GUARD RED: value-type `catch null` did not yield null"; }
 
 	const z = try divide(0, 5) catch null;
-	if (z === null) { throw "GUARD RED: a legitimate ok value of 0 is indistinguishable from the null catch"; }
-	if (z! !== 0) { throw "GUARD RED: ok-zero lost its value"; }
+	if (z == null) { throw "GUARD RED: a legitimate ok value of 0 is indistinguishable from the null catch"; }
+	if (z! != 0) { throw "GUARD RED: ok-zero lost its value"; }
 
 	const m = try divide(8, 2) catch null;
-	if (m === null) { throw "GUARD RED: ok path lost its value"; }
-	if (m! !== 4) { throw "GUARD RED: ok path wrong value"; }
+	if (m == null) { throw "GUARD RED: ok path lost its value"; }
+	if (m! != 4) { throw "GUARD RED: ok path wrong value"; }
 
 	const t = try getTok(false) catch null;
-	if (t !== null) { throw "GUARD RED: ref-type `catch null` did not yield null"; }
+	if (t != null) { throw "GUARD RED: ref-type `catch null` did not yield null"; }
 	const t2 = try getTok(true) catch null;
-	if (t2 === null) { throw "GUARD RED: ref ok path lost its value"; }
+	if (t2 == null) { throw "GUARD RED: ref ok path lost its value"; }
 
 	const same = try divide(10, 2) catch 0;
-	if (same !== 5) { throw "GUARD RED: same-type catch changed"; }
+	if (same != 5) { throw "GUARD RED: same-type catch changed"; }
 
 	const v = try divide(9, 3) catch boom();
-	if (v !== 3) { throw "GUARD RED: never-catch changed"; }
+	if (v != 3) { throw "GUARD RED: never-catch changed"; }
 
 	console.log("tryCatchJoin ok");
 }

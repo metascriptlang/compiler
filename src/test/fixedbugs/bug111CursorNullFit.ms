@@ -21,15 +21,15 @@
 import { hasError, strictErrorCount } from "../handoff/helpers";
 
 test "bug111: bare null initializes a Cursor field" {
-	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(): void { const a: B111A = { tag: \"x\", next: null }; }") === 0;
+	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(): void { const a: B111A = { tag: \"x\", next: null }; }") == 0;
 }
 
 test "bug111: bare null assigns into a Cursor field" {
-	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(a: B111A): void { a.next = null; }") === 0;
+	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(a: B111A): void { a.next = null; }") == 0;
 }
 
 test "bug111: a ref assigns into a Cursor field" {
-	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(): void { const a: B111A = { tag: \"x\", next: null }; const b: B111A = { tag: \"y\", next: null }; a.next = b; }") === 0;
+	assert strictErrorCount("interface B111A { tag: string; next: Cursor<B111A>; } function f(): void { const a: B111A = { tag: \"x\", next: null }; const b: B111A = { tag: \"y\", next: null }; a.next = b; }") == 0;
 }
 
 test "bug111: null into a plain ref field by assignment is rejected" {
@@ -41,7 +41,7 @@ test "bug111: null into a plain ref local by assignment is rejected" {
 }
 
 test "bug111: null into a T | null field stays legal" {
-	assert strictErrorCount("interface B111P { tag: string; } interface B111H { p: B111P | null; } function f(h: B111H): void { h.p = null; }") === 0;
+	assert strictErrorCount("interface B111P { tag: string; } interface B111H { p: B111P | null; } function f(h: B111H): void { h.p = null; }") == 0;
 }
 
 test "bug111: null into a bare Ptr field literal stays rejected" {

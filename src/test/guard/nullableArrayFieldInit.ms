@@ -21,7 +21,7 @@ interface P1 { name: string }
 interface RecNode { children: RecNode[]; dyn: P1[] | null }
 
 function withDynRec(n: RecNode, name: string): RecNode {
-	if (n.dyn === null) { n.dyn = []; }
+	if (n.dyn == null) { n.dyn = []; }
 	(n.dyn as P1[]).push({ name });
 	return n;
 }
@@ -31,7 +31,7 @@ interface P2 { name: string; get: () => SV }
 interface FlatNode { dyn: P2[] | null; region: (() => void) | null }
 
 function withDynFlat(n: FlatNode, name: string, get: () => SV): FlatNode {
-	if (n.dyn === null) { n.dyn = []; }
+	if (n.dyn == null) { n.dyn = []; }
 	(n.dyn as P2[]).push({ name, get });
 	return n;
 }

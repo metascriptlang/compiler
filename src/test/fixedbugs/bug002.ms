@@ -37,14 +37,14 @@ test "bug002: Ref<GI<MatchType>> ok variant — mono name preserved" {
 	// Pre-fix: codegen emitted `Body*` instead of `Body__number_string*`,
 	// triggering pointer-type warnings + potential link issues.
 	const r = makeOk(99);
-	if (r.kind === BodyK.Ok) {
-		assert r.value === 99;
+	if (r.kind == BodyK.Ok) {
+		assert r.value == 99;
 	}
 }
 
 test "bug002: Ref<GI<MatchType>> err variant — mono name preserved" {
 	const r = makeErr("boom");
-	if (r.kind === BodyK.Err) {
-		assert r.error === "boom";
+	if (r.kind == BodyK.Err) {
+		assert r.error == "boom";
 	}
 }

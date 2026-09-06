@@ -24,7 +24,7 @@ function first(arr: V[]): V { return arr[0]; }   // index 0 of empty → out-of-
 function main(): void {
 	// Runtime-true condition (array access — not const-foldable away).
 	const flags: int32[] = [1];
-	const condT: boolean = flags[0] === 1;
+	const condT: boolean = flags[0] == 1;
 
 	// 1. direct var-init: only mkA must run → runs == 1
 	const a: V = condT ? mkA() : mkB();

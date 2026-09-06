@@ -47,7 +47,7 @@ function main(): void {
 		r = r + t;
 	}
 	const total = await sink.get();
-	if (total !== 600000) { console.log("FAIL actor sum"); process.exit(1); }
+	if (total != 600000) { console.log("FAIL actor sum"); process.exit(1); }
 	console.log(`leak-moved-arg done r=${r}`);
 }
 main();

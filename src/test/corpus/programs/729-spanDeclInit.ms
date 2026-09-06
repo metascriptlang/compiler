@@ -10,7 +10,7 @@ function describe(s: Span<uint8>): string {
 let fails = 0;
 
 function check(label: string, got: string, want: string): void {
-	if (got !== want) {
+	if (got != want) {
 		fails = fails + 1;
 		console.log(label + " got " + got + " want " + want);
 	}
@@ -32,6 +32,6 @@ check("let", describe(sLet), "3:7");
 sLet = sized;
 check("let-reassign", describe(sLet), "4:1");
 
-if (fails === 0) {
+if (fails == 0) {
 	console.log("span-decl all-ok");
 }

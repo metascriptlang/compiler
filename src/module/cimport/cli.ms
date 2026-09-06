@@ -42,7 +42,7 @@ export function runCli(args: string[]): number {
 	for (const a of args) {
 		if (a.startsWith("--target=")) {
 			opts.target = resolveTarget(a.slice(9, a.length));
-		} else if (a === "--export") {
+		} else if (a == "--export") {
 			opts.emit.withExport = true;
 		} else if (a.startsWith("-I")) {
 			opts.includePaths.push(a.slice(2, a.length));
@@ -56,7 +56,7 @@ export function runCli(args: string[]): number {
 		}
 	}
 
-	if (headerPath === "") {
+	if (headerPath == "") {
 		console.log("usage: cparse <header.h> [--target=...] [-I...] [-D...] [--export] [--names=a,b]");
 		return 1;
 	}
@@ -71,5 +71,5 @@ export function runCli(args: string[]): number {
 	for (const d of out.diagnostics) {
 		console.log(`${d.file}:${d.line}:${d.col}: ${d.message}`);
 	}
-	return out.diagnostics.length === 0 ? 0 : 2;
+	return out.diagnostics.length == 0 ? 0 : 2;
 }

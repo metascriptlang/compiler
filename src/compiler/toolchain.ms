@@ -15,26 +15,26 @@ const ZIG_BASE = "https://ziglang.org/download/0.16.0/";
 
 function metascriptHome(): string {
 	let h = env.get("HOME");
-	if (h === "") h = env.get("USERPROFILE");
-	if (h === "") return "";
+	if (h == "") h = env.get("USERPROFILE");
+	if (h == "") return "";
 	return join(h, ".metascript");
 }
 
 function managedZigDir(): string {
 	const home = metascriptHome();
-	if (home === "") return "";
+	if (home == "") return "";
 	return join(home, "zig");
 }
 
 function managedZigBinary(): string {
 	const dir = managedZigDir();
-	if (dir === "") return "";
-	return join(dir, platform === "windows" ? "zig.exe" : "zig");
+	if (dir == "") return "";
+	return join(dir, platform == "windows" ? "zig.exe" : "zig");
 }
 
 function hasManagedZig(): boolean {
 	const b = managedZigBinary();
-	return b !== "" && exists(b);
+	return b != "" && exists(b);
 }
 
 export function managedZigCompiler(): string {
@@ -47,8 +47,8 @@ export function managedZigCompiler(): string {
 }
 
 function hostArch(): string {
-	if (platform === "windows") {
-		return env.get("PROCESSOR_ARCHITECTURE") === "ARM64" ? "aarch64" : "x86_64";
+	if (platform == "windows") {
+		return env.get("PROCESSOR_ARCHITECTURE") == "ARM64" ? "aarch64" : "x86_64";
 	}
 	const r = exec("uname -m");
 	const m = r.ok ? r.value : "";
@@ -67,7 +67,7 @@ function hostOs(): string {
 
 function hostKey(): string {
 	const os = hostOs();
-	if (os === "") return "";
+	if (os == "") return "";
 	return `${hostArch()}-${os}`;
 }
 
@@ -96,9 +96,9 @@ function zigSha256(key: string): string {
 }
 
 function verifySha256(file: string, want: string): boolean {
-	if (want === "") return true;
+	if (want == "") return true;
 	let out = "";
-	if (platform === "windows") {
+	if (platform == "windows") {
 		const r = exec(`certutil -hashfile "${file}" SHA256`);
 		out = r.ok ? r.value.toLowerCase() : "";
 	} else {
@@ -106,19 +106,19 @@ function verifySha256(file: string, want: string): boolean {
 		if (!r.ok) r = exec(`sha256sum "${file}"`);
 		out = r.ok ? r.value.toLowerCase() : "";
 	}
-	if (out === "") return false;
+	if (out == "") return false;
 	return out.indexOf(want.toLowerCase()) >= 0;
 }
 
 function autoInstallAllowed(assumeYes: boolean): boolean {
 	if (assumeYes) return true;
-	return env.get("MSC_AUTO_INSTALL_CC") === "1";
+	return env.get("MSC_AUTO_INSTALL_CC") == "1";
 }
 
 function promptInstall(dir: string): boolean {
 	writeStderr(`No C compiler configured. Download Zig ${ZIG_VERSION} to ${dir}? [y/N] `);
 	const ans = readLine();
-	return ans === "y" || ans === "Y" || ans === "yes";
+	return ans == "y" || ans == "Y" || ans == "yes";
 }
 
 function ensureZig(assumeYes: boolean): string {
@@ -126,7 +126,7 @@ function ensureZig(assumeYes: boolean): string {
 
 	const key = hostKey();
 	const tarball = zigTarball(key);
-	if (tarball === "") {
+	if (tarball == "") {
 		eprintln(`error: no managed Zig build for host '${key}'.`);
 		eprintln(`  → install a C compiler and pass --cc=clang.`);
 		return "";
@@ -169,12 +169,12 @@ function ensureZig(assumeYes: boolean): string {
 // cc.ms (ltoBroken/resolveLto) and run right after this, once the compiler is
 // known.
 export function resolveCC(opts: CliOptions): void {
-	if (opts.ccBinary === "zig") opts.ccBinary = "zig cc";
+	if (opts.ccBinary == "zig") opts.ccBinary = "zig cc";
 
-	if (opts.ccBinary !== "" || opts.ccCompiler !== 0) return;
-	if (opts.targetOs === "solana" || opts.targetOs === "bare" || opts.targetOs === "emcc") return;
+	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
+	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
 
-	if (ensureZig(opts.autoYes) === "") exit(1);
+	if (ensureZig(opts.autoYes) == "") exit(1);
 	// Leave ccBinary empty: getCompilerName resolves managed zig from its warmed
 	// global, which workers read read-only. Stuffing the heap path string into
 	// ccBinary would capture it into the parallel-compile spawn closures.

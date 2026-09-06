@@ -53,42 +53,42 @@ export function internedCount(interner: TaStringInterner): int32 {
 // ===== Tests =====
 test "empty interner has zero count" {
 	const interner = createStringInterner();
-	assert internedCount(interner) === 0;
+	assert internedCount(interner) == 0;
 }
 
 test "intern returns sequential IDs" {
 	const interner = createStringInterner();
 	const id0 = internString(interner, "hello");
 	const id1 = internString(interner, "world");
-	assert id0 === 0;
-	assert id1 === 1;
+	assert id0 == 0;
+	assert id1 == 1;
 }
 
 test "same string returns same ID" {
 	const interner = createStringInterner();
 	const id1 = internString(interner, "hello");
 	const id2 = internString(interner, "hello");
-	assert id1 === id2;
-	assert internedCount(interner) === 1;
+	assert id1 == id2;
+	assert internedCount(interner) == 1;
 }
 
 test "different strings get different IDs" {
 	const interner = createStringInterner();
 	const a = internString(interner, "foo");
 	const b = internString(interner, "bar");
-	assert a !== b;
-	assert internedCount(interner) === 2;
+	assert a != b;
+	assert internedCount(interner) == 2;
 }
 
 test "lookup retrieves correct string" {
 	const interner = createStringInterner();
 	const id = internString(interner, "test");
-	assert lookupInterned(interner, id) === "test";
+	assert lookupInterned(interner, id) == "test";
 }
 
 test "lookup unknown ID returns empty" {
 	const interner = createStringInterner();
-	assert lookupInterned(interner, 999) === "";
+	assert lookupInterned(interner, 999) == "";
 }
 
 test "intern many strings" {
@@ -98,7 +98,7 @@ test "intern many strings" {
 	internString(interner, "c");
 	internString(interner, "a");
 	internString(interner, "b");
-	assert internedCount(interner) === 3;
+	assert internedCount(interner) == 3;
 }
 
 test "lookup after multiple interns" {
@@ -106,7 +106,7 @@ test "lookup after multiple interns" {
 	const idA = internString(interner, "alpha");
 	const idB = internString(interner, "beta");
 	const idG = internString(interner, "gamma");
-	assert lookupInterned(interner, idA) === "alpha";
-	assert lookupInterned(interner, idB) === "beta";
-	assert lookupInterned(interner, idG) === "gamma";
+	assert lookupInterned(interner, idA) == "alpha";
+	assert lookupInterned(interner, idB) == "beta";
+	assert lookupInterned(interner, idG) == "gamma";
 }

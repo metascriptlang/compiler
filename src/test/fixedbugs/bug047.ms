@@ -32,7 +32,7 @@ test "bug047: HashMap subscript read does not crash" {
 	m.set("a", 1);
 	m.set("b", 2);
 	const v = m["a"];
-	assert v === 1;
+	assert v == 1;
 }
 
 test "bug047: HashMap subscript read multiple keys" {
@@ -40,9 +40,9 @@ test "bug047: HashMap subscript read multiple keys" {
 	m.set("x", 10);
 	m.set("y", 20);
 	m.set("z", 30);
-	assert m["x"] === 10;
-	assert m["y"] === 20;
-	assert m["z"] === 30;
+	assert m["x"] == 10;
+	assert m["y"] == 20;
+	assert m["z"] == 30;
 }
 
 test "bug047: HashMap subscript in expression context" {
@@ -50,5 +50,5 @@ test "bug047: HashMap subscript in expression context" {
 	m.set("a", 5);
 	m.set("b", 7);
 	const sum = m["a"]! + m["b"]!;
-	assert sum === 12;
+	assert sum == 12;
 }

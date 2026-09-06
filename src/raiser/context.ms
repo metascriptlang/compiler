@@ -57,7 +57,7 @@ export function execute(ctx: RaiserContext): boolean {
 	ctx.arrayHeap = vm.arrayHeap;
 	ctx.objectHeap = vm.objectHeap;
 	ctx.orphanFailures = vmOrphanFailures(vm);
-	if (vm.error !== "") {
+	if (vm.error != "") {
 		ctx.lastError = `${vm.error}\n${vmDumpStack(vm)}`;
 		return false;
 	}
@@ -74,7 +74,7 @@ test "create + load + execute" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	assert ctx.lastResult.intVal === 42;
+	assert ctx.lastResult.intVal == 42;
 }
 
 test "execute without load returns false" {
@@ -95,11 +95,11 @@ test "load replaces module" {
 	);
 	load(ctx, mod1);
 	execute(ctx);
-	assert ctx.lastResult.intVal === 10;
+	assert ctx.lastResult.intVal == 10;
 
 	load(ctx, mod2);
 	execute(ctx);
-	assert ctx.lastResult.intVal === 20;
+	assert ctx.lastResult.intVal == 20;
 }
 
 test "output captured" {
@@ -114,7 +114,7 @@ test "output captured" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	assert ctx.lastOutput === "99\n";
+	assert ctx.lastOutput == "99\n";
 }
 
 test "error propagates with stack trace" {

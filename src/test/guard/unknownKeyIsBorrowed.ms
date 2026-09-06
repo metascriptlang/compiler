@@ -63,7 +63,7 @@ function main(): void {
 		i = i + 1;
 	}
 
-	if (m.size !== 64) { throw "GUARD RED: map lost entries"; }
+	if (m.size != 64) { throw "GUARD RED: map lost entries"; }
 
 	// Identity lookups must still hit, and the payload behind each borrowed
 	// handle must be intact because `owner` holds the real reference.
@@ -72,8 +72,8 @@ function main(): void {
 		const h = owner[j];
 		if (!m.has(h)) { throw "GUARD RED: identity key no longer found"; }
 		const got = m.get(h) ?? -1;
-		if (got !== (j as int32)) { throw "GUARD RED: identity key mapped to the wrong slot"; }
-		if (h.tag !== (j as int32)) { throw "GUARD RED: owned handle was finalized while borrowed"; }
+		if (got != (j as int32)) { throw "GUARD RED: identity key mapped to the wrong slot"; }
+		if (h.tag != (j as int32)) { throw "GUARD RED: owned handle was finalized while borrowed"; }
 		j = j + 1;
 	}
 

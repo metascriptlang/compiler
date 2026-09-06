@@ -36,7 +36,7 @@ function main(): void {
 		round = round + 1;
 	}
 
-	const keeperOk = obj.objects[ka].rc >= 1 && heapObjectFieldCount(obj, ka) === 1;
+	const keeperOk = obj.objects[ka].rc >= 1 && heapObjectFieldCount(obj, ka) == 1;
 	console.log("raiser-cycle freed=" + (totalFreed % 1000000).toString() + " keeperOk=" + (keeperOk ? "1" : "0"));
 }
 

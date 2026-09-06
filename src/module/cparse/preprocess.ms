@@ -98,17 +98,17 @@ function newEof(ctx: PPContext, tok: CToken): CToken {
 
 // Append tok2 list after the end of tok1 list. Returns tok1 head.
 function append(tok1: CToken, tok2: CToken): CToken {
-	if (tok1.kind === CTokenKind.Eof) return tok2;
+	if (tok1.kind == CTokenKind.Eof) return tok2;
 	const head = tok1;
 	let cur = tok1;
-	while (cur.next.kind !== CTokenKind.Eof) cur = cur.next;
+	while (cur.next.kind != CTokenKind.Eof) cur = cur.next;
 	cur.next = tok2;
 	return head;
 }
 
 // Skip to next line. Returns first token of next line.
 function skipLine(tok: CToken): CToken {
-	while (tok.kind !== CTokenKind.Eof && !tok.atBol) tok = tok.next;
+	while (tok.kind != CTokenKind.Eof && !tok.atBol) tok = tok.next;
 	return tok;
 }
 
@@ -117,24 +117,24 @@ function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 	const head = makeEofToken(tok.file);
 	let cur = head;
 	// If tok is already at beginning of next line, body is empty
-	if (tok.atBol || tok.kind === CTokenKind.Eof) {
+	if (tok.atBol || tok.kind == CTokenKind.Eof) {
 		cur.next = newEof(ctx, tok);
 		return [head.next, tok];
 	}
-	while (tok.kind !== CTokenKind.Eof && !tok.next.atBol) {
+	while (tok.kind != CTokenKind.Eof && !tok.next.atBol) {
 		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 		tok = tok.next;
 	}
 	// Include the last token on the line
-	if (tok.kind !== CTokenKind.Eof) {
+	if (tok.kind != CTokenKind.Eof) {
 		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
 	}
 	cur.next = newEof(ctx, tok);
-	const rest = tok.kind === CTokenKind.Eof ? tok : tok.next;
+	const rest = tok.kind == CTokenKind.Eof ? tok : tok.next;
 	return [head.next, rest]; // [copied line head, rest of stream]
 }
 
@@ -142,7 +142,7 @@ function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 function joinTokens(tok: CToken): string {
 	let result = "";
 	let first = true;
-	while (tok.kind !== CTokenKind.Eof) {
+	while (tok.kind != CTokenKind.Eof) {
 		if (!first && tok.hasSpace) result = result + " ";
 		result = result + tok.stringVal;
 		first = false;
@@ -155,7 +155,7 @@ function joinTokens(tok: CToken): string {
 
 function hidesetContains(hs: string[], name: string): boolean {
 	for (const h of hs) {
-		if (h === name) return true;
+		if (h == name) return true;
 	}
 	return false;
 }
@@ -180,7 +180,7 @@ function hidesetIntersection(a: string[], b: string[]): string[] {
 // Add name to hideset of all tokens in list.
 function addHideset(tok: CToken, name: string): void {
 	let t = tok;
-	while (t.kind !== CTokenKind.Eof) {
+	while (t.kind != CTokenKind.Eof) {
 		if (!hidesetContains(t.hideset, name)) t.hideset.push(name);
 		t = t.next;
 	}
@@ -198,16 +198,16 @@ function addMacro(ctx: PPContext, name: string, isObjlike: boolean, body: CToken
 }
 
 function findMacro(ctx: PPContext, tok: CToken): Macro {
-	if (tok.kind !== CTokenKind.Ident) return null as unknown as Macro;
+	if (tok.kind != CTokenKind.Ident) return null as unknown as Macro;
 	const m = ctx.macros.get(tok.stringVal);
-	if (m !== null) return m;
+	if (m != null) return m;
 	return null as unknown as Macro;
 }
 
 // ===== Read Macro Definition =====
 
 function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
-	if (tok.kind !== CTokenKind.Ident) {
+	if (tok.kind != CTokenKind.Ident) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col, "macro name must be an identifier"));
 		return skipLine(tok);
 	}
@@ -215,27 +215,27 @@ function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
 	tok = tok.next;
 
 	// Function-like: ( immediately after name, no space
-	if (!tok.hasSpace && tok.stringVal === "(") {
+	if (!tok.hasSpace && tok.stringVal == "(") {
 		const params: MacroParam[] = [];
 		let vaArgs = "";
 		tok = tok.next; // skip (
-		while (tok.kind !== CTokenKind.Eof && tok.stringVal !== ")") {
+		while (tok.kind != CTokenKind.Eof && tok.stringVal != ")") {
 			if (params.length > 0) {
-				if (tok.stringVal !== ",") break;
+				if (tok.stringVal != ",") break;
 				tok = tok.next;
 			}
-			if (tok.stringVal === "...") {
+			if (tok.stringVal == "...") {
 				vaArgs = "__VA_ARGS__";
 				tok = tok.next;
 				break;
 			}
-			if (tok.kind !== CTokenKind.Ident) break;
+			if (tok.kind != CTokenKind.Ident) break;
 			const pname = tok.stringVal;
 			tok = tok.next;
-			if (tok.stringVal === "...") { vaArgs = pname; tok = tok.next; break; }
+			if (tok.stringVal == "...") { vaArgs = pname; tok = tok.next; break; }
 			params.push({ name: pname });
 		}
-		if (tok.stringVal === ")") tok = tok.next;
+		if (tok.stringVal == ")") tok = tok.next;
 
 		const bodyParts = copyLine(ctx, tok);
 		const body = bodyParts[0];
@@ -258,7 +258,7 @@ function readMacroDefinition(tok: CToken, ctx: PPContext): CToken {
 function stringize(tok: CToken): string {
 	let result = "\"";
 	let first = true;
-	while (tok.kind !== CTokenKind.Eof) {
+	while (tok.kind != CTokenKind.Eof) {
 		if (!first && tok.hasSpace) result = result + " ";
 		const s = tok.stringVal;
 		// Run-copied for multi-byte UTF-8 safety: plain bytes flush as spans,
@@ -267,7 +267,7 @@ function stringize(tok: CToken): string {
 		let i = 0;
 		while (i < s.byteLength) {
 			const ch = s.byteAt(i);
-			if (ch === "\"".code || ch === "\\".code) {
+			if (ch == "\"".code || ch == "\\".code) {
 				if (runStart < i) result = result + s.byteSlice(runStart, i);
 				result = result + "\\" + s.byteSlice(i, i + 1);
 				runStart = i + 1;
@@ -289,7 +289,7 @@ function paste(lhs: CToken, rhs: CToken, ctx: PPContext): CToken {
 	// The pasted token splices into the outer stream — its arena must outlive
 	// this call, so fold it into the session arena.
 	for (const at of r.arena) ctx.arena.push(at);
-	if (r.head.kind === CTokenKind.Eof || r.head.next.kind !== CTokenKind.Eof) {
+	if (r.head.kind == CTokenKind.Eof || r.head.next.kind != CTokenKind.Eof) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, lhs.file, lhs.line, lhs.col,
 			`pasting "${lhs.stringVal}" and "${rhs.stringVal}" does not give a valid token`));
 	}
@@ -300,7 +300,7 @@ function paste(lhs: CToken, rhs: CToken, ctx: PPContext): CToken {
 
 function findArg(args: MacroArg[], name: string): MacroArg {
 	for (const arg of args) {
-		if (arg.name === name) return arg;
+		if (arg.name == name) return arg;
 	}
 	return null as unknown as MacroArg;
 }
@@ -312,11 +312,11 @@ function readMacroArgOne(ctx: PPContext, tok: CToken, readRest: boolean): CToken
 	let cur = head;
 	let depth = 0;
 
-	while (tok.kind !== CTokenKind.Eof) {
-		if (depth === 0 && tok.stringVal === ")") break;
-		if (depth === 0 && !readRest && tok.stringVal === ",") break;
-		if (tok.stringVal === "(") depth = depth + 1;
-		if (tok.stringVal === ")") depth = depth - 1;
+	while (tok.kind != CTokenKind.Eof) {
+		if (depth == 0 && tok.stringVal == ")") break;
+		if (depth == 0 && !readRest && tok.stringVal == ",") break;
+		if (tok.stringVal == "(") depth = depth + 1;
+		if (tok.stringVal == ")") depth = depth - 1;
 		const c = copyToken(ctx, tok);
 		cur.next = c;
 		cur = c;
@@ -332,23 +332,23 @@ function readMacroArgs(ctx: PPContext, tok: CToken, mac: Macro): MacroArg[][] {
 	tok = tok.next; // skip (
 
 	let pi = 0;
-	if (tok.stringVal !== ")") {
+	if (tok.stringVal != ")") {
 		while (pi < mac.params.length) {
 			const r = readMacroArgOne(ctx, tok, false);
 			args.push({ name: mac.params[pi].name, isVaArgs: false, tok: r[0] });
 			tok = r[1];
 			pi = pi + 1;
-			if (tok.stringVal === ")") break;
-			if (tok.stringVal === ",") tok = tok.next;
+			if (tok.stringVal == ")") break;
+			if (tok.stringVal == ",") tok = tok.next;
 		}
 		// Variadic: read remaining as __VA_ARGS__
-		if (mac.vaArgsName !== "") {
+		if (mac.vaArgsName != "") {
 			const r = readMacroArgOne(ctx, tok, true);
 			args.push({ name: mac.vaArgsName, isVaArgs: true, tok: r[0] });
 			tok = r[1];
 		}
 	}
-	if (tok.stringVal === ")") tok = tok.next;
+	if (tok.stringVal == ")") tok = tok.next;
 	return [args, [{ name: tok.stringVal }] as unknown as MacroArg[]] as unknown as MacroArg[][];
 }
 
@@ -358,11 +358,11 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 	const head = makeEofToken("");
 	let cur = head;
 
-	while (body.kind !== CTokenKind.Eof) {
+	while (body.kind != CTokenKind.Eof) {
 		// # stringize
-		if (body.stringVal === "#" && body.next.kind !== CTokenKind.Eof) {
+		if (body.stringVal == "#" && body.next.kind != CTokenKind.Eof) {
 			const arg = findArg(args, body.next.stringVal);
-			if (arg !== null) {
+			if (arg != null) {
 				const str = stringize(arg.tok);
 				const stok = copyToken(ctx, body);
 				stok.kind = CTokenKind.Str;
@@ -375,13 +375,13 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 		}
 
 		// ## paste
-		if (body.stringVal === "##" && body.next.kind !== CTokenKind.Eof) {
+		if (body.stringVal == "##" && body.next.kind != CTokenKind.Eof) {
 			// LHS is previous token (cur), RHS is next
 			const rhs = body.next;
 			const rhsArg = findArg(args, rhs.stringVal);
-			if (rhsArg !== null) {
+			if (rhsArg != null) {
 				// Paste cur with first token of arg
-				if (rhsArg.tok.kind !== CTokenKind.Eof) {
+				if (rhsArg.tok.kind != CTokenKind.Eof) {
 					const pasted = paste(cur, rhsArg.tok, ctx);
 					cur.kind = pasted.kind;
 					cur.stringVal = pasted.stringVal;
@@ -389,7 +389,7 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 					cur.floatVal = pasted.floatVal;
 					// Append rest of arg
 					let rest = rhsArg.tok.next;
-					while (rest.kind !== CTokenKind.Eof) {
+					while (rest.kind != CTokenKind.Eof) {
 						const c = copyToken(ctx, rest);
 						cur.next = c;
 						cur = c;
@@ -406,11 +406,11 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 		}
 
 		// Parameter with ## on left side
-		if (body.next.stringVal === "##") {
+		if (body.next.stringVal == "##") {
 			const arg = findArg(args, body.stringVal);
-			if (arg !== null) {
+			if (arg != null) {
 				// , ## __VA_ARGS__ — if VA_ARGS empty, remove comma
-				if (arg.isVaArgs && arg.tok.kind === CTokenKind.Eof && cur.stringVal === ",") {
+				if (arg.isVaArgs && arg.tok.kind == CTokenKind.Eof && cur.stringVal == ",") {
 					// Remove the comma
 					// Walk back to find the token before cur — tricky with linked list
 					// Simpler: just mark cur as empty
@@ -419,9 +419,9 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 					body = body.next.next; // skip param ##
 					continue;
 				}
-				if (arg.tok.kind !== CTokenKind.Eof) {
+				if (arg.tok.kind != CTokenKind.Eof) {
 					let t = arg.tok;
-					while (t.kind !== CTokenKind.Eof) {
+					while (t.kind != CTokenKind.Eof) {
 						const c = copyToken(ctx, t);
 						cur.next = c;
 						cur = c;
@@ -435,17 +435,17 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 
 		// Parameter substitution (normal)
 		const arg = findArg(args, body.stringVal);
-		if (arg !== null) {
+		if (arg != null) {
 			// Expand the argument first
 			let t = arg.tok;
-			if (t.kind === CTokenKind.Eof) {
+			if (t.kind == CTokenKind.Eof) {
 				// Empty argument — skip
 				body = body.next;
 				continue;
 			}
-			while (t.kind !== CTokenKind.Eof) {
+			while (t.kind != CTokenKind.Eof) {
 				const c = copyToken(ctx, t);
-				c.hasSpace = (cur === head) ? body.hasSpace : c.hasSpace;
+				c.hasSpace = (cur == head) ? body.hasSpace : c.hasSpace;
 				cur.next = c;
 				cur = c;
 				t = t.next;
@@ -470,11 +470,11 @@ function subst(body: CToken, args: MacroArg[], ctx: PPContext): CToken {
 function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	// Returns [expanded-or-null, rest] — null means not expanded
 	const mac = findMacro(ctx, tok);
-	if (mac === null) return [null as unknown as CToken, tok];
+	if (mac == null) return [null as unknown as CToken, tok];
 	if (hidesetContains(tok.hideset, mac.name)) return [null as unknown as CToken, tok];
 
 	// Built-in handler macros
-	if (mac.handler !== "") {
+	if (mac.handler != "") {
 		const result = handleBuiltinMacro(tok, mac, ctx);
 		return [result, tok.next];
 	}
@@ -490,13 +490,13 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 		addHideset(body, mac.name);
 		// Set hideset on each token
 		let t = body;
-		while (t.kind !== CTokenKind.Eof) {
+		while (t.kind != CTokenKind.Eof) {
 			const merged = hidesetUnion(t.hideset, hs);
 			t.hideset = merged;
 			t = t.next;
 		}
 		// Preserve leading whitespace
-		if (body.kind !== CTokenKind.Eof) {
+		if (body.kind != CTokenKind.Eof) {
 			body.hasSpace = tok.hasSpace;
 			body.atBol = tok.atBol;
 		}
@@ -505,7 +505,7 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	}
 
 	// Function-like macro — needs ( after name
-	if (tok.next.stringVal !== "(") return [null as unknown as CToken, tok];
+	if (tok.next.stringVal != "(") return [null as unknown as CToken, tok];
 
 	const argsResult = readMacroArgs(ctx, tok.next, mac);
 	const args = argsResult[0] as unknown as MacroArg[];
@@ -513,26 +513,26 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	// Re-walk from tok to find the closing ) (simpler than decoding readMacroArgs' rest)
 	let rest = tok.next.next; // skip name (
 	let depth = 1;
-	while (rest.kind !== CTokenKind.Eof && depth > 0) {
-		if (rest.stringVal === "(") depth = depth + 1;
-		if (rest.stringVal === ")") depth = depth - 1;
+	while (rest.kind != CTokenKind.Eof && depth > 0) {
+		if (rest.stringVal == "(") depth = depth + 1;
+		if (rest.stringVal == ")") depth = depth - 1;
 		if (depth > 0) rest = rest.next;
 	}
-	if (rest.stringVal === ")") rest = rest.next;
+	if (rest.stringVal == ")") rest = rest.next;
 
 	const body = subst(mac.body, args, ctx);
 	const emptyHideset: string[] = [];
-	const restHideset = rest.kind !== CTokenKind.Eof ? rest.hideset : emptyHideset;
+	const restHideset = rest.kind != CTokenKind.Eof ? rest.hideset : emptyHideset;
 	const hs = hidesetIntersection(tok.hideset, restHideset);
 	addHideset(body, mac.name);
 	let t = body;
-	while (t.kind !== CTokenKind.Eof) {
+	while (t.kind != CTokenKind.Eof) {
 		const hsWithName = hidesetUnion(hs, macNameArr);
 		const merged = hidesetUnion(t.hideset, hsWithName);
 		t.hideset = merged;
 		t = t.next;
 	}
-	if (body.kind !== CTokenKind.Eof) {
+	if (body.kind != CTokenKind.Eof) {
 		body.hasSpace = tok.hasSpace;
 		body.atBol = tok.atBol;
 	}
@@ -544,7 +544,7 @@ function copyTokenList(ctx: PPContext, head: CToken): CToken {
 	const sentinel = makeEofToken("");
 	let cur = sentinel;
 	let t = head;
-	while (t.kind !== CTokenKind.Eof) {
+	while (t.kind != CTokenKind.Eof) {
 		const c = copyToken(ctx, t);
 		cur.next = c;
 		cur = c;
@@ -597,14 +597,14 @@ function pushCondIncl(ctx: PPContext, included: boolean): void {
 // Skip tokens until matching #elif, #else, or #endif.
 function skipCondIncl(tok: CToken): CToken {
 	let depth = 0;
-	while (tok.kind !== CTokenKind.Eof) {
-		if (tok.atBol && tok.stringVal === "#") {
+	while (tok.kind != CTokenKind.Eof) {
+		if (tok.atBol && tok.stringVal == "#") {
 			const dir = tok.next;
-			if (dir.stringVal === "if" || dir.stringVal === "ifdef" || dir.stringVal === "ifndef") {
+			if (dir.stringVal == "if" || dir.stringVal == "ifdef" || dir.stringVal == "ifndef") {
 				depth = depth + 1;
-			} else if (depth === 0 && (dir.stringVal === "elif" || dir.stringVal === "else" || dir.stringVal === "endif")) {
+			} else if (depth == 0 && (dir.stringVal == "elif" || dir.stringVal == "else" || dir.stringVal == "endif")) {
 				return tok;
-			} else if (dir.stringVal === "endif") {
+			} else if (dir.stringVal == "endif") {
 				depth = depth - 1;
 			}
 		}
@@ -629,41 +629,41 @@ function evalNext(es: EvalState): void {
 
 function evalTernary(es: EvalState, ctx: PPContext): int32 {
 	let val = evalOr(es, ctx);
-	if (es.tok.stringVal === "?") {
+	if (es.tok.stringVal == "?") {
 		evalNext(es);
 		const thenVal = evalTernary(es, ctx);
-		if (es.tok.stringVal !== ":") {
+		if (es.tok.stringVal != ":") {
 			ctx.diags.push(makeDiag(DiagSeverity.Error, es.tok.file, es.tok.line, es.tok.col, "expected ':' in ternary"));
 		} else { evalNext(es); }
 		const elseVal = evalTernary(es, ctx);
-		return val !== 0 ? thenVal : elseVal;
+		return val != 0 ? thenVal : elseVal;
 	}
 	return val;
 }
 
 function evalOr(es: EvalState, ctx: PPContext): int32 {
 	let val = evalAnd(es, ctx);
-	while (es.tok.stringVal === "||") {
+	while (es.tok.stringVal == "||") {
 		evalNext(es);
 		const rhs = evalAnd(es, ctx);
-		val = (val !== 0 || rhs !== 0) ? 1 : 0;
+		val = (val != 0 || rhs != 0) ? 1 : 0;
 	}
 	return val;
 }
 
 function evalAnd(es: EvalState, ctx: PPContext): int32 {
 	let val = evalBitOr(es, ctx);
-	while (es.tok.stringVal === "&&") {
+	while (es.tok.stringVal == "&&") {
 		evalNext(es);
 		const rhs = evalBitOr(es, ctx);
-		val = (val !== 0 && rhs !== 0) ? 1 : 0;
+		val = (val != 0 && rhs != 0) ? 1 : 0;
 	}
 	return val;
 }
 
 function evalBitOr(es: EvalState, ctx: PPContext): int32 {
 	let val = evalBitXor(es, ctx);
-	while (es.tok.stringVal === "|") {
+	while (es.tok.stringVal == "|") {
 		evalNext(es);
 		val = val | evalBitXor(es, ctx);
 	}
@@ -672,7 +672,7 @@ function evalBitOr(es: EvalState, ctx: PPContext): int32 {
 
 function evalBitXor(es: EvalState, ctx: PPContext): int32 {
 	let val = evalBitAnd(es, ctx);
-	while (es.tok.stringVal === "^") {
+	while (es.tok.stringVal == "^") {
 		evalNext(es);
 		val = val ^ evalBitAnd(es, ctx);
 	}
@@ -681,7 +681,7 @@ function evalBitXor(es: EvalState, ctx: PPContext): int32 {
 
 function evalBitAnd(es: EvalState, ctx: PPContext): int32 {
 	let val = evalEquality(es, ctx);
-	while (es.tok.stringVal === "&") {
+	while (es.tok.stringVal == "&") {
 		evalNext(es);
 		val = val & evalEquality(es, ctx);
 	}
@@ -690,20 +690,20 @@ function evalBitAnd(es: EvalState, ctx: PPContext): int32 {
 
 function evalEquality(es: EvalState, ctx: PPContext): int32 {
 	let val = evalRelational(es, ctx);
-	while (es.tok.stringVal === "==" || es.tok.stringVal === "!=") {
+	while (es.tok.stringVal == "==" || es.tok.stringVal == "!=") {
 		const op = es.tok.stringVal;
 		evalNext(es);
 		const rhs = evalRelational(es, ctx);
-		if (op === "==") val = val === rhs ? 1 : 0;
-		else val = val !== rhs ? 1 : 0;
+		if (op == "==") val = val == rhs ? 1 : 0;
+		else val = val != rhs ? 1 : 0;
 	}
 	return val;
 }
 
 function evalRelational(es: EvalState, ctx: PPContext): int32 {
 	let val = evalShift(es, ctx);
-	while (es.tok.stringVal === "<" || es.tok.stringVal === ">" ||
-		   es.tok.stringVal === "<=" || es.tok.stringVal === ">=") {
+	while (es.tok.stringVal == "<" || es.tok.stringVal == ">" ||
+		   es.tok.stringVal == "<=" || es.tok.stringVal == ">=") {
 		const op = es.tok.stringVal;
 		evalNext(es);
 		const rhs = evalShift(es, ctx);
@@ -719,11 +719,11 @@ function evalRelational(es: EvalState, ctx: PPContext): int32 {
 
 function evalShift(es: EvalState, ctx: PPContext): int32 {
 	let val = evalAdd(es, ctx);
-	while (es.tok.stringVal === "<<" || es.tok.stringVal === ">>") {
+	while (es.tok.stringVal == "<<" || es.tok.stringVal == ">>") {
 		const op = es.tok.stringVal;
 		evalNext(es);
 		const rhs = evalAdd(es, ctx);
-		if (op === "<<") val = val << rhs;
+		if (op == "<<") val = val << rhs;
 		else val = val >> rhs;
 	}
 	return val;
@@ -731,11 +731,11 @@ function evalShift(es: EvalState, ctx: PPContext): int32 {
 
 function evalAdd(es: EvalState, ctx: PPContext): int32 {
 	let val = evalMul(es, ctx);
-	while (es.tok.stringVal === "+" || es.tok.stringVal === "-") {
+	while (es.tok.stringVal == "+" || es.tok.stringVal == "-") {
 		const op = es.tok.stringVal;
 		evalNext(es);
 		const rhs = evalMul(es, ctx);
-		if (op === "+") val = val + rhs;
+		if (op == "+") val = val + rhs;
 		else val = val - rhs;
 	}
 	return val;
@@ -743,20 +743,20 @@ function evalAdd(es: EvalState, ctx: PPContext): int32 {
 
 function evalMul(es: EvalState, ctx: PPContext): int32 {
 	let val = evalUnary(es, ctx);
-	while (es.tok.stringVal === "*" || es.tok.stringVal === "/" || es.tok.stringVal === "%") {
+	while (es.tok.stringVal == "*" || es.tok.stringVal == "/" || es.tok.stringVal == "%") {
 		const op = es.tok.stringVal;
 		evalNext(es);
 		const rhs = evalUnary(es, ctx);
-		if (op === "*") val = val * rhs;
-		else if (op === "/" && rhs !== 0) val = (val / rhs) | 0; // integer division
-		else if (op === "%" && rhs !== 0) val = val % rhs;
+		if (op == "*") val = val * rhs;
+		else if (op == "/" && rhs != 0) val = (val / rhs) | 0; // integer division
+		else if (op == "%" && rhs != 0) val = val % rhs;
 	}
 	return val;
 }
 
 function evalUnary(es: EvalState, ctx: PPContext): int32 {
 	return match (es.tok.stringVal) {
-		"!" => { evalNext(es); return evalUnary(es, ctx) === 0 ? 1 : 0; },
+		"!" => { evalNext(es); return evalUnary(es, ctx) == 0 ? 1 : 0; },
 		"~" => { evalNext(es); return ~evalUnary(es, ctx); },
 		"-" => { evalNext(es); return -evalUnary(es, ctx); },
 		"+" => { evalNext(es); return evalUnary(es, ctx); },
@@ -768,22 +768,22 @@ function evalPrimary(es: EvalState, ctx: PPContext): int32 {
 	const tok = es.tok;
 
 	// Parenthesized expression
-	if (tok.stringVal === "(") {
+	if (tok.stringVal == "(") {
 		evalNext(es);
 		const val = evalTernary(es, ctx);
-		if (es.tok.stringVal === ")") evalNext(es);
+		if (es.tok.stringVal == ")") evalNext(es);
 		return val;
 	}
 
 	// Numeric literal (includes character literals stored as Num)
-	if (tok.kind === CTokenKind.Num) {
+	if (tok.kind == CTokenKind.Num) {
 		const val = tok.intVal as int32;
 		evalNext(es);
 		return val;
 	}
 
 	// Undefined identifier → 0 (C spec)
-	if (tok.kind === CTokenKind.Ident) {
+	if (tok.kind == CTokenKind.Ident) {
 		evalNext(es);
 		return 0;
 	}
@@ -802,15 +802,15 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 	const processed = makeEofToken("");
 	let cur = processed;
 	let t = line;
-	while (t.kind !== CTokenKind.Eof) {
-		if (t.kind === CTokenKind.Ident && t.stringVal === "defined") {
+	while (t.kind != CTokenKind.Eof) {
+		if (t.kind == CTokenKind.Ident && t.stringVal == "defined") {
 			t = t.next;
 			let name = "";
-			if (t.stringVal === "(") {
+			if (t.stringVal == "(") {
 				t = t.next;
 				name = t.stringVal;
 				t = t.next; // skip name
-				if (t.stringVal === ")") t = t.next;
+				if (t.stringVal == ")") t = t.next;
 			} else {
 				name = t.stringVal;
 				t = t.next;
@@ -840,8 +840,8 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 
 	// Replace remaining identifiers with 0
 	let et = expanded;
-	while (et.kind !== CTokenKind.Eof) {
-		if (et.kind === CTokenKind.Ident) {
+	while (et.kind != CTokenKind.Eof) {
+		if (et.kind == CTokenKind.Ident) {
 			et.kind = CTokenKind.Num;
 			et.intVal = 0 as int64;
 			et.stringVal = "0";
@@ -857,9 +857,9 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 	const head = makeEofToken("");
 	let cur = head;
-	while (tok.kind !== CTokenKind.Eof) {
+	while (tok.kind != CTokenKind.Eof) {
 		const r = expandMacro(tok, ctx);
-		if (r[0] !== null) {
+		if (r[0] != null) {
 			tok = r[0];
 			continue;
 		}
@@ -880,37 +880,37 @@ function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 // flip resolution if a file later appears.
 function probeReadFile(path: string, ctx: PPContext): string {
 	const content = try readFile(path) catch "";
-	if (ctx.readLog !== null) {
-		ctx.readLog.push(content !== "" ? `${path}\t${headerDepHash(content)}` : `${path}\t-`);
+	if (ctx.readLog != null) {
+		ctx.readLog.push(content != "" ? `${path}\t${headerDepHash(content)}` : `${path}\t-`);
 	}
 	return content;
 }
 
 function searchIncludePaths(filename: string, ctx: PPContext): string {
 	// Absolute path
-	if (filename.byteLength > 0 && filename.byteAt(0) === "/".code) {
-		if (probeReadFile(filename, ctx) !== "") return filename;
+	if (filename.byteLength > 0 && filename.byteAt(0) == "/".code) {
+		if (probeReadFile(filename, ctx) != "") return filename;
 		return "";
 	}
 	// Search include paths
 	for (const dir of ctx.includePaths) {
 		const path = dir + "/" + filename;
-		if (probeReadFile(path, ctx) !== "") return path;
+		if (probeReadFile(path, ctx) != "") return path;
 	}
 	return "";
 }
 
 function readIncludeFilename(tok: CToken, ctx: PPContext): string[] {
 	// "filename" → [filename, rest]
-	if (tok.kind === CTokenKind.Str) {
+	if (tok.kind == CTokenKind.Str) {
 		return [tok.stringVal, ""];
 	}
 	// <filename> → join tokens between < and >
-	if (tok.stringVal === "<") {
+	if (tok.stringVal == "<") {
 		let result = "";
 		tok = tok.next;
-		while (tok.kind !== CTokenKind.Eof && tok.stringVal !== ">") {
-			if (tok.hasSpace && result !== "") result = result + " ";
+		while (tok.kind != CTokenKind.Eof && tok.stringVal != ">") {
+			if (tok.hasSpace && result != "") result = result + " ";
 			result = result + tok.stringVal;
 			tok = tok.next;
 		}
@@ -925,14 +925,14 @@ function detectIncludeGuard(tokens: CToken): string {
 	let t = tokens;
 	// Skip to first non-whitespace preprocessor token
 	// Look for: #ifndef IDENTIFIER as the first directive
-	if (t.kind === CTokenKind.Eof) return "";
+	if (t.kind == CTokenKind.Eof) return "";
 	// The raw token stream should start with # ifndef IDENT
 	// But after our tokenizer, # is a Punct and ifndef is an Ident
-	if (t.stringVal !== "#") return "";
+	if (t.stringVal != "#") return "";
 	t = t.next;
-	if (t.kind === CTokenKind.Eof || t.stringVal !== "ifndef") return "";
+	if (t.kind == CTokenKind.Eof || t.stringVal != "ifndef") return "";
 	t = t.next;
-	if (t.kind === CTokenKind.Eof || t.kind !== CTokenKind.Ident) return "";
+	if (t.kind == CTokenKind.Eof || t.kind != CTokenKind.Ident) return "";
 	const guard = t.stringVal;
 	return guard;
 }
@@ -945,12 +945,12 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir:
 	// (chibicc/C semantics) — sibling headers must resolve without the
 	// consumer adding their directory to the include paths.
 	let resolved = "";
-	if (includerDir !== "") {
+	if (includerDir != "") {
 		const sibling = includerDir + "/" + filename;
-		if (probeReadFile(sibling, ctx) !== "") resolved = sibling;
+		if (probeReadFile(sibling, ctx) != "") resolved = sibling;
 	}
-	if (resolved === "") resolved = searchIncludePaths(filename, ctx);
-	if (resolved === "") {
+	if (resolved == "") resolved = searchIncludePaths(filename, ctx);
+	if (resolved == "") {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col,
 			`'${filename}' file not found`));
 		return tok;
@@ -976,7 +976,7 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir:
 	const included = preprocess2(tokenized.head, ctx);
 
 	// If file had include guard AND the guard macro is now defined, treat as #pragma once
-	if (guard !== "" && ctx.macros.has(guard)) {
+	if (guard != "" && ctx.macros.has(guard)) {
 		ctx.pragmaOnce.set(resolved, true);
 		ctx.pragmaOnce.set(filename, true);
 	}
@@ -990,16 +990,16 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 	const head = makeEofToken(ctx.file);
 	let cur = head;
 
-	while (tok.kind !== CTokenKind.Eof) {
+	while (tok.kind != CTokenKind.Eof) {
 		// Try macro expansion
 		const r = expandMacro(tok, ctx);
-		if (r[0] !== null) {
+		if (r[0] != null) {
 			tok = r[0];
 			continue;
 		}
 
 		// Non-directive: pass through
-		if (!tok.atBol || tok.stringVal !== "#") {
+		if (!tok.atBol || tok.stringVal != "#") {
 			const c = copyToken(ctx, tok);
 			cur.next = c;
 			cur = c;
@@ -1009,15 +1009,15 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 		// Directive
 		const dir = tok.next;
-		if (dir.kind === CTokenKind.Eof) { tok = dir; continue; }
+		if (dir.kind == CTokenKind.Eof) { tok = dir; continue; }
 
 		// #include
-		if (dir.stringVal === "include") {
+		if (dir.stringVal == "include") {
 			const fnParts = readIncludeFilename(dir.next, ctx);
 			const filename = fnParts[0];
 			const rest = skipLine(dir.next);
-			if (filename !== "") {
-				const includerDir = dir.next.kind === CTokenKind.Str ? dirname(dir.file) : "";
+			if (filename != "") {
+				const includerDir = dir.next.kind == CTokenKind.Str ? dirname(dir.file) : "";
 				const included = includeFile(filename, rest, ctx, includerDir);
 				tok = included;
 			} else {
@@ -1028,14 +1028,14 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #define
-		if (dir.stringVal === "define") {
+		if (dir.stringVal == "define") {
 			tok = readMacroDefinition(dir.next, ctx);
 			continue;
 		}
 
 		// #undef
-		if (dir.stringVal === "undef") {
-			if (dir.next.kind === CTokenKind.Ident) {
+		if (dir.stringVal == "undef") {
+			if (dir.next.kind == CTokenKind.Ident) {
 				ctx.macros.delete(dir.next.stringVal);
 			}
 			tok = skipLine(dir.next);
@@ -1043,10 +1043,10 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #if
-		if (dir.stringVal === "if") {
+		if (dir.stringVal == "if") {
 			const val = evalConstExpr(dir.next, ctx);
-			pushCondIncl(ctx, val !== 0);
-			if (val === 0) {
+			pushCondIncl(ctx, val != 0);
+			if (val == 0) {
 				tok = skipCondIncl(skipLine(dir.next));
 				continue;
 			}
@@ -1055,8 +1055,8 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #ifdef
-		if (dir.stringVal === "ifdef") {
-			const defined = dir.next.kind === CTokenKind.Ident && ctx.macros.has(dir.next.stringVal);
+		if (dir.stringVal == "ifdef") {
+			const defined = dir.next.kind == CTokenKind.Ident && ctx.macros.has(dir.next.stringVal);
 			pushCondIncl(ctx, defined);
 			if (!defined) {
 				tok = skipCondIncl(skipLine(dir.next));
@@ -1067,8 +1067,8 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #ifndef
-		if (dir.stringVal === "ifndef") {
-			const defined = dir.next.kind === CTokenKind.Ident && ctx.macros.has(dir.next.stringVal);
+		if (dir.stringVal == "ifndef") {
+			const defined = dir.next.kind == CTokenKind.Ident && ctx.macros.has(dir.next.stringVal);
 			pushCondIncl(ctx, !defined);
 			if (defined) {
 				tok = skipCondIncl(skipLine(dir.next));
@@ -1079,13 +1079,13 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #elif
-		if (dir.stringVal === "elif") {
-			if (ctx.condStack === null) {
+		if (dir.stringVal == "elif") {
+			if (ctx.condStack == null) {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "#elif without #if"));
 				tok = skipLine(dir.next);
 				continue;
 			}
-			if (ctx.condStack.ctx === COND_ELSE) {
+			if (ctx.condStack.ctx == COND_ELSE) {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "#elif after #else"));
 				tok = skipLine(dir.next);
 				continue;
@@ -1096,7 +1096,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 				continue;
 			}
 			const val = evalConstExpr(dir.next, ctx);
-			if (val !== 0) {
+			if (val != 0) {
 				ctx.condStack.included = true;
 				tok = skipLine(dir.next);
 			} else {
@@ -1106,8 +1106,8 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #else
-		if (dir.stringVal === "else") {
-			if (ctx.condStack === null) {
+		if (dir.stringVal == "else") {
+			if (ctx.condStack == null) {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "#else without #if"));
 				tok = skipLine(dir.next);
 				continue;
@@ -1123,8 +1123,8 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #endif
-		if (dir.stringVal === "endif") {
-			if (ctx.condStack === null) {
+		if (dir.stringVal == "endif") {
+			if (ctx.condStack == null) {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "#endif without #if"));
 			} else {
 				ctx.condStack = ctx.condStack.parent;
@@ -1134,27 +1134,27 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		}
 
 		// #line
-		if (dir.stringVal === "line") {
+		if (dir.stringVal == "line") {
 			// Consume and ignore (we track line numbers from source)
 			tok = skipLine(dir.next);
 			continue;
 		}
 
 		// #pragma once
-		if (dir.stringVal === "pragma" && dir.next.stringVal === "once") {
+		if (dir.stringVal == "pragma" && dir.next.stringVal == "once") {
 			ctx.pragmaOnce.set(tok.file, true);
 			tok = skipLine(dir.next);
 			continue;
 		}
 
 		// #pragma (other) — skip
-		if (dir.stringVal === "pragma") {
+		if (dir.stringVal == "pragma") {
 			tok = skipLine(dir.next);
 			continue;
 		}
 
 		// #error
-		if (dir.stringVal === "error") {
+		if (dir.stringVal == "error") {
 			const msg = joinTokens(dir.next);
 			ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, `#error ${msg}`));
 			tok = skipLine(dir.next);
@@ -1218,7 +1218,7 @@ export function preprocess(
 	const result = preprocess2(head, ctx);
 
 	// Check for unterminated #if
-	if (ctx.condStack !== null) {
+	if (ctx.condStack != null) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, head.file, 0, 0, "unterminated #if"));
 	}
 
@@ -1232,107 +1232,107 @@ export function preprocess(
 test "preprocess empty token stream is a no-op" {
 	const eof = makeEofToken("empty.h");
 	const r = preprocess(eof, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Eof;
+	assert r.head.kind == CTokenKind.Eof;
 }
 
 test "preprocess object macro" {
 	const r0 = tokenizeFile("#define FOO 42\nFOO", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 42 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 42 as int64;
 }
 
 test "preprocess function macro" {
 	const r0 = tokenizeFile("#define ADD(a,b) a+b\nADD(1,2)", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.stringVal === "1";
-	assert r.head.next.stringVal === "+";
-	assert r.head.next.next.stringVal === "2";
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.stringVal == "1";
+	assert r.head.next.stringVal == "+";
+	assert r.head.next.next.stringVal == "2";
 }
 
 test "preprocess object macro definition ending file without newline" {
 	const r0 = tokenizeFile("#define FOO 42", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Eof;
+	assert r.head.kind == CTokenKind.Eof;
 }
 
 test "preprocess function-like macro definition ending file without newline" {
 	const r0 = tokenizeFile("#define ADD(a,b) a+b", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Eof;
+	assert r.head.kind == CTokenKind.Eof;
 }
 
 test "preprocess ifdef true" {
 	const r0 = tokenizeFile("#define FOO\n#ifdef FOO\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 42 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 42 as int64;
 }
 
 test "preprocess ifdef false" {
 	const r0 = tokenizeFile("#ifdef FOO\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Eof;
+	assert r.head.kind == CTokenKind.Eof;
 }
 
 test "preprocess ifndef" {
 	const r0 = tokenizeFile("#ifndef FOO\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
+	assert r.head.kind == CTokenKind.Num;
 }
 
 test "preprocess if 1" {
 	const r0 = tokenizeFile("#if 1\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
+	assert r.head.kind == CTokenKind.Num;
 }
 
 test "preprocess if 0 else" {
 	const r0 = tokenizeFile("#if 0\n1\n#else\n2\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 2 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 2 as int64;
 }
 
 test "preprocess if defined" {
 	const r0 = tokenizeFile("#define X\n#if defined(X)\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 42 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 42 as int64;
 }
 
 test "preprocess undef" {
 	const r0 = tokenizeFile("#define FOO 1\n#undef FOO\n#ifdef FOO\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Eof;
+	assert r.head.kind == CTokenKind.Eof;
 }
 
 test "preprocess nested ifdef" {
 	const r0 = tokenizeFile("#define A\n#ifdef A\n#ifdef B\n1\n#else\n2\n#endif\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 2 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 2 as int64;
 }
 
 test "preprocess pragma once" {
 	const r0 = tokenizeFile("#pragma once\n42", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
+	assert r.head.kind == CTokenKind.Num;
 }
 
 test "preprocess if expression" {
 	const r0 = tokenizeFile("#if 2 + 3 == 5\n42\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 42 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 42 as int64;
 }
 
 test "preprocess elif" {
 	const r0 = tokenizeFile("#if 0\n1\n#elif 1\n2\n#else\n3\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 2 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 2 as int64;
 }
 
 test "preprocess error directive" {
@@ -1344,49 +1344,49 @@ test "preprocess error directive" {
 test "preprocess macro expanding to another macro" {
 	const r0 = tokenizeFile("#define A B\n#define B 99\nA", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Num;
-	assert r.head.intVal === 99 as int64;
+	assert r.head.kind == CTokenKind.Num;
+	assert r.head.intVal == 99 as int64;
 }
 
 test "preprocess self-referential macro stops" {
 	// #define X X should not infinitely recurse (hideset prevents it)
 	const r0 = tokenizeFile("#define X X\nX", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.kind === CTokenKind.Ident;
-	assert r.head.stringVal === "X";
+	assert r.head.kind == CTokenKind.Ident;
+	assert r.head.stringVal == "X";
 }
 
 test "preprocess function macro with nested parens in arg" {
 	const r0 = tokenizeFile("#define F(x) x\nF((1+2))", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
 	// Should produce ( 1 + 2 ) — the parens are part of the argument
-	assert r.head.stringVal === "(";
+	assert r.head.stringVal == "(";
 }
 
 test "preprocess if with bitwise expression" {
 	const r0 = tokenizeFile("#if (1 << 2) == 4\nyes\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.stringVal === "yes";
+	assert r.head.stringVal == "yes";
 }
 
 test "preprocess if with logical and" {
 	const r0 = tokenizeFile("#define A 1\n#define B 1\n#if defined(A) && defined(B)\nyes\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.stringVal === "yes";
+	assert r.head.stringVal == "yes";
 }
 
 test "preprocess if with undefined macro is 0" {
 	// Undefined identifiers in #if evaluate to 0 per C spec
 	const r0 = tokenizeFile("#if UNDEFINED_MACRO\nyes\n#else\nno\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.stringVal === "no";
+	assert r.head.stringVal == "no";
 }
 
 test "preprocess __STDC__ always defined" {
 	// __STDC__ is a base predefined macro, available for any target
 	const r0 = tokenizeFile("#define __STDC__ 1\n#ifdef __STDC__\nstdc\n#else\nother\n#endif", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.stringVal === "stdc";
+	assert r.head.stringVal == "stdc";
 }
 
 test "preprocess unterminated if produces diagnostic" {
@@ -1398,9 +1398,9 @@ test "preprocess unterminated if produces diagnostic" {
 test "preprocess multi-token macro body" {
 	const r0 = tokenizeFile("#define DECL extern int\nDECL x;", "test.h");
 	const r = preprocess(r0.head, targetLinuxX86_64(), []);
-	assert r.head.stringVal === "extern";
-	assert r.head.next.stringVal === "int";
-	assert r.head.next.next.stringVal === "x";
+	assert r.head.stringVal == "extern";
+	assert r.head.next.stringVal == "int";
+	assert r.head.next.next.stringVal == "x";
 }
 
 test "preprocess include guard pattern" {
@@ -1411,11 +1411,11 @@ test "preprocess include guard pattern" {
 	let foundFirst = false;
 	let foundSecond = false;
 	let tok = r.head;
-	while (tok.kind !== CTokenKind.Eof) {
-		if (tok.stringVal === "first") foundFirst = true;
-		if (tok.stringVal === "second") foundSecond = true;
+	while (tok.kind != CTokenKind.Eof) {
+		if (tok.stringVal == "first") foundFirst = true;
+		if (tok.stringVal == "second") foundSecond = true;
 		tok = tok.next;
 	}
-	assert foundFirst === true;
-	assert foundSecond === false;
+	assert foundFirst == true;
+	assert foundSecond == false;
 }

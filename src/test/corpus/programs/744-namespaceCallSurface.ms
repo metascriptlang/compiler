@@ -12,31 +12,31 @@ function check(name: string, ok: boolean): boolean {
 }
 
 function callSurface(): boolean {
-	let ok = check("String number", String(42) === "42");
-	ok = check("String identity", String("abc") === "abc") && ok;
-	ok = check("String bool", String(true) === "true") && ok;
-	ok = check("BigInt from string", BigInt("255") === 255n) && ok;
-	ok = check("BigInt round trip", BigInt("-7").toString() === "-7") && ok;
+	let ok = check("String number", String(42) == "42");
+	ok = check("String identity", String("abc") == "abc") && ok;
+	ok = check("String bool", String(true) == "true") && ok;
+	ok = check("BigInt from string", BigInt("255") == 255n) && ok;
+	ok = check("BigInt round trip", BigInt("-7").toString() == "-7") && ok;
 	return ok;
 }
 
 function staticSurface(): boolean {
-	let ok = check("fromCharCode ascii", String.fromCharCode(65) === "A");
-	ok = check("fromCharCode bmp", String.fromCharCode(9731) === "\u2603") && ok;
-	ok = check("fromCharCode masks", String.fromCharCode(65601) === "A") && ok;
-	ok = check("asIntN wide", BigInt.asIntN(64, 255n) === 255n) && ok;
-	ok = check("asIntN narrow", BigInt.asIntN(8, 255n) === -1n) && ok;
-	ok = check("asUintN keeps", BigInt.asUintN(8, 255n) === 255n) && ok;
-	ok = check("asUintN wraps", BigInt.asUintN(8, 256n) === 0n) && ok;
+	let ok = check("fromCharCode ascii", String.fromCharCode(65) == "A");
+	ok = check("fromCharCode bmp", String.fromCharCode(9731) == "\u2603") && ok;
+	ok = check("fromCharCode masks", String.fromCharCode(65601) == "A") && ok;
+	ok = check("asIntN wide", BigInt.asIntN(64, 255n) == 255n) && ok;
+	ok = check("asIntN narrow", BigInt.asIntN(8, 255n) == -1n) && ok;
+	ok = check("asUintN keeps", BigInt.asUintN(8, 255n) == 255n) && ok;
+	ok = check("asUintN wraps", BigInt.asUintN(8, 256n) == 0n) && ok;
 	return ok;
 }
 
 function bothSurfacesInterleave(): boolean {
 	const b = BigInt("300");
 	const narrowed = BigInt.asUintN(8, b);
-	let ok = check("interleave value", narrowed === 44n);
-	ok = check("interleave to string", String(narrowed) === "44") && ok;
-	ok = check("interleave char", String.fromCharCode(44) === ",") && ok;
+	let ok = check("interleave value", narrowed == 44n);
+	ok = check("interleave to string", String(narrowed) == "44") && ok;
+	ok = check("interleave char", String.fromCharCode(44) == ",") && ok;
 	return ok;
 }
 
@@ -50,4 +50,4 @@ function main(): int32 {
 }
 
 const rc = main();
-if (rc !== 0) { process.exit(rc); }
+if (rc != 0) { process.exit(rc); }

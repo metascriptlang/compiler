@@ -45,7 +45,7 @@ function isAsyncFn(node: Node): boolean {
 		NodeKind.FunctionExpr => (node.data as FunctionExprData).funcExprFlags,
 		_ => "",
 	};
-	return flags === "async" || flags === "async_generator";
+	return flags == "async" || flags == "async_generator";
 }
 
 // ===== Multi-Spawn Detection =====
@@ -60,17 +60,17 @@ function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
 	// Detect await Promise.all([spawn(a), spawn(b), ...]) where ALL elements are spawn calls.
 	// Replaces the Promise.all callback path with AwaitGroup (condvar + zero-alloc).
 	// Mixed arrays (spawn + non-spawn) fall through to the generic Promise.all combinator.
-	if (awaitArg === null || awaitArg.kind !== NodeKind.CallExpr) return [] as SpawnSlot[];
+	if (awaitArg == null || awaitArg.kind != NodeKind.CallExpr) return [] as SpawnSlot[];
 	const cd = awaitArg.data as CallExprData;
-	const sym = awaitArg.resolvedSym !== null ? awaitArg.resolvedSym : cd.callee.resolvedSym;
-	if (sym === null || sym.builtinKind !== "PromiseAll") return [] as SpawnSlot[];
-	if (cd.arguments.length < 1 || cd.arguments[0].kind !== NodeKind.ArrayLiteral) return [] as SpawnSlot[];
+	const sym = awaitArg.resolvedSym != null ? awaitArg.resolvedSym : cd.callee.resolvedSym;
+	if (sym == null || sym.builtinKind != "PromiseAll") return [] as SpawnSlot[];
+	if (cd.arguments.length < 1 || cd.arguments[0].kind != NodeKind.ArrayLiteral) return [] as SpawnSlot[];
 	const ad = cd.arguments[0].data as ArrayLiteralData;
 	if (ad.elements.length < 2) return [] as SpawnSlot[];
 	const slots: SpawnSlot[] = [];
 	for (const elem of ad.elements) {
 		const info = getSpawnInfo(elem);
-		if (info.closure === null) return [] as SpawnSlot[];
+		if (info.closure == null) return [] as SpawnSlot[];
 		const innerType = awaitedType(elem.nodeType);
 		slots.push({ closure: info.closure, timeout: info.timeout, innerType });
 	}
@@ -95,45 +95,45 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	while (si < n) {
 		const slot = slots[si];
 		// Use first non-null timeout found
-		if (slot.timeout !== null && groupTimeout === null) {
+		if (slot.timeout != null && groupTimeout == null) {
 			groupTimeout = slot.timeout;
 		}
 		// Inject safe-points into closure body when timeout
-		if (groupTimeout !== null) {
+		if (groupTimeout != null) {
 			let closureBody: Node | null = null;
-			if (slot.closure.kind === NodeKind.FunctionExpr) {
+			if (slot.closure.kind == NodeKind.FunctionExpr) {
 				closureBody = (slot.closure.data as FunctionExprData).funcExprBody;
-			} else if (slot.closure.kind === NodeKind.ArrowFunction) {
+			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
 				closureBody = (slot.closure.data as ArrowFunctionData).arrowBody;
 			}
-			if (closureBody !== null) {
+			if (closureBody != null) {
 				injectCancelSafePoints(closureBody, ag.ident, loc);
 			}
 		}
 		// Box return values in closure body (spawnGroupLower runs before spawnLower,
 		// so closures extracted here bypass spawnLower's boxing pass).
 		// Also update closure return type to void* so codegen emits correct signature.
-		if (slot.innerType !== null) {
-			if (slot.closure.kind === NodeKind.FunctionExpr) {
+		if (slot.innerType != null) {
+			if (slot.closure.kind == NodeKind.FunctionExpr) {
 				const fd = slot.closure.data as FunctionExprData;
-				if (fd.funcExprBody !== null) { boxReturns(fd.funcExprBody, slot.innerType); }
-			} else if (slot.closure.kind === NodeKind.ArrowFunction) {
+				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType); }
+			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
 				const ad = slot.closure.data as ArrowFunctionData;
-				if (ad.arrowBody !== null) {
-					if (ad.arrowBody.kind === NodeKind.BlockStmt) {
+				if (ad.arrowBody != null) {
+					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
 						boxReturns(ad.arrowBody, slot.innerType);
 					} else {
 						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ad.arrowBody.location);
 					}
 				}
 			}
-			if (slot.closure.nodeType !== null && slot.closure.nodeType.kind === TypeKind.Function) {
+			if (slot.closure.nodeType != null && slot.closure.nodeType.kind == TypeKind.Function) {
 				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
 		// Wrap bare function reference as msClosure {fn, env: null}
 		let closure = slot.closure;
-		if (closure.kind === NodeKind.Identifier) {
+		if (closure.kind == NodeKind.Identifier) {
 			const pair = makeObjectLiteral(["fn", "env"], [closure, makeNull(loc)], loc);
 			pair.flags = pair.flags | NodeFlag.Closure;
 			pair.nodeType = closure.nodeType;
@@ -168,7 +168,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	let allVoid = true;
 	for (const slot of slots) {
 		const it = slot.innerType;
-		if (it === null || it.kind !== TypeKind.Void) { allVoid = false; }
+		if (it == null || it.kind != TypeKind.Void) { allVoid = false; }
 	}
 
 	let resultExpr: Node | null = null;
@@ -182,7 +182,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				VOID_PTR_TYPE, loc);
 			stmts.push(res.decl);
 			let rExpr = res.ident;
-			if (slots[ri].innerType !== null) {
+			if (slots[ri].innerType != null) {
 				rExpr = makeUnboxCall(rExpr, slots[ri].innerType, loc);
 			}
 			resultIdents.push(rExpr);
@@ -204,14 +204,14 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer !== null && d.initializer.kind === NodeKind.AwaitExpr) {
+			if (d.initializer != null && d.initializer.kind == NodeKind.AwaitExpr) {
 				const ad = d.initializer.data as AwaitExprData;
 				const slots = getMultiSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
-					if (expansion.resultExpr !== null) {
+					if (expansion.resultExpr != null) {
 						// Synthetic ArrayLiteral must carry type — codegen reads initializer nodeType
-						if (expansion.resultExpr.nodeType === null && stmt.nodeType !== null) {
+						if (expansion.resultExpr.nodeType == null && stmt.nodeType != null) {
 							expansion.resultExpr.nodeType = stmt.nodeType;
 						}
 						d.initializer = expansion.resultExpr;
@@ -223,7 +223,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr !== null && d.expr.kind === NodeKind.AwaitExpr) {
+			if (d.expr != null && d.expr.kind == NodeKind.AwaitExpr) {
 				const ad = d.expr.data as AwaitExprData;
 				const slots = getMultiSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
@@ -234,12 +234,12 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument !== null && d.argument.kind === NodeKind.AwaitExpr) {
+			if (d.argument != null && d.argument.kind == NodeKind.AwaitExpr) {
 				const ad = d.argument.data as AwaitExprData;
 				const slots = getMultiSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
-					if (expansion.resultExpr !== null) {
+					if (expansion.resultExpr != null) {
 						d.argument = expansion.resultExpr;
 					} else {
 						d.argument = null;

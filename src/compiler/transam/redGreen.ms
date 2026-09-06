@@ -54,15 +54,15 @@ export function tryMarkGreen(
 	currentRevision: int32
 ): boolean {
 	const entry = cacheGet(cache, key);
-	if (entry === null) return false;
+	if (entry == null) return false;
 
 	// Fast path: already verified this revision
-	if (entry.verifiedAt === currentRevision) {
-		return entry.state === TaQueryState.Green;
+	if (entry.verifiedAt == currentRevision) {
+		return entry.state == TaQueryState.Green;
 	}
 
 	// Cycle detection
-	if (entry.state === TaQueryState.Yellow) return false;
+	if (entry.state == TaQueryState.Yellow) return false;
 	entry.state = TaQueryState.Yellow;
 
 	// Check each dependency
@@ -70,10 +70,10 @@ export function tryMarkGreen(
 	while (i < entry.dependencies.length) {
 		const dep = entry.dependencies[i];
 
-		if (dep.depKey.queryKind === TaQueryKind.FileText) {
+		if (dep.depKey.queryKind == TaQueryKind.FileText) {
 			// Input query: check if file content hash changed
 			const currentHash = getFileHash(fileInput, dep.depKey.fileId);
-			if (currentHash !== dep.expectedHash) {
+			if (currentHash != dep.expectedHash) {
 				entry.state = TaQueryState.Red;
 				return false;
 			}
@@ -85,9 +85,9 @@ export function tryMarkGreen(
 
 		// HIGH durability: skip recursive verification (stdlib assumed stable).
 		// Salsa early cutoff: only invalidate if recomputed AND output actually changed.
-		if (depEntry !== null) {
-			if (depEntry.durability === TaDurability.High) {
-				if (depEntry.computedAt > entry.computedAt && depEntry.outputHash !== dep.expectedHash) {
+		if (depEntry != null) {
+			if (depEntry.durability == TaDurability.High) {
+				if (depEntry.computedAt > entry.computedAt && depEntry.outputHash != dep.expectedHash) {
 					entry.state = TaQueryState.Red;
 					return false;
 				}
@@ -103,15 +103,15 @@ export function tryMarkGreen(
 		}
 
 		// Stamp verified dep so shared subtrees don't re-walk
-		if (depEntry !== null && depEntry.verifiedAt < currentRevision) {
+		if (depEntry != null && depEntry.verifiedAt < currentRevision) {
 			depEntry.verifiedAt = currentRevision;
 		}
 
 		// Salsa early cutoff: dep recomputed, but did output actually change?
-		if (depEntry !== null) {
+		if (depEntry != null) {
 			if (depEntry.computedAt > entry.computedAt) {
 				// Compare output hash — if unchanged, this dep is semantically identical
-				if (depEntry.outputHash !== dep.expectedHash) {
+				if (depEntry.outputHash != dep.expectedHash) {
 					entry.state = TaQueryState.Red;
 					return false;
 				}
@@ -144,7 +144,7 @@ export function executeQueryWith(
 
 	// Store or update cache entry
 	let entry = cacheGet(cache, key);
-	if (entry === null) {
+	if (entry == null) {
 		const newEntry = createCacheEntry(key);
 		cachePut(cache, newEntry);
 		entry = cacheGet(cache, key);
@@ -257,10 +257,10 @@ test "stores entry as Green" {
 	pushFrame(depStack, key);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	assert entry !== null;
-	assert entry.state === TaQueryState.Green;
-	assert entry.computedAt === 1;
-	assert entry.outputHash === 42;
+	assert entry != null;
+	assert entry.state == TaQueryState.Green;
+	assert entry.computedAt == 1;
+	assert entry.outputHash == 42;
 }
 
 test "collects dependencies from frame" {
@@ -273,7 +273,7 @@ test "collects dependencies from frame" {
 	recordDependency(depStack, depKey, 100);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	assert entry.dependencies.length === 1;
+	assert entry.dependencies.length == 1;
 	assert queryKeysEqual(entry.dependencies[0].depKey, depKey);
 }
 
@@ -294,7 +294,7 @@ test "marks file queries red" {
 	entry.state = TaQueryState.Green;
 	cachePut(cache, entry);
 	invalidateFile(cache, moduleDeps, 0);
-	assert cacheGet(cache, key).state === TaQueryState.Red;
+	assert cacheGet(cache, key).state == TaQueryState.Red;
 }
 
 test "marks transitive dependents red" {
@@ -310,8 +310,8 @@ test "marks transitive dependents red" {
 	cachePut(cache, e0);
 	cachePut(cache, e1);
 	invalidateFile(cache, moduleDeps, 1);
-	assert cacheGet(cache, k1).state === TaQueryState.Red;
-	assert cacheGet(cache, k0).state === TaQueryState.Red;
+	assert cacheGet(cache, k1).state == TaQueryState.Red;
+	assert cacheGet(cache, k0).state == TaQueryState.Red;
 }
 
 // ===== Early Cutoff Tests =====
@@ -349,7 +349,7 @@ test "output hash unchanged keeps dependent green (early cutoff)" {
 
 	// Verify: TypeCheck should verify GREEN because Parse output hash is unchanged
 	assert tryMarkGreen(cache, fileInput, checkKey, 2);
-	assert cacheGet(cache, checkKey).state === TaQueryState.Green;
+	assert cacheGet(cache, checkKey).state == TaQueryState.Green;
 }
 
 test "output hash changed marks dependent red" {
@@ -384,7 +384,7 @@ test "output hash changed marks dependent red" {
 
 	// TypeCheck should NOT verify green
 	assert !tryMarkGreen(cache, fileInput, checkKey, 2);
-	assert cacheGet(cache, checkKey).state === TaQueryState.Red;
+	assert cacheGet(cache, checkKey).state == TaQueryState.Red;
 }
 
 // ===== HIGH Durability Tests =====

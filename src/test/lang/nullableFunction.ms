@@ -22,9 +22,9 @@ interface BoxIface {
 test "struct field: assign non-null closure, read back" {
 	const b: BoxStruct = { fn: wrap(fortyTwo) };
 	const v = b.fn;
-	if (v !== null) {
+	if (v != null) {
 		const f = v as Producer;
-		assert f() === 42;
+		assert f() == 42;
 	} else {
 		assert false, "should be non-null";
 	}
@@ -33,15 +33,15 @@ test "struct field: assign non-null closure, read back" {
 test "struct field: assign null, read back" {
 	const b: BoxStruct = { fn: null };
 	const v = b.fn;
-	assert v === null, "should be null";
+	assert v == null, "should be null";
 }
 
 test "interface field: assign non-null closure, read back" {
 	const b: BoxIface = { fn: wrap(fortyTwo) };
 	const v = b.fn;
-	if (v !== null) {
+	if (v != null) {
 		const f = v as Producer;
-		assert f() === 42;
+		assert f() == 42;
 	} else {
 		assert false, "should be non-null";
 	}
@@ -50,5 +50,5 @@ test "interface field: assign non-null closure, read back" {
 test "interface field: assign null, read back" {
 	const b: BoxIface = { fn: null };
 	const v = b.fn;
-	assert v === null, "should be null";
+	assert v == null, "should be null";
 }

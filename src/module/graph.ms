@@ -117,7 +117,7 @@ export function findModule(graph: ModuleGraph, path: string): Module {
 
 export function findModuleIndex(graph: ModuleGraph, path: string): int32 {
 	for (let i = 0; i < graph.modulePaths.length; i += 1) {
-		if (graph.modulePaths[i] === path) return i;
+		if (graph.modulePaths[i] == path) return i;
 	}
 	return -1;
 }
@@ -135,7 +135,7 @@ export function addModule(graph: ModuleGraph, mod: Module): void {
 
 export function isInImportStack(graph: ModuleGraph, path: string): boolean {
 	for (const p of graph.importStack) {
-		if (p === path) return true;
+		if (p == path) return true;
 	}
 	return false;
 }
@@ -154,7 +154,7 @@ export function popImportStack(graph: ModuleGraph): void {
 
 export function isCircularImport(graph: ModuleGraph, path: string): boolean {
 	for (const dep of graph.circularDeps) {
-		if (dep.fromPath === path || dep.toPath === path) return true;
+		if (dep.fromPath == path || dep.toPath == path) return true;
 	}
 	return false;
 }
@@ -162,7 +162,7 @@ export function isCircularImport(graph: ModuleGraph, path: string): boolean {
 export function getCircularDepsFor(graph: ModuleGraph, path: string): CircularDep[] {
 	const result: CircularDep[] = [];
 	for (const dep of graph.circularDeps) {
-		if (dep.fromPath === path || dep.toPath === path) {
+		if (dep.fromPath == path || dep.toPath == path) {
 			result.push(dep);
 		}
 	}
@@ -173,7 +173,7 @@ export function getCircularDepsFor(graph: ModuleGraph, path: string): CircularDe
 
 export function hasExportName(mod: Module, name: string): boolean {
 	for (const n of mod.exportNames) {
-		if (n === name) return true;
+		if (n == name) return true;
 	}
 	return false;
 }
@@ -181,43 +181,43 @@ export function hasExportName(mod: Module, name: string): boolean {
 // ===== Tests =====
 test "create empty graph" {
 	const g = createModuleGraph();
-	assert g.modules.length === 0;
-	assert g.modulePaths.length === 0;
-	assert g.loadOrder.length === 0;
-	assert g.importStack.length === 0;
+	assert g.modules.length == 0;
+	assert g.modulePaths.length == 0;
+	assert g.loadOrder.length == 0;
+	assert g.importStack.length == 0;
 }
 
 test "create module" {
 	const m = createModule("/a/b.ms");
-	assert m.path === "/a/b.ms";
-	assert m.state === ModuleState.Unloaded;
-	assert m.exportNames.length === 0;
-	assert m.imports.length === 0;
+	assert m.path == "/a/b.ms";
+	assert m.state == ModuleState.Unloaded;
+	assert m.exportNames.length == 0;
+	assert m.imports.length == 0;
 }
 
 test "add and find module" {
 	const g = createModuleGraph();
 	const m = createModule("/a/b.ms");
 	addModule(g, m);
-	assert g.modules.length === 1;
+	assert g.modules.length == 1;
 	const found = findModule(g, "/a/b.ms");
-	assert found !== null;
-	assert found.path === "/a/b.ms";
+	assert found != null;
+	assert found.path == "/a/b.ms";
 }
 
 test "find returns null for missing" {
 	const g = createModuleGraph();
 	const found = findModule(g, "/nope.ms");
-	assert found === null;
+	assert found == null;
 }
 
 test "findModuleIndex" {
 	const g = createModuleGraph();
 	addModule(g, createModule("/a.ms"));
 	addModule(g, createModule("/b.ms"));
-	assert findModuleIndex(g, "/a.ms") === 0;
-	assert findModuleIndex(g, "/b.ms") === 1;
-	assert findModuleIndex(g, "/c.ms") === -1;
+	assert findModuleIndex(g, "/a.ms") == 0;
+	assert findModuleIndex(g, "/b.ms") == 1;
+	assert findModuleIndex(g, "/c.ms") == -1;
 }
 
 test "hasModule" {
@@ -251,20 +251,20 @@ test "multiple modules" {
 	addModule(g, m1);
 	addModule(g, m2);
 	addModule(g, m3);
-	assert g.modules.length === 3;
-	assert findModule(g, "/b.ms") !== null;
-	assert findModule(g, "/d.ms") === null;
+	assert g.modules.length == 3;
+	assert findModule(g, "/b.ms") != null;
+	assert findModule(g, "/d.ms") == null;
 }
 
 test "module state transitions" {
 	const m = createModule("/x.ms");
-	assert m.state === ModuleState.Unloaded;
+	assert m.state == ModuleState.Unloaded;
 	m.state = ModuleState.Loading;
-	assert m.state === ModuleState.Loading;
+	assert m.state == ModuleState.Loading;
 	m.state = ModuleState.Parsed;
-	assert m.state === ModuleState.Parsed;
+	assert m.state == ModuleState.Parsed;
 	m.state = ModuleState.Ready;
-	assert m.state === ModuleState.Ready;
+	assert m.state == ModuleState.Ready;
 }
 
 test "hasExportName" {

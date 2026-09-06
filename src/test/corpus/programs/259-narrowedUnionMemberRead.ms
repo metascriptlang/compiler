@@ -20,7 +20,7 @@ function mkSquare(i: int32): Square {
 }
 
 function pick(i: int32): Shape {
-	if (i % 2 === 0) {
+	if (i % 2 == 0) {
 		const c: Circle = mkCircle(i);
 		return c;
 	}
@@ -33,7 +33,7 @@ function main(): void {
 	let total = 0.0;
 	for (let i = 0; i < 50000; i += 1) {
 		const s = pick(i);
-		if (s.kind === "circle") {
+		if (s.kind == "circle") {
 			total += s.r;
 		} else {
 			total += s.w;
@@ -43,13 +43,13 @@ function main(): void {
 
 	// Several reads off the same narrowed local, string payload included.
 	const one = pick(0);
-	if (one.kind === "circle") {
+	if (one.kind == "circle") {
 		console.log("read=" + one.label + "/" + one.r.toString());
 	}
 
 	// Else-branch narrowing is the same shape.
 	const two = pick(1);
-	if (two.kind === "circle") {
+	if (two.kind == "circle") {
 		console.log("unreached=" + two.label);
 	} else {
 		console.log("else=" + two.label + "/" + two.w.toString());

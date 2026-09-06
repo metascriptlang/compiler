@@ -26,9 +26,9 @@ macro firstCasePatternCount(node: Node): Node {
 
 function main(): void {
 	let ok = true;
-	if (matchCaseCount(match (1) { 1 => 10, 2 => 20, _ => 30 }) !== 3) { ok = false; }
-	if (firstCaseBodyKind(match (1) { 1 => 99, _ => 0 }) !== (NodeKind.NumberLiteral as number)) { ok = false; }
-	if (firstCasePatternCount(match (1) { 1 => 10, _ => 20 }) !== 1) { ok = false; }
+	if (matchCaseCount(match (1) { 1 => 10, 2 => 20, _ => 30 }) != 3) { ok = false; }
+	if (firstCaseBodyKind(match (1) { 1 => 99, _ => 0 }) != (NodeKind.NumberLiteral as number)) { ok = false; }
+	if (firstCasePatternCount(match (1) { 1 => 10, _ => 20 }) != 1) { ok = false; }
 	if (ok) { console.log("macro-node-fields PASS"); }
 	else { console.log("macro-node-fields FAIL"); }
 }

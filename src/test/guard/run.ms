@@ -57,18 +57,18 @@ function hasSeparator(p: string): boolean {
 }
 
 function absolutize(p: string): string {
-	if (p.indexOf("/") === 0 || p.indexOf("\\") === 0 || p.indexOf(":") >= 0) { return p; }
+	if (p.indexOf("/") == 0 || p.indexOf("\\") == 0 || p.indexOf(":") >= 0) { return p; }
 	return cwd() + "/" + p;
 }
 
 // cmd.exe's cd wants backslashes; /bin/sh is happy either way.
 function shellPath(p: string): string {
-	if (platform !== "windows") { return p; }
+	if (platform != "windows") { return p; }
 	let out = "";
 	let i = 0;
 	while (i < p.length) {
 		const c = p.charAt(i);
-		out = out + (c === "/" ? "\\" : c);
+		out = out + (c == "/" ? "\\" : c);
 		i = i + 1;
 	}
 	return out;
@@ -127,15 +127,15 @@ function parseDirectives(probe: Probe, src: string): void {
 		const orcAt = line.indexOf(ORC);
 		if (orcAt >= 0) {
 			const tok = firstWordAfter(line.slice(orcAt + ORC.length, line.length));
-			if (tok !== "") { probe.balanceOrc.push(tok); }
+			if (tok != "") { probe.balanceOrc.push(tok); }
 		} else if (line.indexOf(BAL) >= 0) {
 			const tok = firstWordAfter(line.slice(line.indexOf(BAL) + BAL.length, line.length));
-			if (tok !== "") { probe.balance.push(tok); }
+			if (tok != "") { probe.balance.push(tok); }
 		}
-		if (line.indexOf(CHECK) === 0) {
+		if (line.indexOf(CHECK) == 0) {
 			probe.checkfails.push(line.slice(CHECK.length, line.length));
 		}
-		if (line.indexOf(JS) === 0) { probe.wantJs = true; }
+		if (line.indexOf(JS) == 0) { probe.wantJs = true; }
 	}
 }
 
@@ -152,8 +152,8 @@ function readFileOr(path: string, dflt: string): string {
 function discoverProbes(): Probe[] {
 	const probes: Probe[] = [];
 	for (const e of readDir(GUARD_DIR)) {
-		if (e.indexOf("/") === e.length - 1) { continue; }
-		if (e === "run.ms") { continue; }
+		if (e.indexOf("/") == e.length - 1) { continue; }
+		if (e == "run.ms") { continue; }
 		if (e.length < 4 || e.slice(e.length - 3, e.length) != ".ms") { continue; }
 		const probe: Probe = {
 			name: e.slice(0, e.length - 3),
@@ -225,7 +225,7 @@ function firstErrorLines(log: string): string {
 	let out = "";
 	let n = 0;
 	for (const line of log.split("\n")) {
-		if (line.indexOf("error") === 0 || line.indexOf("Error") === 0) {
+		if (line.indexOf("error") == 0 || line.indexOf("Error") == 0) {
 			out = out + (out == "" ? "" : " | ") + line.trim();
 			n = n + 1;
 			if (n >= 3) { break; }
@@ -253,7 +253,7 @@ function fail(t: Tally, tag: string, why: string): void {
 function ledgerImbalance(errText: string, typeName: string): string {
 	let last = "";
 	for (const line of errText.split("\n")) {
-		if (line.indexOf("LEDGER " + typeName + " ") === 0) { last = line; }
+		if (line.indexOf("LEDGER " + typeName + " ") == 0) { last = line; }
 	}
 	if (last == "") { return typeName + " alloc=? destroy=?"; }
 	const a = fieldOf(last, "alloc=");
@@ -322,7 +322,7 @@ function runGcLane(probe: Probe, gc: string, t: Tally): void {
 	writeFile(LOG_DIR + "/" + probe.name + "." + gc + ".out", run.output);
 	const dd = firstLineContaining(errText, "DOUBLE-DESTROY");
 	if (!run.ok || dd != "") {
-		fail(t, tag, dd != "" ? dd : "exit=" + run.exitCode + (run.signal !== 0 ? " signal=" + run.signal : ""));
+		fail(t, tag, dd != "" ? dd : "exit=" + run.exitCode + (run.signal != 0 ? " signal=" + run.signal : ""));
 		progress("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
 		return;
 	}
@@ -419,7 +419,7 @@ function main(): void {
 	}
 
 	progress("");
-	const verdict = t.fails === 0
+	const verdict = t.fails == 0
 		? "nim-guard: ALL GREEN (" + t.passes + " cells)"
 		: "nim-guard: FAILURES ABOVE (" + t.passes + " ok, " + t.fails + " red)";
 	progress(verdict);

@@ -38,8 +38,8 @@ function main(): void {
 	console.log("tailrec-capture=" + a);
 	const b = perIteration();
 	console.log("per-iteration=" + b[0].toString() + "," + b[1].toString());
-	if (a !== "inner") { throw "GUARD RED: closure write to a tail-call-loop local was lost, got=" + a; }
-	if (b[0] !== 110 || b[1] !== 111) { throw "GUARD RED: per-iteration cell diverged from the enclosing loop body, got=" + b[0].toString() + "," + b[1].toString(); }
+	if (a != "inner") { throw "GUARD RED: closure write to a tail-call-loop local was lost, got=" + a; }
+	if (b[0] != 110 || b[1] != 111) { throw "GUARD RED: per-iteration cell diverged from the enclosing loop body, got=" + b[0].toString() + "," + b[1].toString(); }
 	console.log("GUARD-OK");
 }
 main();

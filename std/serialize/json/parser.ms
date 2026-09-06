@@ -37,7 +37,7 @@ function skipWs(input: string, pos: number): number {
 	const len = input.byteLength;
 	while (p < len) {
 		const ch = input.byteAt(p);
-		if (ch !== " ".code && ch !== "\t".code && ch !== "\n".code && ch !== "\r".code) return p;
+		if (ch != " ".code && ch != "\t".code && ch != "\n".code && ch != "\r".code) return p;
 		p = p + 1;
 	}
 	return p;
@@ -62,7 +62,7 @@ function parseValue(input: string, pos: number, depth: number): ParseResult {
 		"f".code => parseLiteral(input, pos, "false", jsonBool(false)),
 		"n".code => parseLiteral(input, pos, "null", jsonNull()),
 		_ => {
-			if (ch === "-".code || (ch >= "0".code && ch <= "9".code)) {
+			if (ch == "-".code || (ch >= "0".code && ch <= "9".code)) {
 				return parseNumber(input, pos);
 			}
 			return errorAt(`Unexpected character '${input.byteSlice(pos, pos + 1)}'`, pos);
@@ -77,7 +77,7 @@ function parseLiteral(input: string, pos: number, expected: string, value: JsonV
 	if (pos + expectedLen > input.byteLength) {
 		return errorAt(`Expected '${expected}'`, pos);
 	}
-	if (input.byteSlice(pos, pos + expectedLen) !== expected) {
+	if (input.byteSlice(pos, pos + expectedLen) != expected) {
 		return errorAt(`Expected '${expected}'`, pos);
 	}
 	return Result.ok({ node: value, pos: pos + expectedLen });
@@ -105,7 +105,7 @@ function parseNumber(input: string, pos: number): ParseResult {
 	const len = input.byteLength;
 
 	// Optional minus
-	if (p < len && input.byteAt(p) === "-".code) p = p + 1;
+	if (p < len && input.byteAt(p) == "-".code) p = p + 1;
 
 	// Integer part. The grammar is `zero / (digit1-9 *DIGIT)` — a leading zero
 	// may not be followed by another digit, so `01` is not a number.
@@ -117,34 +117,34 @@ function parseNumber(input: string, pos: number): ParseResult {
 	while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 		p = p + 1;
 	}
-	if (firstDigit === "0".code && p - intStart > 1) {
+	if (firstDigit == "0".code && p - intStart > 1) {
 		return errorAt("Leading zeros are not allowed in a number", intStart);
 	}
 
 	// Decimal part — the dot must be followed by at least one digit.
 	let isFloat = false;
-	if (p < len && input.byteAt(p) === ".".code) {
+	if (p < len && input.byteAt(p) == ".".code) {
 		isFloat = true;
 		p = p + 1;
 		const fracStart = p;
 		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
-		if (p === fracStart) return errorAt("Expected a digit after '.'", p);
+		if (p == fracStart) return errorAt("Expected a digit after '.'", p);
 	}
 
 	// Exponent part — same rule after the optional sign.
-	if (p < len && (input.byteAt(p) === "e".code || input.byteAt(p) === "E".code)) {
+	if (p < len && (input.byteAt(p) == "e".code || input.byteAt(p) == "E".code)) {
 		isFloat = true;
 		p = p + 1;
-		if (p < len && (input.byteAt(p) === "+".code || input.byteAt(p) === "-".code)) {
+		if (p < len && (input.byteAt(p) == "+".code || input.byteAt(p) == "-".code)) {
 			p = p + 1;
 		}
 		const expStart = p;
 		while (p < len && input.byteAt(p) >= "0".code && input.byteAt(p) <= "9".code) {
 			p = p + 1;
 		}
-		if (p === expStart) return errorAt("Expected a digit in the exponent", p);
+		if (p == expStart) return errorAt("Expected a digit in the exponent", p);
 	}
 
 	const numStr = input.byteSlice(pos, p);
@@ -158,7 +158,7 @@ function parseNumber(input: string, pos: number): ParseResult {
 	if (!isFloat) {
 		const digitCount = p - intStart;
 		if (digitCount > 19) { fitsI64 = false; }
-		else if (digitCount === 19) { fitsI64 = int64FitsAtLimitWidth(input, intStart, pos < intStart); }
+		else if (digitCount == 19) { fitsI64 = int64FitsAtLimitWidth(input, intStart, pos < intStart); }
 	}
 	return Result.ok({
 		node: isFloat || !fitsI64 ? jsonNumber(parseFloat(numStr)) : jsonInt(numStr.parseInt()),
@@ -169,7 +169,7 @@ function parseNumber(input: string, pos: number): ParseResult {
 // ===== String Parser =====
 
 function parseString(input: string, pos: number): ParseResult {
-	if (input.byteAt(pos) !== "\"".code) return errorAt("Expected '\"'", pos);
+	if (input.byteAt(pos) != "\"".code) return errorAt("Expected '\"'", pos);
 	let p = pos + 1;
 	const len = input.byteLength;
 	let result = "";
@@ -180,7 +180,7 @@ function parseString(input: string, pos: number): ParseResult {
 	let runStart = p;
 	while (p < len) {
 		const ch = input.byteAt(p);
-		if (ch === "\"".code) {
+		if (ch == "\"".code) {
 			if (runStart < p) result += input.byteSlice(runStart, p);
 			return Result.ok({ node: jsonString(result), pos: p + 1 });
 		}
@@ -188,7 +188,7 @@ function parseString(input: string, pos: number): ParseResult {
 		if (ch < 32) {
 			return errorAt("Raw control character in string — must be escaped", p);
 		}
-		if (ch === "\\".code) {
+		if (ch == "\\".code) {
 			if (runStart < p) result += input.byteSlice(runStart, p);
 			p = p + 1;
 			if (p >= len) return errorAt("Unexpected end of string", p);
@@ -209,7 +209,7 @@ function parseString(input: string, pos: number): ParseResult {
 					if (codePoint < 0) return errorAt("Invalid unicode escape", p);
 					// Handle UTF-16 surrogate pairs
 					if (codePoint >= 55296 && codePoint <= 56319 && p + 10 < len) {
-						if (input.byteAt(p + 5) === "\\".code && input.byteAt(p + 6) === "u".code) {
+						if (input.byteAt(p + 5) == "\\".code && input.byteAt(p + 6) == "u".code) {
 							const hex2 = input.byteSlice(p + 7, p + 11);
 							const low = parseHex(hex2);
 							if (low >= 56320 && low <= 57343) {
@@ -258,7 +258,7 @@ function parseArray(input: string, pos: number, depth: number): ParseResult {
 	p = skipWs(input, p);
 	const items: JsonValue[] = [];
 
-	if (p < input.byteLength && input.byteAt(p) === "]".code) {
+	if (p < input.byteLength && input.byteAt(p) == "]".code) {
 		return Result.ok({ node: jsonArray(items), pos: p + 1 });
 	}
 
@@ -270,10 +270,10 @@ function parseArray(input: string, pos: number, depth: number): ParseResult {
 
 		if (p >= input.byteLength) return errorAt("Unterminated array", pos);
 		const ch = input.byteAt(p);
-		if (ch === "]".code) {
+		if (ch == "]".code) {
 			return Result.ok({ node: jsonArray(items), pos: p + 1 });
 		}
-		if (ch !== ",".code) {
+		if (ch != ",".code) {
 			return errorAt("Expected ',' or ']' in array", p);
 		}
 		p = p + 1;
@@ -289,24 +289,24 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 	const keys: string[] = [];
 	const values: JsonValue[] = [];
 
-	if (p < input.byteLength && input.byteAt(p) === "}".code) {
+	if (p < input.byteLength && input.byteAt(p) == "}".code) {
 		return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 	}
 
 	while (p < input.byteLength) {
 		p = skipWs(input, p);
-		if (input.byteAt(p) !== "\"".code) {
+		if (input.byteAt(p) != "\"".code) {
 			return errorAt("Expected string key", p);
 		}
 		const keyResult = try parseString(input, p);
 		const keyNode = keyResult.node;
-		if (keyNode.kind !== JsonKind.String) {
+		if (keyNode.kind != JsonKind.String) {
 			return errorAt("Expected string key", p);
 		}
 		const key = keyNode.strVal;
 		p = skipWs(input, keyResult.pos);
 
-		if (p >= input.byteLength || input.byteAt(p) !== ":".code) {
+		if (p >= input.byteLength || input.byteAt(p) != ":".code) {
 			return errorAt("Expected ':'", p);
 		}
 		p = skipWs(input, p + 1);
@@ -316,7 +316,7 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 		// engine objects cannot hold two entries for one key).
 		let existing = -1;
 		for (let ki = 0; ki < keys.length; ki = ki + 1) {
-			if (keys[ki] === key) {
+			if (keys[ki] == key) {
 				existing = ki;
 				break;
 			}
@@ -331,10 +331,10 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 
 		if (p >= input.byteLength) return errorAt("Unterminated object", pos);
 		const ch = input.byteAt(p);
-		if (ch === "}".code) {
+		if (ch == "}".code) {
 			return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 		}
-		if (ch !== ",".code) {
+		if (ch != ",".code) {
 			return errorAt("Expected ',' or '}' in object", p);
 		}
 		p = p + 1;
@@ -347,28 +347,28 @@ function parseObject(input: string, pos: number, depth: number): ParseResult {
 test "parse null" {
 	const r = parseJson("null");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Null;
+	assert r.value.kind == JsonKind.Null;
 }
 
 test "parse true" {
 	const r = parseJson("true");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Bool;
-	assert r.value.boolVal === true;
+	assert r.value.kind == JsonKind.Bool;
+	assert r.value.boolVal == true;
 }
 
 test "parse false" {
 	const r = parseJson("false");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Bool;
-	assert r.value.boolVal === false;
+	assert r.value.kind == JsonKind.Bool;
+	assert r.value.boolVal == false;
 }
 
 test "parse integer" {
 	const r = parseJson("42");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Int;
-	if (r.value.kind === JsonKind.Int) assert r.value.intVal === (42 as int64);
+	assert r.value.kind == JsonKind.Int;
+	if (r.value.kind == JsonKind.Int) assert r.value.intVal == (42 as int64);
 }
 
 test "parse negative" {
@@ -379,87 +379,87 @@ test "parse negative" {
 test "parse string" {
 	const r = parseJson("\"hello\"");
 	assert r.ok;
-	assert r.value.kind === JsonKind.String;
-	assert r.value.strVal === "hello";
+	assert r.value.kind == JsonKind.String;
+	assert r.value.strVal == "hello";
 }
 
 test "parse string with escapes" {
 	const r = parseJson("\"a\\nb\"");
 	assert r.ok;
-	assert r.value.kind === JsonKind.String;
-	assert r.value.strVal === "a\nb";
+	assert r.value.kind == JsonKind.String;
+	assert r.value.strVal == "a\nb";
 }
 
 test "parse string with utf-8 content" {
 	const r = parseJson("\"vào trận → ok\"");
 	assert r.ok;
-	assert r.value.kind === JsonKind.String;
-	assert r.value.strVal === "vào trận → ok";
+	assert r.value.kind == JsonKind.String;
+	assert r.value.strVal == "vào trận → ok";
 }
 
 test "parse object with utf-8 value" {
 	const r = parseJson("{\"k\":\"5s → crash\"}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	if (r.value.kind === JsonKind.Object) {
+	assert r.value.kind == JsonKind.Object;
+	if (r.value.kind == JsonKind.Object) {
 		const v0 = r.value.values[0];
-		assert v0.kind === JsonKind.String;
-		if (v0.kind === JsonKind.String) assert v0.strVal === "5s → crash";
+		assert v0.kind == JsonKind.String;
+		if (v0.kind == JsonKind.String) assert v0.strVal == "5s → crash";
 	}
 }
 
 test "parse empty array" {
 	const r = parseJson("[]");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Array;
-	assert r.value.items.length === 0;
+	assert r.value.kind == JsonKind.Array;
+	assert r.value.items.length == 0;
 }
 
 test "parse array" {
 	const r = parseJson("[1, 2, 3]");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Array;
-	if (r.value.kind === JsonKind.Array) {
-		assert r.value.items.length === 3;
+	assert r.value.kind == JsonKind.Array;
+	if (r.value.kind == JsonKind.Array) {
+		assert r.value.items.length == 3;
 		const first = r.value.items[0];
-		if (first.kind === JsonKind.Int) assert first.intVal === (1 as int64);
+		if (first.kind == JsonKind.Int) assert first.intVal == (1 as int64);
 	}
 }
 
 test "parse empty object" {
 	const r = parseJson("{}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	assert r.value.keys.length === 0;
+	assert r.value.kind == JsonKind.Object;
+	assert r.value.keys.length == 0;
 }
 
 test "parse object" {
 	const r = parseJson("{\"name\": \"Alice\", \"age\": 30}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	if (r.value.kind === JsonKind.Object) {
-		assert r.value.keys.length === 2;
-		assert r.value.keys[0] === "name";
+	assert r.value.kind == JsonKind.Object;
+	if (r.value.kind == JsonKind.Object) {
+		assert r.value.keys.length == 2;
+		assert r.value.keys[0] == "name";
 		const v0 = r.value.values[0];
-		if (v0.kind === JsonKind.String) assert v0.strVal === "Alice";
+		if (v0.kind == JsonKind.String) assert v0.strVal == "Alice";
 		const v1 = r.value.values[1];
-		if (v1.kind === JsonKind.Int) assert v1.intVal === (30 as int64);
+		if (v1.kind == JsonKind.Int) assert v1.intVal == (30 as int64);
 	}
 }
 
 test "parse nested" {
 	const r = parseJson("{\"data\": [1, true, null]}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	if (r.value.kind === JsonKind.Object) {
+	assert r.value.kind == JsonKind.Object;
+	if (r.value.kind == JsonKind.Object) {
 		const arr = r.value.values[0];
-		if (arr.kind === JsonKind.Array) {
-			assert arr.items.length === 3;
+		if (arr.kind == JsonKind.Array) {
+			assert arr.items.length == 3;
 			const i0 = arr.items[0];
-			if (i0.kind === JsonKind.Int) assert i0.intVal === (1 as int64);
+			if (i0.kind == JsonKind.Int) assert i0.intVal == (1 as int64);
 			const i1 = arr.items[1];
-			if (i1.kind === JsonKind.Bool) assert i1.boolVal === true;
-			assert arr.items[2].kind === JsonKind.Null;
+			if (i1.kind == JsonKind.Bool) assert i1.boolVal == true;
+			assert arr.items[2].kind == JsonKind.Null;
 		}
 	}
 }
@@ -482,25 +482,25 @@ test "parse error invalid" {
 test "parse whitespace" {
 	const r = parseJson("  { \"x\" : 1 }  ");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	assert r.value.keys[0] === "x";
+	assert r.value.kind == JsonKind.Object;
+	assert r.value.keys[0] == "x";
 }
 
 test "duplicate keys: last one wins (JS parity)" {
 	const r = parseJson("{\"a\":1,\"a\":2}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	assert r.value.keys.length === 1;
+	assert r.value.kind == JsonKind.Object;
+	assert r.value.keys.length == 1;
 	const v0 = r.value.values[0];
-	if (v0.kind === JsonKind.Int) assert v0.intVal === (2 as int64);
+	if (v0.kind == JsonKind.Int) assert v0.intVal == (2 as int64);
 }
 
 test "parse keeps object keys in insertion order" {
 	const r = parseJson("{\"b\":1,\"2\":2,\"a\":3,\"1\":4}");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Object;
-	assert r.value.keys[0] === "b";
-	assert r.value.keys[1] === "2";
-	assert r.value.keys[2] === "a";
-	assert r.value.keys[3] === "1";
+	assert r.value.kind == JsonKind.Object;
+	assert r.value.keys[0] == "b";
+	assert r.value.keys[1] == "2";
+	assert r.value.keys[2] == "a";
+	assert r.value.keys[3] == "1";
 }

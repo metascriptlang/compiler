@@ -13,7 +13,7 @@ import { jsonNull } from "./builder";
 // ===== Type Accessors (coercion protocol — `as<TargetType>`) =====
 
 export function asString(this v: JsonValue, def: string = ""): string {
-	if (v !== null && v.kind === JsonKind.String) return v.strVal;
+	if (v != null && v.kind == JsonKind.String) return v.strVal;
 	return def;
 }
 
@@ -21,7 +21,7 @@ export function asString(this v: JsonValue, def: string = ""): string {
 // `30.5` as JsonKind.Number (numVal slot). Coercion accepts EITHER variant
 // for asNumber / asInt* — the JSON wire type "number" doesn't distinguish.
 export function asNumber(this v: JsonValue, def: number = 0): number {
-	if (v === null) return def;
+	if (v == null) return def;
 	return match (v.kind) {
 		JsonKind.Number => v.numVal,
 		JsonKind.Int    => v.intVal as number,
@@ -30,12 +30,12 @@ export function asNumber(this v: JsonValue, def: number = 0): number {
 }
 
 export function asBoolean(this v: JsonValue, def: boolean = false): boolean {
-	if (v !== null && v.kind === JsonKind.Bool) return v.boolVal;
+	if (v != null && v.kind == JsonKind.Bool) return v.boolVal;
 	return def;
 }
 
 export function asInt32(this v: JsonValue, def: int32 = 0): int32 {
-	if (v === null) return def;
+	if (v == null) return def;
 	return match (v.kind) {
 		JsonKind.Int    => v.intVal as int32,
 		JsonKind.Number => v.numVal as int32,
@@ -47,7 +47,7 @@ export function asInt32(this v: JsonValue, def: int32 = 0): int32 {
 // sized-int fields when decoding; runtime branch covers parser's int/number
 // split so user struct fields don't read uninitialized slots.
 export function asInt64(this v: JsonValue, def: int64 = 0 as int64): int64 {
-	if (v === null) return def;
+	if (v == null) return def;
 	return match (v.kind) {
 		JsonKind.Int    => v.intVal,
 		JsonKind.Number => v.numVal as int64,
@@ -58,14 +58,14 @@ export function asInt64(this v: JsonValue, def: int64 = 0 as int64): int64 {
 // ===== Collection Accessors =====
 
 export function at(this v: JsonValue, idx: number): JsonValue {
-	if (v !== null && v.kind === JsonKind.Array && idx >= 0 && idx < v.items.length) {
+	if (v != null && v.kind == JsonKind.Array && idx >= 0 && idx < v.items.length) {
 		return v.items[idx];
 	}
 	return jsonNull();
 }
 
 export function length(this v: JsonValue): number {
-	if (v === null) return 0;
+	if (v == null) return 0;
 	return match (v.kind) {
 		JsonKind.Array  => v.items.length,
 		JsonKind.Object => v.keys.length,
@@ -95,27 +95,27 @@ export function kindName(k: JsonKind): string {
 }
 
 function pushKindErr(errs: string[], pfx: string, field: string, expected: string, v: JsonValue): void {
-	const got = v === null ? "null" : kindName(v.kind);
+	const got = v == null ? "null" : kindName(v.kind);
 	errs.push("field '" + pfx + field + "': expected " + expected + ", got " + got);
 }
 
 export function reqString(this v: JsonValue, pfx: string, field: string, errs: string[]): string {
-	if (v !== null && v.kind === JsonKind.String) return v.strVal;
+	if (v != null && v.kind == JsonKind.String) return v.strVal;
 	pushKindErr(errs, pfx, field, "string", v);
 	return "";
 }
 
 export function reqBoolean(this v: JsonValue, pfx: string, field: string, errs: string[]): boolean {
-	if (v !== null && v.kind === JsonKind.Bool) return v.boolVal;
+	if (v != null && v.kind == JsonKind.Bool) return v.boolVal;
 	pushKindErr(errs, pfx, field, "boolean", v);
 	return false;
 }
 
 // JSON wire has one number type; a field typed number accepts either carrier.
 export function reqNumber(this v: JsonValue, pfx: string, field: string, errs: string[]): number {
-	if (v !== null) {
-		if (v.kind === JsonKind.Number) return v.numVal;
-		if (v.kind === JsonKind.Int) return v.intVal as number;
+	if (v != null) {
+		if (v.kind == JsonKind.Number) return v.numVal;
+		if (v.kind == JsonKind.Int) return v.intVal as number;
 	}
 	pushKindErr(errs, pfx, field, "number", v);
 	return 0;
@@ -125,19 +125,19 @@ export function reqNumber(this v: JsonValue, pfx: string, field: string, errs: s
 // (the classification is a pure function of the source text, so both
 // backends reject identically).
 export function reqInt64(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
-	if (v !== null && v.kind === JsonKind.Int) return v.intVal;
+	if (v != null && v.kind == JsonKind.Int) return v.intVal;
 	pushKindErr(errs, pfx, field, "int", v);
 	return 0 as int64;
 }
 
 export function reqArray(this v: JsonValue, pfx: string, field: string, errs: string[]): JsonValue {
-	if (v !== null && v.kind === JsonKind.Array) return v;
+	if (v != null && v.kind == JsonKind.Array) return v;
 	pushKindErr(errs, pfx, field, "array", v);
 	return jsonNull();
 }
 
 export function reqObject(this v: JsonValue, pfx: string, field: string, errs: string[]): JsonValue {
-	if (v !== null && v.kind === JsonKind.Object) return v;
+	if (v != null && v.kind == JsonKind.Object) return v;
 	pushKindErr(errs, pfx, field, "object", v);
 	return jsonNull();
 }
@@ -164,7 +164,7 @@ export function joinDecodeErrors(errs: string[]): string {
 	for (const e of errs) {
 		let dup = false;
 		for (const s of seen) {
-			if (s === e) { dup = true; }
+			if (s == e) { dup = true; }
 		}
 		if (!dup) seen.push(e);
 	}
@@ -173,14 +173,14 @@ export function joinDecodeErrors(errs: string[]): string {
 
 export function _jsonCheckDiscStr(v: string, allowed: string[], errs: string[], pfx: string, field: string): string {
 	for (const a of allowed) {
-		if (a === v) return v;
+		if (a == v) return v;
 	}
 	errs.push("field '" + pfx + field + "': unknown discriminator value '" + v + "'");
 	return allowed[0];
 }
 
 export function _jsonIsNull(v: JsonValue): boolean {
-	return v === null || v.kind === JsonKind.Null;
+	return v == null || v.kind == JsonKind.Null;
 }
 
 test "_jsonIsNull — null sentinel and absent field are null, values are not" {
@@ -193,10 +193,10 @@ test "_jsonIsNull — null sentinel and absent field are null, values are not" {
 // ===== Dynamic Field Access (protocol — `getDynamicField`) =====
 
 export function getDynamicField(this v: JsonValue, key: string): JsonValue {
-	if (v !== null && v.kind === JsonKind.Object) {
+	if (v != null && v.kind == JsonKind.Object) {
 		let i = 0;
 		while (i < v.keys.length) {
-			if (v.keys[i] === key) return v.values[i];
+			if (v.keys[i] == key) return v.values[i];
 			i = i + 1;
 		}
 	}
@@ -211,10 +211,10 @@ export function getDynamicField(this v: JsonValue, key: string): JsonValue {
 // the caller often does not control kind statically. To grow an empty/null
 // value into an object, use builder helpers first.
 export function setDynamicField(this v: JsonValue, key: string, value: JsonValue): void {
-	if (v === null || v.kind !== JsonKind.Object) return;
+	if (v == null || v.kind != JsonKind.Object) return;
 	let i = 0;
 	while (i < v.keys.length) {
-		if (v.keys[i] === key) {
+		if (v.keys[i] == key) {
 			v.values[i] = value;
 			return;
 		}
@@ -232,77 +232,77 @@ export function setDynamicField(this v: JsonValue, key: string, value: JsonValue
 
 export function jsonToStringArray(this v: JsonValue): string[] {
 	const out: string[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asString(item));
 	return out;
 }
 
 export function jsonToBooleanArray(this v: JsonValue): boolean[] {
 	const out: boolean[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asBoolean(item));
 	return out;
 }
 
 export function jsonToNumberArray(this v: JsonValue): number[] {
 	const out: number[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asNumber(item));
 	return out;
 }
 
 export function jsonToInt8Array(this v: JsonValue): int8[] {
 	const out: int8[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as int8);
 	return out;
 }
 
 export function jsonToInt16Array(this v: JsonValue): int16[] {
 	const out: int16[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as int16);
 	return out;
 }
 
 export function jsonToInt32Array(this v: JsonValue): int32[] {
 	const out: int32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as int32);
 	return out;
 }
 
 export function jsonToInt64Array(this v: JsonValue): int64[] {
 	const out: int64[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item));
 	return out;
 }
 
 export function jsonToUint8Array(this v: JsonValue): uint8[] {
 	const out: uint8[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as uint8);
 	return out;
 }
 
 export function jsonToUint16Array(this v: JsonValue): uint16[] {
 	const out: uint16[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as uint16);
 	return out;
 }
 
 export function jsonToUint32Array(this v: JsonValue): uint32[] {
 	const out: uint32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asInt64(item) as uint32);
 	return out;
 }
 
 export function jsonToFloat32Array(this v: JsonValue): float32[] {
 	const out: float32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (const item of v.items) out.push(asNumber(item) as float32);
 	return out;
 }
@@ -312,40 +312,40 @@ export function jsonToFloat32Array(this v: JsonValue): float32[] {
 test "reqString: ok path adds no error" {
 	const errs: string[] = [];
 	const v: JsonValue = { kind: JsonKind.String, strVal: "hi" };
-	assert reqString(v, "", "name", errs) === "hi";
-	assert errs.length === 0;
+	assert reqString(v, "", "name", errs) == "hi";
+	assert errs.length == 0;
 }
 
 test "reqString: wrong kind pushes named error" {
 	const errs: string[] = [];
 	const v: JsonValue = { kind: JsonKind.Int, intVal: 7 as int64 };
-	assert reqString(v, "", "name", errs) === "";
-	assert errs.length === 1;
-	assert errs[0] === "field 'name': expected string, got int";
+	assert reqString(v, "", "name", errs) == "";
+	assert errs.length == 1;
+	assert errs[0] == "field 'name': expected string, got int";
 }
 
 test "reqString: prefix lands in the message" {
 	const errs: string[] = [];
 	const v: JsonValue = { kind: JsonKind.Null };
 	reqString(v, "addr.", "city", errs);
-	assert errs[0] === "field 'addr.city': expected string, got null";
+	assert errs[0] == "field 'addr.city': expected string, got null";
 }
 
 test "reqNumber: accepts both carriers" {
 	const errs: string[] = [];
 	const i: JsonValue = { kind: JsonKind.Int, intVal: 30 as int64 };
 	const f: JsonValue = { kind: JsonKind.Number, numVal: 0.5 };
-	assert reqNumber(i, "", "a", errs) === 30;
-	assert reqNumber(f, "", "b", errs) === 0.5;
-	assert errs.length === 0;
+	assert reqNumber(i, "", "a", errs) == 30;
+	assert reqNumber(f, "", "b", errs) == 0.5;
+	assert errs.length == 0;
 }
 
 test "reqInt64: rejects float carrier" {
 	const errs: string[] = [];
 	const f: JsonValue = { kind: JsonKind.Number, numVal: 1.5 };
 	reqInt64(f, "", "age", errs);
-	assert errs.length === 1;
-	assert errs[0] === "field 'age': expected int, got number";
+	assert errs.length == 1;
+	assert errs[0] == "field 'age': expected int, got number";
 }
 
 test "reqArray/reqObject: mismatch pushes, sentinel returned" {
@@ -353,11 +353,11 @@ test "reqArray/reqObject: mismatch pushes, sentinel returned" {
 	const n: JsonValue = { kind: JsonKind.Int, intVal: 3 as int64 };
 	const a = reqArray(n, "", "tags", errs);
 	const o = reqObject(n, "", "addr", errs);
-	assert a.kind === JsonKind.Null;
-	assert o.kind === JsonKind.Null;
-	assert errs.length === 2;
-	assert errs[0] === "field 'tags': expected array, got int";
-	assert errs[1] === "field 'addr': expected object, got int";
+	assert a.kind == JsonKind.Null;
+	assert o.kind == JsonKind.Null;
+	assert errs.length == 2;
+	assert errs[0] == "field 'tags': expected array, got int";
+	assert errs[1] == "field 'addr': expected object, got int";
 }
 
 // ===== Strict array-extraction helpers =====
@@ -373,7 +373,7 @@ function jsonElemPath(arrPath: string, i: int32): string {
 
 export function jsonToStringArrayE(this v: JsonValue, errs: string[], arrPath: string): string[] {
 	const out: string[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqString(v.items[i], jsonElemPath(arrPath, i), "", errs));
 	}
@@ -382,7 +382,7 @@ export function jsonToStringArrayE(this v: JsonValue, errs: string[], arrPath: s
 
 export function jsonToBooleanArrayE(this v: JsonValue, errs: string[], arrPath: string): boolean[] {
 	const out: boolean[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqBoolean(v.items[i], jsonElemPath(arrPath, i), "", errs));
 	}
@@ -391,7 +391,7 @@ export function jsonToBooleanArrayE(this v: JsonValue, errs: string[], arrPath: 
 
 export function jsonToNumberArrayE(this v: JsonValue, errs: string[], arrPath: string): number[] {
 	const out: number[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs));
 	}
@@ -400,7 +400,7 @@ export function jsonToNumberArrayE(this v: JsonValue, errs: string[], arrPath: s
 
 export function jsonToFloat32ArrayE(this v: JsonValue, errs: string[], arrPath: string): float32[] {
 	const out: float32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs) as float32);
 	}
@@ -409,7 +409,7 @@ export function jsonToFloat32ArrayE(this v: JsonValue, errs: string[], arrPath: 
 
 export function jsonToInt8ArrayE(this v: JsonValue, errs: string[], arrPath: string): int8[] {
 	const out: int8[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int8);
 	}
@@ -418,7 +418,7 @@ export function jsonToInt8ArrayE(this v: JsonValue, errs: string[], arrPath: str
 
 export function jsonToInt16ArrayE(this v: JsonValue, errs: string[], arrPath: string): int16[] {
 	const out: int16[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int16);
 	}
@@ -427,7 +427,7 @@ export function jsonToInt16ArrayE(this v: JsonValue, errs: string[], arrPath: st
 
 export function jsonToInt32ArrayE(this v: JsonValue, errs: string[], arrPath: string): int32[] {
 	const out: int32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int32);
 	}
@@ -436,7 +436,7 @@ export function jsonToInt32ArrayE(this v: JsonValue, errs: string[], arrPath: st
 
 export function jsonToInt64ArrayE(this v: JsonValue, errs: string[], arrPath: string): int64[] {
 	const out: int64[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs));
 	}
@@ -445,7 +445,7 @@ export function jsonToInt64ArrayE(this v: JsonValue, errs: string[], arrPath: st
 
 export function jsonToUint8ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint8[] {
 	const out: uint8[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint8);
 	}
@@ -454,7 +454,7 @@ export function jsonToUint8ArrayE(this v: JsonValue, errs: string[], arrPath: st
 
 export function jsonToUint16ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint16[] {
 	const out: uint16[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint16);
 	}
@@ -463,7 +463,7 @@ export function jsonToUint16ArrayE(this v: JsonValue, errs: string[], arrPath: s
 
 export function jsonToUint32ArrayE(this v: JsonValue, errs: string[], arrPath: string): uint32[] {
 	const out: uint32[] = [];
-	if (v === null || v.kind !== JsonKind.Array) return out;
+	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
 		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint32);
 	}

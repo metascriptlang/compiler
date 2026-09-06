@@ -30,8 +30,8 @@ export function escapeCString(s: string): string {
 	let i = 0;
 	while (i < s.byteLength) {
 		const b = s.byteAt(i);
-		if (b < 32 || b >= 127 || b === "\\".code || b === "\"".code
-				|| b === "'".code || b === "?".code) {
+		if (b < 32 || b >= 127 || b == "\\".code || b == "\"".code
+				|| b == "'".code || b == "?".code) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			result = result + match (b) {
 				"\\".code => "\\\\",
@@ -72,25 +72,25 @@ export function cStringLiteral(s: string): string {
 // MS would emit as `(0 / 0)` and trap as integer divide-by-zero instead of producing
 // IEEE 754 NaN.
 export function formatCNumber(value: number, type: Type | null = null): string {
-	const isFloat = type !== null
-		&& (type.kind === TypeKind.Number || type.kind === TypeKind.Float32 || type.kind === TypeKind.Float64);
+	const isFloat = type != null
+		&& (type.kind == TypeKind.Number || type.kind == TypeKind.Float32 || type.kind == TypeKind.Float64);
 
 	// Non-finite doubles have no C literal spelling — emit the C99 math.h
 	// macros (constant expressions, linker/runtime neutral).
-	if (value !== value) return "NAN";
+	if (value != value) return "NAN";
 	if (value > 1.7976931348623157e308) return "INFINITY";
 	if (value < -1.7976931348623157e308) return "-INFINITY";
 
 	// Negative zero — must check before the regular zero branch (1.0 / -0.0 is -Infinity).
-	if (value === 0.0 && (1.0 / value) < 0.0) return isFloat ? "-0.0" : "-0";
-	if (value === 0.0) return isFloat ? "0.0" : "0";
+	if (value == 0.0 && (1.0 / value) < 0.0) return isFloat ? "-0.0" : "-0";
+	if (value == 0.0) return isFloat ? "0.0" : "0";
 
 	// Integer-valued? Truncation check stays bounded to int32 range; larger magnitudes
 	// fall through to the precision-preserving double formatter.
 	let isInt = false;
 	if (value > -2147483648.0 && value < 2147483647.0) {
 		const truncated = value - (value % 1.0);
-		if (truncated === value) {
+		if (truncated == value) {
 			isInt = true;
 		}
 	}
@@ -110,10 +110,10 @@ export function formatCNumber(value: number, type: Type | null = null): string {
 // Literal emission for a NumberLiteral node: integers take the exact int64,
 // floats (and integer literals in float position) keep the double formatter.
 export function formatCNumberLit(d: NumberLiteralData, ty: Type | null = null): string {
-	const wantsFloat = ty !== null
-		&& (ty.kind === TypeKind.Number || ty.kind === TypeKind.Float32 || ty.kind === TypeKind.Float64);
-	const wantsUint64 = ty !== null && ty.kind === TypeKind.Uint64;
-	const wantsInt64 = ty !== null && ty.kind === TypeKind.Int64;
+	const wantsFloat = ty != null
+		&& (ty.kind == TypeKind.Number || ty.kind == TypeKind.Float32 || ty.kind == TypeKind.Float64);
+	const wantsUint64 = ty != null && ty.kind == TypeKind.Uint64;
+	const wantsInt64 = ty != null && ty.kind == TypeKind.Int64;
 	if (d.isFloat || wantsFloat) return formatCNumber(d.value, ty);
 	if (wantsUint64) {
 		return formatCUint64(d.intVal as uint64);
@@ -126,7 +126,7 @@ export function formatCNumberLit(d: NumberLiteralData, ty: Type | null = null): 
 
 export function formatCIntLiteral(v: int64): string {
 	if (v > -2147483648 && v <= 2147483647) return int64ToDecimal(v);
-	if (v === -2147483648) return "(-2147483647 -1)";
+	if (v == -2147483648) return "(-2147483647 -1)";
 	return formatCInt64(v);
 }
 
@@ -202,98 +202,98 @@ export function cNullLiteral(): string {
 }
 
 // ===== Tests =====
-test "plain string" { assert escapeCString("hello") === "hello"; }
+test "plain string" { assert escapeCString("hello") == "hello"; }
 
-test "escape backslash" { assert escapeCString("a\\b") === "a\\\\b"; }
+test "escape backslash" { assert escapeCString("a\\b") == "a\\\\b"; }
 
-test "escape quotes" { assert escapeCString("a\"b") === "a\\\"b"; }
+test "escape quotes" { assert escapeCString("a\"b") == "a\\\"b"; }
 
-test "escape newline" { assert escapeCString("a\nb") === "a\\nb"; }
+test "escape newline" { assert escapeCString("a\nb") == "a\\nb"; }
 
-test "escape tab" { assert escapeCString("a\tb") === "a\\tb"; }
+test "escape tab" { assert escapeCString("a\tb") == "a\\tb"; }
 
-test "escape question mark prevents trigraphs" { assert escapeCString("??=") === "\\?\\?="; }
+test "escape question mark prevents trigraphs" { assert escapeCString("??=") == "\\?\\?="; }
 
 test "cStringLiteral wraps in quotes" {
-	assert cStringLiteral("hello") === "\"hello\"";
-	assert cStringLiteral("a\"b") === "\"a\\\"b\"";
+	assert cStringLiteral("hello") == "\"hello\"";
+	assert cStringLiteral("a\"b") == "\"a\\\"b\"";
 }
 
-test "zero" { assert formatCNumber(0.0) === "0"; }
+test "zero" { assert formatCNumber(0.0) == "0"; }
 
-test "positive integer" { assert formatCNumber(42.0) === "42"; }
+test "positive integer" { assert formatCNumber(42.0) == "42"; }
 
-test "negative integer" { assert formatCNumber(-7.0) === "-7"; }
+test "negative integer" { assert formatCNumber(-7.0) == "-7"; }
 
 test "zero in float context emits 0.0" {
 	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
-	assert formatCNumber(0.0, t) === "0.0";
+	assert formatCNumber(0.0, t) == "0.0";
 }
 
 test "positive integer in float context emits .0 suffix" {
 	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
-	assert formatCNumber(1.0, t) === "1.0";
-	assert formatCNumber(42.0, t) === "42.0";
+	assert formatCNumber(1.0, t) == "1.0";
+	assert formatCNumber(42.0, t) == "42.0";
 }
 
 test "negative integer in float context emits .0 suffix" {
 	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
-	assert formatCNumber(-1.0, t) === "-1.0";
+	assert formatCNumber(-1.0, t) == "-1.0";
 }
 
 test "fractional value unchanged by float context" {
 	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
-	assert formatCNumber(0.5, t) === "0.5";
+	assert formatCNumber(0.5, t) == "0.5";
 }
 
 test "negative zero in float context emits -0.0" {
 	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
 	const negZero: number = -1.0 * 0.0;
-	assert formatCNumber(negZero, t) === "-0.0";
+	assert formatCNumber(negZero, t) == "-0.0";
 }
 
 test "negative zero with null type emits -0" {
 	const negZero: number = -1.0 * 0.0;
-	assert formatCNumber(negZero) === "-0";
+	assert formatCNumber(negZero) == "-0";
 }
 
 test "integer type still emits plain integer" {
 	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
-	assert formatCNumber(42.0, t) === "42";
+	assert formatCNumber(42.0, t) == "42";
 }
 
 
-test "int32 suffix" { assert formatCInt32(42) === "42"; }
+test "int32 suffix" { assert formatCInt32(42) == "42"; }
 
 test "number literal emission dispatches on uint64" {
 	const tu: Type = { kind: TypeKind.Uint64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
 	const d: NumberLiteralData = { value: 0.0, isFloat: false, intVal: -1, outOfRangeText: "", isBitPattern: true };
-	assert formatCNumberLit(d, tu) === "18446744073709551615ULL";
+	assert formatCNumberLit(d, tu) == "18446744073709551615ULL";
 }
 
 test "number literal emission dispatches on int64" {
 	const ti: Type = { kind: TypeKind.Int64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
 	const d: NumberLiteralData = { value: 42.0, isFloat: false, intVal: 42, outOfRangeText: "", isBitPattern: false };
-	assert formatCNumberLit(d, ti) === "42LL";
+	assert formatCNumberLit(d, ti) == "42LL";
 }
 
-test "int64 suffix" { assert formatCInt64(42) === "42LL"; }
+test "int64 suffix" { assert formatCInt64(42) == "42LL"; }
 
-test "int64 min decomposes" { assert formatCInt64(-9223372036854775808) === "(-9223372036854775807LL - 1LL)"; }
+test "int64 min decomposes" { assert formatCInt64(-9223372036854775808) == "(-9223372036854775807LL - 1LL)"; }
 
-test "int64 max keeps the suffix" { assert formatCInt64(9223372036854775807) === "9223372036854775807LL"; }
+test "int64 max keeps the suffix" { assert formatCInt64(9223372036854775807) == "9223372036854775807LL"; }
 
-test "int literal stays bare inside int32 range" { assert formatCIntLiteral(42) === "42"; }
+test "int literal stays bare inside int32 range" { assert formatCIntLiteral(42) == "42"; }
 
-test "int literal decomposes int32 min" { assert formatCIntLiteral(-2147483648) === "(-2147483647 -1)"; }
+test "int literal decomposes int32 min" { assert formatCIntLiteral(-2147483648) == "(-2147483647 -1)"; }
 
-test "int literal takes the suffix past int32" { assert formatCIntLiteral(5000000000) === "5000000000LL"; }
+test "int literal takes the suffix past int32" { assert formatCIntLiteral(5000000000) == "5000000000LL"; }
 
-test "uint64 max spells the digits" { assert formatCUint64(18446744073709551615) === "18446744073709551615ULL"; }
+test "uint64 max spells the digits" { assert formatCUint64(18446744073709551615) == "18446744073709551615ULL"; }
 
-test "uint32 suffix" { assert formatCUint32(42) === "42U"; }
+test "uint32 suffix" { assert formatCUint32(42) == "42U"; }
 
-test "float32 suffix" { assert formatCFloat32(3.14) === "3.14f"; }
+test "float32 suffix" { assert formatCFloat32(3.14) == "3.14f"; }
 
 test "emit pool declarations as msStrPayload" {
 	const pool = createStringPool();
@@ -306,31 +306,31 @@ test "emit pool declarations as msStrPayload" {
 	// Should contain MS_STRLIT_FLAG, cap, and data
 }
 
-test "msStringPoolRef format" { assert msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)"; }
+test "msStringPoolRef format" { assert msStringPoolRef("TMP_STR_1", 5) == "MS_STRING_LIT(&TMP_STR_1, 5)"; }
 
 test "true/false" {
-	assert cBoolLiteral(true) === "MS_TRUE";
-	assert cBoolLiteral(false) === "MS_FALSE";
+	assert cBoolLiteral(true) == "MS_TRUE";
+	assert cBoolLiteral(false) == "MS_FALSE";
 }
 
-test "null" { assert cNullLiteral() === "MS_NIL"; }
+test "null" { assert cNullLiteral() == "MS_NIL"; }
 
 test "backslash-x sequence has its backslash escaped" {
 	const backslash = "\\";
 	const esc = backslash + "x1b[";
-	assert escapeCString(esc) === backslash + backslash + "x1b[";
+	assert escapeCString(esc) == backslash + backslash + "x1b[";
 }
 
 test "control and non-ascii bytes emit octal escapes" {
-	assert escapeCString(fromCodePoint(27) + "[") === "\\033[";
-	assert escapeCString("hi" + fromCodePoint(10) + "yo") === "hi\\nyo";
-	assert escapeCString(fromCodePoint(233)) === "\\303\\251";
+	assert escapeCString(fromCodePoint(27) + "[") == "\\033[";
+	assert escapeCString("hi" + fromCodePoint(10) + "yo") == "hi\\nyo";
+	assert escapeCString(fromCodePoint(233)) == "\\303\\251";
 }
 
-test "cStringByteLen plain" { assert cStringByteLen("hello") === 5; }
+test "cStringByteLen plain" { assert cStringByteLen("hello") == 5; }
 
 test "cStringByteLen counts raw bytes" {
 	const backslash = "\\";
-	assert cStringByteLen(backslash + "x1b[") === 5;
-	assert cStringByteLen(fromCodePoint(27) + "[0m") === 4;
+	assert cStringByteLen(backslash + "x1b[") == 5;
+	assert cStringByteLen(fromCodePoint(27) + "[0m") == 4;
 }

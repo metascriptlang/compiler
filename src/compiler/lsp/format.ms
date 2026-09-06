@@ -199,18 +199,18 @@ export function lspFmtSignatureHelp(signaturesJson: string, activeSig: number, a
 }
 
 // ===== Tests =====
-test "position" { assert lspFmtPosition(0, 5) === "{\"line\":0,\"character\":5}"; }
+test "position" { assert lspFmtPosition(0, 5) == "{\"line\":0,\"character\":5}"; }
 
-test "zero position" { assert lspFmtPosition(0, 0) === "{\"line\":0,\"character\":0}"; }
+test "zero position" { assert lspFmtPosition(0, 0) == "{\"line\":0,\"character\":0}"; }
 
 test "single line range" {
 	const r = lspFmtLineRange(3, 5, 10);
-	assert r === "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}";
+	assert r == "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}";
 }
 
 test "multi line range" {
 	const r = lspFmtRange(1, 0, 5, 10);
-	assert r === "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}";
+	assert r == "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}";
 }
 
 test "location" {

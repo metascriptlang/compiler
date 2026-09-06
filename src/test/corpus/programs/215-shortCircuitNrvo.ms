@@ -23,7 +23,7 @@ function sink(b: boolean): int32 { return b ? 1 : 0; }
 function main(): void {
 	const flags: int32[] = [];
 	const f: boolean = flags.length > 0;
-	const t: boolean = flags.length === 0;
+	const t: boolean = flags.length == 0;
 
 	// 1. var-init: untaken && RHS must not run
 	const a: boolean = f && (mk().x > 0);

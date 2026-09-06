@@ -18,12 +18,12 @@ import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 const ORG_API_BASE = registryBaseUrl();
 
 function getStr(obj: JsonValue, field: string): string {
-	if (obj === null || obj.kind !== JsonKind.Object) return "";
+	if (obj == null || obj.kind != JsonKind.Object) return "";
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			const v = obj.values[i];
-			if (v !== null && v.kind === JsonKind.String) return v.strVal;
+			if (v != null && v.kind == JsonKind.String) return v.strVal;
 		}
 		i = i + 1;
 	}
@@ -31,12 +31,12 @@ function getStr(obj: JsonValue, field: string): string {
 }
 
 function getArray(obj: JsonValue, field: string): JsonValue[] {
-	if (obj === null || obj.kind !== JsonKind.Object) return [];
+	if (obj == null || obj.kind != JsonKind.Object) return [];
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			const v = obj.values[i];
-			if (v !== null && v.kind === JsonKind.Array) return v.items;
+			if (v != null && v.kind == JsonKind.Array) return v.items;
 		}
 		i = i + 1;
 	}
@@ -45,7 +45,7 @@ function getArray(obj: JsonValue, field: string): JsonValue[] {
 
 function authHeaders(): { headers: HttpHeaders, ok: boolean } {
 	const token = loadToken();
-	if (token === "") {
+	if (token == "") {
 		console.log(`${errStyle("error")}: not logged in — run ${cyan("msc login")} first`);
 		return { headers: createHeaders(), ok: false };
 	}
@@ -56,7 +56,7 @@ function authHeaders(): { headers: HttpHeaders, ok: boolean } {
 }
 
 export function cmdOrg(args: string[]): boolean {
-	if (args.length === 0) {
+	if (args.length == 0) {
 		printUsage();
 		return false;
 	}
@@ -107,7 +107,7 @@ function orgCreate(args: string[]): boolean {
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
 
-	if (resp.status === 201) {
+	if (resp.status == 201) {
 		console.log(`${green("created")} organization ${cyan("@" + name)}`);
 		return true;
 	}
@@ -137,7 +137,7 @@ function orgInvite(args: string[]): boolean {
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
 
-	if (resp.status === 201) {
+	if (resp.status == 201) {
 		console.log(`${green("added")} ${cyan(username)} to ${cyan("@" + orgName)}`);
 		return true;
 	}
@@ -165,7 +165,7 @@ function orgRemove(args: string[]): boolean {
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
 
-	if (resp.status === 200) {
+	if (resp.status == 200) {
 		console.log(`${green("removed")} ${cyan(username)} from ${cyan("@" + orgName)}`);
 		return true;
 	}
@@ -187,7 +187,7 @@ function orgList(): boolean {
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
 
-	if (resp.status !== 200) {
+	if (resp.status != 200) {
 		console.log(`${errStyle("error")}: failed to list organizations`);
 		return false;
 	}
@@ -199,7 +199,7 @@ function orgList(): boolean {
 	}
 
 	const orgs = getArray(parsed.value, "organizations");
-	if (orgs.length === 0) {
+	if (orgs.length == 0) {
 		console.log("no organizations — create one with " + cyan("msc org create <name>"));
 		return true;
 	}
@@ -224,11 +224,11 @@ function orgMembers(args: string[]): boolean {
 	const fetchResult = fetch(ORG_API_BASE + "/orgs/" + orgName, { method: "GET" });
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
-	if (resp.status === 404) {
+	if (resp.status == 404) {
 		console.log(`${errStyle("error")}: organization not found: @${orgName}`);
 		return false;
 	}
-	if (resp.status !== 200) {
+	if (resp.status != 200) {
 		console.log(`${errStyle("error")}: failed to fetch org`);
 		return false;
 	}
@@ -260,7 +260,7 @@ function orgRole(args: string[]): boolean {
 	const username = args[2];
 	const role = args[3];
 
-	if (role !== "owner" && role !== "member") {
+	if (role != "owner" && role != "member") {
 		console.log(`${errStyle("error")}: role must be "owner" or "member"`);
 		return false;
 	}
@@ -277,7 +277,7 @@ function orgRole(args: string[]): boolean {
 	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
 	const resp = fetchResult.value;
 
-	if (resp.status === 200) {
+	if (resp.status == 200) {
 		console.log(`${green("updated")} ${cyan(username)} → ${cyan(role)} in ${cyan("@" + orgName)}`);
 		return true;
 	}

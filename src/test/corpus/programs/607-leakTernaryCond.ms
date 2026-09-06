@@ -20,7 +20,7 @@ function main(): void {
 	let hits = 0;
 	let i = 0;
 	while (i < 3000000) {
-		const x = (i % 2 === 0) ? provide(i).ok : false;
+		const x = (i % 2 == 0) ? provide(i).ok : false;
 		if (x) { hits = hits + 1; }
 		i = i + 1;
 	}

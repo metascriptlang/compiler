@@ -25,18 +25,18 @@ function bug066Joined(): string {
 
 test "bug066: asBytes on a concat rvalue receiver" {
 	const rv = (bug066Joined() + "!").asBytes();
-	assert rv.length === 6;
-	assert rv[0] === 104;
-	assert rv[5] === 33;
+	assert rv.length == 6;
+	assert rv[0] == 104;
+	assert rv[5] == 33;
 }
 
 test "bug066: asBytes on a direct call rvalue receiver" {
 	const direct = bug066Joined().asBytes();
-	assert direct.length === 5;
-	assert direct[4] === 111;
+	assert direct.length == 5;
+	assert direct[4] == 111;
 }
 
 test "bug066: statement-position rvalue receiver still works" {
 	(bug066Joined() + "?").asBytes();
-	assert bug066Joined().length === 5;
+	assert bug066Joined().length == 5;
 }

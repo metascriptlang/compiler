@@ -30,7 +30,7 @@ import {
 
 // Decode a CborValue Array into T[] using `cborValueToStruct<T>` per item.
 function decodeArray<T>(cv: CborValue, witness: T | null): Result<T[], SurrealError> {
-	if (cv.kind !== CborKind.Array) {
+	if (cv.kind != CborKind.Array) {
 		return Result.err(decodeError("expected Array result, got kind=" + cv.kind.toString()));
 	}
 	const out: T[] = [];
@@ -38,7 +38,7 @@ function decodeArray<T>(cv: CborValue, witness: T | null): Result<T[], SurrealEr
 	let i: int64 = 0;
 	while (i < n) {
 		const item = at(cv, i);
-		if (item.kind !== CborKind.Map) {
+		if (item.kind != CborKind.Map) {
 			return Result.err(decodeError("expected Map element at index " + i.toString() + ", got kind=" + item.kind.toString()));
 		}
 		out.push(cborValueToStruct(item, witness));
@@ -51,12 +51,12 @@ function decodeArray<T>(cv: CborValue, witness: T | null): Result<T[], SurrealEr
 // 1-element Array; peel that case. Empty array → error.
 function decodeOne<T>(cv: CborValue, witness: T | null): Result<T, SurrealError> {
 	let item = cv;
-	if (cv.kind === CborKind.Array) {
+	if (cv.kind == CborKind.Array) {
 		const n = length(cv);
-		if (n === 0) return Result.err(decodeError("expected record, got empty array"));
+		if (n == 0) return Result.err(decodeError("expected record, got empty array"));
 		item = at(cv, 0);
 	}
-	if (item.kind !== CborKind.Map) {
+	if (item.kind != CborKind.Map) {
 		return Result.err(decodeError("expected record (Map), got kind=" + item.kind.toString()));
 	}
 	return Result.ok(cborValueToStruct(item, witness));

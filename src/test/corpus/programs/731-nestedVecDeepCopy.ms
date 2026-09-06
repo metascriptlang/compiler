@@ -15,35 +15,35 @@ function nested2(): boolean {
 	const c: Vec<Vec<int32>> = a;
 	c[0][0] = 99;
 	c[1].push(5);
-	return a[0][0] === 1 && a[1].length === 2 && c[0][0] === 99 && c[1].length === 3;
+	return a[0][0] == 1 && a[1].length == 2 && c[0][0] == 99 && c[1].length == 3;
 }
 
 function nested3(): boolean {
 	const a: Vec<Vec<Vec<int32>>> = [[[5]]];
 	const c: Vec<Vec<Vec<int32>>> = a;
 	c[0][0][0] = 77;
-	return a[0][0][0] === 5 && c[0][0][0] === 77;
+	return a[0][0][0] == 5 && c[0][0][0] == 77;
 }
 
 function nestedStr(): boolean {
 	const a: Vec<Vec<string>> = [["x", "y"]];
 	const c: Vec<Vec<string>> = a;
 	c[0][0] = "mut";
-	return a[0][0] === "x" && c[0][0] === "mut";
+	return a[0][0] == "x" && c[0][0] == "mut";
 }
 
 function nestedU8(): boolean {
 	const a: Vec<Vec<uint8>> = [[1, 2]];
 	const c: Vec<Vec<uint8>> = a;
 	c[0][0] = 9 as uint8;
-	return a[0][0] === 1 && c[0][0] === 9;
+	return a[0][0] == 1 && c[0][0] == 9;
 }
 
 function reassign(): boolean {
 	let a: Vec<Vec<int32>> = [[1]];
 	const keep: Vec<Vec<int32>> = a;
 	a = [[2]];
-	return keep[0][0] === 1 && a[0][0] === 2;
+	return keep[0][0] == 1 && a[0][0] == 2;
 }
 
 function main(): void {

@@ -56,7 +56,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	const finalStmts: Node[] = [];
 	let si = 0;
 	while (si < stmts.length) {
-		if (si === stmts.length - 1 && stmts[si].kind === NodeKind.ExprStmt) {
+		if (si == stmts.length - 1 && stmts[si].kind == NodeKind.ExprStmt) {
 			const ed = stmts[si].data as ExprStmtData;
 			finalStmts.push(createNode(NodeKind.ReturnStmt, { argument: ed.expr }, synthToken(loc)));
 		} else {
@@ -70,7 +70,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	// (no ctx, e.g. evaluateComptimeBlocks): top-level statements, body
 	// must be self-contained.
 	let ctx: RaiserContext | null;
-	if (checkerCtx !== null) {
+	if (checkerCtx != null) {
 		const fnBody = createNode(NodeKind.BlockStmt, { statements: finalStmts }, synthToken(loc));
 		const emptyDefaults: Node[] = [];
 		const comptimeFn = createNode(NodeKind.FunctionDecl, {
@@ -97,7 +97,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	// `null`, which then hits a confusing "Type 'null' is not assignable to
 	// type 'X'" error far from the actual cause. The most common cause is a
 	// missing string/array extension method bridge.
-	if (ctx.lastError !== "" && checkerCtx !== null) {
+	if (ctx.lastError != "" && checkerCtx != null) {
 		addError(checkerCtx, "@comptime evaluation failed: " + ctx.lastError, loc.line, loc.column);
 	}
 
@@ -115,7 +115,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 // --- First pass: check if AST contains any ComptimeBlock nodes ---
 
 function hasComptimeBlock(node: Node | null): boolean {
-	if (node === null) return false;
+	if (node == null) return false;
 	return match (node.kind) {
 		NodeKind.ComptimeBlock => true,
 		NodeKind.VariableDecl => {
@@ -159,7 +159,7 @@ function hasComptimeBlock(node: Node | null): boolean {
 // --- AST walker — find and replace ComptimeBlock nodes ---
 
 function walkNode(node: Node | null): Node {
-	if (node === null) return null as unknown as Node;
+	if (node == null) return null as unknown as Node;
 	return match (node.kind) {
 		NodeKind.ComptimeBlock => evalComptimeBlock(node, null as unknown as CheckerContext),
 		NodeKind.VariableDecl => {
@@ -254,11 +254,11 @@ test "comptime int arithmetic" {
 	const result = evaluateComptimeBlocks(pr.value);
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
-	assert varDecl.kind === NodeKind.VariableDecl;
+	assert varDecl.kind == NodeKind.VariableDecl;
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.NumberLiteral;
+	assert vd.initializer.kind == NodeKind.NumberLiteral;
 	const nd = vd.initializer.data as NumberLiteralData;
-	assert nd.value === 15;
+	assert nd.value == 15;
 }
 
 test "comptime string" {
@@ -268,9 +268,9 @@ test "comptime string" {
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.StringLiteral;
+	assert vd.initializer.kind == NodeKind.StringLiteral;
 	const sd = vd.initializer.data as StringLiteralData;
-	assert sd.value === "darwin";
+	assert sd.value == "darwin";
 }
 
 test "comptime boolean" {
@@ -280,16 +280,16 @@ test "comptime boolean" {
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.BooleanLiteral;
+	assert vd.initializer.kind == NodeKind.BooleanLiteral;
 	const bd = vd.initializer.data as BooleanLiteralData;
-	assert bd.boolValue === true;
+	assert bd.boolValue == true;
 }
 
 test "no comptime passes through" {
 	const pr = parseSource("const x = 42;");
 	assert pr.ok;
 	const result = evaluateComptimeBlocks(pr.value);
-	assert result === pr.value;
+	assert result == pr.value;
 }
 
 // --- Phase 8a POC regression tests (same-file outer-scope @comptime) ---
@@ -310,11 +310,11 @@ test "Phase 8a: outer fn callable from @comptime" {
 	const pd = pr.value.data as ProgramData;
 	// programStmts[0] = function decl, [1] = const decl with folded literal
 	const varDecl = pd.programStmts[1];
-	assert varDecl.kind === NodeKind.VariableDecl;
+	assert varDecl.kind == NodeKind.VariableDecl;
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.NumberLiteral;
+	assert vd.initializer.kind == NodeKind.NumberLiteral;
 	const nd = vd.initializer.data as NumberLiteralData;
-	assert nd.value === 42;
+	assert nd.value == 42;
 }
 
 test "Phase 8a: outer fn chain (transitive same-file)" {
@@ -328,9 +328,9 @@ test "Phase 8a: outer fn chain (transitive same-file)" {
 	const pd = pr.value.data as ProgramData;
 	const varDecl = pd.programStmts[2];
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.NumberLiteral;
+	assert vd.initializer.kind == NodeKind.NumberLiteral;
 	const nd = vd.initializer.data as NumberLiteralData;
-	assert nd.value === 12;  // (5+1)*2
+	assert nd.value == 12;  // (5+1)*2
 }
 
 test "Phase 8a: outer fn + extern via CallHost" {
@@ -346,9 +346,9 @@ test "Phase 8a: outer fn + extern via CallHost" {
 	const pd = pr.value.data as ProgramData;
 	const varDecl = pd.programStmts[2];
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.NumberLiteral;
+	assert vd.initializer.kind == NodeKind.NumberLiteral;
 	const nd = vd.initializer.data as NumberLiteralData;
-	assert nd.value === 1;  // README exists (1) + missing (0)
+	assert nd.value == 1;  // README exists (1) + missing (0)
 }
 
 // Single-file checkProgram mode has no outer ExportRegistry, so cross-module
@@ -368,7 +368,7 @@ test "Phase 8b: cross-module unresolved in single-file mode (no registry)" {
 	const pd = pr.value.data as ProgramData;
 	const varDecl = pd.programStmts[1];
 	const vd = varDecl.data as VariableDeclData;
-	assert vd.initializer.kind === NodeKind.NullLiteral;
+	assert vd.initializer.kind == NodeKind.NullLiteral;
 }
 
 // --- CallHost smoke tests (Phase 6) ---
@@ -397,61 +397,61 @@ function _smokeCallHost(src: string): RaiserContext {
 
 test "comptime CallHost msProcessPlatform" {
 	const ctx = _smokeCallHost("extern function msProcessPlatform(): string; return msProcessPlatform();");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.String;
 	assert ctx.lastResult.strVal.length > 0;
 }
 
 test "comptime CallHost msProcessCwd" {
 	const ctx = _smokeCallHost("extern function msProcessCwd(): string; return msProcessCwd();");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.String;
 	assert ctx.lastResult.strVal.length > 0;
 }
 
 test "comptime CallHost msFsExists present file" {
 	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"README.md\");");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal === 1;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsExists missing file" {
 	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"/tmp/__nope_xyz__\");");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal === 0;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 0;
 }
 
 test "comptime CallHost msFsIsFile README" {
 	const ctx = _smokeCallHost("extern function msFsIsFile(path: string): number; return msFsIsFile(\"README.md\");");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal === 1;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsIsDir cwd" {
 	const ctx = _smokeCallHost("extern function msFsIsDir(path: string): number; return msFsIsDir(\".\");");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal === 1;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsFileSize positive" {
 	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): number; return msFsFileSize(\"README.md\");");
-	assert ctx.lastError === "";
+	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal > 0;
 }
 
 test "comptime CallHost msProcessGetEnv missing var" {
 	const ctx = _smokeCallHost("extern function msProcessGetEnv(name: string): string; return msProcessGetEnv(\"__NEVER_SET_ABCXYZ__\");");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.kind === RaiserValueKind.String;
-	assert ctx.lastResult.strVal === "";
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.String;
+	assert ctx.lastResult.strVal == "";
 }
 
 // Pure-MS test (no CallHost) — verifies the smoke harness compiles plain MS
 // correctly so any CallHost failures aren't masked by harness issues.
 test "comptime smoke harness pure MS" {
 	const ctx = _smokeCallHost("function add(a: number, b: number): number { return a + b; } return add(10, 32);");
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal === 42;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 42;
 }
 
 // --- Phase 7 smoke tests: wrapper-inline pattern ---
@@ -469,8 +469,8 @@ test "comptime CallHost msFsReadFile reads README" {
 		"extern function msFsReadFile(path: string): string;" +
 		"return msFsReadFile(\"README.md\");"
 	);
-	assert ctx.lastError === "";
-	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.String;
 	assert ctx.lastResult.strVal.length > 0;
 }
 
@@ -481,8 +481,8 @@ test "comptime CallHost msFsReadFile missing → empty + errno set" {
 		"const raw = msFsReadFile(\"/tmp/__missing_zzz__\");" +
 		"return msFsLastErrno();"
 	);
-	assert ctx.lastError === "";
-	assert ctx.lastResult.intVal !== 0;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal != 0;
 }
 
 test "comptime CallHost wrapper-inline Result-like" {
@@ -500,9 +500,9 @@ test "comptime CallHost wrapper-inline Result-like" {
 		"}" +
 		"return tryRead(\"README.md\");"
 	);
-	assert ctx.lastError === "";
+	assert ctx.lastError == "";
 	// Result is a heap-allocated Object inside the VM
-	assert ctx.lastResult.kind === RaiserValueKind.Object;
+	assert ctx.lastResult.kind == RaiserValueKind.Object;
 }
 
 test "comptime CallHost msFsReadDirEntries non-empty" {
@@ -510,8 +510,8 @@ test "comptime CallHost msFsReadDirEntries non-empty" {
 		"extern function msFsReadDirEntries(path: string): string;" +
 		"return msFsReadDirEntries(\".\");"
 	);
-	assert ctx.lastError === "";
-	assert ctx.lastResult.kind === RaiserValueKind.String;
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.String;
 	assert ctx.lastResult.strVal.length > 0;
 }
 

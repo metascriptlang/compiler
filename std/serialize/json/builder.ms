@@ -128,39 +128,39 @@ export function jsonArrayOfFloat32(arr: float32[]): JsonValue {
 
 test "construct null" {
 	const v = jsonNull();
-	assert v.kind === JsonKind.Null;
+	assert v.kind == JsonKind.Null;
 }
 
 test "construct bool" {
 	const t = jsonBool(true);
-	assert t.kind === JsonKind.Bool;
-	assert t.boolVal === true;
+	assert t.kind == JsonKind.Bool;
+	assert t.boolVal == true;
 }
 
 test "construct number" {
 	const v = jsonNumber(42);
-	assert v.kind === JsonKind.Number;
-	assert v.numVal === 42;
+	assert v.kind == JsonKind.Number;
+	assert v.numVal == 42;
 }
 
 test "construct string" {
 	const v = jsonString("hello");
-	assert v.kind === JsonKind.String;
-	assert v.strVal === "hello";
+	assert v.kind == JsonKind.String;
+	assert v.strVal == "hello";
 }
 
 test "construct array" {
 	const items: JsonValue[] = [jsonNumber(1), jsonNumber(2)];
 	const v = jsonArray(items);
-	assert v.kind === JsonKind.Array;
-	assert v.items.length === 2;
+	assert v.kind == JsonKind.Array;
+	assert v.items.length == 2;
 }
 
 test "construct object" {
 	const keys: string[] = ["name", "age"];
 	const vals: JsonValue[] = [jsonString("Alice"), jsonNumber(30)];
 	const v = jsonObject(keys, vals);
-	assert v.kind === JsonKind.Object;
-	assert v.keys.length === 2;
-	assert v.keys[0] === "name";
+	assert v.kind == JsonKind.Object;
+	assert v.keys.length == 2;
+	assert v.keys[0] == "name";
 }

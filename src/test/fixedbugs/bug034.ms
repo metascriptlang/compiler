@@ -60,10 +60,10 @@ test "bug034: Union[] cleanup runs cleanly under stress (no crash)" {
 	let iter: int32 = 0 as int32;
 	while (iter < (50 as int32)) {
 		const xs = bug034_make(20 as int32);
-		assert xs.length === 20;
+		assert xs.length == 20;
 		iter = (iter + (1 as int32)) as int32;
 	}
-	assert iter === 50;
+	assert iter == 50;
 }
 
 test "bug034: Union[] inner ref decref-on-cleanup (no leak)" {
@@ -73,6 +73,6 @@ test "bug034: Union[] inner ref decref-on-cleanup (no leak)" {
 	// drc_array/scenarios/bug3Family.ms (asserts the analyzer routes to
 	// a per-T helper, not msArrayRefDestroy).
 	const xs = bug034_make(5 as int32);
-	assert xs.length === 5;
-	if (!xs[0].ok) assert xs[0].msg === "msg_0";
+	assert xs.length == 5;
+	if (!xs[0].ok) assert xs[0].msg == "msg_0";
 }

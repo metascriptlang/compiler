@@ -33,7 +33,7 @@ function fresh(i: int32): JoinNode {
 // by canonicalizeBranchJoin rather than returned straight from joinBranchTypes.
 function pick(arena: JoinNode[], i: int32, mode: int32): JoinNode | null {
 	const borrowed = arena[0].link;
-	const r = mode === 0 ? borrowed : (mode === 1 ? fresh(i) : null);
+	const r = mode == 0 ? borrowed : (mode == 1 ? fresh(i) : null);
 	return r;
 }
 
@@ -49,12 +49,12 @@ function main(): number {
 	const kept: JoinNode[] = [];
 	for (let i = 0; i < 3000; i++) {
 		const p = pick(arena, i, i % 3);
-		if (p !== null) { kept.push(p); }
+		if (p != null) { kept.push(p); }
 	}
 	let acc = 0;
 	for (const k of kept) { acc = acc + k.id; }
 	// 1000 borrowed steps (id 1) + the fresh ids 1,4,…,2998 = 1000 + 1499500.
-	if (acc !== 1500500) {
+	if (acc != 1500500) {
 		console.log("GUARD RED: null-union Ref/Ptr join lost the owner, acc=" + acc.toString());
 		return 1;
 	}
@@ -63,4 +63,4 @@ function main(): number {
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

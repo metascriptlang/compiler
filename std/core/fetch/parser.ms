@@ -38,7 +38,7 @@ export interface ParsedResponse {
 function findCRLF(data: string, pos: int32): int32 {
 	const len = (data.byteLength as int32) - 1;
 	for (let i = pos; i < len; i = i + 1) {
-		if (data.byteAt(i) === "\r".code && data.byteAt(i + 1) === "\n".code) {
+		if (data.byteAt(i) == "\r".code && data.byteAt(i + 1) == "\n".code) {
 			return i;
 		}
 	}
@@ -49,7 +49,7 @@ function findCRLF(data: string, pos: int32): int32 {
 function findChar(data: string, ch: number, pos: int32): int32 {
 	const len = data.byteLength as int32;
 	for (let i = pos; i < len; i = i + 1) {
-		if (data.byteAt(i) === ch) return i;
+		if (data.byteAt(i) == ch) return i;
 	}
 	return -1;
 }
@@ -67,7 +67,7 @@ function parseHeaderBlock(data: string, pos: int32, h: HttpHeaders): Result<Head
 	const len = data.byteLength as int32;
 	while (cur < len) {
 		// Empty line = end of headers
-		if (cur + 1 < len && data.byteAt(cur) === "\r".code && data.byteAt(cur + 1) === "\n".code) {
+		if (cur + 1 < len && data.byteAt(cur) == "\r".code && data.byteAt(cur + 1) == "\n".code) {
 			return Result.ok({ endPos: cur + 2 });
 		}
 		// Find end of this header line
@@ -81,7 +81,7 @@ function parseHeaderBlock(data: string, pos: int32, h: HttpHeaders): Result<Head
 		const name = data.byteSlice(cur, colon);
 		// Skip colon + optional whitespace
 		let valStart = colon + 1;
-		while (valStart < lineEnd && (data.byteAt(valStart) === " ".code || data.byteAt(valStart) === "\t".code)) {
+		while (valStart < lineEnd && (data.byteAt(valStart) == " ".code || data.byteAt(valStart) == "\t".code)) {
 			valStart = valStart + 1;
 		}
 		const value = data.byteSlice(valStart, lineEnd);
@@ -99,8 +99,8 @@ interface VersionResult {
 }
 
 function parseHttpVersion(versionStr: string, errFn: (msg: string) => HttpError): Result<VersionResult, HttpError> {
-	if (versionStr === "HTTP/1.1") return Result.ok({ version: "1.1" });
-	if (versionStr === "HTTP/1.0") return Result.ok({ version: "1.0" });
+	if (versionStr == "HTTP/1.1") return Result.ok({ version: "1.1" });
+	if (versionStr == "HTTP/1.0") return Result.ok({ version: "1.0" });
 	return Result.err(errFn("unsupported HTTP version: " + versionStr));
 }
 
@@ -252,7 +252,7 @@ export function decodeChunked(data: string): Result<string, HttpError> {
 		const sizeStr = data.byteSlice(pos, sizeEnd);
 		const chunkSize = parseHex(sizeStr);
 		if (chunkSize < 0) return Result.err(invalidResponse("invalid chunk size: " + sizeStr));
-		if (chunkSize === 0) return Result.ok(result);
+		if (chunkSize == 0) return Result.ok(result);
 
 		// Read chunk data
 		const dataStart = sizeEnd + 2;
@@ -304,7 +304,7 @@ function chunkedMalformed(): ChunkedDecodeResult {
 
 // Verify two bytes at `pos` form a CRLF separator.
 function isCRLFAt(data: string, pos: int32): boolean {
-	return data.byteAt(pos) === 13 && data.byteAt(pos + 1) === 10;
+	return data.byteAt(pos) == 13 && data.byteAt(pos + 1) == 10;
 }
 
 export function tryDecodeChunked(data: string): ChunkedDecodeResult {
@@ -319,7 +319,7 @@ export function tryDecodeChunked(data: string): ChunkedDecodeResult {
 		if (chunkSize < 0) return chunkedMalformed();
 
 		const dataStart = sizeEnd + 2;
-		if (chunkSize === 0) {
+		if (chunkSize == 0) {
 			// Final chunk — expect trailing CRLF (no trailers support in v1).
 			if (dataStart + 1 >= len) return chunkedNeedMore();
 			if (!isCRLFAt(data, dataStart as int32)) return chunkedMalformed();
@@ -382,8 +382,8 @@ export function frameRequest(
 	const teValues = getHeaderValues(headers, "transfer-encoding");
 	if (teValues.length > 1) return frameReject(400);
 	let te = false;
-	if (teValues.length === 1) {
-		if (teValues[0].trim().toLowerCase() !== "chunked") return frameReject(400);
+	if (teValues.length == 1) {
+		if (teValues[0].trim().toLowerCase() != "chunked") return frameReject(400);
 		te = true;
 	}
 
@@ -393,12 +393,12 @@ export function frameRequest(
 
 	if (te) {
 		const r = tryDecodeChunked(bufferAfterHeaders);
-		if (r.kind === "ready") {
+		if (r.kind == "ready") {
 			// HTTP byte-oriented: cap by byte length, not UTF-16 unit count.
 			if ((r.body.byteLength() as int32) > maxBodySize) return frameReject(413);
 			return frameReady(r.body, r.bytesConsumed);
 		}
-		if (r.kind === "needMore") return frameNeedMore();
+		if (r.kind == "needMore") return frameNeedMore();
 		return frameReject(400);
 	}
 
@@ -412,7 +412,7 @@ export function frameRequest(
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.
-	if (method === HttpMethod.POST || method === HttpMethod.PUT || method === HttpMethod.PATCH) {
+	if (method == HttpMethod.POST || method == HttpMethod.PUT || method == HttpMethod.PATCH) {
 		return frameReject(411);
 	}
 	return frameReady("", 0);
@@ -421,7 +421,7 @@ export function frameRequest(
 // ===== Hex Helpers =====
 
 function parseHex(s: string): int32 {
-	if (s.length === 0) return -1;
+	if (s.length == 0) return -1;
 	let result: int32 = 0;
 	let i = 0;
 	while (i < s.length) {
@@ -443,7 +443,7 @@ function parseHex(s: string): int32 {
 }
 
 function toHex(n: number): string {
-	if (n === 0) return "0";
+	if (n == 0) return "0";
 	let result = "";
 	let val = n;
 	while (val > 0) {
@@ -469,25 +469,25 @@ test "parseRequest simple GET" {
 	const data = "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.method === HttpMethod.GET;
-	assert r.value.path === "/index.html";
-	assert r.value.version === "1.1";
+	assert r.value.method == HttpMethod.GET;
+	assert r.value.path == "/index.html";
+	assert r.value.version == "1.1";
 }
 
 test "parseRequest POST with headers" {
 	const data = "POST /api/data HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\n{\"key\":\"val\"}";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.method === HttpMethod.POST;
-	assert r.value.path === "/api/data";
-	assert r.value.bodyStart === 66;
+	assert r.value.method == HttpMethod.POST;
+	assert r.value.path == "/api/data";
+	assert r.value.bodyStart == 66;
 }
 
 test "parseRequest HTTP/1.0" {
 	const data = "GET / HTTP/1.0\r\nHost: old.com\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.version === "1.0";
+	assert r.value.version == "1.0";
 }
 
 test "parseRequest bad version" {
@@ -506,7 +506,7 @@ test "parseRequest multiple headers" {
 	const data = "GET / HTTP/1.1\r\nHost: a.com\r\nAccept: text/html\r\nX-Custom: foo\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.headers._names.length === 3;
+	assert r.value.headers._names.length == 3;
 }
 
 // --- Response Parsing ---
@@ -515,24 +515,24 @@ test "parseResponse 200 OK" {
 	const data = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html>";
 	const r = parseResponse(data);
 	assert r.ok;
-	assert r.value.status === 200;
-	assert r.value.statusText === "OK";
-	assert r.value.version === "1.1";
+	assert r.value.status == 200;
+	assert r.value.statusText == "OK";
+	assert r.value.version == "1.1";
 }
 
 test "parseResponse 404" {
 	const data = "HTTP/1.1 404 Not Found\r\n\r\n";
 	const r = parseResponse(data);
 	assert r.ok;
-	assert r.value.status === 404;
-	assert r.value.statusText === "Not Found";
+	assert r.value.status == 404;
+	assert r.value.statusText == "Not Found";
 }
 
 test "parseResponse HTTP/1.0" {
 	const data = "HTTP/1.0 200 OK\r\n\r\n";
 	const r = parseResponse(data);
 	assert r.ok;
-	assert r.value.version === "1.0";
+	assert r.value.version == "1.0";
 }
 
 test "parseResponse bad version" {
@@ -545,40 +545,40 @@ test "parseResponse bad version" {
 
 test "splitPathQuery no query" {
 	const r = splitPathQuery("/api/users");
-	assert r.path === "/api/users";
-	assert r.query === "";
+	assert r.path == "/api/users";
+	assert r.query == "";
 }
 
 test "splitPathQuery with query" {
 	const r = splitPathQuery("/search?q=hello&page=2");
-	assert r.path === "/search";
-	assert r.query === "q=hello&page=2";
+	assert r.path == "/search";
+	assert r.query == "q=hello&page=2";
 }
 
 test "parseUrl http" {
 	const r = parseUrl("http://example.com/path?q=1");
 	assert r.ok;
-	assert r.value.protocol === "http";
-	assert r.value.hostname === "example.com";
-	assert r.value.port === 80;
-	assert r.value.path === "/path";
-	assert r.value.query === "q=1";
+	assert r.value.protocol == "http";
+	assert r.value.hostname == "example.com";
+	assert r.value.port == 80;
+	assert r.value.path == "/path";
+	assert r.value.query == "q=1";
 }
 
 test "parseUrl https with port" {
 	const r = parseUrl("https://api.example.com:8443/v1/data");
 	assert r.ok;
-	assert r.value.protocol === "https";
-	assert r.value.hostname === "api.example.com";
-	assert r.value.port === 8443;
-	assert r.value.path === "/v1/data";
+	assert r.value.protocol == "https";
+	assert r.value.hostname == "api.example.com";
+	assert r.value.port == 8443;
+	assert r.value.path == "/v1/data";
 }
 
 test "parseUrl no path" {
 	const r = parseUrl("http://example.com");
 	assert r.ok;
-	assert r.value.path === "/";
-	assert r.value.query === "";
+	assert r.value.path == "/";
+	assert r.value.query == "";
 }
 
 test "parseUrl bad protocol" {
@@ -592,83 +592,83 @@ test "decodeChunked simple" {
 	const data = "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
 	const r = decodeChunked(data);
 	assert r.ok;
-	assert r.value === "Hello World";
+	assert r.value == "Hello World";
 }
 
 test "decodeChunked single chunk" {
 	const data = "3\r\nabc\r\n0\r\n\r\n";
 	const r = decodeChunked(data);
 	assert r.ok;
-	assert r.value === "abc";
+	assert r.value == "abc";
 }
 
 test "decodeChunked empty" {
 	const data = "0\r\n\r\n";
 	const r = decodeChunked(data);
 	assert r.ok;
-	assert r.value === "";
+	assert r.value == "";
 }
 
 test "encodeChunk" {
 	const r = encodeChunk("Hello");
-	assert r === "5\r\nHello\r\n";
+	assert r == "5\r\nHello\r\n";
 }
 
 test "encodeLastChunk" {
-	assert encodeLastChunk() === "0\r\n\r\n";
+	assert encodeLastChunk() == "0\r\n\r\n";
 }
 
 test "toHex values" {
-	assert toHex(0) === "0";
-	assert toHex(10) === "a";
-	assert toHex(255) === "ff";
-	assert toHex(16) === "10";
+	assert toHex(0) == "0";
+	assert toHex(10) == "a";
+	assert toHex(255) == "ff";
+	assert toHex(16) == "10";
 }
 
 test "parseHex values" {
-	assert parseHex("0") === 0;
-	assert parseHex("a") === 10;
-	assert parseHex("ff") === 255;
-	assert parseHex("10") === 16;
-	assert parseHex("FF") === 255;
-	assert parseHex("xyz") === -1;
-	assert parseHex("") === -1;
+	assert parseHex("0") == 0;
+	assert parseHex("a") == 10;
+	assert parseHex("ff") == 255;
+	assert parseHex("10") == 16;
+	assert parseHex("FF") == 255;
+	assert parseHex("xyz") == -1;
+	assert parseHex("") == -1;
 }
 
 test "header value with tab whitespace" {
 	const data = "GET / HTTP/1.1\r\nX-Tab:\tvalue\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.headers._values[0] === "value";
+	assert r.value.headers._values[0] == "value";
 }
 
 test "header value with mixed whitespace" {
 	const data = "GET / HTTP/1.1\r\nX-Mix:\t  spaced\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.headers._values[0] === "spaced";
+	assert r.value.headers._values[0] == "spaced";
 }
 
 test "parseRequest empty path" {
 	const data = "GET / HTTP/1.1\r\n\r\n";
 	const r = parseRequest(data);
 	assert r.ok;
-	assert r.value.path === "/";
-	assert r.value.headers._names.length === 0;
+	assert r.value.path == "/";
+	assert r.value.headers._names.length == 0;
 }
 
 test "parseResponse body offset correct" {
 	const data = "HTTP/1.1 200 OK\r\n\r\nbody";
 	const r = parseResponse(data);
 	assert r.ok;
-	assert data.slice(r.value.bodyStart, data.length) === "body";
+	assert data.slice(r.value.bodyStart, data.length) == "body";
 }
 
 test "parseUrl with query only" {
 	const r = parseUrl("http://example.com/?key=val");
 	assert r.ok;
-	assert r.value.path === "/";
-	assert r.value.query === "key=val";
+	assert r.value.path == "/";
+	assert r.value.query == "key=val";
 }
 
 // --- Server Request Body Framing ---
@@ -677,33 +677,33 @@ test "frameRequest CL exact match" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
 	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "hello";
-	assert r.bytesConsumed === 5;
+	assert r.kind == "ready";
+	assert r.body == "hello";
+	assert r.bytesConsumed == 5;
 }
 
 test "frameRequest CL truncated → needMore" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "10");
 	const r = frameRequest(h, HttpMethod.POST, "hel", 1024 as int32);
-	assert r.kind === "needMore";
+	assert r.kind == "needMore";
 }
 
 test "frameRequest CL over maxBodySize → 413" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "9999");
 	const r = frameRequest(h, HttpMethod.POST, "", 100 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 413;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 413;
 }
 
 test "frameRequest CL=0" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "0");
 	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "";
-	assert r.bytesConsumed === 0;
+	assert r.kind == "ready";
+	assert r.body == "";
+	assert r.bytesConsumed == 0;
 }
 
 test "frameRequest pipelined POST extra bytes ignored" {
@@ -711,23 +711,23 @@ test "frameRequest pipelined POST extra bytes ignored" {
 	const h = createHeaders();
 	addHeader(h, "Content-Length", "5");
 	const r = frameRequest(h, HttpMethod.POST, "helloGET /next HTTP/1.1\r\n\r\n", 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "hello";
-	assert r.bytesConsumed === 5;
+	assert r.kind == "ready";
+	assert r.body == "hello";
+	assert r.bytesConsumed == 5;
 }
 
 test "frameRequest GET no body → ready empty" {
 	const h = createHeaders();
 	const r = frameRequest(h, HttpMethod.GET, "", 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "";
+	assert r.kind == "ready";
+	assert r.body == "";
 }
 
 test "frameRequest POST without CL or TE → 411" {
 	const h = createHeaders();
 	const r = frameRequest(h, HttpMethod.POST, "", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 411;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 411;
 }
 
 test "frameRequest smuggling CL+TE → 400" {
@@ -735,8 +735,8 @@ test "frameRequest smuggling CL+TE → 400" {
 	addHeader(h, "Content-Length", "5");
 	addHeader(h, "Transfer-Encoding", "chunked");
 	const r = frameRequest(h, HttpMethod.POST, "hello", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 // Smuggling defense — RFC 9112 §6.3.5: server MUST reject if message has
@@ -747,8 +747,8 @@ test "frameRequest multiple CL → 400" {
 	addHeader(h, "Content-Length", "5");
 	addHeader(h, "Content-Length", "10");
 	const r = frameRequest(h, HttpMethod.POST, "hello12345", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 // Smuggling defense — Transfer-Encoding must be exactly "chunked".
@@ -760,16 +760,16 @@ test "frameRequest TE chunked,gzip → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked, gzip");
 	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 test "frameRequest TE gzip,chunked → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "gzip, chunked");
 	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 test "frameRequest TE chunked uppercase → ready (case-insensitive)" {
@@ -777,8 +777,8 @@ test "frameRequest TE chunked uppercase → ready (case-insensitive)" {
 	addHeader(h, "Transfer-Encoding", "Chunked");
 	const data = "5\r\nhello\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "hello";
+	assert r.kind == "ready";
+	assert r.body == "hello";
 }
 
 test "frameRequest TE chunked with whitespace → ready" {
@@ -786,8 +786,8 @@ test "frameRequest TE chunked with whitespace → ready" {
 	addHeader(h, "Transfer-Encoding", "  chunked  ");
 	const data = "5\r\nhello\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "hello";
+	assert r.kind == "ready";
+	assert r.body == "hello";
 }
 
 test "frameRequest multiple TE headers → 400" {
@@ -795,8 +795,8 @@ test "frameRequest multiple TE headers → 400" {
 	addHeader(h, "Transfer-Encoding", "chunked");
 	addHeader(h, "Transfer-Encoding", "gzip");
 	const r = frameRequest(h, HttpMethod.POST, "5\r\nhello\r\n0\r\n\r\n", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 test "frameRequest chunked basic" {
@@ -804,37 +804,37 @@ test "frameRequest chunked basic" {
 	addHeader(h, "Transfer-Encoding", "chunked");
 	const data = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
 	const r = frameRequest(h, HttpMethod.POST, data, 1024 as int32);
-	assert r.kind === "ready";
-	assert r.body === "hello world";
-	assert r.bytesConsumed === data.length as int32;
+	assert r.kind == "ready";
+	assert r.body == "hello world";
+	assert r.bytesConsumed == data.length as int32;
 }
 
 test "frameRequest chunked truncated → needMore" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
 	const r = frameRequest(h, HttpMethod.POST, "5\r\nhel", 1024 as int32);
-	assert r.kind === "needMore";
+	assert r.kind == "needMore";
 }
 
 test "frameRequest chunked malformed hex → 400" {
 	const h = createHeaders();
 	addHeader(h, "Transfer-Encoding", "chunked");
 	const r = frameRequest(h, HttpMethod.POST, "ZZ\r\nhello\r\n0\r\n\r\n", 1024 as int32);
-	assert r.kind === "reject";
-	assert r.rejectStatus === 400;
+	assert r.kind == "reject";
+	assert r.rejectStatus == 400;
 }
 
 test "tryDecodeChunked truncated mid-data" {
 	const r = tryDecodeChunked("5\r\nhel");
-	assert r.kind === "needMore";
+	assert r.kind == "needMore";
 }
 
 test "tryDecodeChunked complete with bytesConsumed" {
 	const data = "5\r\nhello\r\n0\r\n\r\n";
 	const r = tryDecodeChunked(data);
-	assert r.kind === "ready";
-	assert r.body === "hello";
-	assert r.bytesConsumed === data.length as int32;
+	assert r.kind == "ready";
+	assert r.body == "hello";
+	assert r.bytesConsumed == data.length as int32;
 }
 
 // Regression: chunked-terminated buffer ends with \r\n\r\n (the final chunk
@@ -852,5 +852,5 @@ test "parseRequest finds first CRLFCRLF, not last (chunked terminator regression
 	assert r.value.bodyStart < data.length as int32;
 	// Everything after bodyStart is the chunked body, intact.
 	const bodyPart = data.slice(r.value.bodyStart, data.length);
-	assert bodyPart === "5\r\nhello\r\n0\r\n\r\n";
+	assert bodyPart == "5\r\nhello\r\n0\r\n\r\n";
 }

@@ -68,27 +68,27 @@ export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
 }
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {
-	if (provider.taReadFn !== null) {
+	if (provider.taReadFn != null) {
 		const content = provider.taReadFn(path);
 		if (content.length > 0) return Result.ok(content);
 		return Result.err(`File not found: ${path}`);
 	}
 	for (const e of provider.entries) {
-		if (e.entryPath === path) {
-			if (provider.readLog !== null) provider.readLog.push(`${path}\t${headerDepHash(e.entrySource)}`);
+		if (e.entryPath == path) {
+			if (provider.readLog != null) provider.readLog.push(`${path}\t${headerDepHash(e.entrySource)}`);
 			return Result.ok(e.entrySource);
 		}
 	}
 	if (provider.useFileSystem) {
 		const content = try readFile(path) catch "";
 		if (content.length > 0) {
-			if (provider.readLog !== null) provider.readLog.push(`${path}\t${headerDepHash(content)}`);
+			if (provider.readLog != null) provider.readLog.push(`${path}\t${headerDepHash(content)}`);
 			const cached: MapEntry = { entryPath: path, entrySource: content };
 			provider.entries.push(cached);
 			return Result.ok(content);
 		}
 	}
-	if (provider.readLog !== null) provider.readLog.push(`${path}\t-`);
+	if (provider.readLog != null) provider.readLog.push(`${path}\t-`);
 	return Result.err(`File not found: ${path}`);
 }
 
@@ -157,9 +157,9 @@ function headerDepHash(s: string): string {
 // (Trans-Am, pure map providers whose entries may not mirror disk), or a
 // source that cannot contain a .h import at all.
 function headerCacheEngage(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean): string {
-	if (_hcLookupFn === null) return "";
-	if (provider.taReadFn !== null || !provider.useFileSystem) return "";
-	if (env.get("MSC_NO_HEADER_CACHE") !== "") return "";
+	if (_hcLookupFn == null) return "";
+	if (provider.taReadFn != null || !provider.useFileSystem) return "";
+	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	if (source.indexOf(".h") < 0) return "";
 	return _hcKeyFn(source, modulePath, compactReplacement);
 }
@@ -168,25 +168,25 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	const _ih0 = performance.now();
 	_inlineN = _inlineN + 1;
 	const key = headerCacheEngage(source, modulePath, provider, compactReplacement);
-	if (key !== "") {
+	if (key != "") {
 		const hit = _hcLookupFn(key);
-		if (hit !== "") {
+		if (hit != "") {
 			_inlineHits = _inlineHits + 1;
 			_inlineMs = _inlineMs + (performance.now() - _ih0);
 			return hit;
 		}
 	}
-	const errLen0 = outErrors !== null ? outErrors.length : 0;
+	const errLen0 = outErrors != null ? outErrors.length : 0;
 	const prevLog = provider.readLog;
 	const probeLog: string[] = [];
 	const cparseReads: string[] = [];
-	if (key !== "") provider.readLog = probeLog;
+	if (key != "") provider.readLog = probeLog;
 	let deps: string[] = null as unknown as string[];
 	let output = "";
 	try {
-		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, key !== "" ? cparseReads : (null as unknown as string[]));
+		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, key != "" ? cparseReads : (null as unknown as string[]));
 	} finally {
-		if (key !== "") {
+		if (key != "") {
 			const seen = new HashSet<string>();
 			deps = [];
 			for (const d of probeLog) {
@@ -201,7 +201,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	// Store only clean runs: a run that surfaced diagnostics must recompute
 	// next time so the diagnostics re-surface. Output equal to source means
 	// nothing was inlined — recomputing that is as cheap as a hit.
-	if (key !== "" && deps !== null && output !== source && (outErrors === null || outErrors.length === errLen0)) {
+	if (key != "" && deps != null && output != source && (outErrors == null || outErrors.length == errLen0)) {
 		_hcStoreFn(key, deps, output);
 	}
 	_inlineMs = _inlineMs + (performance.now() - _ih0);
@@ -282,10 +282,10 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		let headerSource = provideSource(provider, headerPath);
 		if (!headerSource.ok && !isAbsolute(headerPath)) {
 			const root = resolveRuntimeDir();
-			if (root !== "") headerSource = provideSource(provider, `${root}/${headerPath}`);
+			if (root != "") headerSource = provideSource(provider, `${root}/${headerPath}`);
 		}
 		if (!headerSource.ok) {
-			if (outErrors !== null) {
+			if (outErrors != null) {
 				const missLine = countLinesBefore(result, importIdx) - insertedLines;
 				outErrors.push(createModuleError(`cannot read C header '${specifier}' (resolved '${headerPath}')`, missLine, 1, ErrorSeverity.Error));
 			}
@@ -306,16 +306,16 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		const headerDir = dirname(headerPath);
 		const headerParentDir = dirname(headerDir);
 		const compilerRoot = resolveRuntimeDir();
-		const builtinInclude = compilerRoot !== "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
-		const includePaths = compilerRoot !== ""
+		const builtinInclude = compilerRoot != "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
+		const includePaths = compilerRoot != ""
 			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
 			: [builtinInclude, headerDir, headerParentDir];
 		const headerDiags: Diagnostic[] = [];
 		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads);
-		if (outErrors !== null && headerDiags.length > 0) {
+		if (outErrors != null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
-				const sev = hd.severity === DiagSeverity.Error ? ErrorSeverity.Error : ErrorSeverity.Warning;
+				const sev = hd.severity == DiagSeverity.Error ? ErrorSeverity.Error : ErrorSeverity.Warning;
 				outErrors.push(createModuleError(`C header ${hd.file}:${hd.line}:${hd.col}: ${hd.message}`, importLine, 1, sev));
 			}
 		}
@@ -329,7 +329,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		let hasCompanionC = provideSource(provider, companionC).ok;
 		if (!hasCompanionC && !isAbsolute(companionC)) {
 			const root = resolveRuntimeDir();
-			if (root !== "") hasCompanionC = provideSource(provider, `${root}/${companionC}`).ok;
+			if (root != "") hasCompanionC = provideSource(provider, `${root}/${companionC}`).ok;
 		}
 		let compileDirective = "";
 		if (hasCompanionC) compileDirective = `@compile("${companionC}");\n`;
@@ -375,7 +375,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 function countLinesBefore(text: string, endPos: int32): int32 {
 	let n = 1;
 	for (let i = 0; i < endPos; i += 1) {
-		if (text.charCodeAt(i) === "\n".code) n = n + 1;
+		if (text.charCodeAt(i) == "\n".code) n = n + 1;
 	}
 	return n;
 }
@@ -388,7 +388,7 @@ function parseSpecItems(stmt: string, braceOpen: int32, braceClose: int32): Spec
 	const parts = stmt.slice(braceOpen + 1, braceClose).split(",");
 	for (const part of parts) {
 		const trimmed = part.trim();
-		if (trimmed.length === 0) continue;
+		if (trimmed.length == 0) continue;
 		const asIdx = trimmed.indexOf(" as ");
 		if (asIdx > 0) {
 			items.push({ origName: trimmed.slice(0, asIdx).trim(), aliasName: trimmed.slice(asIdx + 4, trimmed.length).trim() });
@@ -417,7 +417,7 @@ function exportizeAtIdentBoundary(text: string, marker: string): string {
 		const after = idx + marker.length;
 		const ch = after < text.length ? text.charCodeAt(after) : 0;
 		const isIdentChar = (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code)
-			|| (ch >= "0".code && ch <= "9".code) || ch === "_".code;
+			|| (ch >= "0".code && ch <= "9".code) || ch == "_".code;
 		out = out + text.slice(pos, idx);
 		if (isIdentChar) {
 			out = out + marker;
@@ -437,7 +437,7 @@ function buildReexportReplacement(translated: string, specs: SpecItem[], headerP
 	let exportTranslated = translated;
 
 	for (const spec of specs) {
-		if (spec.aliasName !== "") {
+		if (spec.aliasName != "") {
 			// Aliased: find the translated extern and re-emit with alias + from clause
 			const declMarker = ` ${spec.origName}(`;
 			const structMarker = ` ${spec.origName} {`;
@@ -461,7 +461,7 @@ function buildReexportReplacement(translated: string, specs: SpecItem[], headerP
 			for (const k of kinds) {
 				const marker = `extern ${k} ${spec.origName}`;
 				const replaced = exportizeAtIdentBoundary(exportTranslated, marker);
-				if (replaced !== "") {
+				if (replaced != "") {
 					exportTranslated = replaced;
 					break;
 				}
@@ -474,7 +474,7 @@ function buildReexportReplacement(translated: string, specs: SpecItem[], headerP
 
 export function isCHeaderPath(path: string): boolean {
 	if (path.length < 3) return false;
-	return path.slice(path.length - 2, path.length) === ".h";
+	return path.slice(path.length - 2, path.length) == ".h";
 }
 
 // ===== Module Loading =====
@@ -539,17 +539,17 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	const program = parseResult.value;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
-		if (stmt.kind === NodeKind.ImportDecl) {
+		if (stmt.kind == NodeKind.ImportDecl) {
 			const d = stmt.data as ImportDeclData;
 			// .h imports are fully handled by inlineHeaderImports above (which inlined
 			// extern decls alongside this ImportDecl). The ImportDecl is kept purely for
 			// checker unused-import detection; don't try to resolve it as a module.
 			if (isCHeaderPath(d.importSource)) continue;
 			processImportDecl(graph, mod, stmt, provider, config, useConfig);
-		} else if (stmt.kind === NodeKind.ExportDecl) {
+		} else if (stmt.kind == NodeKind.ExportDecl) {
 			// Re-export: export { ... } from "./module" wraps ImportDecl in ExportDecl
 			const ed = stmt.data as ExportDeclData;
-			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ImportDecl) {
+			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.ImportDecl) {
 				const id = ed.exportedDecl.data as ImportDeclData;
 				if (isCHeaderPath(id.importSource)) continue;
 				processImportDecl(graph, mod, ed.exportedDecl, provider, config, useConfig);
@@ -580,14 +580,14 @@ export function canonicalModulePath(path: string): string {
 }
 
 function canonicalizeStdModule(path: string, stdPath: string, provider: SourceProvider): string {
-	if (stdPath.length === 0) return path;
+	if (stdPath.length == 0) return path;
 	let dir = dirname(path);
 	let stepsUp = 0;
 	while (dir.length > 1 && stepsUp < 6) {
 		const marker = join(dir, "std/core/system/index.ms");
 		if (provideSource(provider, marker).ok) {
 			const prefix = join(dir, "std") + "/";
-			if (path.length > prefix.length && path.slice(0, prefix.length) === prefix) {
+			if (path.length > prefix.length && path.slice(0, prefix.length) == prefix) {
 				const subpath = path.slice(prefix.length, path.length);
 				const candidate = join(stdPath, subpath);
 				if (provideSource(provider, candidate).ok) return candidate;
@@ -595,7 +595,7 @@ function canonicalizeStdModule(path: string, stdPath: string, provider: SourcePr
 			return path;
 		}
 		const parent = dirname(dir);
-		if (parent === dir) return path;
+		if (parent == dir) return path;
 		dir = parent;
 		stepsUp = stepsUp + 1;
 	}
@@ -609,14 +609,14 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	// Already in graph — check if still loading (circular import)
 	if (hasModule(graph, path)) {
 		const existing = findModule(graph, path);
-		if (existing !== null) {
-			if (existing.state === ModuleState.Loading) {
+		if (existing != null) {
+			if (existing.state == ModuleState.Loading) {
 				// Implementation parity: record cycle info
 				// Extract cycle path from importStack
 				const cycle: string[] = [];
 				let inCycle = false;
 				for (const sp of graph.importStack) {
-					if (sp === path) inCycle = true;
+					if (sp == path) inCycle = true;
 					if (inCycle) cycle.push(sp);
 				}
 				cycle.push(path); // close the cycle
@@ -647,14 +647,14 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 	const d = node.data as ImportDeclData;
 	const specifier = d.importSource;
 
-	if (useConfig === 0) {
+	if (useConfig == 0) {
 		// Bare mode: skip std, resolve .ms only
 		if (isStdImport(specifier)) return;
 
 		const candidates = resolveImport(specifier, mod.path);
 		let resolved = "";
 		for (const candidate of candidates) {
-			if (resolved === "") {
+			if (resolved == "") {
 				const trySource = provideSource(provider, candidate);
 				if (trySource.ok) {
 					resolved = candidate;
@@ -662,7 +662,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 			}
 		}
 
-		if (resolved === "") {
+		if (resolved == "") {
 			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
@@ -674,7 +674,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		// Enrich circular dep with import site info if a new cycle was just detected
 		if (graph.circularDeps.length > preCircCount) {
 			const lastDep = graph.circularDeps[graph.circularDeps.length - 1];
-			lastDep.importLine = node.location !== null ? node.location.line : 0;
+			lastDep.importLine = node.location != null ? node.location.line : 0;
 			lastDep.importNames = d.importNames;
 		}
 	} else {
@@ -683,7 +683,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 
 		let resolved = "";
 		for (const candidate of candidates) {
-			if (resolved === "") {
+			if (resolved == "") {
 				const trySource = provideSource(provider, candidate);
 				if (trySource.ok) {
 					resolved = candidate;
@@ -691,9 +691,9 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 			}
 		}
 
-		if (resolved === "") {
+		if (resolved == "") {
 			// std/ with empty stdPath: silently skip (handled externally)
-			if (isStdImport(specifier) && config.stdPath.length === 0) return;
+			if (isStdImport(specifier) && config.stdPath.length == 0) return;
 			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
@@ -704,7 +704,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		const _loadResult = loadModule(graph, resolved, provider, config, 1);
 		if (graph.circularDeps.length > preCircCount2) {
 			const lastDep2 = graph.circularDeps[graph.circularDeps.length - 1];
-			lastDep2.importLine = node.location !== null ? node.location.line : 0;
+			lastDep2.importLine = node.location != null ? node.location.line : 0;
 			lastDep2.importNames = d.importNames;
 		}
 	}
@@ -740,13 +740,13 @@ test "single file graph" {
 	entries.push(makeEntry("/src/a.ms", "const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	assert graph.modules.length === 1;
-	assert graph.loadOrder.length === 1;
-	assert graph.loadOrder[0] === "/src/a.ms";
+	assert graph.modules.length == 1;
+	assert graph.loadOrder.length == 1;
+	assert graph.loadOrder[0] == "/src/a.ms";
 	const mod = findModule(graph, "/src/a.ms");
-	assert mod !== null;
-	assert mod.state === ModuleState.Ready;
-	assert mod.source === "const x = 1;";
+	assert mod != null;
+	assert mod.state == ModuleState.Ready;
+	assert mod.source == "const x = 1;";
 }
 
 test "inlineHeaderImports surfaces missing-include diagnostics with .ms import line" {
@@ -760,7 +760,7 @@ test "inlineHeaderImports surfaces missing-include diagnostics with .ms import l
 	assert errs.length > 0;
 	assert errs[0].message.indexOf("nada.h") >= 0;
 	assert errs[0].message.indexOf("file not found") >= 0;
-	assert errs[0].line === 2;
+	assert errs[0].line == 2;
 }
 
 test "inlineHeaderImports surfaces unreadable .h as Error instead of silent skip" {
@@ -769,10 +769,10 @@ test "inlineHeaderImports surfaces unreadable .h as Error instead of silent skip
 	const errs: ModuleError[] = [];
 	const inlined = inlineHeaderImports(src, "/tmp/msmissing/main.ms", provider, false, errs);
 	assert inlined.indexOf("extern function ghost") < 0;
-	assert errs.length === 1;
-	assert errs[0].severity === ErrorSeverity.Error;
+	assert errs.length == 1;
+	assert errs[0].severity == ErrorSeverity.Error;
 	assert errs[0].message.indexOf("missing.h") >= 0;
-	assert errs[0].line === 1;
+	assert errs[0].line == 1;
 }
 
 test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-independent)" {
@@ -801,15 +801,15 @@ test "A imports B chain" {
 	entries.push(makeEntry("/src/b.ms", "export function foo() { return 1; }"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	assert graph.modules.length === 2;
+	assert graph.modules.length == 2;
 	// Topological: B before A (dependency loaded first)
-	assert graph.loadOrder[0] === "/src/b.ms";
-	assert graph.loadOrder[1] === "/src/a.ms";
+	assert graph.loadOrder[0] == "/src/b.ms";
+	assert graph.loadOrder[1] == "/src/a.ms";
 	// A has import entry pointing to B
 	const modA = findModule(graph, "/src/a.ms");
-	assert modA !== null;
-	assert modA.imports.length === 1;
-	assert modA.imports[0].sourcePath === "/src/b.ms";
+	assert modA != null;
+	assert modA.imports.length == 1;
+	assert modA.imports[0].sourcePath == "/src/b.ms";
 }
 
 test "circular import handled" {
@@ -819,14 +819,14 @@ test "circular import handled" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	// Both modules loaded (circular doesn't crash)
-	assert graph.modules.length === 2;
+	assert graph.modules.length == 2;
 	// Both end up in Ready state
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	assert modA !== null;
-	assert modB !== null;
-	assert modA.state === ModuleState.Ready;
-	assert modB.state === ModuleState.Ready;
+	assert modA != null;
+	assert modB != null;
+	assert modA.state == ModuleState.Ready;
+	assert modB.state == ModuleState.Ready;
 }
 
 test "diamond dependency" {
@@ -837,10 +837,10 @@ test "diamond dependency" {
 	entries.push(makeEntry("/src/d.ms", "export const d = 3;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	assert graph.modules.length === 4;
+	assert graph.modules.length == 4;
 	// D should be loaded once (not duplicated)
-	assert graph.loadOrder[0] === "/src/d.ms";
-	assert graph.errors.length === 0;
+	assert graph.loadOrder[0] == "/src/d.ms";
+	assert graph.errors.length == 0;
 }
 
 test "missing module error" {
@@ -849,7 +849,7 @@ test "missing module error" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	assert mod !== null;
+	assert mod != null;
 	assert mod.errors.length > 0;
 }
 
@@ -858,10 +858,10 @@ test "std import skipped" {
 	entries.push(makeEntry("/src/a.ms", "import { test } from \"std/testing\"; const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	assert graph.modules.length === 1;
+	assert graph.modules.length == 1;
 	const mod = findModule(graph, "/src/a.ms");
-	assert mod !== null;
-	assert mod.imports.length === 0;
+	assert mod != null;
+	assert mod.imports.length == 0;
 }
 
 test "no duplicate loading" {
@@ -870,7 +870,7 @@ test "no duplicate loading" {
 	entries.push(makeEntry("/src/b.ms", "export const x = 1; export const y = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	assert graph.modules.length === 2;
+	assert graph.modules.length == 2;
 }
 
 test "C header import inlines declarations" {
@@ -880,15 +880,15 @@ test "C header import inlines declarations" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/app.ms", provider);
 	// .h imports are inlined — no separate module created (reference parity)
-	assert graph.modules.length === 1;
-	assert graph.errors.length === 0;
+	assert graph.modules.length == 1;
+	assert graph.errors.length == 0;
 	const hAppMod = findModule(graph, "/src/app.ms");
-	assert hAppMod !== null;
+	assert hAppMod != null;
 	// The consuming module's source should contain the inlined extern declaration
 	assert hAppMod.source.indexOf("extern") >= 0;
 	const appMod = findModule(graph, "/src/app.ms");
-	assert appMod !== null;
-	assert appMod.errors.length === 0;
+	assert appMod != null;
+	assert appMod.errors.length == 0;
 }
 
 test "parse error recorded" {
@@ -897,9 +897,9 @@ test "parse error recorded" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	assert mod !== null;
+	assert mod != null;
 	assert mod.errors.length > 0;
-	assert mod.state === ModuleState.Ready;
+	assert mod.state == ModuleState.Ready;
 }
 
 test "loadOrder is topological" {
@@ -909,9 +909,9 @@ test "loadOrder is topological" {
 	entries.push(makeEntry("/src/b.ms", "export const b = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/main.ms", provider);
-	assert graph.loadOrder[0] === "/src/b.ms";
-	assert graph.loadOrder[1] === "/src/a.ms";
-	assert graph.loadOrder[2] === "/src/main.ms";
+	assert graph.loadOrder[0] == "/src/b.ms";
+	assert graph.loadOrder[1] == "/src/a.ms";
+	assert graph.loadOrder[2] == "/src/main.ms";
 }
 
 test "module source stored" {
@@ -920,8 +920,8 @@ test "module source stored" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	assert mod !== null;
-	assert mod.source === "const x = 42;";
+	assert mod != null;
+	assert mod.source == "const x = 42;";
 }
 
 // ===== Header-Inline Cache Wrapper Tests =====
@@ -945,24 +945,24 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 	let storedOut = "";
 	registerHeaderCache(
 		(_s: string, _m: string, _c: boolean) => "KHCW",
-		(k: string) => { return k === "KHCW" && storedOut !== "" ? storedOut : ""; },
+		(k: string) => { return k == "KHCW" && storedOut != "" ? storedOut : ""; },
 		(k: string, d: string[], o: string) => { storedKey = k; storedDeps = d; storedOut = o; }
 	);
 	takeInlineHeaderTimings();
 	const out1 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
-	assert storedKey === "KHCW";
-	assert storedOut === out1;
+	assert storedKey == "KHCW";
+	assert storedOut == out1;
 	assert out1.indexOf("extern function hcwA") >= 0;
 	let sawHeader = false;
 	for (const d of storedDeps) {
-		if (d.indexOf("/tmp/mshcw/a.h\t", 0) === 0) sawHeader = true;
+		if (d.indexOf("/tmp/mshcw/a.h\t", 0) == 0) sawHeader = true;
 	}
 	assert sawHeader;
 	const out2 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
-	assert out2 === out1;
+	assert out2 == out1;
 	const t = takeInlineHeaderTimings();
-	assert t.hits === 1;
-	assert t.n === 2;
+	assert t.hits == 1;
+	assert t.n == 2;
 	unregisterHeaderCacheForTest();
 }
 
@@ -978,7 +978,7 @@ test "header cache wrapper: diagnostics-producing runs are not stored" {
 	const out = inlineHeaderImports(src, "/tmp/mshcw/miss.ms", createFileSystemProvider(), false, errs);
 	assert errs.length > 0;
 	assert out.indexOf("extern function nope") < 0;
-	assert storeCalls === 0;
+	assert storeCalls == 0;
 	unregisterHeaderCacheForTest();
 }
 

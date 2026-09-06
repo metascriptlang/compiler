@@ -4,12 +4,12 @@
 // uninitialized slot (sgFormatHover SIGABRT, 2026-07-31).
 
 function pick(sel: int32, tag: string): string {
-	if (sel === 0) {
+	if (sel == 0) {
 		let kw = "";
 		kw = "var-" + tag;
-		if (kw.length === 0) { return "unreachable"; }
+		if (kw.length == 0) { return "unreachable"; }
 	}
-	if (sel === 1) {
+	if (sel == 1) {
 		const kw = match (sel) {
 			1 => "uno",
 			_ => "y",
@@ -37,11 +37,11 @@ function both(tag: string): string {
 }
 
 test "match-expr var beside same-named let keeps its own slot" {
-	assert pick(1, "t") === "m-uno";
-	assert pick(0, "z") === "p-0";
+	assert pick(1, "t") == "m-uno";
+	assert pick(0, "z") == "p-0";
 }
 
 test "both blocks in one call: no double destroy" {
-	assert both("ab") === "head-ab|mid-ab";
-	assert both("x") === "head-x";
+	assert both("ab") == "head-ab|mid-ab";
+	assert both("x") == "head-x";
 }

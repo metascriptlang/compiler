@@ -25,15 +25,15 @@ test "bug026: string MemberExpr === MemberExpr (Bug C)" {
 	const v: Pair = { name: "bob", role: "admin" };
 	// Without Bug C fix, both comparisons would dispatch to numeric BeqI64
 	// and return wrong (heap handles compare equal/random) instead of EqStr.
-	assert (u.name === v.name) === false;
-	assert (u.role === v.role) === true;
-	assert (u.name === u.name) === true;
+	assert (u.name == v.name) == false;
+	assert (u.role == v.role) == true;
+	assert (u.name == u.name) == true;
 }
 
 test "bug026: Result.ok narrowing through if (regression check)" {
 	const r: Result<int32, string> = Result.ok(42 as int32);
 	if (r.ok) {
-		assert r.value === 42;
+		assert r.value == 42;
 	} else {
 		assert false;  // unreachable
 	}
@@ -44,7 +44,7 @@ test "bug026: Result.err narrowing through if" {
 	if (r.ok) {
 		assert false;  // unreachable
 	} else {
-		assert r.error === "oops";
+		assert r.error == "oops";
 	}
 }
 
@@ -55,15 +55,15 @@ test "bug026: string ArrayAccess === MemberExpr" {
 	// Both ArrayAccess and MemberExpr returning string — comparison must
 	// use EqStr not BeqI64. Without Bug C fix, fields[i] === primary
 	// would dispatch to numeric and give wrong result.
-	assert (c.fields[0] === c.primary) === false;
-	assert (c.fields[1] === c.primary) === true;
-	assert (c.fields[2] === c.primary) === false;
+	assert (c.fields[0] == c.primary) == false;
+	assert (c.fields[1] == c.primary) == true;
+	assert (c.fields[2] == c.primary) == false;
 }
 
 test "bug026: ArrayAccess === ArrayAccess across two arrays" {
 	const a: string[] = ["x", "y", "z"];
 	const b: string[] = ["x", "Y", "z"];
-	assert (a[0] === b[0]) === true;
-	assert (a[1] === b[1]) === false;
-	assert (a[2] === b[2]) === true;
+	assert (a[0] == b[0]) == true;
+	assert (a[1] == b[1]) == false;
+	assert (a[2] == b[2]) == true;
 }

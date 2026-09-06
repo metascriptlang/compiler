@@ -62,16 +62,16 @@ function isUpper(ch: number): boolean {
 }
 
 function direction(d: number): string {
-	if (d === 0) return "north";
-	if (d === 1) return "south";
-	if (d === 2) return "east";
-	if (d === 3) return "west";
+	if (d == 0) return "north";
+	if (d == 1) return "south";
+	if (d == 2) return "east";
+	if (d == 3) return "west";
 	unreachable;
 }
 
 function isPowerOf2(n: int32): boolean {
 	if (n <= 0) return false;
-	return (n & (n - 1)) === 0;
+	return (n & (n - 1)) == 0;
 }
 
 // ===== Sized integers =====
@@ -79,14 +79,14 @@ function isPowerOf2(n: int32): boolean {
 test "int32 arithmetic" {
 	const a: int32 = 42;
 	const b: int32 = 8;
-	assert a + b === 50;
-	assert a * b === 336;
+	assert a + b == 50;
+	assert a * b == 336;
 }
 
 test "int64 arithmetic" {
 	const a: int64 = 1000000;
 	const b: int64 = 2000000;
-	assert a + b === 3000000;
+	assert a + b == 3000000;
 }
 
 test "uint32 range" {
@@ -106,44 +106,44 @@ test "float32 and float64" {
 // ===== Enums =====
 
 test "enum ordinal values" {
-	assert Color.Red === 0;
-	assert Color.Green === 1;
-	assert Color.Blue === 2;
+	assert Color.Red == 0;
+	assert Color.Green == 1;
+	assert Color.Blue == 2;
 }
 
 test "enum match dispatch" {
-	assert colorName(Color.Red) === "red";
-	assert colorName(Color.Blue) === "blue";
+	assert colorName(Color.Red) == "red";
+	assert colorName(Color.Blue) == "blue";
 }
 
 // ===== Interfaces =====
 
 test "interface construction and field access" {
 	const p = makePoint(3.0, 4.0);
-	assert p.x === 3.0;
-	assert p.y === 4.0;
-	assert distSq(p) === 25.0;
+	assert p.x == 3.0;
+	assert p.y == 4.0;
+	assert distSq(p) == 25.0;
 }
 
 test "nested interfaces" {
 	const r: Rect = { origin: makePoint(0.0, 0.0), width: 5.0, height: 3.0 };
-	assert area(r) === 15.0;
+	assert area(r) == 15.0;
 }
 
 // ===== Type aliases =====
 
 test "type alias for interface" {
 	const pair = makePair(10, 20);
-	assert sumPair(pair) === 30;
+	assert sumPair(pair) == 30;
 }
 
 // ===== Char .code =====
 
 test "char code literals" {
-	assert "A".code === 65;
-	assert "a".code === 97;
-	assert "0".code === 48;
-	assert "\n".code === 10;
+	assert "A".code == 65;
+	assert "a".code == 97;
+	assert "0".code == 48;
+	assert "\n".code == 10;
 }
 
 test "char classification with .code" {
@@ -156,84 +156,84 @@ test "char classification with .code" {
 // ===== Unreachable =====
 
 test "unreachable as exhaustiveness marker" {
-	assert direction(0) === "north";
-	assert direction(3) === "west";
+	assert direction(0) == "north";
+	assert direction(3) == "west";
 }
 
 // ===== Bitwise operators =====
 
 test "hex literal with e digit is integer" {
 	const a = 0xe0 | 1;
-	assert a === 225;
+	assert a == 225;
 	const b = 0xE0 | 1;
-	assert b === 225;
-	assert 0xbeef === 48879;
+	assert b == 225;
+	assert 0xbeef == 48879;
 	const c: int32 = 0xffee;
-	assert c === 65518;
+	assert c == 65518;
 }
 
 test "bitwise AND" {
 	const a: int32 = 0xFF;
 	const b: int32 = 0x0F;
-	assert (a & b) === 0x0F;
+	assert (a & b) == 0x0F;
 
 	const c: int32 = 0b1100;
 	const d: int32 = 0b1010;
-	assert (c & d) === 0b1000;
+	assert (c & d) == 0b1000;
 
 	const e: int32 = 7;
 	const f: int32 = 3;
-	assert (e & f) === 3;
+	assert (e & f) == 3;
 }
 
 test "bitwise OR" {
 	const a: int32 = 0xF0;
 	const b: int32 = 0x0F;
-	assert (a | b) === 0xFF;
+	assert (a | b) == 0xFF;
 
 	const c: int32 = 4;
 	const d: int32 = 2;
-	assert (c | d) === 6;
+	assert (c | d) == 6;
 }
 
 test "bitwise XOR" {
 	const a: int32 = 0xFF;
-	assert (a ^ a) === 0;
+	assert (a ^ a) == 0;
 	const b: int32 = 0x00;
-	assert (a ^ b) === 0xFF;
+	assert (a ^ b) == 0xFF;
 
 	const c: int32 = 5;
 	const d: int32 = 3;
-	assert (c ^ d) === 6;
+	assert (c ^ d) == 6;
 }
 
 test "bitwise NOT" {
 	const a: int32 = 0;
-	assert ~a === -1;
+	assert ~a == -1;
 
 	const b: int32 = -1;
-	assert ~b === 0;
+	assert ~b == 0;
 }
 
 test "left shift" {
 	const one: int32 = 1;
-	assert (one << 0) === 1;
-	assert (one << 1) === 2;
-	assert (one << 3) === 8;
+	assert (one << 0) == 1;
+	assert (one << 1) == 2;
+	assert (one << 3) == 8;
 
 	const three: int32 = 3;
-	assert (three << 2) === 12;
+	assert (three << 2) == 12;
 }
 
 test "right shift" {
 	const a: int32 = 8;
-	assert (a >> 1) === 4;
+	assert (a >> 1) == 4;
 
 	const b: int32 = 16;
-	assert (b >> 2) === 4;
+	assert (b >> 2) == 4;
 
 	const c: int32 = 255;
-	assert (c >> 4) === 15;
+	assert (c >> 4) == 15;
 }
 
 // ===== Hex and binary literals =====
@@ -243,10 +243,10 @@ test "hex and binary literals" {
 	const b: int32 = 0x10;
 	const c: int32 = 0b1111;
 	const d: int32 = 0b10000000;
-	assert a === 255;
-	assert b === 16;
-	assert c === 15;
-	assert d === 128;
+	assert a == 255;
+	assert b == 16;
+	assert c == 15;
+	assert d == 128;
 }
 
 // ===== Compound assignment =====
@@ -254,17 +254,17 @@ test "hex and binary literals" {
 test "compound assignment operators" {
 	let x: number = 10;
 	x += 5;
-	assert x === 15;
+	assert x == 15;
 	x -= 3;
-	assert x === 12;
+	assert x == 12;
 	x *= 2;
-	assert x === 24;
+	assert x == 24;
 	x /= 4;
-	assert x === 6;
+	assert x == 6;
 
 	let y: int32 = 10;
 	y %= 4;
-	assert y === 2;
+	assert y == 2;
 }
 
 // ===== Bit flag pattern =====
@@ -277,16 +277,16 @@ test "bit flag pattern" {
 	let perms: int32 = 0;
 	perms = perms | FLAG_READ;
 	perms = perms | FLAG_WRITE;
-	assert (perms & FLAG_READ) !== 0;
-	assert (perms & FLAG_WRITE) !== 0;
-	assert (perms & FLAG_EXEC) === 0;
+	assert (perms & FLAG_READ) != 0;
+	assert (perms & FLAG_WRITE) != 0;
+	assert (perms & FLAG_EXEC) == 0;
 
 	perms = perms | FLAG_EXEC;
-	assert (perms & FLAG_EXEC) !== 0;
+	assert (perms & FLAG_EXEC) != 0;
 
 	perms = perms & (~FLAG_WRITE);
-	assert (perms & FLAG_WRITE) === 0;
-	assert (perms & FLAG_READ) !== 0;
+	assert (perms & FLAG_WRITE) == 0;
+	assert (perms & FLAG_READ) != 0;
 }
 
 // ===== Power of 2 check =====
@@ -319,6 +319,6 @@ type TypesXBrand = string & { __brand: "X" };
 
 test "intersection inline annotation is a brand" {
 	const x: TypesXBrand = "hello" as TypesXBrand;
-	assert (x as string) === "hello";
-	assert x.length === 5;
+	assert (x as string) == "hello";
+	assert x.length == 5;
 }

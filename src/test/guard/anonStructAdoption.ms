@@ -76,17 +76,17 @@ function main(): void {
     console.log("array=" + viaArray[0].buf);
     console.log("field=" + viaField.inner.id);
     console.log("churn=" + churn);
-    if (viaArg !== 17) { throw "GUARD RED: arg length " + viaArg; }
-    if (viaInit.buf !== t.buf) { throw "GUARD RED: init buf " + viaInit.buf; }
-    if (viaAssign.id !== 7) { throw "GUARD RED: assign id " + viaAssign.id; }
-    if (viaReturn.id !== 2) { throw "GUARD RED: return id " + viaReturn.id; }
-    if (viaTernary.id !== 7) { throw "GUARD RED: ternary id " + viaTernary.id; }
-    if (viaArray[0].buf !== t.buf) { throw "GUARD RED: array buf " + viaArray[0].buf; }
-    if (viaField.inner.id !== 7) { throw "GUARD RED: field id " + viaField.inner.id; }
+    if (viaArg != 17) { throw "GUARD RED: arg length " + viaArg; }
+    if (viaInit.buf != t.buf) { throw "GUARD RED: init buf " + viaInit.buf; }
+    if (viaAssign.id != 7) { throw "GUARD RED: assign id " + viaAssign.id; }
+    if (viaReturn.id != 2) { throw "GUARD RED: return id " + viaReturn.id; }
+    if (viaTernary.id != 7) { throw "GUARD RED: ternary id " + viaTernary.id; }
+    if (viaArray[0].buf != t.buf) { throw "GUARD RED: array buf " + viaArray[0].buf; }
+    if (viaField.inner.id != 7) { throw "GUARD RED: field id " + viaField.inner.id; }
     if (!viaGeneric.ok) { throw "GUARD RED: generic not ok"; }
     if (viaGeneric.ok) {
-        if (viaGeneric.value.id !== 1) { throw "GUARD RED: generic id " + viaGeneric.value.id; }
-        if (viaGeneric.value.buf.length !== 17) { throw "GUARD RED: generic buf " + viaGeneric.value.buf; }
+        if (viaGeneric.value.id != 1) { throw "GUARD RED: generic id " + viaGeneric.value.id; }
+        if (viaGeneric.value.buf.length != 17) { throw "GUARD RED: generic buf " + viaGeneric.value.buf; }
     }
     console.log("GUARD-OK");
 }

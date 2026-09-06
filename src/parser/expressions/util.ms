@@ -50,15 +50,15 @@ export function exprOp(input: string): string {
 	if (!lr.ok) return "";
 	const pr = parseFn(lr.value);
 	if (!pr.ok) return "";
-	if (pr.value.kind === NodeKind.BinaryExpr) {
+	if (pr.value.kind == NodeKind.BinaryExpr) {
 		const d = pr.value.data as BinaryExprData;
 		return d.operator;
 	}
-	if (pr.value.kind === NodeKind.UnaryExpr) {
+	if (pr.value.kind == NodeKind.UnaryExpr) {
 		const d = pr.value.data as UnaryExprData;
 		return d.unaryOp;
 	}
-	if (pr.value.kind === NodeKind.UpdateExpr) {
+	if (pr.value.kind == NodeKind.UpdateExpr) {
 		const d = pr.value.data as UpdateExprData;
 		return d.updateOp;
 	}
@@ -70,7 +70,7 @@ export function exprOp(input: string): string {
 
 export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 	const tok = current(state);
-	if (tok.kind === TokenKind.Number) {
+	if (tok.kind == TokenKind.Number) {
 		advance(state);
 		const isFloat = numericLiteralIsFloat(tok.value);
 		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(tok.value);
@@ -82,7 +82,7 @@ export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 		advance(state);
 		return Result.ok(createNode(NodeKind.Identifier, { name: tok.value }, tok));
 	}
-	if (tok.kind === TokenKind.String) {
+	if (tok.kind == TokenKind.String) {
 		advance(state);
 		return Result.ok(createNode(NodeKind.StringLiteral, { value: tok.value }, tok));
 	}
@@ -95,7 +95,7 @@ export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 
 export function parseMemberChain(state: ParserState, base: Node): Node {
 	let node = base;
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		const dotToken = current(state);
 		advance(state);
 		const prop = current(state);
@@ -116,11 +116,11 @@ export function parseMemberChain(state: ParserState, base: Node): Node {
 // passes treat them as literals rather than binding names. See bug025.
 export function tryParseLiteralKeyword(state: ParserState): Node {
 	const token = current(state);
-	if (token.kind === TokenKind.True || token.kind === TokenKind.False) {
+	if (token.kind == TokenKind.True || token.kind == TokenKind.False) {
 		advance(state);
-		return createNode(NodeKind.BooleanLiteral, { boolValue: token.kind === TokenKind.True }, token);
+		return createNode(NodeKind.BooleanLiteral, { boolValue: token.kind == TokenKind.True }, token);
 	}
-	if (token.kind === TokenKind.Null) {
+	if (token.kind == TokenKind.Null) {
 		advance(state);
 		return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token);
 	}

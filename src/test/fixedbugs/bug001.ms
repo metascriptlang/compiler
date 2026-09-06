@@ -21,12 +21,12 @@ type Either<L, R> = match (ok: boolean) {
 };
 
 function eitherDiv(a: number, b: number): Either<string, number> {
-	if (b === 0) return { ok: false, error: "div0" };
+	if (b == 0) return { ok: false, error: "div0" };
 	return { ok: true, value: a / b };
 }
 
 function resultDiv(a: number, b: number): Result<number, string> {
-	if (b === 0) return Result.err("div0");
+	if (b == 0) return Result.err("div0");
 	return Result.ok(a / b);
 }
 
@@ -35,14 +35,14 @@ test "bug001: Either + Result with identical variant shape coexist" {
 	const e = eitherDiv(20, 4);
 	const r = resultDiv(20, 4);
 	assert e.ok && r.ok;
-	if (e.ok) assert e.value === 5;
-	if (r.ok) assert r.value === 5;
+	if (e.ok) assert e.value == 5;
+	if (r.ok) assert r.value == 5;
 }
 
 test "bug001: error variants of structurally-identical DUs distinct at runtime" {
 	const e = eitherDiv(10, 0);
 	const r = resultDiv(10, 0);
 	assert !e.ok && !r.ok;
-	if (!e.ok) assert e.error === "div0";
-	if (!r.ok) assert r.error === "div0";
+	if (!e.ok) assert e.error == "div0";
+	if (!r.ok) assert r.error == "div0";
 }

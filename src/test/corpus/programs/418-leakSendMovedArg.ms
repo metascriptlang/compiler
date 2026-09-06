@@ -33,13 +33,13 @@ function main(): void {
 	for (let i = 0; i < 1200000; i = i + 1) {
 		const b: Box = { v: 1 };
 		s.take(move b);
-		if ((i % 10000) === 9999) {
+		if ((i % 10000) == 9999) {
 			const t = await s.get();
-			if (t !== i + 1) { console.log("FAIL actor sum"); process.exit(1); }
+			if (t != i + 1) { console.log("FAIL actor sum"); process.exit(1); }
 		}
 	}
 	const t = await s.get();
-	if (t !== 1200000) { console.log("FAIL actor sum"); process.exit(1); }
+	if (t != 1200000) { console.log("FAIL actor sum"); process.exit(1); }
 	console.log("leak-send-moved-arg done");
 }
 main();

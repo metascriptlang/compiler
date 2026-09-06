@@ -32,12 +32,12 @@ test "bug003: generic class field type substitutes through typeReturn" {
 	// Pre-fix: b.items had GenericParam(T) in env-field typing → emitted void*.
 	const b = getBox();
 	const arr = b.items;
-	assert arr.length === 2;
-	assert arr[0] === "a";
+	assert arr.length == 2;
+	assert arr[0] == "a";
 }
 
 function safeDiv(a: number, b: number): Result<number, string> {
-	if (b === 0) return Result.err("zero");
+	if (b == 0) return Result.err("zero");
 	return Result.ok(a / b);
 }
 
@@ -46,7 +46,7 @@ test "bug003: narrowed variant field has concrete error type" {
 	//         raw `==` instead of msStringEquals lowering.
 	const r = safeDiv(10, 0);
 	if (!r.ok) {
-		assert r.error === "zero";
+		assert r.error == "zero";
 	}
 }
 
@@ -61,6 +61,6 @@ test "bug003: numeric literal contextual T binds correctly" {
 	}
 	const got = f();
 	if (got.ok) {
-		assert got.value === -1;
+		assert got.value == -1;
 	}
 }

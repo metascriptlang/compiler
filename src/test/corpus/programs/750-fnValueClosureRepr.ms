@@ -12,7 +12,7 @@
 type Sel = { size?: string };
 
 function pick(s: Sel): string {
-	return s.size === null ? "-" : s.size;
+	return s.size == null ? "-" : s.size;
 }
 
 type Sheet = { btn: (s: Sel) => string };
@@ -28,7 +28,7 @@ function main(): void {
 	const returned = make();
 	const got = bare({ size: "a" }) + annotated({ size: "b" })
 		+ sheet.btn({ size: "c" }) + returned({ size: "d" }) + bare({});
-	if (got === "abcd-") {
+	if (got == "abcd-") {
 		console.log("fn-value ok");
 	} else {
 		console.log("fn-value BAD: " + got);

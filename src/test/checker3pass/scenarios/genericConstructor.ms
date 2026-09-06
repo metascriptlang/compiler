@@ -25,19 +25,19 @@ function main5(): void {
 
 test "generic-constructor: no checker errors" {
 	const result = checkOnly(SRC_CTOR);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "generic-constructor: arrow has no GenericParam leakage" {
 	const result = checkOnly(SRC_CTOR);
 	const main_fn = findFnDecl(result.program, "main5");
-	assert main_fn !== null;
+	assert main_fn != null;
 	const arrow = findFirstArrow(main_fn);
-	assert arrow !== null;
-	assert arrow.nodeType !== null;
+	assert arrow != null;
+	assert arrow.nodeType != null;
 	assert arrow.nodeType.typeChildren.length > 0;
 	const k = arrow.nodeType.typeChildren[0].kind;
-	assert k === TypeKind.Int32,
+	assert k == TypeKind.Int32,
 		"ctor substitution failed: arrow.typeChildren[0].kind = " + k.toString();
 }
 

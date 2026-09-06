@@ -32,12 +32,12 @@ interface OkBag { ok: true; val: int32; }
 test "bug029: JSON literal-string disc field encodes correctly" {
 	const c: Circle = { kind: "circle", r: 5 };
 	const json = JSON.stringify(c);
-	assert json === "{\"kind\":\"circle\",\"r\":5}";
+	assert json == "{\"kind\":\"circle\",\"r\":5}";
 }
 
 test "bug029: JSON literal-bool disc field encodes correctly" {
 	const o: OkBag = { ok: true, val: 42 };
 	const json = JSON.stringify(o);
-	assert json === "{\"ok\":true,\"val\":42}";
+	assert json == "{\"ok\":true,\"val\":42}";
 }
 

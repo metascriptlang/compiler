@@ -23,7 +23,7 @@ export function checkSource(source: string): CheckerContext {
 	// Single-source check: one pass with null graph/mod so top-level symbols land
 	// in the returned ctx.table. The graph two-pass path registers them in the
 	// export registry instead, leaving ctx.table empty for introspection.
-	if (getPreludeContext() === null) {
+	if (getPreludeContext() == null) {
 		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
 		checkModuleGraph(g, "");
 	}
@@ -34,7 +34,7 @@ export function checkSource(source: string): CheckerContext {
 
 export function fullPipeline(source: string): Node {
 	resetAllSideChannels();
-	if (getPreludeContext() === null) {
+	if (getPreludeContext() == null) {
 		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
 		checkModuleGraph(g, "");
 	}
@@ -50,12 +50,12 @@ export function fullPipeline(source: string): Node {
 
 // Find a FunctionDecl by name in the program's top-level statements
 export function findFnDecl(program: Node, name: string): Node {
-	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
+	if (program == null || program.kind != NodeKind.Program) return null as unknown as Node;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
-		if (stmt.kind === NodeKind.FunctionDecl) {
+		if (stmt.kind == NodeKind.FunctionDecl) {
 			const fd = stmt.data as FunctionDeclData;
-			if (fd.fnName === name) return stmt;
+			if (fd.fnName == name) return stmt;
 		}
 	}
 	return null as unknown as Node;
@@ -65,33 +65,33 @@ export function findFnDecl(program: Node, name: string): Node {
 
 export function errorCount(src: string): number {
 	const ctx = checkSource(src);
-	if (ctx === null) return -1;
+	if (ctx == null) return -1;
 	return ctx.errors.length;
 }
 
 export function strictErrorCount(src: string): number {
 	const ctx = checkSource(src);
-	if (ctx === null) return -1;
+	if (ctx == null) return -1;
 	let count = 0;
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Error) count = count + 1;
+		if (err.severity == Severity.Error) count = count + 1;
 	}
 	return count;
 }
 
 export function warningCount(src: string): number {
 	const ctx = checkSource(src);
-	if (ctx === null) return -1;
+	if (ctx == null) return -1;
 	let count = 0;
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Warning) count = count + 1;
+		if (err.severity == Severity.Warning) count = count + 1;
 	}
 	return count;
 }
 
 export function hasError(src: string, needle: string): boolean {
 	const ctx = checkSource(src);
-	if (ctx === null) return false;
+	if (ctx == null) return false;
 	for (const err of ctx.errors) {
 		if (err.message.indexOf(needle) >= 0) return true;
 	}
@@ -100,9 +100,9 @@ export function hasError(src: string, needle: string): boolean {
 
 export function hasWarning(src: string, needle: string): boolean {
 	const ctx = checkSource(src);
-	if (ctx === null) return false;
+	if (ctx == null) return false;
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Warning && err.message.indexOf(needle) >= 0) return true;
+		if (err.severity == Severity.Warning && err.message.indexOf(needle) >= 0) return true;
 	}
 	return false;
 }

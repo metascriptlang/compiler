@@ -24,5 +24,5 @@ test "reassign owned refs inside a test body" {
 	let p: GuardSinkCell = { v: 1 };
 	p = { v: 2 };
 	const q: GuardSinkCell = { v: 3 };
-	assert p.v + q.v === 5;
+	assert p.v + q.v == 5;
 }

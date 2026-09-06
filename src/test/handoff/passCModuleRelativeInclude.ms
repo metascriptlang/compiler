@@ -15,9 +15,9 @@
 import { relDot, relDotDot } from "./fixtures/passCRelInclude/mod";
 
 test "@passC -I./dir resolves against the declaring module" {
-	assert relDot() === 42, "header under the module's own subdir";
+	assert relDot() == 42, "header under the module's own subdir";
 }
 
 test "@passC -I../dir resolves against the declaring module" {
-	assert relDotDot() === 7, "header beside the module's parent";
+	assert relDotDot() == 7, "header beside the module's parent";
 }

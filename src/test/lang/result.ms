@@ -3,7 +3,7 @@
 type DivResult = Result<number, string>;
 
 function divide(a: number, b: number): DivResult {
-	if (b === 0) return Result.err("division by zero");
+	if (b == 0) return Result.err("division by zero");
 	return Result.ok(a / b);
 }
 
@@ -25,53 +25,53 @@ function chain(a: number, b: number, c: number): DivResult {
 
 test "basic Result ok" {
 	const r = divide(10, 2);
-	assert r.ok === true;
-	assert r.value === 5;
+	assert r.ok == true;
+	assert r.value == 5;
 }
 
 test "basic Result err" {
 	const r = divide(10, 0);
-	assert r.ok === false;
-	assert r.error === "division by zero";
+	assert r.ok == false;
+	assert r.error == "division by zero";
 }
 
 test "try operator ok" {
 	const r = halfDivide(20, 4);
-	assert r.ok === true;
-	assert r.value === 2.5;
+	assert r.ok == true;
+	assert r.value == 2.5;
 }
 
 test "try operator err propagation" {
 	const r = halfDivide(10, 0);
-	assert r.ok === false;
-	assert r.error === "division by zero";
+	assert r.ok == false;
+	assert r.error == "division by zero";
 }
 
 test "try catch fallback" {
-	assert safeDivide(10, 2) === 5;
-	assert safeDivide(10, 0) === 0;
+	assert safeDivide(10, 2) == 5;
+	assert safeDivide(10, 0) == 0;
 }
 
 test "Result chain ok" {
 	const r = chain(100, 2, 5);
-	assert r.ok === true;
-	assert r.value === 10;
+	assert r.ok == true;
+	assert r.value == 10;
 }
 
 test "Result chain first err" {
 	const r = chain(100, 0, 5);
-	assert r.ok === false;
+	assert r.ok == false;
 }
 
 test "Result chain second err" {
 	const r = chain(100, 2, 0);
-	assert r.ok === false;
+	assert r.ok == false;
 }
 
 test "manual Result check" {
 	const r = divide(42, 7);
 	if (r.ok) {
-		assert r.value === 6;
+		assert r.value == 6;
 	}
 }
 
@@ -88,7 +88,7 @@ function process(): Result<void, string> {
 
 test "try inside Result void fn ok" {
 	const r = process();
-	assert r.ok === true;
+	assert r.ok == true;
 }
 
 function failWork(): Result<number, string> {
@@ -102,8 +102,8 @@ function failProcess(): Result<void, string> {
 
 test "try inside Result void fn err propagation" {
 	const r = failProcess();
-	assert r.ok === false;
-	assert r.error === "oops";
+	assert r.ok == false;
+	assert r.error == "oops";
 }
 
 // Nested: outer Result<void, E>, inner Result<number, E>
@@ -120,7 +120,7 @@ function outerVoid(): Result<void, string> {
 
 test "try nested functions different Result types" {
 	const r = outerVoid();
-	assert r.ok === true;
+	assert r.ok == true;
 }
 
 // =====================================================================
@@ -136,15 +136,15 @@ function classifyInt(n: number): Result<number, number> {
 test "Result<T, T> — same ok/err type" {
 	const a = classifyInt(7);
 	const b = classifyInt(-9);
-	assert a.ok && b.ok === false;
-	if (a.ok) assert a.value === 7;
-	if (!b.ok) assert b.error === 9;
+	assert a.ok && b.ok == false;
+	if (a.ok) assert a.value == 7;
+	if (!b.ok) assert b.error == 9;
 }
 
 // --- Nested Result<Result<T, E1>, E2> ---
 function nested(x: number): Result<Result<number, string>, string> {
 	if (x < 0) return Result.err("outer fail");
-	if (x === 0) return Result.ok(Result.err("inner fail"));
+	if (x == 0) return Result.ok(Result.err("inner fail"));
 	return Result.ok(Result.ok(x));
 }
 
@@ -154,7 +154,7 @@ test "Nested Result — outer ok, inner ok" {
 	if (r.ok) {
 		const inner = r.value;
 		assert inner.ok;
-		if (inner.ok) assert inner.value === 5;
+		if (inner.ok) assert inner.value == 5;
 	}
 }
 
@@ -164,14 +164,14 @@ test "Nested Result — outer ok, inner err" {
 	if (r.ok) {
 		const inner = r.value;
 		assert !inner.ok;
-		if (!inner.ok) assert inner.error === "inner fail";
+		if (!inner.ok) assert inner.error == "inner fail";
 	}
 }
 
 test "Nested Result — outer err" {
 	const r = nested(-1);
 	assert !r.ok;
-	if (!r.ok) assert r.error === "outer fail";
+	if (!r.ok) assert r.error == "outer fail";
 }
 
 // --- Result with reference type payload ---
@@ -186,15 +186,15 @@ test "Result<Ref<Struct>, string> — ok variant carries reference" {
 	const r = makePerson("Alice", 30);
 	assert r.ok;
 	if (r.ok) {
-		assert r.value.name === "Alice";
-		assert r.value.age === 30;
+		assert r.value.name == "Alice";
+		assert r.value.age == 30;
 	}
 }
 
 test "Result<Ref<Struct>, string> — err variant" {
 	const r = makePerson("Bob", -1);
 	assert !r.ok;
-	if (!r.ok) assert r.error === "invalid age";
+	if (!r.ok) assert r.error == "invalid age";
 }
 
 // --- Result with array payload ---
@@ -213,22 +213,22 @@ test "Result<number[], string> — ok with non-empty array" {
 	const r = makeRange(3);
 	assert r.ok;
 	if (r.ok) {
-		assert r.value.length === 3;
-		assert r.value[0] === 0;
-		assert r.value[2] === 2;
+		assert r.value.length == 3;
+		assert r.value[0] == 0;
+		assert r.value[2] == 2;
 	}
 }
 
 test "Result<number[], string> — ok with empty array" {
 	const r = makeRange(0);
 	assert r.ok;
-	if (r.ok) assert r.value.length === 0;
+	if (r.ok) assert r.value.length == 0;
 }
 
 test "Result<number[], string> — err variant" {
 	const r = makeRange(-5);
 	assert !r.ok;
-	if (!r.ok) assert r.error === "negative count";
+	if (!r.ok) assert r.error == "negative count";
 }
 
 // --- Result with string payload — ensure RC managed correctly ---
@@ -240,21 +240,21 @@ function buildMessage(name: string, ok: boolean): Result<string, string> {
 test "Result<string, string> — ok with concatenated payload" {
 	const r = buildMessage("world", true);
 	assert r.ok;
-	if (r.ok) assert r.value === "hello, world";
+	if (r.ok) assert r.value == "hello, world";
 }
 
 test "Result<string, string> — multiple instances in same scope (DRC stress)" {
 	const a = buildMessage("a", true);
 	const b = buildMessage("b", false);
 	const c = buildMessage("c", true);
-	if (a.ok) assert a.value === "hello, a";
-	if (!b.ok) assert b.error === "rejected: b";
-	if (c.ok) assert c.value === "hello, c";
+	if (a.ok) assert a.value == "hello, a";
+	if (!b.ok) assert b.error == "rejected: b";
+	if (c.ok) assert c.value == "hello, c";
 }
 
 // --- Result + try chain that traverses through 3 functions ---
 function step1(x: number): Result<number, string> {
-	if (x === 0) return Result.err("step1 fail");
+	if (x == 0) return Result.err("step1 fail");
 	return Result.ok(x * 2);
 }
 
@@ -272,19 +272,19 @@ function step3(x: number): Result<number, string> {
 test "try chain — 3 levels deep, ok path" {
 	const r = step3(3);  // step1: 6 → step2: 7 → step3: 49
 	assert r.ok;
-	if (r.ok) assert r.value === 49;
+	if (r.ok) assert r.value == 49;
 }
 
 test "try chain — fail at step1 propagates through all" {
 	const r = step3(0);
 	assert !r.ok;
-	if (!r.ok) assert r.error === "step1 fail";
+	if (!r.ok) assert r.error == "step1 fail";
 }
 
 test "try chain — fail at step2 propagates" {
 	const r = step3(60);  // step1: 120 → step2 overflow
 	assert !r.ok;
-	if (!r.ok) assert r.error === "step2 overflow";
+	if (!r.ok) assert r.error == "step2 overflow";
 }
 
 // --- Result coexistence with user-defined boolean DU (regression for type-cache collision) ---
@@ -305,8 +305,8 @@ test "Result + user-defined Either coexistence (cache collision regression)" {
 	const r = step1(3);
 	const e = eitherSplit(3);
 	assert r.ok && e.ok;
-	if (r.ok) assert r.value === 6;
-	if (e.ok) assert e.value === 3;
+	if (r.ok) assert r.value == 6;
+	if (e.ok) assert e.value == 3;
 }
 
 // --- Result.ok(null) for Result<void, E> construction ---
@@ -318,5 +318,5 @@ test "Result.ok(null) void construction" {
 test "Result.err for Result<void, E>" {
 	const r: Result<void, string> = Result.err("boom");
 	assert !r.ok;
-	if (!r.ok) assert r.error === "boom";
+	if (!r.ok) assert r.error == "boom";
 }

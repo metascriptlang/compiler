@@ -10,11 +10,11 @@ import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, string
 // conversion runs. So numeric elements of different C width (int32 vs number)
 // would be reinterpreted, not converted → OOB/garbage. Require matching repr.
 function sameElementRepr(a: Type | null, b: Type | null): boolean {
-	if (a === null || b === null) return true;
+	if (a == null || b == null) return true;
 	if (!isNumeric(a) || !isNumeric(b)) return true;
-	if (a.kind === b.kind) return true;
-	const aDouble = a.kind === TypeKind.Number || a.kind === TypeKind.Float64;
-	const bDouble = b.kind === TypeKind.Number || b.kind === TypeKind.Float64;
+	if (a.kind == b.kind) return true;
+	const aDouble = a.kind == TypeKind.Number || a.kind == TypeKind.Float64;
+	const bDouble = b.kind == TypeKind.Number || b.kind == TypeKind.Float64;
 	return aDouble && bDouble;
 }
 
@@ -39,36 +39,36 @@ export function isReinterpretUnsafe(source: Type | null, target: Type | null): b
 function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boolean {
 	source = skipModifier(source);
 	target = skipModifier(target);
-	if (source === null || target === null) return false;
-	if (source.kind === TypeKind.Ref && target.kind === TypeKind.Ref) {
+	if (source == null || target == null) return false;
+	if (source.kind == TypeKind.Ref && target.kind == TypeKind.Ref) {
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
 	}
 	// Nullable-ref (`X | null`) stores/reads the pointer as X — peel to the
 	// non-null member so enforcement reaches through nullable fields/slots.
-	if (target.kind === TypeKind.Union && source.kind !== TypeKind.Union && source.kind !== TypeKind.Null) {
+	if (target.kind == TypeKind.Union && source.kind != TypeKind.Union && source.kind != TypeKind.Null) {
 		const tn = nonNullMemberOfNullable(target);
-		if (tn !== null) return isReinterpretUnsafe(source, tn);
+		if (tn != null) return isReinterpretUnsafe(source, tn);
 	}
-	if (source.kind === TypeKind.Union && target.kind !== TypeKind.Union) {
+	if (source.kind == TypeKind.Union && target.kind != TypeKind.Union) {
 		const sn = nonNullMemberOfNullable(source);
-		if (sn !== null) return isReinterpretUnsafe(sn, target);
+		if (sn != null) return isReinterpretUnsafe(sn, target);
 	}
 	if ((isPointerShapedRepr(source) && isScalarRepr(target))
 		|| (isScalarRepr(source) && isPointerShapedRepr(target))) return true;
-	if (source.kind === TypeKind.Array && target.kind === TypeKind.Ref
-		&& target.typeReturn !== null && target.typeReturn.kind === TypeKind.Array) return true;
-	if (source.kind === TypeKind.Ref && source.typeReturn !== null
-		&& source.typeReturn.kind === TypeKind.Array && target.kind === TypeKind.Array) return true;
-	if (source.kind !== target.kind) return false;
-	if (source.kind === TypeKind.Array || source.kind === TypeKind.Span
-		|| source.kind === TypeKind.Ptr || source.kind === TypeKind.SizedArray) {
+	if (source.kind == TypeKind.Array && target.kind == TypeKind.Ref
+		&& target.typeReturn != null && target.typeReturn.kind == TypeKind.Array) return true;
+	if (source.kind == TypeKind.Ref && source.typeReturn != null
+		&& source.typeReturn.kind == TypeKind.Array && target.kind == TypeKind.Array) return true;
+	if (source.kind != target.kind) return false;
+	if (source.kind == TypeKind.Array || source.kind == TypeKind.Span
+		|| source.kind == TypeKind.Ptr || source.kind == TypeKind.SizedArray) {
 		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
 	}
 	// Closures are raw-copied msClosure structs and the call site casts fn to the
 	// DECLARED signature — a numeric-repr mismatch in return/params calls through
 	// the wrong ABI (Nim tyProc: params AND return invariant, procParamTypeRel).
-	if (source.kind === TypeKind.Function) {
+	if (source.kind == TypeKind.Function) {
 		if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return true;
 		const tParams = target.typeChildren;
 		let fi = 0;
@@ -78,9 +78,9 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		}
 		return false;
 	}
-	if (source.kind === TypeKind.Struct) {
-		if (source === target) return false;
-		if (source.typeName !== "" && source.typeName === target.typeName) return false;
+	if (source.kind == TypeKind.Struct) {
+		if (source == target) return false;
+		if (source.typeName != "" && source.typeName == target.typeName) return false;
 		const sNames = source.typeNames;
 		const sChildren = source.typeChildren;
 		const tChildren = target.typeChildren;
@@ -88,7 +88,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		for (const tProp of target.typeNames) {
 			let si = 0;
 			for (const sProp of sNames) {
-				if (sProp === tProp && si < sChildren.length && ti < tChildren.length) {
+				if (sProp == tProp && si < sChildren.length && ti < tChildren.length) {
 					if (fieldReprMismatch(sChildren[si], tChildren[ti])) return true;
 					if (isReinterpretUnsafe(sChildren[si], tChildren[ti])) return true;
 				}
@@ -102,34 +102,34 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 }
 
 function isPointerShapedRepr(t: Type | null): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr
-		|| t.kind === TypeKind.Array || t.kind === TypeKind.Span
-		|| t.kind === TypeKind.SizedArray || t.kind === TypeKind.Function;
+	if (t == null) return false;
+	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr
+		|| t.kind == TypeKind.Array || t.kind == TypeKind.Span
+		|| t.kind == TypeKind.SizedArray || t.kind == TypeKind.Function;
 }
 
 function isScalarRepr(t: Type | null): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	if (isNumeric(t)) return true;
-	return t.kind === TypeKind.Boolean || t.kind === TypeKind.BooleanLiteral
-		|| t.kind === TypeKind.Enum || t.kind === TypeKind.EnumLiteral;
+	return t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral
+		|| t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral;
 }
 
 // msString-repr family: string, string literals, and pure string-literal unions
 // (codegen collapses the latter to msString — genUnionType allStrLit arm).
 function isStringRepr(t: Type): boolean {
-	return t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral || isAllStringLiteralUnion(t);
+	return t.kind == TypeKind.String || t.kind == TypeKind.StringLiteral || isAllStringLiteralUnion(t);
 }
 
 // The non-null member of a 2-member `X | null` union, or null if not that shape.
 export function nonNullMemberOfNullable(t: Type | null): Type | null {
-	if (t === null || t.kind !== TypeKind.Union) return null;
-	if (t.typeChildren.length !== 2) return null;
+	if (t == null || t.kind != TypeKind.Union) return null;
+	if (t.typeChildren.length != 2) return null;
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
-	if (a === null || b === null) return null;
-	if (b.kind === TypeKind.Null && a.kind !== TypeKind.Null) return a;
-	if (a.kind === TypeKind.Null && b.kind !== TypeKind.Null) return b;
+	if (a == null || b == null) return null;
+	if (b.kind == TypeKind.Null && a.kind != TypeKind.Null) return a;
+	if (a.kind == TypeKind.Null && b.kind != TypeKind.Null) return b;
 	return null;
 }
 
@@ -139,16 +139,16 @@ export function nonNullMemberOfNullable(t: Type | null): Type | null {
 function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
-	if (a === null || b === null) return false;
+	if (a == null || b == null) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
 	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
-	const ak = a.kind === TypeKind.StringLiteral ? TypeKind.String
-		: (a.kind === TypeKind.BooleanLiteral ? TypeKind.Boolean : a.kind);
-	const bk = b.kind === TypeKind.StringLiteral ? TypeKind.String
-		: (b.kind === TypeKind.BooleanLiteral ? TypeKind.Boolean : b.kind);
-	if (ak !== bk) return true;
-	if (a.kind === TypeKind.Union) {
-		if (a.typeChildren.length !== b.typeChildren.length) return true;
+	const ak = a.kind == TypeKind.StringLiteral ? TypeKind.String
+		: (a.kind == TypeKind.BooleanLiteral ? TypeKind.Boolean : a.kind);
+	const bk = b.kind == TypeKind.StringLiteral ? TypeKind.String
+		: (b.kind == TypeKind.BooleanLiteral ? TypeKind.Boolean : b.kind);
+	if (ak != bk) return true;
+	if (a.kind == TypeKind.Union) {
+		if (a.typeChildren.length != b.typeChildren.length) return true;
 		let i = 0;
 		while (i < a.typeChildren.length) {
 			if (unionSlotReprMismatch(a.typeChildren[i], b.typeChildren[i])) return true;
@@ -156,7 +156,7 @@ function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 		}
 		return false;
 	}
-	if (a.kind === TypeKind.Struct) return isReinterpretUnsafe(a, b);
+	if (a.kind == TypeKind.Struct) return isReinterpretUnsafe(a, b);
 	return false;
 }
 
@@ -166,10 +166,10 @@ function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
-	if (a === null || b === null) return false;
+	if (a == null || b == null) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
-	if (a.kind === TypeKind.Union && b.kind === TypeKind.Union) {
-		if (a.typeChildren.length !== b.typeChildren.length) return true;
+	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
+		if (a.typeChildren.length != b.typeChildren.length) return true;
 		let i = 0;
 		while (i < a.typeChildren.length) {
 			if (unionSlotReprMismatch(a.typeChildren[i], b.typeChildren[i])) return true;
@@ -177,7 +177,7 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 		}
 		return false;
 	}
-	if (a.kind === TypeKind.Union || b.kind === TypeKind.Union) return true;
+	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) return true;
 	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
 	return false;
 }
@@ -201,8 +201,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// allowsNil (sigmatch.nim:730): a cursor link is nilable by design — null is
 	// the end-of-chain state. Checked BEFORE skipModifier because it peels Cursor.
 	// Ref/Ptr stay TS-strict (`T | null` opt-in; see the Null-source arm below).
-	if (source !== null && target !== null
-		&& source.kind === TypeKind.Null && target.kind === TypeKind.Cursor) {
+	if (source != null && target != null
+		&& source.kind == TypeKind.Null && target.kind == TypeKind.Cursor) {
 		return true;
 	}
 	// Reference parity: sink and lent modifiers are transparent ownership modifiers — unwrap before comparing
@@ -213,15 +213,15 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Null guard: null operands flow through unwrapped types and indicate
 	// "no information" — conservatively report compatible to avoid blocking checks
 	// that legitimately have no type yet (e.g. unresolved generics).
-	if (source === null || target === null) return true;
+	if (source == null || target == null) return true;
 
 	// Reference parity: tyVarargs is transparent — peel to inner array type
 	// before comparing. Callers may legitimately pass either the wrapped or
 	// unwrapped form depending on whether they walked through Function.typeChildren.
-	if (source.kind === TypeKind.Varargs && source.typeChildren.length > 0) {
+	if (source.kind == TypeKind.Varargs && source.typeChildren.length > 0) {
 		source = source.typeChildren[0];
 	}
-	if (target.kind === TypeKind.Varargs && target.typeChildren.length > 0) {
+	if (target.kind == TypeKind.Varargs && target.typeChildren.length > 0) {
 		target = target.typeChildren[0];
 	}
 
@@ -231,7 +231,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
 	// `return x` where `x: never` must be valid regardless of the return type.
-	if (source.kind === TypeKind.Never) return true;
+	if (source.kind == TypeKind.Never) return true;
 
 	// `A | null` into `A | B | null`. MUST precede the same-kind arm below: both
 	// sides are Maybe carriers, so kind equality sends them to the struct
@@ -242,30 +242,30 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (maybePayloadWidenSlot(source, target) >= 0) return true;
 
 	// Same kind is always compatible
-	if (source.kind === target.kind) {
+	if (source.kind == target.kind) {
 		return match (source.kind) {
-			TypeKind.SizedArray => source.typeFlags === target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.SizedArray => source.typeFlags == target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
 				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
 				// mixing atomic + non-atomic rc ops on one object is UB.
-				if (isAtomicRef(source) !== isAtomicRef(target)) {
+				if (isAtomicRef(source) != isAtomicRef(target)) {
 					return false;
 				}
 				// Nominal shortcut: Ref types with same-named inner struct are assignable
 				// (handles cross-module interface identity where Type objects differ but names match)
-				if (source.typeReturn !== null && target.typeReturn !== null
-					&& source.typeReturn.typeName !== "" && source.typeReturn.typeName === target.typeReturn.typeName) {
+				if (source.typeReturn != null && target.typeReturn != null
+					&& source.typeReturn.typeName != "" && source.typeReturn.typeName == target.typeReturn.typeName) {
 					return true;
 				}
 				return isAssignable(source.typeReturn, target.typeReturn);
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
-			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
-			TypeKind.EnumLiteral => source.typeName === target.typeName
+			TypeKind.Enum | TypeKind.Distinct => source.typeName == target.typeName,
+			TypeKind.EnumLiteral => source.typeName == target.typeName
 				&& source.typeNames.length > 0 && target.typeNames.length > 0
-				&& source.typeNames[0] === target.typeNames[0],
+				&& source.typeNames[0] == target.typeNames[0],
 			TypeKind.GenericInstance => {
 				// Structural compatibility: compare type args pairwise
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
@@ -277,7 +277,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				// opt-out path that strips affinity. Element type compatibility is
 				// already verified by the loop above.
 				if (isAffineAwaitable(source) && isAwaitable(target) && !isAffineAwaitable(target)) return true;
-				return source.typeName === target.typeName;
+				return source.typeName == target.typeName;
 			},
 			_ => true,
 		};
@@ -287,55 +287,55 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// (instantiateGenericBody). When the resolved body is a leaf (not a
 	// Struct/Union-backed generic like Map/Result), compare against it so
 	// `U<Box<string>>` (resolves to string) accepts a string value.
-	if (target.kind === TypeKind.GenericInstance && target.typeReturn !== null
-		&& target.typeReturn.kind !== TypeKind.Struct && target.typeReturn.kind !== TypeKind.Union) {
+	if (target.kind == TypeKind.GenericInstance && target.typeReturn != null
+		&& target.typeReturn.kind != TypeKind.Struct && target.typeReturn.kind != TypeKind.Union) {
 		return isAssignable(source, target.typeReturn);
 	}
-	if (source.kind === TypeKind.GenericInstance && source.typeReturn !== null
-		&& source.typeReturn.kind !== TypeKind.Struct && source.typeReturn.kind !== TypeKind.Union) {
+	if (source.kind == TypeKind.GenericInstance && source.typeReturn != null
+		&& source.typeReturn.kind != TypeKind.Struct && source.typeReturn.kind != TypeKind.Union) {
 		return isAssignable(source.typeReturn, target);
 	}
 
 	// Brand widens implicitly to its base (CubeId → string); base → brand needs `as`.
-	if (isBrandDistinct(source) && source.typeReturn !== null && target.kind !== TypeKind.Distinct) {
+	if (isBrandDistinct(source) && source.typeReturn != null && target.kind != TypeKind.Distinct) {
 		return isAssignable(source.typeReturn, target);
 	}
 
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>
-	if (target.kind === TypeKind.Span) {
-		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) {
+	if (target.kind == TypeKind.Span) {
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
-		if (source.kind === TypeKind.String && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) {
+		if (source.kind == TypeKind.String && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) {
 			return true;
 		}
 	}
 
 	// Var (out param) unwrap: T -> Var<T> (caller passes T, callee gets T*)
-	if (target.kind === TypeKind.Var && target.typeReturn !== null) {
+	if (target.kind == TypeKind.Var && target.typeReturn != null) {
 		return isAssignable(source, target.typeReturn);
 	}
 
 	// Implicit borrow promotion: T -> Borrow<T> (zero-copy const pointer)
-	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
+	if (target.kind == TypeKind.Borrow && target.typeReturn != null) {
 		return isAssignable(source, target.typeReturn);
 	}
 
 	// Inference sentinels (Inferred = open signature, None = typeless node) and
 	// user unknown stay lenient — shape rules are enforced at fitNode.
-	if (source.kind === TypeKind.Unknown || target.kind === TypeKind.Unknown
-		|| source.kind === TypeKind.None || target.kind === TypeKind.None
-		|| source.kind === TypeKind.Inferred || target.kind === TypeKind.Inferred) {
+	if (source.kind == TypeKind.Unknown || target.kind == TypeKind.Unknown
+		|| source.kind == TypeKind.None || target.kind == TypeKind.None
+		|| source.kind == TypeKind.Inferred || target.kind == TypeKind.Inferred) {
 		return true;
 	}
 
 	// GenericParam on either side: unresolved generic, allow
-	if (source.kind === TypeKind.GenericParam || target.kind === TypeKind.GenericParam) {
+	if (source.kind == TypeKind.GenericParam || target.kind == TypeKind.GenericParam) {
 		return true;
 	}
 
 	// Error type is compatible with everything (suppress cascading errors)
-	if (source.kind === TypeKind.Error || target.kind === TypeKind.Error) {
+	if (source.kind == TypeKind.Error || target.kind == TypeKind.Error) {
 		return true;
 	}
 
@@ -348,7 +348,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	//    instead of being deref'd to `X` (which wouldn't match Ref<X>).
 	//  - Null-source allowance, so `null` matches `Union(T, Null)` via the
 	//    Null member instead of falling into the legacy bare-target rule.
-	if (target.kind === TypeKind.Union) {
+	if (target.kind == TypeKind.Union) {
 		for (const member of target.typeChildren) {
 			if (isAssignable(source, member)) return true;
 		}
@@ -360,7 +360,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// `T | null` (handled by the Union-target check above) to opt into nullability.
 	// Cursor<T> is the deliberate exception (allowsNil arm at function entry).
 	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
-	if (source.kind === TypeKind.Null) {
+	if (source.kind == TypeKind.Null) {
 		return match (target.kind) {
 			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Void => true,
 			_ => false,
@@ -368,12 +368,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	}
 
 	// Numeric widening: any numeric type assignable to Number
-	if (isNumeric(source) && target.kind === TypeKind.Number) {
+	if (isNumeric(source) && target.kind == TypeKind.Number) {
 		return true;
 	}
 
 	// Integer → float64 widening (lossless for int32 range); Number is the same C double
-	if ((isIntegerType(source) || source.kind === TypeKind.Number) && target.kind === TypeKind.Float64) {
+	if ((isIntegerType(source) || source.kind == TypeKind.Number) && target.kind == TypeKind.Float64) {
 		return true;
 	}
 
@@ -382,41 +382,41 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Arc<T> is excluded — it is not pointer-interchangeable (atomic rc must stay typed).
 	// Intentional divergence from Nim's strict ref/ptr split — MS Ptr<T> is the cursor
 	// pattern (NIM-REF.md row 63).
-	if ((source.kind === TypeKind.Ref && target.kind === TypeKind.Ptr)
-		|| (source.kind === TypeKind.Ptr && target.kind === TypeKind.Ref)) {
+	if ((source.kind == TypeKind.Ref && target.kind == TypeKind.Ptr)
+		|| (source.kind == TypeKind.Ptr && target.kind == TypeKind.Ref)) {
 		if (!isAtomicRef(source) && !isAtomicRef(target)
-			&& source.typeReturn !== null && target.typeReturn !== null) {
+			&& source.typeReturn != null && target.typeReturn != null) {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
 	}
 	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
 	// but passing them to functions expecting T should work transparently.
 	// Arc<T> does NOT auto-unwrap — sharing the pointee unguarded defeats the atomic rc.
-	if (source.kind === TypeKind.Ref && !isAtomicRef(source) && source.typeReturn !== null) {
-		if (source.typeReturn.kind === TypeKind.Array && target.kind === TypeKind.Array) return false;
+	if (source.kind == TypeKind.Ref && !isAtomicRef(source) && source.typeReturn != null) {
+		if (source.typeReturn.kind == TypeKind.Array && target.kind == TypeKind.Array) return false;
 		return isAssignable(source.typeReturn, target);
 	}
 
 	// String → CString implicit coercion (zero-copy pointer extraction)
-	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) {
+	if (source.kind == TypeKind.String && target.kind == TypeKind.CString) {
 		return true;
 	}
-	if (source.kind === TypeKind.CString && target.kind === TypeKind.String) {
+	if (source.kind == TypeKind.CString && target.kind == TypeKind.String) {
 		return true;
 	}
 
 	// StringLiteral → String (subtype: "north" assignable to string)
-	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.String) {
+	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.String) {
 		return true;
 	}
 
 	// StringLiteral → StringLiteral (same value only)
-	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.StringLiteral) {
-		return source.typeName === target.typeName;
+	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.StringLiteral) {
+		return source.typeName == target.typeName;
 	}
 
 	// StringLiteral → CString (string literal can be passed as cstring)
-	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.CString) {
+	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.CString) {
 		return true;
 	}
 
@@ -424,24 +424,24 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// BooleanLiteral → BooleanLiteral matches only on identical value.
 	// Boolean → BooleanLiteral falls through to the default `false` (general
 	// boolean cannot satisfy a specific true/false constraint).
-	if (source.kind === TypeKind.BooleanLiteral && target.kind === TypeKind.Boolean) {
+	if (source.kind == TypeKind.BooleanLiteral && target.kind == TypeKind.Boolean) {
 		return true;
 	}
-	if (source.kind === TypeKind.BooleanLiteral && target.kind === TypeKind.BooleanLiteral) {
-		return source.typeName === target.typeName;
+	if (source.kind == TypeKind.BooleanLiteral && target.kind == TypeKind.BooleanLiteral) {
+		return source.typeName == target.typeName;
 	}
 
 	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
-	if (source.kind === TypeKind.EnumLiteral && target.kind === TypeKind.Enum) {
-		return source.typeName === target.typeName;
+	if (source.kind == TypeKind.EnumLiteral && target.kind == TypeKind.Enum) {
+		return source.typeName == target.typeName;
 	}
 	// Integer → Enum (enums are int32 at runtime; allows { kind: 0 } for enum-typed fields)
-	if (isIntegerType(source) && target.kind === TypeKind.Enum) {
+	if (isIntegerType(source) && target.kind == TypeKind.Enum) {
 		return true;
 	}
 	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
 	// EnumLiteral → Number/Int32 (enums are ints at runtime)
-	if (source.kind === TypeKind.EnumLiteral && (target.kind === TypeKind.Int32 || target.kind === TypeKind.Number)) {
+	if (source.kind == TypeKind.EnumLiteral && (target.kind == TypeKind.Int32 || target.kind == TypeKind.Number)) {
 		return true;
 	}
 
@@ -449,7 +449,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// NB: `T | null → T` is rejected here (Null not assignable to non-null T) —
 	// intentional TS-style divergence (NIM-REF.md §"Nullable-ref struct field
 	// hooks"), swallowed by the fitNode isReinterpretUnsafe scope (row 72).
-	if (source.kind === TypeKind.Union) {
+	if (source.kind == TypeKind.Union) {
 		for (const member of source.typeChildren) {
 			if (!isAssignable(member, target)) return false;
 		}
@@ -465,30 +465,30 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 // Returns true when source needs an explicit cast to target in C codegen.
 // Used by checker to insert HiddenStdConv nodes at call argument positions.
 export function needsStdConv(source: Type, target: Type): boolean {
-	if (source === null || target === null) return false;
+	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
-	if (target.kind === TypeKind.Var && target.typeReturn !== null) {
+	if (target.kind == TypeKind.Var && target.typeReturn != null) {
 		return needsStdConv(source, target.typeReturn);
 	}
-	if (source.kind === target.kind) return false;
+	if (source.kind == target.kind) return false;
 	// Numeric widening/narrowing: int32→number, float32→number, etc.
 	if (isNumeric(source) && isNumeric(target)) return true;
 	// Variant struct → discriminated union: different C layouts require
 	// proper construction (tag + variant slot), not a raw cast.
-	if (target.kind === TypeKind.Union && target.typeChildren !== null && source.kind === TypeKind.Struct) {
+	if (target.kind == TypeKind.Union && target.typeChildren != null && source.kind == TypeKind.Struct) {
 		return true;
 	}
 	// Array/SizedArray/String to Span coercion requires struct initializer
-	if (target.kind === TypeKind.Span) {
-		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) return true;
-		if ((source.kind === TypeKind.String || source.kind === TypeKind.StringLiteral) && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) return true;
+	if (target.kind == TypeKind.Span) {
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return true;
+		if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) return true;
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
-	if ((source.kind === TypeKind.String || source.kind === TypeKind.StringLiteral) && target.kind === TypeKind.CString) return true;
-	if (source.kind === TypeKind.CString && target.kind === TypeKind.String) return true;
+	if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.kind == TypeKind.CString) return true;
+	if (source.kind == TypeKind.CString && target.kind == TypeKind.String) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
-	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
-		if (source.kind !== TypeKind.Borrow) return true;
+	if (target.kind == TypeKind.Borrow && target.typeReturn != null) {
+		if (source.kind != TypeKind.Borrow) return true;
 	}
 	return false;
 }
@@ -501,14 +501,14 @@ export function needsStdConv(source: Type, target: Type): boolean {
 function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
-	if (a === null || b === null) return false;
-	if (b.kind === TypeKind.Union && a.kind !== TypeKind.Union && a.kind !== TypeKind.Null) {
+	if (a == null || b == null) return false;
+	if (b.kind == TypeKind.Union && a.kind != TypeKind.Union && a.kind != TypeKind.Null) {
 		const bn = nonNullMemberOfNullable(b);
-		if (bn !== null) return fnSlotReprMismatch(a, bn);
+		if (bn != null) return fnSlotReprMismatch(a, bn);
 	}
-	if (a.kind === TypeKind.Union && b.kind !== TypeKind.Union && b.kind !== TypeKind.Null) {
+	if (a.kind == TypeKind.Union && b.kind != TypeKind.Union && b.kind != TypeKind.Null) {
 		const an = nonNullMemberOfNullable(a);
-		if (an !== null) return fnSlotReprMismatch(an, b);
+		if (an != null) return fnSlotReprMismatch(an, b);
 	}
 	if (fieldReprMismatch(a, b)) return true;
 	return isReinterpretUnsafe(a, b);
@@ -516,8 +516,8 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
-	if (source === null || target === null) return false;
-	if (source.typeChildren.length !== target.typeChildren.length) return false;
+	if (source == null || target == null) return false;
+	if (source.typeChildren.length != target.typeChildren.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of source.typeChildren) {
@@ -536,7 +536,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	}
 	if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return false;
 	// Check return (covariant)
-	if (source.typeReturn !== null && target.typeReturn !== null) {
+	if (source.typeReturn != null && target.typeReturn != null) {
 		return isAssignable(source.typeReturn, target.typeReturn);
 	}
 	return true;
@@ -544,24 +544,24 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
 function isAnonLiteralName(name: string): boolean {
-	return name.length > 6 && name.slice(0, 6) === "__anon";
+	return name.length > 6 && name.slice(0, 6) == "__anon";
 }
 
 // Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
-	if (source === target) return true;
-	if (source === null || target === null) return false;
+	if (source == target) return true;
+	if (source == null || target == null) return false;
 	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
-	if (source.typeName !== "" && source.typeName === target.typeName) return true;
+	if (source.typeName != "" && source.typeName == target.typeName) return true;
 	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
-	if (source.sym !== null && source.sym === target.sym) return true;
+	if (source.sym != null && source.sym == target.sym) return true;
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
 	// runs the cast silently. Annotating at the literal is the supported path.
 	if (isAnonStructAdoption(source, target)) return true;
-	if (isAnonLiteralName(source.typeName) && target.typeName !== "" && !isAnonLiteralName(target.typeName)) return false;
+	if (isAnonLiteralName(source.typeName) && target.typeName != "" && !isAnonLiteralName(target.typeName)) return false;
 	// Pin source/target fields to locals — the binder's flow narrowing on the
 	// `source: Type | null` parameter doesn't always propagate into nested
 	// for-of bodies (each loop iteration walks the narrowing chain anew).
@@ -580,7 +580,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (tNames.length > sNames.length) return false;
 	let idx = 0;
 	for (const targetProp of tNames) {
-		if (sNames[idx] !== targetProp) return false;
+		if (sNames[idx] != targetProp) return false;
 		if (idx < sChildren.length && idx < tChildren.length) {
 			if (!isAssignable(sChildren[idx], tChildren[idx])) return false;
 			// Shared fields whose union/numeric repr differs would reinterpret
@@ -603,14 +603,14 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 export function isObjectShapeMismatch(source: Type | null, target: Type | null): boolean {
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(target);
-	if (s0 === null || t0 === null) return false;
+	if (s0 == null || t0 == null) return false;
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
-	if (s.kind !== TypeKind.Struct || t.kind !== TypeKind.Struct) return false;
-	if (s === t) return false;
-	if (s.typeName === "" || t.typeName === "") return false;
-	if (s.typeName === t.typeName) return false;
-	if (s.sym !== null && s.sym === t.sym) return false;
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return false;
+	if (s == t) return false;
+	if (s.typeName == "" || t.typeName == "") return false;
+	if (s.typeName == t.typeName) return false;
+	if (s.sym != null && s.sym == t.sym) return false;
 	return !isAssignable(source, target);
 }
 
@@ -620,12 +620,12 @@ export function isObjectShapeMismatch(source: Type | null, target: Type | null):
 export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(target);
-	if (s0 === null || t0 === null) return "";
+	if (s0 == null || t0 == null) return "";
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
-	if (s.kind !== TypeKind.Struct || t.kind !== TypeKind.Struct) return "";
-	if (s.typeName === "" || t.typeName === "") return "";
-	if (s.typeName === t.typeName) return "";
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return "";
+	if (s.typeName == "" || t.typeName == "") return "";
+	if (s.typeName == t.typeName) return "";
 	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
 		return " (the literal froze as an anonymous type before reaching '" + t.typeName
 			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
@@ -635,11 +635,11 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		let foundAt = 0 - 1;
 		let si = 0;
 		for (const sProp of s.typeNames) {
-			if (sProp === tProp) foundAt = si;
+			if (sProp == tProp) foundAt = si;
 			si += 1;
 		}
 		if (foundAt < 0) return "";
-		if (foundAt !== ti) {
+		if (foundAt != ti) {
 			return " ('" + tProp + "' is field " + String(ti) + " of " + t.typeName
 				+ " but field " + String(foundAt) + " of " + s.typeName
 				+ "; a structural match is a pointer cast, so " + t.typeName
@@ -659,17 +659,17 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 // (prefix) matches stay rejected — the C copy would drop fields the js
 // identity keeps, a built-in parity split.
 export function isAnonStructAdoption(source: Type | null, target: Type | null): boolean {
-	if (source === null || target === null) return false;
-	if (source.kind !== TypeKind.Struct || target.kind !== TypeKind.Struct) return false;
+	if (source == null || target == null) return false;
+	if (source.kind != TypeKind.Struct || target.kind != TypeKind.Struct) return false;
 	if (!isAnonLiteralName(source.typeName)) return false;
-	if (target.typeName === "" || isAnonLiteralName(target.typeName)) return false;
-	if (target.sym !== null && target.sym.symbolKind === SymbolKind.Interface) return false;
+	if (target.typeName == "" || isAnonLiteralName(target.typeName)) return false;
+	if (target.sym != null && target.sym.symbolKind == SymbolKind.Interface) return false;
 	if (isMaybeType(target)) return false;
 	const sNames = source.typeNames;
 	const tNames = target.typeNames;
-	if (sNames.length !== tNames.length) return false;
+	if (sNames.length != tNames.length) return false;
 	for (let i = 0; i < tNames.length; i += 1) {
-		if (sNames[i] !== tNames[i]) return false;
+		if (sNames[i] != tNames[i]) return false;
 		if (i >= source.typeChildren.length || i >= target.typeChildren.length) return false;
 		if (!sameType(source.typeChildren[i], target.typeChildren[i])) return false;
 	}
@@ -707,8 +707,8 @@ export enum TypeRelation {
 let _sameTypeDepth = 0;
 
 export function sameType(a: Type | null, b: Type | null): boolean {
-	if (a === b) return true;
-	if (a === null || b === null) return false;
+	if (a == b) return true;
+	if (a == null || b == null) return false;
 	if (_sameTypeDepth > 12) return true;
 	_sameTypeDepth = _sameTypeDepth + 1;
 	const result = sameTypeInner(a, b);
@@ -717,9 +717,9 @@ export function sameType(a: Type | null, b: Type | null): boolean {
 }
 
 function sameTypeList(a: Type[], b: Type[]): boolean {
-	if (a === null && b === null) return true;
-	if (a === null || b === null) return false;
-	if (a.length !== b.length) return false;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
 		if (!sameType(a[i], b[i])) return false;
 	}
@@ -727,42 +727,42 @@ function sameTypeList(a: Type[], b: Type[]): boolean {
 }
 
 function sameNameList(a: string[], b: string[]): boolean {
-	if (a === null && b === null) return true;
-	if (a === null || b === null) return false;
-	if (a.length !== b.length) return false;
+	if (a == null && b == null) return true;
+	if (a == null || b == null) return false;
+	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (a[i] !== b[i]) return false;
+		if (a[i] != b[i]) return false;
 	}
 	return true;
 }
 
 function sameStructType(a: Type, b: Type): boolean {
 	// Nominal types keep comparing by name; anonymous ones are structural.
-	if (a.typeName !== "" || b.typeName !== "") return a.typeName === b.typeName;
-	if (a.typeFlags !== b.typeFlags) return false;
+	if (a.typeName != "" || b.typeName != "") return a.typeName == b.typeName;
+	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
 	return sameTypeList(a.typeChildren, b.typeChildren);
 }
 
 function sameInnerType(a: Type, b: Type): boolean {
-	if (a.typeReturn === null && b.typeReturn === null) return true;
-	if (a.typeReturn === null || b.typeReturn === null) return false;
+	if (a.typeReturn == null && b.typeReturn == null) return true;
+	if (a.typeReturn == null || b.typeReturn == null) return false;
 	return sameType(a.typeReturn, b.typeReturn);
 }
 
 function sameTypeInner(a: Type, b: Type): boolean {
-	if (a.kind !== b.kind) return false;
+	if (a.kind != b.kind) return false;
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b),
 		TypeKind.Enum | TypeKind.Distinct | TypeKind.GenericParam
 			| TypeKind.StringLiteral | TypeKind.BooleanLiteral
-			| TypeKind.TypeReference => a.typeName === b.typeName,
-		TypeKind.EnumLiteral => a.typeName === b.typeName && sameNameList(a.typeNames, b.typeNames),
-		TypeKind.GenericInstance => a.typeName === b.typeName && sameTypeList(a.typeChildren, b.typeChildren),
+			| TypeKind.TypeReference => a.typeName == b.typeName,
+		TypeKind.EnumLiteral => a.typeName == b.typeName && sameNameList(a.typeNames, b.typeNames),
+		TypeKind.GenericInstance => a.typeName == b.typeName && sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
 			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
-		TypeKind.SizedArray => a.typeFlags === b.typeFlags && sameInnerType(a, b),
+		TypeKind.SizedArray => a.typeFlags == b.typeFlags && sameInnerType(a, b),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
 			| TypeKind.Lent => sameInnerType(a, b),
@@ -782,65 +782,65 @@ export function typeRelation(formal: Type | null, actual: Type | null): TypeRela
 }
 
 function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelation {
-	if (formal === null || actual === null) return TypeRelation.None;
+	if (formal == null || actual == null) return TypeRelation.None;
 	// Ownership modifiers (Sink/Lent) are transparent — unwrap before comparison.
-	if (formal.kind === TypeKind.Sink || formal.kind === TypeKind.Lent) {
-		if (formal.typeReturn !== null) formal = formal.typeReturn;
+	if (formal.kind == TypeKind.Sink || formal.kind == TypeKind.Lent) {
+		if (formal.typeReturn != null) formal = formal.typeReturn;
 	}
-	if (actual.kind === TypeKind.Sink || actual.kind === TypeKind.Lent) {
-		if (actual.typeReturn !== null) actual = actual.typeReturn;
+	if (actual.kind == TypeKind.Sink || actual.kind == TypeKind.Lent) {
+		if (actual.typeReturn != null) actual = actual.typeReturn;
 	}
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
-	if (actual.kind === TypeKind.Never) return TypeRelation.Exact;
+	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
 	// Same kind: dispatch on type-specific rules
-	if (formal.kind === actual.kind) {
+	if (formal.kind == actual.kind) {
 		return match (formal.kind) {
 			TypeKind.Struct => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
 			TypeKind.Enum | TypeKind.Distinct => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
 			// Literal types carry their value in typeName — two different literals
 			// are different types (isAssignable :368/:384, sameType :651).
 			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
-				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
 			TypeKind.EnumLiteral => {
-				if (formal.typeName !== actual.typeName) return TypeRelation.None;
-				if (formal.typeNames.length === 0 || actual.typeNames.length === 0) return TypeRelation.None;
-				if (formal.typeNames[0] === actual.typeNames[0]) return TypeRelation.Exact;
+				if (formal.typeName != actual.typeName) return TypeRelation.None;
+				if (formal.typeNames.length == 0 || actual.typeNames.length == 0) return TypeRelation.None;
+				if (formal.typeNames[0] == actual.typeNames[0]) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
 			TypeKind.SizedArray => {
-				if (formal.typeFlags !== actual.typeFlags) return TypeRelation.None;
-				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+				if (formal.typeFlags != actual.typeFlags) return TypeRelation.None;
+				if (formal.typeReturn != null && actual.typeReturn != null) {
 					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
-					if (elemRel === TypeRelation.None) return TypeRelation.None;
+					if (elemRel == TypeRelation.None) return TypeRelation.None;
 					return elemRel;
 				}
 				return TypeRelation.Exact;
 			},
 			TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => {
-				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+				if (formal.typeReturn != null && actual.typeReturn != null) {
 					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
-					if (elemRel === TypeRelation.None) return TypeRelation.None;
+					if (elemRel == TypeRelation.None) return TypeRelation.None;
 					return elemRel;
 				}
 				return TypeRelation.Exact;
 			},
 			TypeKind.GenericInstance => {
 				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
-				if (formal.typeName !== actual.typeName) return TypeRelation.None;
+				if (formal.typeName != actual.typeName) return TypeRelation.None;
 				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
 				for (let gi = 0; gi < giLimit; gi += 1) {
 					const argRel = typeRelation(formal.typeChildren[gi], actual.typeChildren[gi]);
-					if (argRel === TypeRelation.None) return TypeRelation.None;
+					if (argRel == TypeRelation.None) return TypeRelation.None;
 				}
 				return TypeRelation.Exact;
 			},
@@ -849,18 +849,18 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				// the return type, combined with minRel — the weakest component wins.
 				// callConv is deliberately not folded in (NIM-REF row 77: MS has one
 				// closure repr, so it carries no discriminating information).
-				if (formal.typeChildren.length !== actual.typeChildren.length) return TypeRelation.None;
+				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
 					const paramRel = typeRelation(formal.typeChildren[pi], actual.typeChildren[pi]);
-					if (paramRel === TypeRelation.None) return TypeRelation.None;
+					if (paramRel == TypeRelation.None) return TypeRelation.None;
 					if (paramRel < worst) worst = paramRel;
 				}
 				// A null side carries no information (inference pending), so it does
 				// not penalise — only two known return types are compared.
-				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+				if (formal.typeReturn != null && actual.typeReturn != null) {
 					const retRel = typeRelation(formal.typeReturn, actual.typeReturn);
-					if (retRel === TypeRelation.None) return TypeRelation.None;
+					if (retRel == TypeRelation.None) return TypeRelation.None;
 					if (retRel < worst) worst = retRel;
 				}
 				return worst;
@@ -869,80 +869,80 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		};
 	}
 	// Var (out param) unwrap: formal is Var<T>, actual is T → match inner
-	if (formal.kind === TypeKind.Var && formal.typeReturn !== null) {
+	if (formal.kind == TypeKind.Var && formal.typeReturn != null) {
 		return typeRelation(formal.typeReturn, actual);
 	}
 
 	// Inference sentinels + user unknown score as Generic
-	if (formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown
-		|| formal.kind === TypeKind.None || actual.kind === TypeKind.None
-		|| formal.kind === TypeKind.Inferred || actual.kind === TypeKind.Inferred) {
+	if (formal.kind == TypeKind.Unknown || actual.kind == TypeKind.Unknown
+		|| formal.kind == TypeKind.None || actual.kind == TypeKind.None
+		|| formal.kind == TypeKind.Inferred || actual.kind == TypeKind.Inferred) {
 		return TypeRelation.Generic;
 	}
 	// GenericParam = inference pending
-	if (formal.kind === TypeKind.GenericParam || actual.kind === TypeKind.GenericParam) {
+	if (formal.kind == TypeKind.GenericParam || actual.kind == TypeKind.GenericParam) {
 		return TypeRelation.Generic;
 	}
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T>
-	if (formal.kind === TypeKind.Span) {
-		if (actual.kind === TypeKind.Array || actual.kind === TypeKind.SizedArray) {
+	if (formal.kind == TypeKind.Span) {
+		if (actual.kind == TypeKind.Array || actual.kind == TypeKind.SizedArray) {
 			const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
-			if (elemRel !== TypeRelation.None) return TypeRelation.Subtype;
+			if (elemRel != TypeRelation.None) return TypeRelation.Subtype;
 		}
 	}
 	// Error type = suppress cascading
-	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
+	if (formal.kind == TypeKind.Error || actual.kind == TypeKind.Error) {
 		return TypeRelation.Exact;
 	}
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
-	if (isNumeric(formal) && (actual.kind === TypeKind.Number || actual.kind === TypeKind.Float64)) {
+	if (isNumeric(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
 		return TypeRelation.FromLiteral;
 	}
 	// Numeric widening: sized → Number
-	if (isNumeric(actual) && formal.kind === TypeKind.Number) {
+	if (isNumeric(actual) && formal.kind == TypeKind.Number) {
 		return TypeRelation.IntConv;
 	}
 	// Int-to-int widening: smaller int → larger int (e.g., int32 → int64)
 	// Safe widening (rank increases) and same-rank conversions (e.g., int32 → uint32).
 	// Narrowing (rank decreases) requires explicit cast.
-	if (isNumeric(actual) && isNumeric(formal) && actual.kind !== formal.kind
+	if (isNumeric(actual) && isNumeric(formal) && actual.kind != formal.kind
 		&& integerRank(actual) <= integerRank(formal)) {
 		return TypeRelation.IntConv;
 	}
 	// Null to nullable (mirrors isAssignableInner's null-source switch).
-	if (actual.kind === TypeKind.Null) {
-		if (formal.kind === TypeKind.Struct || formal.kind === TypeKind.Array ||
-			formal.kind === TypeKind.SizedArray || formal.kind === TypeKind.Span ||
-			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr ||
-			formal.kind === TypeKind.Void) {
+	if (actual.kind == TypeKind.Null) {
+		if (formal.kind == TypeKind.Struct || formal.kind == TypeKind.Array ||
+			formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span ||
+			formal.kind == TypeKind.Function || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr ||
+			formal.kind == TypeKind.Void) {
 			return TypeRelation.Subtype;
 		}
 	}
 	// StringLiteral → String (mirrors isAssignable :362).
-	if (formal.kind === TypeKind.String && actual.kind === TypeKind.StringLiteral) {
+	if (formal.kind == TypeKind.String && actual.kind == TypeKind.StringLiteral) {
 		return TypeRelation.Subtype;
 	}
 	// BooleanLiteral → Boolean (mirrors isAssignable :381; the reverse stays None).
-	if (formal.kind === TypeKind.Boolean && actual.kind === TypeKind.BooleanLiteral) {
+	if (formal.kind == TypeKind.Boolean && actual.kind == TypeKind.BooleanLiteral) {
 		return TypeRelation.Subtype;
 	}
 	// EnumLiteral cross-kind rules:
 	// formal=Enum(K), actual=EnumLiteral(K,A) → Subtype (literal narrows general enum)
-	if (formal.kind === TypeKind.Enum && actual.kind === TypeKind.EnumLiteral) {
-		if (formal.typeName === actual.typeName) return TypeRelation.Subtype;
+	if (formal.kind == TypeKind.Enum && actual.kind == TypeKind.EnumLiteral) {
+		if (formal.typeName == actual.typeName) return TypeRelation.Subtype;
 		return TypeRelation.None;
 	}
 	// formal=EnumLiteral(K,A), actual=Enum(K) → None (would lose specificity)
-	if (formal.kind === TypeKind.EnumLiteral && actual.kind === TypeKind.Enum) {
+	if (formal.kind == TypeKind.EnumLiteral && actual.kind == TypeKind.Enum) {
 		return TypeRelation.None;
 	}
 	// EnumLiteral → numeric (enums are ints at runtime)
-	if (actual.kind === TypeKind.EnumLiteral && isNumeric(formal)) {
+	if (actual.kind == TypeKind.EnumLiteral && isNumeric(formal)) {
 		return TypeRelation.IntConv;
 	}
 	// Union target: best match
-	if (formal.kind === TypeKind.Union) {
+	if (formal.kind == TypeKind.Union) {
 		let best = TypeRelation.None;
 		for (const member of formal.typeChildren) {
 			const rel = typeRelation(member, actual);
@@ -953,20 +953,20 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// Union actual: every member must relate — the weakest member relation wins.
 	// Dual of isAssignable's union-source arm (:406); without it overload
 	// resolution and assignment disagree on the same pair.
-	if (actual.kind === TypeKind.Union) {
+	if (actual.kind == TypeKind.Union) {
 		let weakest = TypeRelation.Exact;
 		for (const member of actual.typeChildren) {
 			const rel = typeRelation(formal, member);
-			if (rel === TypeRelation.None) return TypeRelation.None;
+			if (rel == TypeRelation.None) return TypeRelation.None;
 			if ((rel as number) < (weakest as number)) { weakest = rel; }
 		}
 		return weakest;
 	}
-	if (formal.kind === TypeKind.CString
-			&& (actual.kind === TypeKind.String || actual.kind === TypeKind.StringLiteral)) {
+	if (formal.kind == TypeKind.CString
+			&& (actual.kind == TypeKind.String || actual.kind == TypeKind.StringLiteral)) {
 		return TypeRelation.Convertible;
 	}
-	if (formal.kind === TypeKind.String && actual.kind === TypeKind.CString) {
+	if (formal.kind == TypeKind.String && actual.kind == TypeKind.CString) {
 		return TypeRelation.Convertible;
 	}
 	return TypeRelation.None;
@@ -975,11 +975,11 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 // Score a candidate function against actual arguments.
 // Returns sum of TypeRelation values, or -1 if any param doesn't match.
 export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
-	if (paramTypes.length !== argTypes.length) return -1;
+	if (paramTypes.length != argTypes.length) return -1;
 	let score = 0;
 	for (let i = 0; i < paramTypes.length; i += 1) {
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
-		if (rel === TypeRelation.None) return -1;
+		if (rel == TypeRelation.None) return -1;
 		score = score + (rel as int32);
 	}
 	return score;
@@ -1008,7 +1008,7 @@ export function emptyCandidateScore(): CandidateScore {
 }
 
 export function isNoMatch(score: CandidateScore): boolean {
-	return score.exactMatches === -1;
+	return score.exactMatches == -1;
 }
 
 // Score a candidate function against actual arguments (Standard-aligned priority counters).
@@ -1030,12 +1030,12 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 	}
 	// Score only provided args (default-filled params don't contribute)
 	for (let i = 0; i < argTypes.length; i += 1) {
-		if (skipMask !== null && i < skipMask.length && skipMask[i]) {
+		if (skipMask != null && i < skipMask.length && skipMask[i]) {
 			score.subtypeMatches = score.subtypeMatches + 1;
 			continue;
 		}
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
-		if (rel === TypeRelation.None) {
+		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
 		}
@@ -1055,9 +1055,9 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 // Compare inheritance penalties. -1 = inactive (sentinel).
 // Lower penalty = more specific (better). Returns >0 if a is better.
 function cmpInheritancePenalty(a: number, b: number): number {
-	if (a === -1 && b === -1) return 0;
-	if (a === -1) return -1; // a inactive, b has penalty → b is better
-	if (b === -1) return 1;  // b inactive, a has penalty → a is better
+	if (a == -1 && b == -1) return 0;
+	if (a == -1) return -1; // a inactive, b has penalty → b is better
+	if (b == -1) return 1;  // b inactive, a has penalty → a is better
 	return b - a; // lower penalty is better, so b - a > 0 means a < b means a wins
 }
 
@@ -1069,29 +1069,29 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 	candidateTypeA: Type | null, candidateTypeB: Type | null): number {
 	// 1. Exact matches (highest priority)
 	let result = a.exactMatches - b.exactMatches;
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 2. Generic matches
 	result = a.genericMatches - b.genericMatches;
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 3. Subtype matches
 	result = a.subtypeMatches - b.subtypeMatches;
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 4. Int conversion matches
 	result = a.intConvMatches - b.intConvMatches;
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 5. Conversion matches
 	result = a.convMatches - b.convMatches;
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 6. Inheritance penalty (lower = better)
 	result = cmpInheritancePenalty(a.inheritancePenalty, b.inheritancePenalty);
-	if (result !== 0) return result;
+	if (result != 0) return result;
 	// 7. checkGeneric — generic specialization (Phase 5, stubbed)
-	if (candidateTypeA !== null && candidateTypeB !== null) {
+	if (candidateTypeA != null && candidateTypeB != null) {
 		result = checkGenericSpecialization(candidateTypeA, candidateTypeB);
-		if (result !== 0) return result;
+		if (result != 0) return result;
 		// 8. complexDisambiguation — genericness depth (Phase 5, stubbed)
 		result = complexDisambiguation(candidateTypeA, candidateTypeB);
-		if (result !== 0) return result;
+		if (result != 0) return result;
 	}
 	// 9. Scope depth (higher = inner scope = preferred)
 	result = a.calleeScope - b.calleeScope;
@@ -1103,11 +1103,11 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 // but T cannot match T[].
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
 function checkGenericSpecialization(typeA: Type, typeB: Type): number {
-	if (typeA === null || typeB === null) return 0;
-	if (typeA.kind !== TypeKind.Function || typeB.kind !== TypeKind.Function) return 0;
+	if (typeA == null || typeB == null) return 0;
+	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
 	const lenA = typeA.typeChildren.length;
 	const lenB = typeB.typeChildren.length;
-	if (lenA !== lenB) return 0;
+	if (lenA != lenB) return 0;
 	let aWins = 0;
 	let bWins = 0;
 	let i = 0;
@@ -1117,15 +1117,15 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 		// Cross-test: can B's formal match A's as Generic?
 		const bMatchesA = typeRelation(pA, pB);
 		const aMatchesB = typeRelation(pB, pA);
-		if (bMatchesA === TypeRelation.Generic && aMatchesB !== TypeRelation.Generic) {
+		if (bMatchesA == TypeRelation.Generic && aMatchesB != TypeRelation.Generic) {
 			aWins = aWins + 1; // A is more specific (B is more general)
-		} else if (aMatchesB === TypeRelation.Generic && bMatchesA !== TypeRelation.Generic) {
+		} else if (aMatchesB == TypeRelation.Generic && bMatchesA != TypeRelation.Generic) {
 			bWins = bWins + 1; // B is more specific (A is more general)
 		}
 		i = i + 1;
 	}
-	if (aWins > 0 && bWins === 0) return 1;
-	if (bWins > 0 && aWins === 0) return -1;
+	if (aWins > 0 && bWins == 0) return 1;
+	if (bWins > 0 && aWins == 0) return -1;
 	return 0; // contradiction or equal
 }
 
@@ -1134,8 +1134,8 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 // GenericParam = 1, Container<T> = 1 + sumGeneric(T)
 let sumGenericDepth = 0;
 function sumGeneric(t: Type | null): int32 {
-	if (t === null) return 0;
-	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Unknown || t.kind === TypeKind.None || t.kind === TypeKind.Inferred) return 1;
+	if (t == null) return 0;
+	if (t.kind == TypeKind.GenericParam || t.kind == TypeKind.Unknown || t.kind == TypeKind.None || t.kind == TypeKind.Inferred) return 1;
 	if (sumGenericDepth > 20) return 0;
 	sumGenericDepth = sumGenericDepth + 1;
 	let childSum = 0;
@@ -1144,10 +1144,10 @@ function sumGeneric(t: Type | null): int32 {
 		childSum = childSum + sumGeneric(t.typeChildren[i]);
 		i = i + 1;
 	}
-	if (t.typeReturn !== null) {
+	if (t.typeReturn != null) {
 		childSum = childSum + sumGeneric(t.typeReturn);
 	}
-	if (t.typeExtra !== null) {
+	if (t.typeExtra != null) {
 		childSum = childSum + sumGeneric(t.typeExtra);
 	}
 	sumGenericDepth = sumGenericDepth - 1;
@@ -1160,8 +1160,8 @@ function sumGeneric(t: Type | null): int32 {
 // Per-parameter contradiction detection: if param i favors A but param j favors B → return 0.
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
 function complexDisambiguation(typeA: Type, typeB: Type): number {
-	if (typeA === null || typeB === null) return 0;
-	if (typeA.kind !== TypeKind.Function || typeB.kind !== TypeKind.Function) return 0;
+	if (typeA == null || typeB == null) return 0;
+	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
 	let aWins = 0;
 	let bWins = 0;
 	let i = 0;
@@ -1194,14 +1194,14 @@ export function resolveOverloadIdx(candidates: Type[], argTypes: Type[],
 	let bestType: Type | null = null;
 	let ambiguous = false;
 	for (let i = 0; i < candidates.length; i += 1) {
-		if (candidates[i].kind !== TypeKind.Function) continue;
+		if (candidates[i].kind != TypeKind.Function) continue;
 		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
 		if (isNoMatch(score)) continue;
 		// Set scope depth from parallel array
 		if (i < scopeDepths.length) {
 			score.calleeScope = scopeDepths[i];
 		}
-		if (bestIdx === -1) {
+		if (bestIdx == -1) {
 			bestIdx = i;
 			bestScore = score;
 			bestType = candidates[i];
@@ -1213,7 +1213,7 @@ export function resolveOverloadIdx(candidates: Type[], argTypes: Type[],
 				bestScore = score;
 				bestType = candidates[i];
 				ambiguous = false;
-			} else if (cmp === 0) {
+			} else if (cmp == 0) {
 				ambiguous = true;
 			}
 		}
@@ -1229,7 +1229,7 @@ export function findFirstMismatch(paramTypes: Type[], argTypes: Type[], minArity
 	if (argTypes.length < minArity) return argTypes.length; // missing required param
 	for (let i = 0; i < argTypes.length; i += 1) {
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
-		if (rel === TypeRelation.None) return i;
+		if (rel == TypeRelation.None) return i;
 	}
 	return -1;
 }
@@ -1311,33 +1311,33 @@ test "source missing prop" {
 }
 
 test "exact match" {
-	assert typeRelation(numberType(), numberType()) === TypeRelation.Exact;
-	assert typeRelation(stringType(), stringType()) === TypeRelation.Exact;
+	assert typeRelation(numberType(), numberType()) == TypeRelation.Exact;
+	assert typeRelation(stringType(), stringType()) == TypeRelation.Exact;
 }
 
-test "no match" { assert typeRelation(numberType(), stringType()) === TypeRelation.None; }
+test "no match" { assert typeRelation(numberType(), stringType()) == TypeRelation.None; }
 
 test "unknown = generic" {
-	assert typeRelation(numberType(), inferredType()) === TypeRelation.Generic;
-	assert typeRelation(inferredType(), numberType()) === TypeRelation.Generic;
+	assert typeRelation(numberType(), inferredType()) == TypeRelation.Generic;
+	assert typeRelation(inferredType(), numberType()) == TypeRelation.Generic;
 }
 
-test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv; }
+test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.IntConv; }
 
-test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) === TypeRelation.Subtype; }
+test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.Subtype; }
 
 test "exact args" {
 	const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);
-	assert score === 12; // 6 + 6
+	assert score == 12; // 6 + 6
 }
 
-test "arity mismatch" { assert scoreCandidate([numberType()], []) === -1; }
+test "arity mismatch" { assert scoreCandidate([numberType()], []) == -1; }
 
-test "type mismatch" { assert scoreCandidate([numberType()], [stringType()]) === -1; }
+test "type mismatch" { assert scoreCandidate([numberType()], [stringType()]) == -1; }
 
 test "mixed scoring" {
 	const score = scoreCandidate([numberType(), numberType()], [numberType(), createPrimitive(TypeKind.Int32)]);
-	assert score === 8; // 6 (exact) + 2 (intconv)
+	assert score == 8; // 6 (exact) + 2 (intconv)
 }
 
 test "source union all match" {
@@ -1422,21 +1422,21 @@ test "array to span" {
 	const arr = createArray(numberType());
 	const span = createSpan(numberType());
 	assert isAssignable(arr, span);
-	assert typeRelation(span, arr) === TypeRelation.Subtype;
+	assert typeRelation(span, arr) == TypeRelation.Subtype;
 }
 
 test "sized array to span" {
 	const sarr = createSizedArray(numberType(), 4);
 	const span = createSpan(numberType());
 	assert isAssignable(sarr, span);
-	assert typeRelation(span, sarr) === TypeRelation.Subtype;
+	assert typeRelation(span, sarr) == TypeRelation.Subtype;
 }
 
 test "mismatched element to span" {
 	const arr = createArray(stringType());
 	const span = createSpan(numberType());
 	assert !isAssignable(arr, span);
-	assert typeRelation(span, arr) === TypeRelation.None;
+	assert typeRelation(span, arr) == TypeRelation.None;
 }
 
 // TS-strict: null is NOT assignable to bare Ptr<T> — must be Union(Ptr<T>, Null).
@@ -1471,39 +1471,39 @@ test "different distinct name" {
 test "enum exact" {
 	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
 	const e2 = createEnum("Color", ["Red"], null as unknown as number[]);
-	assert typeRelation(e1, e2) === TypeRelation.Exact;
+	assert typeRelation(e1, e2) == TypeRelation.Exact;
 }
 
 test "enum mismatch" {
 	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
 	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
-	assert typeRelation(e1, e2) === TypeRelation.None;
+	assert typeRelation(e1, e2) == TypeRelation.None;
 }
 
 test "enum literal same member exact" {
 	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
 	const a1 = createEnumLiteral(e, "A");
 	const a2 = createEnumLiteral(e, "A");
-	assert typeRelation(a1, a2) === TypeRelation.Exact;
+	assert typeRelation(a1, a2) == TypeRelation.Exact;
 }
 
 test "enum literal different members none" {
 	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
 	const a = createEnumLiteral(e, "A");
 	const b = createEnumLiteral(e, "B");
-	assert typeRelation(a, b) === TypeRelation.None;
+	assert typeRelation(a, b) == TypeRelation.None;
 }
 
 test "enum literal subtype of enum" {
 	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
 	const a = createEnumLiteral(e, "A");
-	assert typeRelation(e, a) === TypeRelation.Subtype;
+	assert typeRelation(e, a) == TypeRelation.Subtype;
 }
 
 test "enum not assignable to enum literal" {
 	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
 	const a = createEnumLiteral(e, "A");
-	assert typeRelation(a, e) === TypeRelation.None;
+	assert typeRelation(a, e) == TypeRelation.None;
 }
 
 test "enum literal isAssignable to enum" {
@@ -1517,42 +1517,42 @@ test "enum literal cross-enum none" {
 	const m = createEnum("M", ["A"], null as unknown as number[]);
 	const ka = createEnumLiteral(k, "A");
 	const ma = createEnumLiteral(m, "A");
-	assert typeRelation(ka, ma) === TypeRelation.None;
+	assert typeRelation(ka, ma) == TypeRelation.None;
 }
 
 test "result exact" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(numberType(), stringType());
-	assert typeRelation(r1, r2) === TypeRelation.Exact;
+	assert typeRelation(r1, r2) == TypeRelation.Exact;
 }
 
 test "result mismatch" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(stringType(), stringType());
-	assert typeRelation(r1, r2) === TypeRelation.None;
+	assert typeRelation(r1, r2) == TypeRelation.None;
 }
 
-test "array same element exact" { assert typeRelation(createArray(numberType()), createArray(numberType())) === TypeRelation.Exact; }
+test "array same element exact" { assert typeRelation(createArray(numberType()), createArray(numberType())) == TypeRelation.Exact; }
 
-test "array different element none" { assert typeRelation(createArray(numberType()), createArray(stringType())) === TypeRelation.None; }
+test "array different element none" { assert typeRelation(createArray(numberType()), createArray(stringType())) == TypeRelation.None; }
 
-test "ref same inner exact" { assert typeRelation(createRef(numberType()), createRef(numberType())) === TypeRelation.Exact; }
+test "ref same inner exact" { assert typeRelation(createRef(numberType()), createRef(numberType())) == TypeRelation.Exact; }
 
-test "ref different inner none" { assert typeRelation(createRef(numberType()), createRef(stringType())) === TypeRelation.None; }
+test "ref different inner none" { assert typeRelation(createRef(numberType()), createRef(stringType())) == TypeRelation.None; }
 
-test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), createPtr(numberType())) === TypeRelation.Exact; }
+test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), createPtr(numberType())) == TypeRelation.Exact; }
 
-test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) === TypeRelation.None; }
+test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) == TypeRelation.None; }
 
 test "from literal" {
-	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) === TypeRelation.FromLiteral;
-	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) === TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) == TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.FromLiteral;
 }
 
 test "generic param" {
 	const gp = createGenericParam("T");
-	assert typeRelation(gp, numberType()) === TypeRelation.Generic;
-	assert typeRelation(numberType(), gp) === TypeRelation.Generic;
+	assert typeRelation(gp, numberType()) == TypeRelation.Generic;
+	assert typeRelation(numberType(), gp) == TypeRelation.Generic;
 }
 
 test "exact beats subtype-sum" {
@@ -1573,8 +1573,8 @@ test "FromLiteral weight intConvMatches += 256" {
 	const score = scoreCandidatePriority(params, args, params.length);
 	assert !isNoMatch(score);
 	// FromLiteral maps to intConvMatches += 256
-	assert score.intConvMatches === 256;
-	assert score.exactMatches === 0;
+	assert score.intConvMatches == 256;
+	assert score.exactMatches == 0;
 }
 
 test "ambiguity: equal scores" {
@@ -1584,7 +1584,7 @@ test "ambiguity: equal scores" {
 	const b = emptyCandidateScore();
 	b.exactMatches = 2;
 	const nullT = null;
-	assert cmpCandidates(a, b, nullT, nullT) === 0;
+	assert cmpCandidates(a, b, nullT, nullT) == 0;
 }
 
 test "inheritance penalty: lower wins" {
@@ -1616,7 +1616,7 @@ test "single candidate matches" {
 	const candidates = [fn1];
 	const argTypes = [numberType()];
 	const depths: number[] = [0];
-	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
+	assert resolveOverloadIdx(candidates, argTypes, depths) == 0;
 }
 
 test "picks best of two" {
@@ -1626,7 +1626,7 @@ test "picks best of two" {
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
 	const depths: number[] = [0, 0];
-	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
+	assert resolveOverloadIdx(candidates, argTypes, depths) == 0;
 }
 
 test "picks second overload" {
@@ -1636,7 +1636,7 @@ test "picks second overload" {
 	const candidates = [fn1, fn2];
 	const argTypes = [stringType()];
 	const depths: number[] = [0, 0];
-	assert resolveOverloadIdx(candidates, argTypes, depths) === 1;
+	assert resolveOverloadIdx(candidates, argTypes, depths) == 1;
 }
 
 test "no match returns -1" {
@@ -1644,7 +1644,7 @@ test "no match returns -1" {
 	const candidates = [fn1];
 	const argTypes = [stringType()];
 	const depths: number[] = [0];
-	assert resolveOverloadIdx(candidates, argTypes, depths) === -1;
+	assert resolveOverloadIdx(candidates, argTypes, depths) == -1;
 }
 
 test "ambiguous returns -2" {
@@ -1654,18 +1654,18 @@ test "ambiguous returns -2" {
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
 	const depths: number[] = [0, 0];
-	assert resolveOverloadIdx(candidates, argTypes, depths) === -2;
+	assert resolveOverloadIdx(candidates, argTypes, depths) == -2;
 }
 
-test "all match" { assert findFirstMismatch([numberType()], [numberType()], 1) === -1; }
+test "all match" { assert findFirstMismatch([numberType()], [numberType()], 1) == -1; }
 
-test "first param mismatch" { assert findFirstMismatch([numberType()], [stringType()], 1) === 0; }
+test "first param mismatch" { assert findFirstMismatch([numberType()], [stringType()], 1) == 0; }
 
-test "second param mismatch" { assert findFirstMismatch([numberType(), stringType()], [numberType(), numberType()], 2) === 1; }
+test "second param mismatch" { assert findFirstMismatch([numberType(), stringType()], [numberType(), numberType()], 2) == 1; }
 
-test "arity mismatch too many args" { assert findFirstMismatch([numberType()], [numberType(), stringType()], 1) === 1; }
+test "arity mismatch too many args" { assert findFirstMismatch([numberType()], [numberType(), stringType()], 1) == 1; }
 
-test "arity mismatch too few args" { assert findFirstMismatch([numberType(), stringType()], [numberType()], 2) === 1; }
+test "arity mismatch too few args" { assert findFirstMismatch([numberType(), stringType()], [numberType()], 2) == 1; }
 
 test "complexDisambiguation deeper type wins" {
 	// f(T[]) vs f(T) — array param has deeper generic nesting
@@ -1698,5 +1698,5 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	const b = emptyCandidateScore();
 	b.genericMatches = 2;
 	const cmp = cmpCandidates(a, b, fnA, fnB);
-	assert cmp === 0;
+	assert cmp == 0;
 }

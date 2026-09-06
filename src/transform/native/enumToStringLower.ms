@@ -51,11 +51,11 @@ function makeEnumToString(fnName: string, enumName: string, members: string[], l
 }
 
 function getEnumFromStmt(stmt: Node): Node {
-	if (stmt === null) return null as unknown as Node;
-	if (stmt.kind === NodeKind.EnumDecl) return stmt;
-	if (stmt.kind === NodeKind.ExportDecl) {
+	if (stmt == null) return null as unknown as Node;
+	if (stmt.kind == NodeKind.EnumDecl) return stmt;
+	if (stmt.kind == NodeKind.ExportDecl) {
 		const d = stmt.data as ExportDeclData;
-		if (d.exportedDecl !== null && d.exportedDecl.kind === NodeKind.EnumDecl) {
+		if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.EnumDecl) {
 			return d.exportedDecl;
 		}
 	}
@@ -82,11 +82,11 @@ test "enum toString injects FunctionDecl" {
 	const enumNode = makeTestEnum("Color", ["Red", "Green", "Blue"]);
 	const prog = makeTestProgram([enumNode]);
 	const pd = prog.data as ProgramData;
-	assert pd.programStmts.length === 1;
+	assert pd.programStmts.length == 1;
 	const result = lowerEnumToString(prog, null as unknown as TransformContext);
 	const rd = result.data as ProgramData;
-	assert rd.programStmts.length === 2;
-	assert rd.programStmts[1].kind === NodeKind.FunctionDecl;
+	assert rd.programStmts.length == 2;
+	assert rd.programStmts[1].kind == NodeKind.FunctionDecl;
 }
 
 test "enum toString body has switch" {
@@ -95,8 +95,8 @@ test "enum toString body has switch" {
 	const result = lowerEnumToString(prog, null as unknown as TransformContext);
 	const rd = result.data as ProgramData;
 	const fn = rd.programStmts[1];
-	assert fn.kind === NodeKind.FunctionDecl;
-	assert fn.nodeType !== null;
+	assert fn.kind == NodeKind.FunctionDecl;
+	assert fn.nodeType != null;
 }
 
 import { parseSource } from "../../parser/statements/validation";
@@ -112,24 +112,24 @@ test "enum toString E2E: parse → transform → codegen" {
 	const transformed = lowerEnumToString(pr.value, null as unknown as TransformContext);
 	const td = transformed.data as ProgramData;
 	// Verify transform injected FunctionDecl
-	assert td.programStmts.length === 2;
-	assert td.programStmts[0].kind === NodeKind.EnumDecl;
-	assert td.programStmts[1].kind === NodeKind.FunctionDecl;
+	assert td.programStmts.length == 2;
+	assert td.programStmts[0].kind == NodeKind.EnumDecl;
+	assert td.programStmts[1].kind == NodeKind.FunctionDecl;
 	const fd = td.programStmts[1].data as FunctionDeclData;
-	assert fd.fnName === "Color_toString";
+	assert fd.fnName == "Color_toString";
 	// Generate C — should include the toString function
 	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createAliveSet(), true, false);
 	assert cCode.length > 50;
 }
 
 export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
-	if (program === null || program.kind !== NodeKind.Program) return program;
+	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
 	// Primary path: extract enums from checker's symbol table (DCE-safe).
 	// Walk all scopes from current up to global — user enums are typically
 	// in the module scope (table.current), not the root global scope.
-	if (ctx !== null && ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
+	if (ctx != null && ctx.checkerCtx != null && ctx.checkerCtx.table != null) {
 		const toStringFns: Node[] = [];
 		const injected: NameSet = createNameSet();
 		// Scope scan — C only. Each module is its own translation unit there, so
@@ -142,9 +142,9 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		// list is complete, every site calls requestEnumToString.
 		if (!ctx.jsBackend) {
 			let scope = ctx.checkerCtx.table.current;
-			while (scope !== null) {
+			while (scope != null) {
 				for (const sym of scope.symbols.values()) {
-					if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
+					if (sym.symbolKind == SymbolKind.Enum && sym.symbolType != null && sym.symbolType.kind == TypeKind.Enum) {
 						const t = sym.symbolType;
 						if (nameSetContains(injected, t.typeName)) continue;
 						nameSetAdd(injected, t.typeName);
@@ -157,7 +157,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		// Lowering sites (builtinLower/debugLower) request enums that are not in
 		// module scope — e.g. reached only through an imported field's type.
 		for (const t of ctx.checkerCtx.pendingEnumToStrings) {
-			if (t.kind !== TypeKind.Enum || nameSetContains(injected, t.typeName)) continue;
+			if (t.kind != TypeKind.Enum || nameSetContains(injected, t.typeName)) continue;
 			nameSetAdd(injected, t.typeName);
 			toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, program.location));
 		}
@@ -175,7 +175,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		newStmts.push(stmt);
 
 		const enumNode = getEnumFromStmt(stmt);
-		if (enumNode !== null) {
+		if (enumNode != null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
 			const toStringFn = makeEnumToString(enumToStringName(d.enumName), d.enumName, d.enumMembers, loc);

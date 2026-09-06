@@ -70,7 +70,7 @@ function stringSwitchBreakStaysInLoop(): string {
     let sum: int32 = 0;
     let hits: string = "";
     for (const x of [1, 2, 3, 4, 5]) {
-        const k = x === 3 ? "stop" : "go";
+        const k = x == 3 ? "stop" : "go";
         switch (k) {
             case "stop":
                 hits = hits + "S";
@@ -112,7 +112,7 @@ function switchOutsideLoop(): string {
 }
 
 function expect(actual: string, want: string, name: string): int32 {
-    if (actual !== want) {
+    if (actual != want) {
         console.log(`GUARD-FAIL ${name}: got ${actual}, want ${want}`);
         return 1;
     }
@@ -127,9 +127,9 @@ function main(): int32 {
     rc += expect(stringSwitchBreakStaysInLoop(), "15,ggSgg", "stringSwitchBreakStaysInLoop");
     rc += expect(ordinalSwitchMidCaseBreak(), "..a..", "ordinalSwitchMidCaseBreak");
     rc += expect(switchOutsideLoop(), "two", "switchOutsideLoop");
-    if (rc === 0) { console.log("GUARD-OK breakJumpTargets"); }
+    if (rc == 0) { console.log("GUARD-OK breakJumpTargets"); }
     return rc;
 }
 
 const rc = main();
-if (rc !== 0) { process.exit(rc); }
+if (rc != 0) { process.exit(rc); }

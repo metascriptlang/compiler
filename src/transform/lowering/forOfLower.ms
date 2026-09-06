@@ -27,7 +27,7 @@ export function lowerForOf(program: Node, ctx: TransformContext): Node {
 // Closure-returning visitor to capture ctx
 function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 	return (node: Node): Node => {
-		if (node.kind !== NodeKind.ForOfStmt) return node;
+		if (node.kind != NodeKind.ForOfStmt) return node;
 		const d = node.data as ForOfStmtData;
 		const loc = node.location;
 		const bindingSym = node.resolvedSym;
@@ -37,7 +37,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 
 		// Iterator<T>: while + next() pattern (for function* generators)
 		const iterType = d.forOfIterable.nodeType;
-		if (iterType !== null && isIterator(iterType)) {
+		if (iterType != null && isIterator(iterType)) {
 			return lowerIteratorForOf(d, ctx, loc, bindingSym);
 		}
 
@@ -53,16 +53,16 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 
 function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLocation): Node {
 	const call = makeCall(makeMember(makeIdentResolved(iterSym, loc), "next", loc), [], loc);
-	if (resultType !== null) call.nodeType = resultType;
+	if (resultType != null) call.nodeType = resultType;
 	return call;
 }
 
 function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
 	const iterType = d.forOfIterable.nodeType;
-	const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : noneType());
+	const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 	const nextFnType = getIteratorNextFnType(d.forOfIterable.nodeType);
-	const resultType = nextFnType !== null ? nextFnType.typeReturn : null;
-	const rSym = freshTempSym(ctx, "r", resultType !== null ? resultType : noneType());
+	const resultType = nextFnType != null ? nextFnType.typeReturn : null;
+	const rSym = freshTempSym(ctx, "r", resultType != null ? resultType : noneType());
 
 	const stmts: Node[] = [];
 	const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
@@ -70,18 +70,18 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 	stmts.push(iterDecl);
 	const rDecl = makeVarDecl(rSym.name, makeNextCallSym(iterSym, resultType, loc), DeclKind.Let, loc);
 	rDecl.resolvedSym = rSym;
-	if (resultType !== null) rDecl.nodeType = resultType;
+	if (resultType != null) rDecl.nodeType = resultType;
 	stmts.push(rDecl);
 
 	const cond = makeUnary("!", makeMember(makeIdentResolved(rSym, loc), "done", loc), loc);
 	const bodyStmts: Node[] = [];
 	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdentResolved(rSym, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
-	if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
+	if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
 	// Stamp the binding's resolved element type so downstream passes (generatorLower's
 	// collectDeclTypes → env field types, lambdaLifting's typeToEnvStr) see the
 	// monomorphized T. Without this, env fields fall back to `void*` and DRC hooks
 	// reference `<Type>__unknown` instead of `<Type>__string` etc.
-	if (resultType !== null && resultType.typeChildren !== null && resultType.typeChildren.length > 0) {
+	if (resultType != null && resultType.typeChildren != null && resultType.typeChildren.length > 0) {
 		itemDecl.nodeType = resultType.typeChildren[0];
 	}
 	bodyStmts.push(itemDecl);
@@ -101,31 +101,31 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// reference array: the iter expr keeps its Ref<Array> type (nativeLower derefs the
 	// synthesized .length/[idx] access), but element-type stamping must read through the
 	// Ref to the value array so `.typeReturn` yields the element type, not the inner array.
-	const elemArrType = (iterType !== null && iterType.kind === TypeKind.Ref
-			&& iterType.typeReturn !== null && iterType.typeReturn.kind === TypeKind.Array)
+	const elemArrType = (iterType != null && iterType.kind == TypeKind.Ref
+			&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array)
 		? iterType.typeReturn : iterType;
 
 	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
 	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
 	// if the loop body pushes to the original (reallocation invalidates the copy).
 	// For non-lvalue expressions (calls, etc.), still use a temp to evaluate once.
-	const isStableLvalue = d.forOfIterable.kind === NodeKind.Identifier
-		|| d.forOfIterable.kind === NodeKind.MemberExpr;
+	const isStableLvalue = d.forOfIterable.kind == NodeKind.Identifier
+		|| d.forOfIterable.kind == NodeKind.MemberExpr;
 
 	const preamble: Node[] = [];
 
 	// For non-stable expressions, copy to a temp (evaluated once)
 	let iterExpr: Node = d.forOfIterable;
 	if (!isStableLvalue) {
-		const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : noneType());
+		const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
 		// A fresh owned value (call result / array literal) has no other owner, so the
 		// temp must own+destroy it (like `const t = f(); for..of t`). Cursor here would
 		// skip destroy and leak the array every iteration. Aliasing rvalues (conditional,
 		// type-assertion of an lvalue) stay Cursor to avoid double-free.
-		const producesFreshOwned = d.forOfIterable.kind === NodeKind.CallExpr
-			|| d.forOfIterable.kind === NodeKind.ArrayLiteral;
+		const producesFreshOwned = d.forOfIterable.kind == NodeKind.CallExpr
+			|| d.forOfIterable.kind == NodeKind.ArrayLiteral;
 		if (!producesFreshOwned) {
 			iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
 		}
@@ -156,23 +156,23 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const whileStmts: Node[] = [];
 	const itemDk = boolToDeclKind(d.forOfIsConst);
 
-	const patKind = d.forOfPattern !== null ? d.forOfPattern.kind : NodeKind.Identifier;
-	if (patKind === NodeKind.ArrayPattern || patKind === NodeKind.ObjectPattern) {
+	const patKind = d.forOfPattern != null ? d.forOfPattern.kind : NodeKind.Identifier;
+	if (patKind == NodeKind.ArrayPattern || patKind == NodeKind.ObjectPattern) {
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
-		const elemType = elemArrType !== null && elemArrType.typeReturn !== null ? elemArrType.typeReturn : noneType();
+		const elemType = elemArrType != null && elemArrType.typeReturn != null ? elemArrType.typeReturn : noneType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
 		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);
 		elemDecl.resolvedSym = elemSym;
 		// Propagate element type for nativeLower (tuple → member access)
-		if (elemArrType !== null && elemArrType.typeReturn !== null) {
+		if (elemArrType != null && elemArrType.typeReturn != null) {
 			elemDecl.nodeType = elemArrType.typeReturn;
 			// Untyped access + Maybe-carried element makes codegen re-wrap the already
 			// wrapped element (lit.value = Maybe struct — clang error)
 			elemAccess.nodeType = elemArrType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
-		const bindings = patKind === NodeKind.ArrayPattern
+		const bindings = patKind == NodeKind.ArrayPattern
 			? expandArrayRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx)
 			: expandObjectRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx);
 		let pi = 0;
@@ -186,12 +186,12 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
-		if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
+		if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
 		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
 		// passes can see the monomorphized binding type. Same reason as the iterator
 		// path above — without this, generic for..of bindings degrade to `void*` in
 		// generated C and break DRC hook resolution.
-		if (elemArrType !== null && elemArrType.typeReturn !== null) {
+		if (elemArrType != null && elemArrType.typeReturn != null) {
 			itemDecl.nodeType = elemArrType.typeReturn;
 			itemAccess.nodeType = elemArrType.typeReturn;
 		}
@@ -220,13 +220,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 // Clone a simple expression node (Identifier or MemberExpr) for reuse in lowered code.
 // Avoids sharing a single AST node across multiple parents.
 function cloneExpr(node: Node, loc: SourceLocation): Node {
-	if (node.kind === NodeKind.Identifier) {
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		const clone = makeTypedIdent(d.name, node.nodeType, loc);
 		clone.resolvedSym = node.resolvedSym;
 		return clone;
 	}
-	if (node.kind === NodeKind.MemberExpr) {
+	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
 		const clone = makeMember(cloneExpr(d.object, loc), d.property, loc);
 		clone.nodeType = node.nodeType;
@@ -241,12 +241,12 @@ function cloneExpr(node: Node, loc: SourceLocation): Node {
 
 
 // ===== Tests =====
-test "for-of becomes block" { assert firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt; }
+test "for-of becomes block" { assert firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) == NodeKind.BlockStmt; }
 
-test "regular for unchanged" { assert firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt; }
+test "regular for unchanged" { assert firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) == NodeKind.ForStmt; }
 
-test "for-of preserves surrounding stmts" { assert stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3; }
+test "for-of preserves surrounding stmts" { assert stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) == 3; }
 
-test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) === NodeKind.BlockStmt; }
+test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) == NodeKind.BlockStmt; }
 
-test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) === 3; }
+test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) == 3; }
