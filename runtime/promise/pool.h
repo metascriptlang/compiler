@@ -69,7 +69,9 @@ bool msPoolHelpOne(void);
 /* busyCount signaling for wait paths. Workers decrement on entering wait
  * (msAwaitSlotWait, msWaitForReady) so shouldSend sees available capacity.
  * Re-increment when exiting the wait loop. */
-void msPoolBusyDec(void);
+/* Returns whether it decremented — the decrement saturates at 0, so re-increment
+ * ONLY when it did, or the counter drifts up and strands msDrainUntilIdle. */
+bool msPoolBusyDec(void);
 void msPoolBusyInc(void);
 int32_t msPoolBusyPeek(void);
 

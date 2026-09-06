@@ -176,43 +176,65 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		return;
 	}
 
-	/* Phase 8: Help-first scheduling — before parking on the condvar, try
+	/* Dual-path wait, same split as msWaitFor / msAwaitSlotWait (dispatchFull.c,
+	 * awaitGroup.h): a pool worker helps and parks on the group condvar; the
+	 * LOOP thread must keep pumping its event loop while it waits. Helping
+	 * alone is not enough - a spawn child can be blocked on something only the
+	 * loop can complete (a timer armed by sleepAsync, a cross-thread
+	 * completion posted to the loop's port), and nobody else will ever run it
+	 * while the loop thread waits here. Proven 2026-09-05 by corpus 422.
+	 *
+	 * Re-increment ONLY if the decrement took - see msPoolBusyDec (pool.c):
+	 * the count saturates at 0 and an unconditional Inc strands the exit drain. */
+	bool worker = msIsPoolWorker;
+	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	if (!worker) {
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			if (msPoolHelpOne()) continue;
+			/* Same 5ms active-wait cadence as msWaitFor (MS_ACTIVE_WAIT_MS) -
+			 * bounded slice so the deadline variant re-checks on time. */
+			msRunOnce(5);
+		}
+	} else {
+	/* Phase 8: Help-first scheduling - before parking on the condvar, try
 	 * to dequeue and execute tasks from the global pool queue inline. This
 	 * prevents deadlock when all pool workers are blocked in await groups
 	 * while their child tasks sit in the global queue.
 	 *
 	 * Lock ordering: we never hold both group mutex and pool mutex at once.
-	 * Drop group lock → msPoolHelpOne (acquires/releases pool lock internally)
-	 * → re-acquire group lock. */
+	 * Drop group lock, msPoolHelpOne (acquires/releases pool lock internally),
+	 * re-acquire group lock. */
 #ifdef _WIN32
-	EnterCriticalSection(&g->cs);
-	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		LeaveCriticalSection(&g->cs);
-		if (msPoolHelpOne()) {
-			EnterCriticalSection(&g->cs);
-			continue;
-		}
 		EnterCriticalSection(&g->cs);
-		if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			LeaveCriticalSection(&g->cs);
+			if (msPoolHelpOne()) {
+				EnterCriticalSection(&g->cs);
+				continue;
+			}
+			EnterCriticalSection(&g->cs);
+			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+				SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
+			}
 		}
-	}
-	LeaveCriticalSection(&g->cs);
+		LeaveCriticalSection(&g->cs);
 #else
-	pthread_mutex_lock(&g->mutex);
-	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		pthread_mutex_unlock(&g->mutex);
-		if (msPoolHelpOne()) {
-			pthread_mutex_lock(&g->mutex);
-			continue;
-		}
 		pthread_mutex_lock(&g->mutex);
-		if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			pthread_cond_wait(&g->cv, &g->mutex);
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			pthread_mutex_unlock(&g->mutex);
+			if (msPoolHelpOne()) {
+				pthread_mutex_lock(&g->mutex);
+				continue;
+			}
+			pthread_mutex_lock(&g->mutex);
+			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+				pthread_cond_wait(&g->cv, &g->mutex);
+			}
 		}
-	}
-	pthread_mutex_unlock(&g->mutex);
+		pthread_mutex_unlock(&g->mutex);
 #endif
+	}
+	if (dec) msPoolBusyInc();  /* back to own work */
 }
 
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
@@ -224,64 +246,87 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 		return;
 	}
 
+	/* Same dual-path split as msAwaitGroupBlocking above (see the comment
+	 * there): loop thread pumps, worker parks on the group condvar. */
+	bool worker = msIsPoolWorker;
+	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	if (!worker) {
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			/* Deadline BEFORE help: msPoolHelpOne executes a whole child
+			 * inline, and a deadline must not be pushed past that. Measured
+			 * 2026-09-05 (corpus 422): a 300ms task under a 60ms deadline
+			 * returned its value instead of throwing whenever help won the
+			 * race and ran the child itself. */
+			if (msMonoTimeMs() >= deadlineMs) {
+				g->timedOut = true;
+				atomic_store_explicit(&g->cancelled, true, memory_order_release);
+				break;
+			}
+			if (msPoolHelpOne()) continue;
+			int64_t remain = deadlineMs - msMonoTimeMs();
+			msRunOnce(remain > 5 ? 5 : (int)remain);
+		}
+	} else {
 	/* Phase 8: same help-first pattern as msAwaitGroupBlocking, with
-	 * deadline check after each steal attempt. */
+	 * deadline check at the top of every iteration (see the non-worker arm
+	 * for why the check must precede help). */
 #ifdef _WIN32
-	EnterCriticalSection(&g->cs);
-	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		LeaveCriticalSection(&g->cs);
-		if (msPoolHelpOne()) {
-			EnterCriticalSection(&g->cs);
-			continue;
-		}
 		EnterCriticalSection(&g->cs);
-		if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
-		int64_t now = msMonoTimeMs();
-		if (now >= deadlineMs) {
-			g->timedOut = true;
-			atomic_store_explicit(&g->cancelled, true, memory_order_release);
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			if (msMonoTimeMs() >= deadlineMs) {
+				g->timedOut = true;
+				atomic_store_explicit(&g->cancelled, true, memory_order_release);
+				break;
+			}
 			LeaveCriticalSection(&g->cs);
-			return;
+			if (msPoolHelpOne()) {
+				EnterCriticalSection(&g->cs);
+				continue;
+			}
+			EnterCriticalSection(&g->cs);
+			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
+			int64_t remainMs = deadlineMs - msMonoTimeMs();
+			/* Clamp: a negative remainder cast to DWORD would sleep ~49 days. */
+			SleepConditionVariableCS(&g->cv, &g->cs, remainMs > 0 ? (DWORD)remainMs : 0);
 		}
-		DWORD remainMs = (DWORD)(deadlineMs - now);
-		SleepConditionVariableCS(&g->cv, &g->cs, remainMs);
-	}
-	LeaveCriticalSection(&g->cs);
+		LeaveCriticalSection(&g->cs);
 #else
-	pthread_mutex_lock(&g->mutex);
-	while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-		pthread_mutex_unlock(&g->mutex);
-		if (msPoolHelpOne()) {
-			pthread_mutex_lock(&g->mutex);
-			continue;
-		}
 		pthread_mutex_lock(&g->mutex);
-		if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
-		int64_t now = msMonoTimeMs();
-		if (now >= deadlineMs) {
-			g->timedOut = true;
-			atomic_store_explicit(&g->cancelled, true, memory_order_release);
+		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
+			if (msMonoTimeMs() >= deadlineMs) {
+				g->timedOut = true;
+				atomic_store_explicit(&g->cancelled, true, memory_order_release);
+				break;
+			}
 			pthread_mutex_unlock(&g->mutex);
-			return;
+			if (msPoolHelpOne()) {
+				pthread_mutex_lock(&g->mutex);
+				continue;
+			}
+			pthread_mutex_lock(&g->mutex);
+			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
+			/* Convert remaining time to absolute CLOCK_REALTIME timespec.
+			 * POSIX pthread_cond_timedwait requires CLOCK_REALTIME.
+			 * macOS lacks pthread_condattr_setclock for CLOCK_MONOTONIC.
+			 * Clock-jump risk: NTP adjustments can cause early/late wake -
+			 * mitigated by the while-loop recheck of deadline vs monotonic now. */
+			struct timespec ts;
+			clock_gettime(CLOCK_REALTIME, &ts);
+			int64_t remainMs = deadlineMs - msMonoTimeMs();
+			if (remainMs > 0) {
+				ts.tv_sec += remainMs / 1000;
+				ts.tv_nsec += (remainMs % 1000) * 1000000;
+				if (ts.tv_nsec >= 1000000000) {
+					ts.tv_sec += 1;
+					ts.tv_nsec -= 1000000000;
+				}
+				pthread_cond_timedwait(&g->cv, &g->mutex, &ts);
+			}
 		}
-		/* Convert remaining time to absolute CLOCK_REALTIME timespec.
-		 * POSIX pthread_cond_timedwait requires CLOCK_REALTIME.
-		 * macOS lacks pthread_condattr_setclock for CLOCK_MONOTONIC.
-		 * Clock-jump risk: NTP adjustments can cause early/late wake —
-		 * mitigated by the while-loop recheck of deadline vs monotonic now. */
-		struct timespec ts;
-		clock_gettime(CLOCK_REALTIME, &ts);
-		int64_t remainMs = deadlineMs - now;
-		ts.tv_sec += remainMs / 1000;
-		ts.tv_nsec += (remainMs % 1000) * 1000000;
-		if (ts.tv_nsec >= 1000000000) {
-			ts.tv_sec += 1;
-			ts.tv_nsec -= 1000000000;
-		}
-		pthread_cond_timedwait(&g->cv, &g->mutex, &ts);
-	}
-	pthread_mutex_unlock(&g->mutex);
+		pthread_mutex_unlock(&g->mutex);
 #endif
+	}
+	if (dec) msPoolBusyInc();  /* back to own work */
 }
 
 void msAwaitGroupCancel(msAwaitGroup* g) {

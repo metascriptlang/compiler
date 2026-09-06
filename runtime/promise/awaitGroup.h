@@ -297,7 +297,7 @@ static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
  * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
 
 extern bool msPoolHelpOne(void);  /* pool.h — avoid circular include */
-extern void msPoolBusyDec(void);
+extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
 typedef struct msAwaitSlot {
@@ -330,15 +330,33 @@ static inline void msAwaitSlotFail(void* sp, void* error) {
 /* msIsPoolWorker declared in pool.c — true only for pool worker threads */
 extern _Thread_local bool msIsPoolWorker;
 
+extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include */
+
+/* Dual-path wait, same split msWaitFor uses (dispatchFull.c): a pool worker
+ * helps and yields, but the LOOP thread must keep pumping its loop while it
+ * waits. Helping alone is not enough — a spawn child can be blocked on
+ * something only the loop can complete (a timer armed by sleepAsync, a
+ * cross-thread completion posted to the loop's port), and nobody else will
+ * ever run it while the loop thread spins here. Proven 2026-09-05 by corpus
+ * 421: `await spawn(() => waitFor(tick()))` where tick() sleeps deadlocked
+ * every run — the child's timer sat on the heap unserviced because main was
+ * parked in this loop.
+ *
+ * Timeout 0 (non-blocking poll), NOT msWaitFor's 5ms: this is the hot fused
+ * await-spawn path (corpus 411 runs 100k iterations of it), and a blocking
+ * poll here would add its timeout to every single await. */
 static inline void msAwaitSlotWait(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
-    bool isWorker = msIsPoolWorker;
-    if (isWorker) msPoolBusyDec();  /* signal: I'm available to help while waiting */
+    /* Re-increment ONLY if the decrement took: the count saturates at 0 and a
+     * nested help-first chain reaches it routinely, so an unconditional Inc
+     * adds a count nobody removed and strands the exit drain. */
+    bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
     while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
         if (msPoolHelpOne()) continue;
+        if (!msIsPoolWorker) msRunOnce(0);
         msYield();
     }
-    if (isWorker) msPoolBusyInc();  /* back to own work */
+    if (dec) msPoolBusyInc();  /* back to own work */
 }
 
 static inline void* msAwaitSlotResult(void* sp) {
