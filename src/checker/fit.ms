@@ -5,9 +5,9 @@
 import { CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType } from "./context";
+import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
+import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -298,6 +298,25 @@ export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: 
 	if (leftInt && rightInt && isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind != rightType.kind) {
 		addError(ctx, "bitwise operator '" + op + "' requires same integer size, got '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "'", node.location.line, node.location.column);
 	}
+}
+
+function relationalNeedsOperator(t: Type): boolean {
+	const s = skipModifier(t);
+	if (s.kind == TypeKind.Struct) return !isMaybeType(s);
+	return s.kind == TypeKind.Array || s.kind == TypeKind.SizedArray
+		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function;
+}
+
+export function checkRelationalOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
+	if (leftType == null || rightType == null) return;
+	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return;
+	if (!relationalNeedsOperator(leftType) && !relationalNeedsOperator(rightType)) return;
+	if (ctx.extensionRegistry != null
+		&& resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) != null) return;
+	addError(ctx, "operator '" + op + "' is not defined for '" + typeDisplayName(leftType)
+		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
+		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + "): boolean`",
+		node.location.line, node.location.column);
 }
 
 // ===== Integer Literal Coercion =====

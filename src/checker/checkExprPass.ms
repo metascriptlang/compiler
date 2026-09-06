@@ -28,7 +28,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, fitJoinedBranch, fitNode, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, unwrapAsUnknown, widenVariantToUnion, wrapInConv } from "./fit";
+import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, fitJoinedBranch, fitNode, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, unwrapAsUnknown, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -784,6 +784,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
+			if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
 			if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 			node.nodeType = inferBinaryOp(d.operator, effLeft!, effRight!);
 			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
