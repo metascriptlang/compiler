@@ -1343,6 +1343,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (id.name != "_") {
 					const derived = destrPositionalElemType(iterType, i);
 					if (derived != null) elem.nodeType = derived;
+					if (i < apd.patternDefaults.length && apd.patternDefaults[i] != null) checkExpr(ctx, apd.patternDefaults[i], derived);
 					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst));
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -1392,6 +1393,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				const id = p.propAlias.data as IdentifierData;
 				const derived = destrNamedFieldType(iterType, p.propKey);
 				if (derived != null) p.propAlias.nodeType = derived;
+				if (p.propDefault != null) checkExpr(ctx, p.propDefault, derived);
 				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst));
 				markInitialized(ctx.initTracker, id.name);
 			}
@@ -2755,6 +2757,11 @@ test "variable use" { assert checkOk("const x = 1; const y = x;"); }
 test "undefined variable" {
 	assert !checkOk("const x = y;");
 	assert checkErrors("const x = y;") == 1;
+}
+
+test "pattern default is checked" {
+	assert !checkOk("const p = { x: 1 }; const { x = zzz } = p;");
+	assert !checkOk("const a = [1]; const [q = zzz] = a;");
 }
 
 test "function scope" { assert checkOk("function foo(a, b) { const x = a; }"); }
