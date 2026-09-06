@@ -13,9 +13,12 @@ import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/field
 // ===== Clone Mode =====
 // Mono: monomorphization (copies nodeType, drops typeExpr — used by generic instantiation)
 // Check: dbTypeCheck (copies typeExpr for resolvePass, drops nodeType/resolvedSym so checker re-populates)
+// Keep: template repeated-param clone (keeps Sem/nodeType/resolvedSym — the already-checked
+//       argument expression is duplicated verbatim, no re-check)
 export enum CloneMode {
 	Mono,
 	Check,
+	Keep,
 }
 
 // Module-level mode: set by the public entry points (monoCloneNode, cloneNodeForCheck),
@@ -36,6 +39,14 @@ export function monoCloneNode(node: Node): Node {
 export function cloneNodeForCheck(node: Node): Node {
 	const saved = currentCloneMode;
 	currentCloneMode = CloneMode.Check;
+	const result = cloneNodeImpl(node);
+	currentCloneMode = saved;
+	return result;
+}
+
+export function cloneNodeKeepSem(node: Node): Node {
+	const saved = currentCloneMode;
+	currentCloneMode = CloneMode.Keep;
 	const result = cloneNodeImpl(node);
 	currentCloneMode = saved;
 	return result;
@@ -85,6 +96,17 @@ export function cloneNodeForCheck(node: Node): Node {
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
 function copyNodeMeta(src: Node, dst: Node): Node {
+	if (currentCloneMode == CloneMode.Keep) {
+		dst.flags = src.flags;
+		dst.nodeType = src.nodeType;
+		dst.resolvedSym = src.resolvedSym;
+		dst.typeArg = src.typeArg;
+		dst.typeExpr = src.typeExpr;
+		dst.typeExprs = src.typeExprs;
+		dst.paramLocations = src.paramLocations;
+		dst.comments = src.comments;
+		return dst;
+	}
 	// Clear Sem flag on mono clones so monoCheckInstantiatedBody can actually
 	// re-check the cloned body. Without this, the Sem flag from the original
 	// (set during the first check pass) makes checkExpr early-return and nested
@@ -93,7 +115,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// concrete instantiations. On-demand instantiation (callInstantiateGeneric)
 	// at checkExprPass.ms only fires during the re-check. This unlocks that.
 	dst.flags = src.flags & ~NodeFlag.Sem;
-	if (currentCloneMode === CloneMode.Mono) {
+	if (currentCloneMode == CloneMode.Mono) {
 		dst.nodeType = src.nodeType;
 		// Preserve explicit generic type args so they survive monomorphize cloning.
 		// Without this, `new HashMap<K, V>()` inside a cloned generic wrapper would
@@ -121,10 +143,10 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// Check mode for comptime/macro re-check, Mono mode for generic instantiation
 	// (else a cloned `E.M` in a generic body re-resolves by name and fails).
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
-	if (src.resolvedSym !== null && src.resolvedSym.symbolKind === SymbolKind.EnumMember) {
+	if (src.resolvedSym != null && src.resolvedSym.symbolKind == SymbolKind.EnumMember) {
 		dst.resolvedSym = src.resolvedSym;
 		dst.nodeType = src.nodeType;
-	} else if (src.resolvedSym !== null && (src.flags & NodeFlag.BoundSym) !== 0) {
+	} else if (src.resolvedSym != null && (src.flags & NodeFlag.BoundSym) != 0) {
 		// bindSym: pre-bound symbol travels by reference; checker re-derives nodeType.
 		dst.resolvedSym = src.resolvedSym;
 	}
@@ -132,22 +154,22 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 }
 
 const cloneXform: FieldXform = {
-	node: (n: Node | null): Node | null => { return n !== null ? cloneNodeImpl(n) : null; },
+	node: (n: Node | null): Node | null => { return n != null ? cloneNodeImpl(n) : null; },
 	nodes: (a: (Node | null)[] | null): (Node | null)[] => {
 		const out: (Node | null)[] = [];
-		if (a !== null) { for (const x of a) { out.push(x !== null ? cloneNodeImpl(x) : null); } }
+		if (a != null) { for (const x of a) { out.push(x != null ? cloneNodeImpl(x) : null); } }
 		return out;
 	},
 	nodesNested: (a: (Node | null)[][] | null): (Node | null)[][] => {
 		const out: (Node | null)[][] = [];
-		if (a !== null) { for (const row of a) { const r: (Node | null)[] = []; if (row !== null) { for (const x of row) { r.push(x !== null ? cloneNodeImpl(x) : null); } } out.push(r); } }
+		if (a != null) { for (const row of a) { const r: (Node | null)[] = []; if (row != null) { for (const x of row) { r.push(x != null ? cloneNodeImpl(x) : null); } } out.push(r); } }
 		return out;
 	},
 	typ: (t: Type | null): Type | null => { return t; },
 	str: (s: string): string => { return s; },
 	strArr: (a: string[] | null): string[] => {
 		const out: string[] = [];
-		if (a !== null) { for (const s of a) { out.push(s); } }
+		if (a != null) { for (const s of a) { out.push(s); } }
 		return out;
 	},
 	integer: (v: int64): int64 => { return v; },
@@ -156,18 +178,18 @@ const cloneXform: FieldXform = {
 	loc: (l: SourceLocation | null): SourceLocation | null => { return l; },
 	locs: (l: SourceLocation[] | null): SourceLocation[] => {
 		const out: SourceLocation[] = [];
-		if (l !== null) { for (const x of l) { out.push(x); } }
+		if (l != null) { for (const x of l) { out.push(x); } }
 		return out;
 	},
 	floats: (a: number[] | null): number[] => {
 		const out: number[] = [];
-		if (a !== null) { for (const v of a) { out.push(v); } }
+		if (a != null) { for (const v of a) { out.push(v); } }
 		return out;
 	},
 };
 
 function cloneNodeImpl(node: Node | null): Node {
-	if (node === null) return null as unknown as Node;
+	if (node == null) return null as unknown as Node;
 	const loc = node.location;
 	return copyNodeMeta(node, createNodeAt(node.kind, rebuildNodeData(node, cloneXform), makeLocRange(loc.line, loc.column, loc.endLine, loc.endColumn)));
 }
@@ -176,22 +198,22 @@ function cloneNodeImpl(node: Node | null): Node {
 // ===== Substitute — rewrite generic param names in string-form type annotations =====
 
 function monoIsAlphaNumOrUnderscore(ch: string): boolean {
-	if (ch === "_") return true;
-	if (ch === "a" || ch === "b" || ch === "c" || ch === "d" || ch === "e" || ch === "f" || ch === "g" || ch === "h" || ch === "i" || ch === "j" || ch === "k" || ch === "l" || ch === "m" || ch === "n" || ch === "o" || ch === "p" || ch === "q" || ch === "r" || ch === "s" || ch === "t" || ch === "u" || ch === "v" || ch === "w" || ch === "x" || ch === "y" || ch === "z") return true;
-	if (ch === "A" || ch === "B" || ch === "C" || ch === "D" || ch === "E" || ch === "F" || ch === "G" || ch === "H" || ch === "I" || ch === "J" || ch === "K" || ch === "L" || ch === "M" || ch === "N" || ch === "O" || ch === "P" || ch === "Q" || ch === "R" || ch === "S" || ch === "T" || ch === "U" || ch === "V" || ch === "W" || ch === "X" || ch === "Y" || ch === "Z") return true;
-	if (ch === "0" || ch === "1" || ch === "2" || ch === "3" || ch === "4" || ch === "5" || ch === "6" || ch === "7" || ch === "8" || ch === "9") return true;
+	if (ch == "_") return true;
+	if (ch == "a" || ch == "b" || ch == "c" || ch == "d" || ch == "e" || ch == "f" || ch == "g" || ch == "h" || ch == "i" || ch == "j" || ch == "k" || ch == "l" || ch == "m" || ch == "n" || ch == "o" || ch == "p" || ch == "q" || ch == "r" || ch == "s" || ch == "t" || ch == "u" || ch == "v" || ch == "w" || ch == "x" || ch == "y" || ch == "z") return true;
+	if (ch == "A" || ch == "B" || ch == "C" || ch == "D" || ch == "E" || ch == "F" || ch == "G" || ch == "H" || ch == "I" || ch == "J" || ch == "K" || ch == "L" || ch == "M" || ch == "N" || ch == "O" || ch == "P" || ch == "Q" || ch == "R" || ch == "S" || ch == "T" || ch == "U" || ch == "V" || ch == "W" || ch == "X" || ch == "Y" || ch == "Z") return true;
+	if (ch == "0" || ch == "1" || ch == "2" || ch == "3" || ch == "4" || ch == "5" || ch == "6" || ch == "7" || ch == "8" || ch == "9") return true;
 	return false;
 }
 
 export function monoSubstAnnotation(annotation: string, paramName: string, concreteTypeName: string): string {
-	if (annotation === "") return "";
-	if (annotation === paramName) return concreteTypeName;
+	if (annotation == "") return "";
+	if (annotation == paramName) return concreteTypeName;
 	let result = "";
 	let i = 0;
 	while (i < annotation.byteLength) {
 		let isMatch = true;
 		if (i + paramName.byteLength > annotation.byteLength) { isMatch = false; } else {
-			for (let pi = 0; pi < paramName.byteLength; pi += 1) { if (annotation.charAt(i + pi) !== paramName.charAt(pi)) { isMatch = false; } }
+			for (let pi = 0; pi < paramName.byteLength; pi += 1) { if (annotation.charAt(i + pi) != paramName.charAt(pi)) { isMatch = false; } }
 		}
 		if (isMatch) {
 			let prevOk = true;
@@ -209,7 +231,7 @@ export function monoSubstAnnotation(annotation: string, paramName: string, concr
 // Used by substituteAnnotations to replace generic params in type annotations.
 // NOT for C name mangling — use registry.ms:monoTypeKey for that.
 export function monoConcreteTypeName(t: Type | null): string {
-	if (t === null) return "unknown";
+	if (t == null) return "unknown";
 	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;
 	return match (t.kind) {
 		TypeKind.Number => "number",
@@ -230,7 +252,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 		TypeKind.Ref => {
 			const wrapper = refWrapperName(t);
 			const inner = monoConcreteTypeName(refSubstInner(t));
-			return wrapper === "" ? inner : `${wrapper}<${inner}>`;
+			return wrapper == "" ? inner : `${wrapper}<${inner}>`;
 		},
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
@@ -239,7 +261,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 			let name = t.typeName;
 			let i = 0;
 			while (i < t.typeChildren.length) {
-				name = name + (i === 0 ? "<" : ", ") + monoConcreteTypeName(t.typeChildren[i]);
+				name = name + (i == 0 ? "<" : ", ") + monoConcreteTypeName(t.typeChildren[i]);
 				i = i + 1;
 			}
 			return name + ">";
@@ -247,7 +269,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 		TypeKind.Union => {
 			// Named DU alias (Either, Result, user-declared union): use the name —
 			// it resolves back to the same Union via type-alias lookup.
-			if (t.typeName !== "") return t.typeName;
+			if (t.typeName != "") return t.typeName;
 			// Anonymous union: emit literal `A | B | C` so the substituted
 			// annotation roundtrips through `resolveAnnotation` back to a
 			// Union with the same children. The previous "Union" placeholder
@@ -260,7 +282,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 				lit = lit + monoConcreteTypeName(t.typeChildren[i]);
 				i = i + 1;
 			}
-			return lit !== "" ? lit : "unknown";
+			return lit != "" ? lit : "unknown";
 		},
 		TypeKind.Conditional => {
 			// `T extends U ? A : B` — typeChildren = [check, extends, true, false].
@@ -279,7 +301,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 			// "unknown" would erase the element types and drop per-element DRC cleanup.
 			let lit = "";
 			for (const child of t.typeChildren) {
-				if (lit !== "") lit = lit + ", ";
+				if (lit != "") lit = lit + ", ";
 				lit = lit + monoConcreteTypeName(child);
 			}
 			return "[" + lit + "]";
@@ -304,7 +326,7 @@ export function monoConcreteTypeName(t: Type | null): string {
 				sig = sig + paramName + ": " + monoConcreteTypeName(t.typeChildren[i]);
 				i = i + 1;
 			}
-			const retName = t.typeReturn !== null ? monoConcreteTypeName(t.typeReturn) : "void";
+			const retName = t.typeReturn != null ? monoConcreteTypeName(t.typeReturn) : "void";
 			return "(" + sig + ") => " + retName + ")";
 		},
 		TypeKind.Int8 => "int8",
@@ -337,15 +359,15 @@ test "clone: exhaustive per-kind payload roundtrip" {
 	ct.kind = TypeKind.Boolean;
 	ct.typeName = "bool";
 	const samples = pkSamples(null as unknown as Symbol, nt, ct);
-	assert samples.length === 91;
+	assert samples.length == 91;
 	for (let i = 0; i < samples.length; i += 1) {
-		assert (samples[i].kind as int32) === i;
+		assert (samples[i].kind as int32) == i;
 	}
 	for (let i = 0; i < samples.length; i += 1) {
 		const c = monoCloneNode(samples[i]);
 		const da = pkDumpNode(samples[i], false);
 		const db = pkDumpNode(c, false);
-		if (da !== db) {
+		if (da != db) {
 			console.log(`kind ${i} clone mismatch`);
 			console.log(`  orig: ${da.slice(0, 300)}`);
 			console.log(`  got : ${db.slice(0, 300)}`);
