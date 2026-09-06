@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -2176,6 +2176,36 @@ test "object rest" { assert programOk("const {a, ...rest} = obj;"); }
 test "array rest" { assert programOk("const [first, ...rest] = arr;"); }
 
 test "let destructure" { assert programOk("let {x, y} = point;"); }
+
+test "object destructure shorthand default" {
+	const dd = stmtAt("const {a = 1} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey === "a";
+	assert prop.propDefault !== null;
+}
+
+test "object destructure alias default" {
+	const dd = stmtAt("const {k: alias = 2} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey === "k";
+	assert prop.propDefault !== null;
+}
+
+test "object destructure without default" {
+	const dd = stmtAt("const {a} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propDefault === null;
+}
+
+test "array destructure default" {
+	const dd = stmtAt("const [x = 3] = arr;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ArrayPatternData;
+	assert pat.patternDefaults.length === 1;
+	assert pat.patternDefaults[0] !== null;
+}
 
 test "func destr param" { assert programOk("function f({x, y}) { return x; }"); }
 
