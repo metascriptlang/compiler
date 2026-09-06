@@ -1626,6 +1626,26 @@ export function destrNamedFieldType(srcType: Type | null, fieldName: string): Ty
 	return null;
 }
 
+export function destrHasRuntimeLength(srcType: Type | null): boolean {
+	let bt = srcType;
+	if (bt == null) return false;
+	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
+	return bt.kind == TypeKind.Array || bt.kind == TypeKind.SizedArray;
+}
+
+export function destrDefaultedType(derived: Type | null): Type | null {
+	if (derived == null) return null;
+	if (isMaybeType(derived)) return unwrapMaybeType(derived);
+	if (derived.kind != TypeKind.Union || derived.typeChildren == null) return derived;
+	const kept: Type[] = [];
+	for (const m of derived.typeChildren) {
+		if (m != null && m.kind != TypeKind.Null) kept.push(m);
+	}
+	if (kept.length == 0 || kept.length == derived.typeChildren.length) return derived;
+	if (kept.length == 1) return kept[0];
+	return createUnion(kept);
+}
+
 export function destrRestElemType(srcType: Type | null): Type | null {
 	let bt = srcType;
 	if (bt == null) return null;
@@ -3601,4 +3621,17 @@ test "refWrapperName spells the annotation each Ref class re-resolves from" {
 	assert refWrapperName(createLocked(int32Type())) == "Locked";
 	assert refWrapperName(createArc(int32Type())) == "Arc";
 	assert refWrapperName(createRef(int32Type())) == "";
+}
+
+test "only a length-carrying source can be short" {
+	assert destrHasRuntimeLength(createArray(int32Type()));
+	assert !destrHasRuntimeLength(int32Type());
+	assert !destrHasRuntimeLength(null);
+}
+
+test "a defaulted binding sheds null" {
+	assert destrDefaultedType(createMaybeType(int32Type())) == int32Type();
+	assert destrDefaultedType(createUnion([stringType(), nullType()])) == stringType();
+	assert destrDefaultedType(int32Type()) == int32Type();
+	assert destrDefaultedType(null) == null;
 }
