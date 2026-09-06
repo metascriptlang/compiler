@@ -74,7 +74,11 @@ export function `<`(this a: string, b: string): boolean {
 	@emit(`return ${a} < ${b};`);
 	unreachable;
 }
-// Derived operators (>, <=, >=, !=) come from the system templates.
+export function `<=`(this a: string, b: string): boolean {
+	@emit(`return ${a} <= ${b};`);
+	unreachable;
+}
+// Derived operators (!=, >, >=) come from the system templates.
 
 export function msStringCompare(a: string, b: string): int32 {
 	@emit(`return ${a} < ${b} ? -1 : (${a} > ${b} ? 1 : 0);`);

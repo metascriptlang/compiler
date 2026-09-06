@@ -1036,7 +1036,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [
-		"msStringEquals", "msStringCompareLt",            // string == / <
+		"msStringEquals", "msStringCompareLt", "msStringCompareLe", // string == / < / <=
 		"msStringCharAt", "msStringSlice",                // StrCharAt / StrSlice
 		"&msGenericArrayPush",                            // ArrayPush
 		"&msGenericArraySetLen",                          // ArraySetLen

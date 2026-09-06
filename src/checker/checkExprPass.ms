@@ -758,7 +758,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				return;
 			}
 			const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
-				: ((d.operator == ">" || d.operator == "<=" || d.operator == ">=") ? d.operator : "");
+				: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
 			if (tplOpName != "" && effLeft != null && effRight != null
 				&& !isMaybeType(effLeft) && !isMaybeType(effRight)
 				&& effLeft.kind != TypeKind.Null && effRight.kind != TypeKind.Null

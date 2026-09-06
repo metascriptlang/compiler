@@ -92,9 +92,10 @@ export class AbortController {
 }
 
 // ===== Derived comparison operators (standard library parity) =====
-// Given == and < for any type, derive !=, >, <=, >= at zero cost.
+// Given ==, < and <= for a type, derive !=, > and >= at zero cost.
+// `<=` stays a per-type base operator: deriving it as !(b < a) only holds for a
+// total order, and silently inverts the answer for partial ones (NaN, subset).
 export template `!=`<T>(a: T, b: T): boolean { return !(a == b); }
 export template `>`<T>(a: T, b: T): boolean { return b < a; }
-export template `<=`<T>(a: T, b: T): boolean { return !(b < a); }
-export template `>=`<T>(a: T, b: T): boolean { return !(a < b); }
+export template `>=`<T>(a: T, b: T): boolean { return b <= a; }
 
