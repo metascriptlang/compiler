@@ -1342,6 +1342,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	const bracketToken = current(state);
 	advance(state); // consume '['
 	const elements: Node[] = [];
+	const defaults: Node[] = [];
 	let hasRest = false;
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBracket) {
 		// Rest element: ...x
@@ -1368,10 +1369,12 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			const elemToken = current(state);
 			advance(state);
 			elements.push(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken));
-			// Skip default value: x = defaultVal
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
-				skipDefaultValue(state);
+				const dIdx = elements.length - 1;
+				while (defaults.length < dIdx) { defaults.push(null); }
+				const dExpr = try callExprParser(state);
+				defaults.push(dExpr);
 			}
 		} else if (current(state).kind === TokenKind.Comma) {
 			// Elision: [,, x] — push a placeholder
@@ -1389,7 +1392,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.ArrayPattern, {
 		patternElements: elements,
 		hasRestElement: hasRest,
-		patternDefaults: [],
+		patternDefaults: defaults,
 	}, bracketToken));
 }
 
@@ -1434,28 +1437,29 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
 					advance(state);
+					let aliasDefault: Node | null = null;
+					if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+						advance(state);
+						aliasDefault = try callExprParser(state);
+					}
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
-						propDefault: null,
+						propDefault: aliasDefault,
 					}, keyToken));
-					if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
-						advance(state);
-						skipDefaultValue(state);
-					}
 				}
 			} else {
 				// Shorthand: { key } — alias is same as key
+				let shorthandDefault: Node | null = null;
+				if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+					advance(state);
+					shorthandDefault = try callExprParser(state);
+				}
 				props.push(createNode(NodeKind.ObjectPatternProp, {
 					propKey: keyToken.value,
 					propAlias: createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken),
-					propDefault: null,
+					propDefault: shorthandDefault,
 				}, keyToken));
-				// Skip default value: { x = 5 }
-				if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
-					advance(state);
-					skipDefaultValue(state);
-				}
 			}
 		} else {
 			break;
