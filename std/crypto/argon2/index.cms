@@ -43,7 +43,7 @@ export function argon2Hash(password: string, salt: string, timeCost: int32 = 3, 
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", "salt must be at least 8 bytes"));
 	}
 	const result = msCryptoArgon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2Hash", "Argon2id hashing failed"));
 	}
 	return Result.ok(result);
@@ -66,7 +66,7 @@ export function argon2HashRaw(password: string, salt: string, timeCost: int32 = 
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", "salt must be at least 8 bytes"));
 	}
 	const result = msCryptoArgon2HashRaw(password, salt, timeCost, memoryCost, parallelism, hashLen);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2HashRaw", "Argon2id raw hashing failed"));
 	}
 	return Result.ok(result);

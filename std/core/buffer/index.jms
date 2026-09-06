@@ -47,8 +47,8 @@ function b64Val(c: int32): int32 {
 	if (c >= 65 && c <= 90) return c - 65;
 	if (c >= 97 && c <= 122) return c - 71;
 	if (c >= 48 && c <= 57) return c + 4;
-	if (c === 43) return 62;
-	if (c === 47) return 63;
+	if (c == 43) return 62;
+	if (c == 47) return 63;
 	return -1;
 }
 
@@ -117,7 +117,7 @@ function decodeUtf8Range(b: Buffer, start: number, end: number): string {
 }
 
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (encoding === "hex") {
+	if (encoding == "hex") {
 		let n = 0;
 		let i = 0;
 		while (i + 1 < value.length) {
@@ -135,19 +135,19 @@ export function fromString(this typeof Buffer, value: string, encoding: string):
 		}
 		return out;
 	}
-	if (encoding === "base64") {
+	if (encoding == "base64") {
 		let count = 0;
 		let i = 0;
 		while (i < value.length) {
 			const c = value.charCodeAt(i);
-			if (c === 61 || b64Val(c) < 0) break;
+			if (c == 61 || b64Val(c) < 0) break;
 			count += 1;
 			i += 1;
 		}
 		const rem = count % 4;
 		let n = ((count / 4) | 0) * 3;
-		if (rem === 2) n += 1;
-		if (rem === 3) n += 2;
+		if (rem == 2) n += 1;
+		if (rem == 3) n += 2;
 		const out = Buffer.alloc(n);
 		let acc = 0;
 		let bits = 0;
@@ -179,10 +179,10 @@ export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
 	while (i < n) {
 		const x = a.byteAt(i);
 		const y = b.byteAt(i);
-		if (x !== y) return x < y ? -1 : 1;
+		if (x != y) return x < y ? -1 : 1;
 		i += 1;
 	}
-	if (a.length === b.length) return 0;
+	if (a.length == b.length) return 0;
 	return a.length < b.length ? -1 : 1;
 }
 
@@ -214,20 +214,20 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 		let need = 0;
 		let min = 128;
 		if (b0 >= 194 && b0 <= 223) { need = 1; }
-		else if (b0 === 224) { need = 2; min = 160; }
+		else if (b0 == 224) { need = 2; min = 160; }
 		else if (b0 >= 225 && b0 <= 236) { need = 2; }
-		else if (b0 === 237) { need = 2; }
+		else if (b0 == 237) { need = 2; }
 		else if (b0 >= 238 && b0 <= 239) { need = 2; }
-		else if (b0 === 240) { need = 3; min = 144; }
+		else if (b0 == 240) { need = 3; min = 144; }
 		else if (b0 >= 241 && b0 <= 243) { need = 3; }
-		else if (b0 === 244) { need = 3; }
+		else if (b0 == 244) { need = 3; }
 		else return false;
 		if (i + need >= n) return false;
 		let cp = b0 & (31 >> (need - 1));
 		let k = 1;
 		while (k <= need) {
 			const bk = value.byteAt(i + k);
-			if ((bk & 192) !== 128) return false;
+			if ((bk & 192) != 128) return false;
 			cp = (cp << 6) | (bk & 63);
 			k += 1;
 		}
@@ -238,11 +238,11 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 }
 
 export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
-	if (encoding === "utf8" || encoding === "utf-8" ||
-			encoding === "hex" || encoding === "ascii" ||
-			encoding === "latin1" || encoding === "binary" ||
-			encoding === "base64" || encoding === "base64url" ||
-			encoding === "utf16le" || encoding === "ucs2" || encoding === "ucs-2") {
+	if (encoding == "utf8" || encoding == "utf-8" ||
+			encoding == "hex" || encoding == "ascii" ||
+			encoding == "latin1" || encoding == "binary" ||
+			encoding == "base64" || encoding == "base64url" ||
+			encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") {
 		return true;
 	}
 	return false;
@@ -289,10 +289,10 @@ export function toBase64(this b: Buffer): string {
 		i += 3;
 	}
 	const rem = n - i;
-	if (rem === 1) {
+	if (rem == 1) {
 		const v = b.byteAt(i) << 16;
 		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
-	} else if (rem === 2) {
+	} else if (rem == 2) {
 		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
 		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
 			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
@@ -301,14 +301,14 @@ export function toBase64(this b: Buffer): string {
 }
 
 export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
-	if (encoding === "hex") {
+	if (encoding == "hex") {
 		const h = b.toHex();
 		return h.slice(start * 2, end * 2);
 	}
-	if (encoding === "base64") {
+	if (encoding == "base64") {
 		return toBase64Range(b, start, end);
 	}
-	if (encoding === "binary" || encoding === "latin1" || encoding === "ascii") {
+	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
 		let out = "";
 		let i = start;
 		while (i < end) {
@@ -331,10 +331,10 @@ function toBase64Range(b: Buffer, start: number, end: number): string {
 		i += 3;
 	}
 	const rem = n % 3;
-	if (rem === 1) {
+	if (rem == 1) {
 		const v = b.byteAt(i) << 16;
 		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) + "==";
-	} else if (rem === 2) {
+	} else if (rem == 2) {
 		const v = (b.byteAt(i) << 16) | (b.byteAt(i + 1) << 8);
 		out = out + B64_ALPHABET.charAt((v >> 18) & 63) + B64_ALPHABET.charAt((v >> 12) & 63) +
 			B64_ALPHABET.charAt((v >> 6) & 63) + "=";
@@ -365,12 +365,12 @@ export extern function lastIndexOf(this b: Buffer, value: number, byteOffset: nu
 export extern function includes(this b: Buffer, value: number, byteOffset: number): boolean from "#.includes(#, #)";
 function bufFind(hay: Buffer, needle: Buffer, from: number, reverse: boolean): number {
 	const n = needle.length;
-	if (n === 0) return from;
+	if (n == 0) return from;
 	let i = from;
 	while (i <= hay.length - n) {
 		let k = 0;
-		while (k < n && hay.byteAt(i + k) === needle.byteAt(k)) { k += 1; }
-		if (k === n) return i;
+		while (k < n && hay.byteAt(i + k) == needle.byteAt(k)) { k += 1; }
+		if (k == n) return i;
 		if (reverse) { i -= 1; } else { i += 1; }
 	}
 	return -1;
@@ -382,7 +382,7 @@ export function lastIndexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: nu
 	return bufFind(b, needle, byteOffset < 0 ? b.length : byteOffset, true);
 }
 export function includesBuffer(this b: Buffer, needle: Buffer, byteOffset: number): boolean {
-	return indexOfBuffer(b, needle, byteOffset) !== -1;
+	return indexOfBuffer(b, needle, byteOffset) != -1;
 }
 export extern function bufReverse(this b: Buffer): void from "#.reverse()";
 
@@ -391,7 +391,7 @@ export extern function swap32(this b: Buffer): void from "(function (u) { for (v
 export extern function swap64(this b: Buffer): void from "(function (u) { for (var i = 0; i + 7 < u.length; i += 8) { for (var k = 0; k < 4; k++) { var t = u[i + k]; u[i + k] = u[i + 7 - k]; u[i + 7 - k] = t; } } })(#)";
 
 export function write(this b: Buffer, str: string, offset: number, length: number, encoding: string): number {
-	if (encoding === "binary" || encoding === "latin1" || encoding === "ascii") {
+	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
 		let i = 0;
 		while (i < str.length && i < length) {
 			b.set(offset + i, str.charCodeAt(i) & 255);
@@ -399,7 +399,7 @@ export function write(this b: Buffer, str: string, offset: number, length: numbe
 		}
 		return i;
 	}
-	if (encoding === "hex") {
+	if (encoding == "hex") {
 		let i = 0;
 		while (i + 1 < str.length && i / 2 < length && hexVal(str.charCodeAt(i)) >= 0 && hexVal(str.charCodeAt(i + 1)) >= 0) {
 			b.set(offset + i / 2, hexVal(str.charCodeAt(i)) * 16 + hexVal(str.charCodeAt(i + 1)));
@@ -419,7 +419,7 @@ export function write(this b: Buffer, str: string, offset: number, length: numbe
 
 export function fillString(this b: Buffer, value: string, start: number, end: number, encoding: string): void {
 	const pat = Buffer.fromString(value, encoding);
-	if (pat.length === 0) return;
+	if (pat.length == 0) return;
 	let i = start;
 	let k = 0;
 	while (i < end) {
@@ -430,7 +430,7 @@ export function fillString(this b: Buffer, value: string, start: number, end: nu
 }
 
 export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: number): void {
-	if (value.length === 0) return;
+	if (value.length == 0) return;
 	let i = start;
 	let k = 0;
 	while (i < end) {

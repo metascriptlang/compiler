@@ -115,12 +115,12 @@ export function targetFromTriple(triple: TargetTriple): TargetInfo {
 
 // Parse a triple name string to a TargetTriple enum. Returns null-ish on unknown.
 export function parseTripleName(name: string): TargetTriple {
-	if (name === "x86_64-linux-gnu" || name === "linux-x86_64") return TargetTriple.LinuxX86_64;
-	if (name === "aarch64-linux-gnu" || name === "linux-aarch64") return TargetTriple.LinuxAarch64;
-	if (name === "x86_64-apple-darwin" || name === "macos-x86_64") return TargetTriple.MacosX86_64;
-	if (name === "arm64-apple-darwin" || name === "macos-aarch64") return TargetTriple.MacosAarch64;
-	if (name === "x86_64-pc-windows-msvc" || name === "windows-x64") return TargetTriple.WindowsX64;
-	if (name === "wasm32-unknown-unknown" || name === "wasm32") return TargetTriple.Wasm32;
+	if (name == "x86_64-linux-gnu" || name == "linux-x86_64") return TargetTriple.LinuxX86_64;
+	if (name == "aarch64-linux-gnu" || name == "linux-aarch64") return TargetTriple.LinuxAarch64;
+	if (name == "x86_64-apple-darwin" || name == "macos-x86_64") return TargetTriple.MacosX86_64;
+	if (name == "arm64-apple-darwin" || name == "macos-aarch64") return TargetTriple.MacosAarch64;
+	if (name == "x86_64-pc-windows-msvc" || name == "windows-x64") return TargetTriple.WindowsX64;
+	if (name == "wasm32-unknown-unknown" || name == "wasm32") return TargetTriple.Wasm32;
 	return TargetTriple.MacosAarch64; // fallback to host
 }
 
@@ -176,48 +176,48 @@ export function predefinedMacros(t: TargetInfo): MacroDef[] {
 
 test "default host target is populated" {
 	const t = defaultHostTarget();
-	assert t.pointerSize === 8;
-	assert t.intSize === 4;
+	assert t.pointerSize == 8;
+	assert t.intSize == 4;
 }
 
 test "windows x64 uses LLP64 long size" {
 	const t = targetWindowsX64();
-	assert t.longSize === 4;
-	assert t.longLongSize === 8;
+	assert t.longSize == 4;
+	assert t.longLongSize == 8;
 }
 
 test "linux x86_64 predefined includes __LP64__" {
 	const macros = predefinedMacros(targetLinuxX86_64());
 	let found = false;
 	for (const md of macros) {
-		if (md.name === "__LP64__") found = true;
+		if (md.name == "__LP64__") found = true;
 	}
 	assert found;
 }
 
 test "linux aarch64 char is unsigned" {
 	const t = targetLinuxAarch64();
-	assert t.charSigned === false;
-	assert t.longSize === 8;
+	assert t.charSigned == false;
+	assert t.longSize == 8;
 }
 
 test "macos x86_64 long double is 16" {
 	const t = targetMacosX86_64();
-	assert t.longDoubleSize === 16;
+	assert t.longDoubleSize == 16;
 }
 
 test "targetFromTriple round-trips" {
 	const t = targetFromTriple(TargetTriple.WindowsX64);
-	assert t.longSize === 4;
+	assert t.longSize == 4;
 }
 
 test "parseTripleName linux" {
-	assert parseTripleName("linux-x86_64") === TargetTriple.LinuxX86_64;
-	assert parseTripleName("x86_64-linux-gnu") === TargetTriple.LinuxX86_64;
+	assert parseTripleName("linux-x86_64") == TargetTriple.LinuxX86_64;
+	assert parseTripleName("x86_64-linux-gnu") == TargetTriple.LinuxX86_64;
 }
 
 test "parseTripleName wasm" {
-	assert parseTripleName("wasm32") === TargetTriple.Wasm32;
+	assert parseTripleName("wasm32") == TargetTriple.Wasm32;
 }
 
 test "all 6 triples have predefined macros" {

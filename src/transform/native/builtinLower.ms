@@ -31,25 +31,25 @@ import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLowe
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 	resetStructDumpFns();
 	const result = walkNode(program, (node: Node): Node => {
-		if (node.kind === NodeKind.CallExpr) {
+		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
 		// new Promise(executor) → msPromiseNew(executor)
-		if (node.kind === NodeKind.NewExpr) {
+		if (node.kind == NodeKind.NewExpr) {
 			return lowerNewPromise(node);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
-		if (node.kind === NodeKind.BinaryExpr) {
+		if (node.kind == NodeKind.BinaryExpr) {
 			return lowerLengthAssign(node, ctx);
 		}
 		// E[v] → E_toString(v) (enum reverse index)
-		if (node.kind === NodeKind.ArrayAccess) {
+		if (node.kind == NodeKind.ArrayAccess) {
 			return lowerEnumReverseIndex(node, ctx);
 		}
 		return node;
 	});
 	const dumpFns = takeStructDumpFns();
-	if (dumpFns.length > 0 && result.kind === NodeKind.Program) {
+	if (dumpFns.length > 0 && result.kind == NodeKind.Program) {
 		const pd = result.data as ProgramData;
 		for (const decl of dumpFns) { pd.programStmts.push(decl); }
 	}
@@ -63,29 +63,29 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 
 	const sym = node.resolvedSym;
-	if (sym !== null) {
+	if (sym != null) {
 		// @builtin("Name") → inline expansion
-		if (sym.builtinKind !== "") {
+		if (sym.builtinKind != "") {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
 	// Check callee resolvedSym for builtins the call node missed
-	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
+	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind != "") {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-	if (cd.callee.kind === NodeKind.MemberExpr) {
+	if (cd.callee.kind == NodeKind.MemberExpr) {
 		const me2 = cd.callee.data as MemberExprData;
-		if (me2.property === "toString") {
-			if (me2.object.nodeType !== null) {
+		if (me2.property == "toString") {
+			if (me2.object.nodeType != null) {
 				return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
 			}
 			// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
-			if (me2.object.kind === NodeKind.NumberLiteral) {
+			if (me2.object.kind == NodeKind.NumberLiteral) {
 				const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
 				call.nodeType = stringType();
 				return call;
 			}
-			if (me2.object.kind === NodeKind.BooleanLiteral) {
+			if (me2.object.kind == NodeKind.BooleanLiteral) {
 				const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
 				call.nodeType = stringType();
 				return call;
@@ -104,15 +104,15 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 
 function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 	const d = node.data as ArrayAccessData;
-	if (d.array === null || d.index === null || d.array.kind !== NodeKind.Identifier) return node;
+	if (d.array == null || d.index == null || d.array.kind != NodeKind.Identifier) return node;
 	const sym = d.array.resolvedSym;
-	if (sym === null || sym.symbolKind !== SymbolKind.Enum) return node;
+	if (sym == null || sym.symbolKind != SymbolKind.Enum) return node;
 	const t = sym.symbolType;
-	if (t === null || t.kind !== TypeKind.Enum || t.typeName === "") return node;
-	if (ctx.checkerCtx !== null) requestEnumToString(ctx.checkerCtx, t);
+	if (t == null || t.kind != TypeKind.Enum || t.typeName == "") return node;
+	if (ctx.checkerCtx != null) requestEnumToString(ctx.checkerCtx, t);
 	const loc = node.location;
 	let idx = d.index;
-	if (idx.nodeType !== null && idx.nodeType.kind === TypeKind.Number) {
+	if (idx.nodeType != null && idx.nodeType.kind == TypeKind.Number) {
 		idx = makeHiddenStdConv(idx, createPrimitive(TypeKind.Int32), loc);
 	}
 	const call = makeCall(makeIdent(enumToStringNameFor(t), loc), [idx], loc);
@@ -128,7 +128,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	// bigint is a primitive with no user-extensible toString, and the synthetic
 	// calls that interpolation and concat build carry no symbol for
 	// extensionMethodLower to route — so it resolves ahead of the extension probe.
-	if (objType.kind === TypeKind.BigInt) {
+	if (objType.kind == TypeKind.BigInt) {
 		if (ctx.jsBackend) return callNode;
 		const cdb = callNode.data as CallExprData;
 		const radixArg = cdb.arguments.length > 0 ? cdb.arguments[0] : makeNumber(10, loc);
@@ -137,11 +137,11 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		return bcall;
 	}
 	// Priority 1: user-defined toString extension → leave for extensionMethodLower
-	if (ctx.checkerCtx !== null) {
+	if (ctx.checkerCtx != null) {
 		const tn = typeNameOf(objType);
-		if (tn !== "") {
+		if (tn != "") {
 			const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
-			if (ext !== null) return callNode;
+			if (ext != null) return callNode;
 		}
 	}
 	// Priority 2: compiler defaults
@@ -153,27 +153,27 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
 		let fn = "msNumberToStringRadix";
-		if (objType.kind === TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
-		else if (objType.kind === TypeKind.Int64) { fn = "msIntToStringRadix"; }
+		if (objType.kind == TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
+		else if (objType.kind == TypeKind.Int64) { fn = "msIntToStringRadix"; }
 		const call = makeCall(makeIdent(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// Boolean → msBoolToString
-	if (tk === TypeKind.Boolean) {
+	if (tk == TypeKind.Boolean) {
 		const call = makeCall(makeIdent("msBoolToString", loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// Enum → EnumName_toString
-	if (tk === TypeKind.Enum && objType.typeName !== "") {
-		if (ctx.checkerCtx !== null) requestEnumToString(ctx.checkerCtx, objType);
+	if (tk == TypeKind.Enum && objType.typeName != "") {
+		if (ctx.checkerCtx != null) requestEnumToString(ctx.checkerCtx, objType);
 		const call = makeCall(makeIdent(enumToStringNameFor(objType), loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// String → identity (return self)
-	if (tk === TypeKind.String) {
+	if (tk == TypeKind.String) {
 		return obj;
 	}
 	// Value-carried nullable → stringify the payload, never the carrier. `.present`
@@ -193,29 +193,29 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
 	const inner = unwrapRef(objType);
-	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
+	if (inner.kind == TypeKind.Struct && inner.typeName != "") {
 		return buildStructToString(obj, inner, loc, ctx);
 	}
 	// Array → msArrayToString (runtime helper)
-	if (tk === TypeKind.Array) {
+	if (tk == TypeKind.Array) {
 		const call = makeCall(makeIdent("msArrayToString", loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// Null → "null"
-	if (tk === TypeKind.Null) {
+	if (tk == TypeKind.Null) {
 		const s = makeString("null", loc);
 		s.nodeType = stringType();
 		return s;
 	}
 	// Function/Closure → "<function>"
-	if (tk === TypeKind.Function) {
+	if (tk == TypeKind.Function) {
 		const s = makeString("<function>", loc);
 		s.nodeType = stringType();
 		return s;
 	}
 	// Fallback: "<TypeName>" or "<object>"
-	const fallbackName = objType.typeName !== "" ? objType.typeName : "object";
+	const fallbackName = objType.typeName != "" ? objType.typeName : "object";
 	const s = makeString("<" + fallbackName + ">", loc);
 	s.nodeType = stringType();
 	return s;
@@ -236,40 +236,40 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
-	if (builtinKind === "LengthStr" && cd.arguments.length === 1) {
+	if (builtinKind == "LengthStr" && cd.arguments.length == 1) {
 		return makeCall(makeIdent("msStringLength", loc), cd.arguments, loc);
 	}
 
-	if (builtinKind === "AsBytes") {
+	if (builtinKind == "AsBytes") {
 		return rewriteZeroCopyBridge(node);
 	}
 
-	if (builtinKind === "ResultOk") {
+	if (builtinKind == "ResultOk") {
 		return rewriteResultToLiteral(node, true, ctx);
 	}
-	if (builtinKind === "ResultErr") {
+	if (builtinKind == "ResultErr") {
 		return rewriteResultToLiteral(node, false, ctx);
 	}
 
 	// Promise.* / WaitFor dispatch lives in promiseLower.ms. A non-null return
 	// means that pass rewrote the node; otherwise we continue with other handlers.
 	const promiseRewrite = tryLowerPromiseBuiltin(node, builtinKind, ctx);
-	if (promiseRewrite !== null) return promiseRewrite;
+	if (promiseRewrite != null) return promiseRewrite;
 
-	if (builtinKind === "Echo") {
+	if (builtinKind == "Echo") {
 		return rewriteEcho(node, ctx);
 	}
 
 	// String(x) → x.toString() → leverages existing .toString() infrastructure
-	if (builtinKind === "ToString" && cd.arguments.length === 1) {
+	if (builtinKind == "ToString" && cd.arguments.length == 1) {
 		const arg = cd.arguments[0];
 		const argType = arg.nodeType;
 		// String identity: String("hello") → "hello"
-		if (argType !== null && argType.kind === TypeKind.String) return arg;
+		if (argType != null && argType.kind == TypeKind.String) return arg;
 		// Delegate to .toString() which handles number, boolean, enum, struct, array
 		const toStringCall = makeCall(makeMember(arg, "toString", loc), [], loc);
 		toStringCall.nodeType = stringType();
-		if (argType !== null) {
+		if (argType != null) {
 			return lowerToString(toStringCall, arg, argType, loc, ctx);
 		}
 		return toStringCall;
@@ -299,8 +299,8 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const loc = node.location;
 	let resType = node.nodeType;
 	// Fallback: infer Result type from argument when nodeType is missing
-	if (resType === null || !isResult(resType)) {
-		if (cd.arguments.length > 0 && cd.arguments[0].nodeType !== null) {
+	if (resType == null || !isResult(resType)) {
+		if (cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
 			if (isOk) {
 				resType = createResult(cd.arguments[0].nodeType!, stringType());
 			} else {
@@ -308,7 +308,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 			}
 			node.nodeType = resType;
 		}
-		if (resType === null || !isResult(resType)) {
+		if (resType == null || !isResult(resType)) {
 			return node;
 		}
 	}
@@ -317,7 +317,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const values: Node[] = [makeBool(isOk, loc)];
 
 	const payloadType = isOk ? getResultOkType(resType) : getResultErrType(resType);
-	if (payloadType !== null && payloadType.kind !== TypeKind.Void) {
+	if (payloadType != null && payloadType.kind != TypeKind.Void) {
 		if (cd.arguments.length > 0) {
 			keys.push(isOk ? "value" : "error");
 			values.push(cd.arguments[0]);
@@ -360,17 +360,17 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 	const lowered = lowerBuiltins(upr.value, tctx);
 
 	const pd = lowered.data as ProgramData;
-	if (pd.programStmts.length === 0) return "NO_STMTS";
+	if (pd.programStmts.length == 0) return "NO_STMTS";
 	const stmt = pd.programStmts[0];
-	if (stmt.kind !== NodeKind.ExprStmt) return "NOT_EXPR";
+	if (stmt.kind != NodeKind.ExprStmt) return "NOT_EXPR";
 	const es = stmt.data as ExprStmtData;
-	if (es.expr.kind !== NodeKind.CallExpr) return "NOT_CALL";
+	if (es.expr.kind != NodeKind.CallExpr) return "NOT_CALL";
 	const cd = es.expr.data as CallExprData;
-	if (cd.callee.kind === NodeKind.Identifier) {
+	if (cd.callee.kind == NodeKind.Identifier) {
 		const id = cd.callee.data as IdentifierData;
 		return id.name;
 	}
-	if (cd.callee.kind === NodeKind.MemberExpr) return "STILL_MEMBER";
+	if (cd.callee.kind == NodeKind.MemberExpr) return "STILL_MEMBER";
 	return "OTHER_KIND";
 }
 
@@ -382,24 +382,24 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;
 	const d = node.data as BinaryExprData;
-	if (d.operator !== "=") return node;
-	if (d.left.kind !== NodeKind.MemberExpr) return node;
+	if (d.operator != "=") return node;
+	if (d.left.kind != NodeKind.MemberExpr) return node;
 	const md = d.left.data as MemberExprData;
-	if (md.property !== "length") return node;
+	if (md.property != "length") return node;
 	const objType = md.object.nodeType;
-	if (objType === null || objType.kind !== TypeKind.Array) return node;
+	if (objType == null || objType.kind != TypeKind.Array) return node;
 
 	const loc = node.location;
 	const elemType = objType.typeReturn;
 
 	// Pick the right C runtime function based on element type
 	let fn = "msGenericArraySetLen";
-	if (elemType !== null) {
+	if (elemType != null) {
 		if (isNumeric(elemType)) {
 			fn = "msNumberArraySetLen";
-		} else if (elemType.kind === TypeKind.String) {
+		} else if (elemType.kind == TypeKind.String) {
 			fn = "msStringArraySetLen";
-		} else if (elemType.kind === TypeKind.Ref || elemType.kind === TypeKind.Ptr) {
+		} else if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) {
 			fn = "msRefArraySetLen";
 		}
 	}
@@ -411,13 +411,13 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	return result;
 }
 
-test "passthrough non-call" { assert stmtCountAfter("const x = 1;", lowerBuiltins) === 1; }
+test "passthrough non-call" { assert stmtCountAfter("const x = 1;", lowerBuiltins) == 1; }
 
-test "passthrough plain call" { assert firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr; }
+test "passthrough plain call" { assert firstExprKindAfter("foo();", lowerBuiltins) == NodeKind.CallExpr; }
 
-test "passthrough function decl" { assert firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl; }
+test "passthrough function decl" { assert firstStmtKindAfter("function foo() {}", lowerBuiltins) == NodeKind.FunctionDecl; }
 
-test "passthrough if stmt" { assert firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt; }
+test "passthrough if stmt" { assert firstStmtKindAfter("if (x) {}", lowerBuiltins) == NodeKind.IfStmt; }
 
 // Returns the NodeKind of the first ExprStmt's expression after lowering.
 function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
@@ -432,9 +432,9 @@ function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
 	const tctx = createTransformContextWithChecker(ctx);
 	const lowered = lowerBuiltins(upr.value, tctx);
 	const pd = lowered.data as ProgramData;
-	if (pd.programStmts.length === 0) return NodeKind.NumberLiteral;
+	if (pd.programStmts.length == 0) return NodeKind.NumberLiteral;
 	const stmt = pd.programStmts[0];
-	if (stmt.kind !== NodeKind.ExprStmt) return NodeKind.NumberLiteral;
+	if (stmt.kind != NodeKind.ExprStmt) return NodeKind.NumberLiteral;
 	const es = stmt.data as ExprStmtData;
 	return es.expr.kind;
 }
@@ -442,12 +442,12 @@ function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
 test "@builtin on extern function rewrites to object literal" {
 	const prelude = "@builtin(\"ResultOk\") extern function ok(val: number): number;";
 	const kind = preludeLowerExprKind(prelude, "ok(42);");
-	assert kind === NodeKind.ObjectLiteral;
+	assert kind == NodeKind.ObjectLiteral;
 }
 
 test "extern from identifier callee left for codegen" {
 	const prelude = "extern function parseInt(s: string): number from \"msStringParseInt\";";
 	const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
-	assert result === "parseInt";
+	assert result == "parseInt";
 }
 

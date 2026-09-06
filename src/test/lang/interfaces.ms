@@ -79,7 +79,7 @@ function rangeContains(r: Range, val: number): boolean {
 function tableSet(t: Table, key: string, val: number): void {
 	let i = 0;
 	while (i < t.entries.length) {
-		if (t.entries[i].key === key) { t.entries[i].val = val; return; }
+		if (t.entries[i].key == key) { t.entries[i].val = val; return; }
 		i += 1;
 	}
 	t.entries.push({ key: key, val: val });
@@ -88,7 +88,7 @@ function tableSet(t: Table, key: string, val: number): void {
 function tableGet(t: Table, key: string): number {
 	let i = 0;
 	while (i < t.entries.length) {
-		if (t.entries[i].key === key) return t.entries[i].val;
+		if (t.entries[i].key == key) return t.entries[i].val;
 		i += 1;
 	}
 	return -1;
@@ -113,21 +113,21 @@ function buildQuery(q: QueryBuilder): string {
 
 test "basic struct construction and field access" {
 	const v: Vec2 = { x: 3, y: 4 };
-	assert v.x === 3;
-	assert v.y === 4;
-	assert distSq(v) === 25;
+	assert v.x == 3;
+	assert v.y == 4;
+	assert distSq(v) == 25;
 
 	const origin: Vec2 = { x: 0, y: 0 };
-	assert distSq(origin) === 0;
+	assert distSq(origin) == 0;
 }
 
 test "vector arithmetic" {
 	const v1: Vec2 = { x: 1, y: 2 };
 	const v2: Vec2 = { x: 3, y: 4 };
 	const v3 = addVec(v1, v2);
-	assert v3.x === 4;
-	assert v3.y === 6;
-	assert dotVec(v1, v2) === 11;
+	assert v3.x == 4;
+	assert v3.y == 6;
+	assert dotVec(v1, v2) == 11;
 }
 
 test "nested interfaces (Pixel)" {
@@ -135,16 +135,16 @@ test "nested interfaces (Pixel)" {
 		pos: { x: 10, y: 20 },
 		color: { r: 255, g: 128, b: 0 },
 	};
-	assert px.pos.x === 10;
-	assert px.pos.y === 20;
-	assert px.color.r === 255;
-	assert px.color.b === 0;
+	assert px.pos.x == 10;
+	assert px.pos.y == 20;
+	assert px.color.r == 255;
+	assert px.color.b == 0;
 }
 
 test "nested interfaces (Rect)" {
 	const r: Rect = { topLeft: { x: 0, y: 0 }, width: 5, height: 3 };
-	assert rectArea(r) === 15;
-	assert r.topLeft.x === 0;
+	assert rectArea(r) == 15;
+	assert r.topLeft.x == 0;
 }
 
 interface Counter { count: number; label: string; }
@@ -157,17 +157,17 @@ test "interface mutation" {
 	inc(ctr);
 	inc(ctr);
 	inc(ctr);
-	assert ctr.count === 3;
-	assert ctr.label === "ops";
+	assert ctr.count == 3;
+	assert ctr.label == "ops";
 	reset(ctr);
-	assert ctr.count === 0;
+	assert ctr.count == 0;
 }
 
 interface IntStack { data: number[]; }
 
 function stackPush(s: IntStack, val: number): void { s.data.push(val); }
 function stackPop(s: IntStack): number {
-	if (s.data.length === 0) return -1;
+	if (s.data.length == 0) return -1;
 	const val = s.data[s.data.length - 1];
 	s.data.pop();
 	return val;
@@ -178,15 +178,15 @@ test "interface with array field (stack)" {
 	stackPush(stack, 10);
 	stackPush(stack, 20);
 	stackPush(stack, 30);
-	assert stack.data.length === 3;
-	assert stackPop(stack) === 30;
-	assert stackPop(stack) === 20;
-	assert stack.data.length === 1;
+	assert stack.data.length == 3;
+	assert stackPop(stack) == 30;
+	assert stackPop(stack) == 20;
+	assert stack.data.length == 1;
 }
 
 test "interface as return type (Range)" {
 	const r: Range = { start: 5, end: 15 };
-	assert rangeLen(r) === 10;
+	assert rangeLen(r) == 10;
 	assert rangeContains(r, 5);
 	assert rangeContains(r, 14);
 	assert !rangeContains(r, 15);
@@ -198,12 +198,12 @@ test "array of interfaces (Table)" {
 	tableSet(tbl, "x", 10);
 	tableSet(tbl, "y", 20);
 	tableSet(tbl, "z", 30);
-	assert tableGet(tbl, "x") === 10;
-	assert tableGet(tbl, "z") === 30;
-	assert tableGet(tbl, "missing") === -1;
+	assert tableGet(tbl, "x") == 10;
+	assert tableGet(tbl, "z") == 30;
+	assert tableGet(tbl, "missing") == -1;
 	tableSet(tbl, "x", 99);
-	assert tableGet(tbl, "x") === 99;
-	assert tbl.entries.length === 3;
+	assert tableGet(tbl, "x") == 99;
+	assert tbl.entries.length == 3;
 }
 
 function isDevMode(cfg: Config): boolean { return cfg.debug && cfg.verbose; }
@@ -213,8 +213,8 @@ test "boolean fields" {
 	const prod: Config = { debug: false, verbose: false, maxRetries: 10 };
 	assert isDevMode(dev);
 	assert !isDevMode(prod);
-	assert dev.maxRetries === 3;
-	assert prod.maxRetries === 10;
+	assert dev.maxRetries == 3;
+	assert prod.maxRetries == 10;
 }
 
 test "builder pattern (SQL)" {
@@ -222,5 +222,5 @@ test "builder pattern (SQL)" {
 	q.conditions.push("age > 18");
 	q.conditions.push("active = true");
 	q.limit = 10;
-	assert buildQuery(q) === "SELECT * FROM users WHERE age > 18 AND active = true LIMIT 10";
+	assert buildQuery(q) == "SELECT * FROM users WHERE age > 18 AND active = true LIMIT 10";
 }

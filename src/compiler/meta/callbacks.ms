@@ -116,7 +116,7 @@ export function getComptimeOuterCtx(): ComptimeOuterCtx | null {
 // fields directly — no per-field getters needed.
 
 export function setOuterProgramForComptime(program: Node): void {
-	if (_comptimeOuter === null) {
+	if (_comptimeOuter == null) {
 		_comptimeOuter = {
 			program,
 			registry: null as unknown as ExportRegistry,
@@ -135,7 +135,7 @@ export function setOuterCheckContext(
 	mod: Module,
 	preludeCtx: CheckerContext,
 ): void {
-	if (_comptimeOuter === null) {
+	if (_comptimeOuter == null) {
 		_comptimeOuter = {
 			program: null,
 			registry,

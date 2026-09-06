@@ -42,25 +42,25 @@ function mkAlpha(): FmEnumDU { return { kind: FmK.Alpha, a: 7 }; }
 // The `&&` narrows `d` to the Alpha variant inside its right operand only.
 // After the expression, `d` must be the full union again.
 function classifyAfterAnd(d: FmEnumDU): int32 {
-	const probe = (d.kind === FmK.Alpha) && true;
-	if (d.kind === FmK.Beta) return 2;
+	const probe = (d.kind == FmK.Alpha) && true;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
 function classifyAfterOr(d: FmEnumDU): int32 {
-	const probe = (d.kind === FmK.Alpha) || false;
-	if (d.kind === FmK.Beta) return 2;
+	const probe = (d.kind == FmK.Alpha) || false;
+	if (d.kind == FmK.Beta) return 2;
 	return 1;
 }
 
 function main(): int32 {
-	if (classifyAfterAnd(mkBeta()) !== 2) { console.log("GUARD-FAIL and/beta"); return 1; }
-	if (classifyAfterAnd(mkAlpha()) !== 1) { console.log("GUARD-FAIL and/alpha"); return 1; }
-	if (classifyAfterOr(mkBeta()) !== 2) { console.log("GUARD-FAIL or/beta"); return 1; }
-	if (classifyAfterOr(mkAlpha()) !== 1) { console.log("GUARD-FAIL or/alpha"); return 1; }
+	if (classifyAfterAnd(mkBeta()) != 2) { console.log("GUARD-FAIL and/beta"); return 1; }
+	if (classifyAfterAnd(mkAlpha()) != 1) { console.log("GUARD-FAIL and/alpha"); return 1; }
+	if (classifyAfterOr(mkBeta()) != 2) { console.log("GUARD-FAIL or/beta"); return 1; }
+	if (classifyAfterOr(mkAlpha()) != 1) { console.log("GUARD-FAIL or/alpha"); return 1; }
 	console.log("GUARD-OK flowMergeDiscIdentity");
 	return 0;
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

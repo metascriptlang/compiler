@@ -41,7 +41,7 @@ const obsTern = t.x * 1000 + t.y;
 console.log(obsTern);
 
 let side = 0;
-function tally(p: Pt): boolean { side = side + 1; return p.x === 1; }
+function tally(p: Pt): boolean { side = side + 1; return p.x == 1; }
 
 const closed = false;
 const shortOff = closed && tally(new Pt(1, 2));
@@ -62,15 +62,15 @@ while (belowThree(new Pt(i, 5))) {
 console.log(i);
 
 let bad = 0;
-if (obsP !== 123) { bad += 1; }
-if (obsH !== 4563) { bad += 1; }
-if (obsM !== 893) { bad += 1; }
-if (obsArg !== 783) { bad += 1; }
-if (obsCtor !== 42) { bad += 1; }
-if (obsTern !== 300400) { bad += 1; }
+if (obsP != 123) { bad += 1; }
+if (obsH != 4563) { bad += 1; }
+if (obsM != 893) { bad += 1; }
+if (obsArg != 783) { bad += 1; }
+if (obsCtor != 42) { bad += 1; }
+if (obsTern != 300400) { bad += 1; }
 if (shortOff) { bad += 1; }
-if (obsSkipped !== 0) { bad += 1; }
+if (obsSkipped != 0) { bad += 1; }
 if (!shortOn) { bad += 1; }
-if (obsTaken !== 1) { bad += 1; }
-if (i !== 3) { bad += 1; }
-if (bad === 0) { console.log("GUARD-OK"); }
+if (obsTaken != 1) { bad += 1; }
+if (i != 3) { bad += 1; }
+if (bad == 0) { console.log("GUARD-OK"); }

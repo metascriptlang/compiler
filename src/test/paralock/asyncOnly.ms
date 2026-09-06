@@ -22,13 +22,13 @@ async function asyncChain(x: int32): Promise<int32> {
 
 async function run(): Promise<void> {
 	const a = await asyncAdd(2 as int32, 3 as int32);
-	if (a !== (5 as int32)) { console.log("FAIL asyncAdd a=" + (a as int32)); return; }
+	if (a != (5 as int32)) { console.log("FAIL asyncAdd a=" + (a as int32)); return; }
 
 	const b = await asyncDouble(4 as int32);
-	if (b !== (8 as int32)) { console.log("FAIL asyncDouble b=" + (b as int32)); return; }
+	if (b != (8 as int32)) { console.log("FAIL asyncDouble b=" + (b as int32)); return; }
 
 	const c = await asyncChain(3 as int32);
-	if (c !== (11 as int32)) { console.log("FAIL asyncChain c=" + (c as int32)); return; }
+	if (c != (11 as int32)) { console.log("FAIL asyncChain c=" + (c as int32)); return; }
 
 	console.log("PASS: asyncOnly");
 }

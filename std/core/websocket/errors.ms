@@ -91,30 +91,30 @@ export function isWsTransportError(e: WsError): boolean {
 
 test "wsError constructor" {
 	const e = wsError(WsErrorKind.Timeout, "timed out");
-	assert e.kind === WsErrorKind.Timeout;
-	assert e.message === "timed out";
+	assert e.kind == WsErrorKind.Timeout;
+	assert e.message == "timed out";
 }
 
 test "wsHandshakeFailed constructor" {
 	const e = wsHandshakeFailed("bad accept-key");
-	assert e.kind === WsErrorKind.HandshakeFailed;
-	assert e.message === "bad accept-key";
+	assert e.kind == WsErrorKind.HandshakeFailed;
+	assert e.message == "bad accept-key";
 }
 
 test "wsProtocolError constructor" {
 	const e = wsProtocolError("masked server frame");
-	assert e.kind === WsErrorKind.ProtocolError;
+	assert e.kind == WsErrorKind.ProtocolError;
 }
 
 test "wsPayloadTooLarge message" {
 	const e = wsPayloadTooLarge(20000000, 16777216);
-	assert e.kind === WsErrorKind.PayloadTooLarge;
-	assert e.message === "payload 20000000 exceeds limit 16777216";
+	assert e.kind == WsErrorKind.PayloadTooLarge;
+	assert e.message == "payload 20000000 exceeds limit 16777216";
 }
 
 test "wsClosed constructor" {
 	const e = wsClosed("send on closed socket");
-	assert e.kind === WsErrorKind.Closed;
+	assert e.kind == WsErrorKind.Closed;
 }
 
 test "isWsProtocolError true for protocol/handshake/payload" {
@@ -133,6 +133,6 @@ test "isWsTransportError true for connection/timeout/socket" {
 
 test "wsInternalError constructor" {
 	const e = wsInternalError("RNG failure");
-	assert e.kind === WsErrorKind.InternalError;
-	assert e.message === "RNG failure";
+	assert e.kind == WsErrorKind.InternalError;
+	assert e.message == "RNG failure";
 }

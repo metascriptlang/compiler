@@ -72,7 +72,7 @@ export function parseWsUrl(url: string): Result<WsUrl, WsError> {
 			path = rest.slice(slash, rest.length);
 		}
 	}
-	if (hostPart.length === 0) {
+	if (hostPart.length == 0) {
 		return Result.err(wsInvalidUrl("missing host: " + url));
 	}
 
@@ -88,11 +88,11 @@ export function parseWsUrl(url: string): Result<WsUrl, WsError> {
 			return Result.err(wsInvalidUrl("missing ']' in IPv6 host: " + url));
 		}
 		host = hostPart.slice(1, close);
-		if (host.length === 0) {
+		if (host.length == 0) {
 			return Result.err(wsInvalidUrl("empty IPv6 host: " + url));
 		}
 		if (close + 1 < hostPart.length) {
-			if (hostPart.charCodeAt(close + 1) !== ":".code) {
+			if (hostPart.charCodeAt(close + 1) != ":".code) {
 				return Result.err(wsInvalidUrl("expected ':' after ']' in IPv6 host: " + url));
 			}
 			const portStr = hostPart.slice(close + 2, hostPart.length);
@@ -111,7 +111,7 @@ export function parseWsUrl(url: string): Result<WsUrl, WsError> {
 		}
 	}
 
-	return Result.ok({ host: host, port: port, path: path, secure: scheme === "wss" });
+	return Result.ok({ host: host, port: port, path: path, secure: scheme == "wss" });
 }
 
 // indexOf(needle, fromIndex) — std/core/string only exposes a no-args indexOf
@@ -129,7 +129,7 @@ function indexOfFrom(s: string, needle: string, fromIdx: int32): int32 {
 // Position of ']' in a bracketed-IPv6 host prefix; -1 if missing.
 function findClosingBracket(s: string): int32 {
 	for (let i: int32 = 0; i < s.length; i = i + 1) {
-		if (s.charCodeAt(i) === "]".code) return i;
+		if (s.charCodeAt(i) == "]".code) return i;
 	}
 	return -1;
 }
@@ -142,16 +142,16 @@ function trimAsciiWs(s: string): string {
 	let start: int32 = 0;
 	while (start < s.length) {
 		const c = s.charCodeAt(start);
-		if (c !== " ".code && c !== "\t".code) break;
+		if (c != " ".code && c != "\t".code) break;
 		start = start + 1;
 	}
 	let end: int32 = s.length;
 	while (end > start) {
 		const c = s.charCodeAt(end - 1);
-		if (c !== " ".code && c !== "\t".code) break;
+		if (c != " ".code && c != "\t".code) break;
 		end = end - 1;
 	}
-	if (start === 0 && end === s.length) return s;
+	if (start == 0 && end == s.length) return s;
 	return s.slice(start, end);
 }
 
@@ -171,25 +171,25 @@ export function commaListContainsToken(value: string, token: string): boolean {
 		// Skip leading whitespace + commas.
 		while (i < lower.length) {
 			const c = lower.charCodeAt(i);
-			if (c !== " ".code && c !== "\t".code && c !== ",".code) break;
+			if (c != " ".code && c != "\t".code && c != ",".code) break;
 			i = i + 1;
 		}
 		// Read one token.
 		let tokStart = i;
 		while (i < lower.length) {
 			const c = lower.charCodeAt(i);
-			if (c === ",".code) break;
+			if (c == ",".code) break;
 			i = i + 1;
 		}
 		// Strip trailing whitespace from this token.
 		let tokEnd = i;
 		while (tokEnd > tokStart) {
 			const c = lower.charCodeAt(tokEnd - 1);
-			if (c !== " ".code && c !== "\t".code) break;
+			if (c != " ".code && c != "\t".code) break;
 			tokEnd = tokEnd - 1;
 		}
 		if (tokEnd > tokStart) {
-			if (lower.slice(tokStart, tokEnd) === token) return true;
+			if (lower.slice(tokStart, tokEnd) == token) return true;
 		}
 		// Skip the comma (i already at comma or end).
 		if (i < lower.length) i = i + 1;
@@ -199,7 +199,7 @@ export function commaListContainsToken(value: string, token: string): boolean {
 
 // Parse a non-negative decimal integer. Returns -1 on any error.
 function parseIntStrict(s: string): int32 {
-	if (s.length === 0) return -1;
+	if (s.length == 0) return -1;
 	let v: int32 = 0;
 	let i = 0;
 	while (i < s.length) {
@@ -249,7 +249,7 @@ export function buildUpgradeRequest(
 	extraHeaders: string[],
 ): string {
 	let hostHeader = url.host;
-	if (url.port !== 80) {
+	if (url.port != 80) {
 		hostHeader = url.host + ":" + url.port.toString();
 	}
 
@@ -332,19 +332,19 @@ export function parse101Response(raw: string, expectedAccept: string): Result<Up
 			// emit a trailing space which would defeat the strict equality
 			// check against our derived Sec-WebSocket-Accept hash.
 			const value = trimAsciiWs(line.slice(colon + 1, line.length));
-			if (name === "upgrade") {
+			if (name == "upgrade") {
 				// Upgrade is also a comma-list per RFC 7230, but RFC 6455 §4.1
 				// requires "websocket" be present. Use the same containment
 				// check for consistency with Connection.
 				if (commaListContainsToken(value, "websocket")) upgradeOk = true;
-			} else if (name === "connection") {
+			} else if (name == "connection") {
 				// Multi-token: nginx/Cloudflare proxies send
 				// `Connection: Upgrade, keep-alive` (B3). Token containment
 				// rather than strict equality.
 				if (commaListContainsToken(value, "upgrade")) connectionOk = true;
-			} else if (name === "sec-websocket-accept") {
+			} else if (name == "sec-websocket-accept") {
 				acceptKey = value;
-			} else if (name === "sec-websocket-protocol") {
+			} else if (name == "sec-websocket-protocol") {
 				subprotocol = value;
 			}
 		}
@@ -353,8 +353,8 @@ export function parse101Response(raw: string, expectedAccept: string): Result<Up
 
 	if (!upgradeOk) return Result.err(wsHandshakeFailed("missing or wrong Upgrade header"));
 	if (!connectionOk) return Result.err(wsHandshakeFailed("missing or wrong Connection header"));
-	if (acceptKey.length === 0) return Result.err(wsHandshakeFailed("missing Sec-WebSocket-Accept"));
-	if (acceptKey !== expectedAccept) {
+	if (acceptKey.length == 0) return Result.err(wsHandshakeFailed("missing Sec-WebSocket-Accept"));
+	if (acceptKey != expectedAccept) {
 		return Result.err(wsHandshakeFailed("Sec-WebSocket-Accept mismatch — expected " + expectedAccept + ", got " + acceptKey));
 	}
 
@@ -411,7 +411,7 @@ export function parseUpgradeRequest(raw: string): Result<UpgradeRequest, WsError
 		return Result.err(wsHandshakeFailed("request line missing method/path separator"));
 	}
 	const method = reqLine.slice(0, sp1);
-	if (method !== "GET") {
+	if (method != "GET") {
 		return Result.err(wsHandshakeFailed("upgrade requires GET method, got " + method));
 	}
 	const rest = reqLine.slice(sp1 + 1, reqLine.length);
@@ -421,7 +421,7 @@ export function parseUpgradeRequest(raw: string): Result<UpgradeRequest, WsError
 	}
 	const path = rest.slice(0, sp2);
 	const version = rest.slice(sp2 + 1, rest.length);
-	if (version !== "HTTP/1.1") {
+	if (version != "HTTP/1.1") {
 		return Result.err(wsHandshakeFailed("upgrade requires HTTP/1.1, got " + version));
 	}
 
@@ -455,16 +455,16 @@ export function parseUpgradeRequest(raw: string): Result<UpgradeRequest, WsError
 
 	if (!upgradeOk) return Result.err(wsHandshakeFailed("missing or wrong Upgrade header"));
 	if (!connectionOk) return Result.err(wsHandshakeFailed("missing or wrong Connection header"));
-	if (clientKey.length === 0) return Result.err(wsHandshakeFailed("missing Sec-WebSocket-Key"));
+	if (clientKey.length == 0) return Result.err(wsHandshakeFailed("missing Sec-WebSocket-Key"));
 	// RFC 6455 §4.1 — the key MUST be the base64 encoding of a 16-byte random
 	// nonce. base64(16 bytes) = 22 chars + 2 padding = exactly 24 chars. Lax
 	// parsing here is safe (the protocol's accept-key roundtrip catches garbage
 	// end-to-end) but rejecting wrong-length keys earlier gives the caller a
 	// clear handshake error instead of an opaque "accept mismatch" on the client.
-	if (clientKey.length !== 24) {
+	if (clientKey.length != 24) {
 		return Result.err(wsHandshakeFailed("invalid Sec-WebSocket-Key length: expected 24, got " + clientKey.length.toString()));
 	}
-	if (versionHeader !== WS_VERSION) {
+	if (versionHeader != WS_VERSION) {
 		return Result.err(wsHandshakeFailed("unsupported Sec-WebSocket-Version: " + versionHeader));
 	}
 
@@ -487,19 +487,19 @@ function splitCommaList(value: string): string[] {
 	while (i < lower.length) {
 		while (i < lower.length) {
 			const c = lower.charCodeAt(i);
-			if (c !== " ".code && c !== "\t".code && c !== ",".code) break;
+			if (c != " ".code && c != "\t".code && c != ",".code) break;
 			i = i + 1;
 		}
 		let start = i;
 		while (i < lower.length) {
 			const c = lower.charCodeAt(i);
-			if (c === ",".code) break;
+			if (c == ",".code) break;
 			i = i + 1;
 		}
 		let end = i;
 		while (end > start) {
 			const c = lower.charCodeAt(end - 1);
-			if (c !== " ".code && c !== "\t".code) break;
+			if (c != " ".code && c != "\t".code) break;
 			end = end - 1;
 		}
 		if (end > start) {
@@ -542,34 +542,34 @@ export function buildUpgradeResponse(
 test "parseWsUrl plain host" {
 	const r = parseWsUrl("ws://example.com");
 	assert r.ok;
-	assert r.value.host === "example.com";
-	assert r.value.port === 80;
-	assert r.value.path === "/";
+	assert r.value.host == "example.com";
+	assert r.value.port == 80;
+	assert r.value.path == "/";
 	assert !r.value.secure;
 }
 
 test "parseWsUrl with port" {
 	const r = parseWsUrl("ws://127.0.0.1:8000");
 	assert r.ok;
-	assert r.value.host === "127.0.0.1";
-	assert r.value.port === 8000;
-	assert r.value.path === "/";
+	assert r.value.host == "127.0.0.1";
+	assert r.value.port == 8000;
+	assert r.value.path == "/";
 }
 
 test "parseWsUrl with port and path" {
 	const r = parseWsUrl("ws://localhost:8080/rpc");
 	assert r.ok;
-	assert r.value.host === "localhost";
-	assert r.value.port === 8080;
-	assert r.value.path === "/rpc";
+	assert r.value.host == "localhost";
+	assert r.value.port == 8080;
+	assert r.value.path == "/rpc";
 }
 
 test "parseWsUrl with path and query" {
 	const r = parseWsUrl("ws://api.local/sub?room=42");
 	assert r.ok;
-	assert r.value.host === "api.local";
-	assert r.value.port === 80;
-	assert r.value.path === "/sub?room=42";
+	assert r.value.host == "api.local";
+	assert r.value.port == 80;
+	assert r.value.path == "/sub?room=42";
 }
 
 test "parseWsUrl rejects wss://" {
@@ -592,32 +592,32 @@ test "parseWsUrl rejects bad port" {
 test "parseWsUrl IPv6 loopback with port" {
 	const r = parseWsUrl("ws://[::1]:8080/");
 	assert r.ok;
-	assert r.value.host === "::1";   // brackets stripped — TCP connect wants raw form
-	assert r.value.port === 8080;
-	assert r.value.path === "/";
+	assert r.value.host == "::1";   // brackets stripped — TCP connect wants raw form
+	assert r.value.port == 8080;
+	assert r.value.path == "/";
 }
 
 test "parseWsUrl IPv6 loopback default port" {
 	const r = parseWsUrl("ws://[::1]/");
 	assert r.ok;
-	assert r.value.host === "::1";
-	assert r.value.port === 80;
+	assert r.value.host == "::1";
+	assert r.value.port == 80;
 }
 
 test "parseWsUrl IPv6 with full address" {
 	const r = parseWsUrl("ws://[2001:db8::1]:9000/rpc");
 	assert r.ok;
-	assert r.value.host === "2001:db8::1";
-	assert r.value.port === 9000;
-	assert r.value.path === "/rpc";
+	assert r.value.host == "2001:db8::1";
+	assert r.value.port == 9000;
+	assert r.value.path == "/rpc";
 }
 
 test "parseWsUrl IPv6 no path" {
 	const r = parseWsUrl("ws://[::1]:8000");
 	assert r.ok;
-	assert r.value.host === "::1";
-	assert r.value.port === 8000;
-	assert r.value.path === "/";
+	assert r.value.host == "::1";
+	assert r.value.port == 8000;
+	assert r.value.path == "/";
 }
 
 test "parseWsUrl IPv6 rejects missing close bracket" {
@@ -698,9 +698,9 @@ test "parse101Response success — RFC 6455 §1.3 sample" {
 		"\r\n";
 	const r = parse101Response(raw, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
 	assert r.ok;
-	assert r.value.subprotocol === "";
-	assert r.value.acceptKey === "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
-	assert r.value.bodyStart === raw.length;
+	assert r.value.subprotocol == "";
+	assert r.value.acceptKey == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+	assert r.value.bodyStart == raw.length;
 }
 
 test "parse101Response with subprotocol" {
@@ -713,7 +713,7 @@ test "parse101Response with subprotocol" {
 		"\r\n";
 	const r = parse101Response(raw, "ABC");
 	assert r.ok;
-	assert r.value.subprotocol === "cbor";
+	assert r.value.subprotocol == "cbor";
 }
 
 test "parse101Response case-insensitive header names + values" {
@@ -770,8 +770,8 @@ test "parse101Response surfaces post-headers byte offset" {
 	const raw = headers + trailing;
 	const r = parse101Response(raw, "K");
 	assert r.ok;
-	assert r.value.bodyStart === headers.length;
-	assert raw.slice(r.value.bodyStart, raw.length) === trailing;
+	assert r.value.bodyStart == headers.length;
+	assert raw.slice(r.value.bodyStart, raw.length) == trailing;
 }
 
 // ----- B3: multi-token Connection header (proxies) -----
@@ -831,7 +831,7 @@ test "parse101Response strips trailing whitespace on Sec-WebSocket-Accept" {
 		"\r\n";
 	const r = parse101Response(raw, "ABC");
 	assert r.ok;
-	assert r.value.acceptKey === "ABC";
+	assert r.value.acceptKey == "ABC";
 }
 
 test "parse101Response strips trailing tab on header value" {
@@ -881,11 +881,11 @@ test "commaListContainsToken: only commas returns false" {
 }
 
 test "trimAsciiWs strips both ends" {
-	assert trimAsciiWs("  hi  ") === "hi";
-	assert trimAsciiWs("\t\thi\t\t") === "hi";
-	assert trimAsciiWs("hi") === "hi";
-	assert trimAsciiWs("") === "";
-	assert trimAsciiWs("   ") === "";
+	assert trimAsciiWs("  hi  ") == "hi";
+	assert trimAsciiWs("\t\thi\t\t") == "hi";
+	assert trimAsciiWs("hi") == "hi";
+	assert trimAsciiWs("") == "";
+	assert trimAsciiWs("   ") == "";
 }
 
 // ----- parseUpgradeRequest / buildUpgradeResponse (server-side handshake) -----
@@ -901,10 +901,10 @@ test "parseUpgradeRequest minimal valid" {
 		"\r\n";
 	const r = parseUpgradeRequest(raw);
 	assert r.ok;
-	assert r.value.path === "/socket";
-	assert r.value.clientKey === "dGhlIHNhbXBsZSBub25jZQ==";
-	assert r.value.subprotocols.length === 0;
-	assert r.value.bodyStart === raw.length;
+	assert r.value.path == "/socket";
+	assert r.value.clientKey == "dGhlIHNhbXBsZSBub25jZQ==";
+	assert r.value.subprotocols.length == 0;
+	assert r.value.bodyStart == raw.length;
 }
 
 test "parseUpgradeRequest preserves query string in path" {
@@ -918,7 +918,7 @@ test "parseUpgradeRequest preserves query string in path" {
 		"\r\n";
 	const r = parseUpgradeRequest(raw);
 	assert r.ok;
-	assert r.value.path === "/socket?token=abc";
+	assert r.value.path == "/socket?token=abc";
 }
 
 test "parseUpgradeRequest case-insensitive header names + values" {
@@ -969,9 +969,9 @@ test "parseUpgradeRequest extracts subprotocols list" {
 		"\r\n";
 	const r = parseUpgradeRequest(raw);
 	assert r.ok;
-	assert r.value.subprotocols.length === 2;
-	assert r.value.subprotocols[0] === "cbor";
-	assert r.value.subprotocols[1] === "json";  // lowercased
+	assert r.value.subprotocols.length == 2;
+	assert r.value.subprotocols[0] == "cbor";
+	assert r.value.subprotocols[1] == "json";  // lowercased
 }
 
 test "parseUpgradeRequest empty subprotocols list" {
@@ -984,7 +984,7 @@ test "parseUpgradeRequest empty subprotocols list" {
 		"\r\n";
 	const r = parseUpgradeRequest(raw);
 	assert r.ok;
-	assert r.value.subprotocols.length === 0;
+	assert r.value.subprotocols.length == 0;
 }
 
 test "parseUpgradeRequest rejects non-GET method" {
@@ -1110,8 +1110,8 @@ test "parseUpgradeRequest surfaces post-headers byte offset (piggybacked frame)"
 	const raw = headers + trailing;
 	const r = parseUpgradeRequest(raw);
 	assert r.ok;
-	assert r.value.bodyStart === headers.length;
-	assert raw.slice(r.value.bodyStart, raw.length) === trailing;
+	assert r.value.bodyStart == headers.length;
+	assert raw.slice(r.value.bodyStart, raw.length) == trailing;
 }
 
 test "buildUpgradeResponse minimal — no subprotocol, no extras" {
@@ -1140,37 +1140,37 @@ test "buildUpgradeResponse roundtrips through parse101Response" {
 	const resp = buildUpgradeResponse("ABC", "", []);
 	const r = parse101Response(resp, "ABC");
 	assert r.ok;
-	assert r.value.acceptKey === "ABC";
-	assert r.value.subprotocol === "";
+	assert r.value.acceptKey == "ABC";
+	assert r.value.subprotocol == "";
 }
 
 test "buildUpgradeResponse with subprotocol roundtrips through parse101Response" {
 	const resp = buildUpgradeResponse("K", "cbor", []);
 	const r = parse101Response(resp, "K");
 	assert r.ok;
-	assert r.value.subprotocol === "cbor";
+	assert r.value.subprotocol == "cbor";
 }
 
 test "splitCommaList: single token" {
 	const out = splitCommaList("cbor");
-	assert out.length === 1;
-	assert out[0] === "cbor";
+	assert out.length == 1;
+	assert out[0] == "cbor";
 }
 
 test "splitCommaList: multiple tokens trimmed + lowercased" {
 	const out = splitCommaList("CBOR,  JSON , bincode");
-	assert out.length === 3;
-	assert out[0] === "cbor";
-	assert out[1] === "json";
-	assert out[2] === "bincode";
+	assert out.length == 3;
+	assert out[0] == "cbor";
+	assert out[1] == "json";
+	assert out[2] == "bincode";
 }
 
 test "splitCommaList: empty" {
 	const out = splitCommaList("");
-	assert out.length === 0;
+	assert out.length == 0;
 }
 
 test "splitCommaList: only commas + whitespace" {
 	const out = splitCommaList(" , , ,");
-	assert out.length === 0;
+	assert out.length == 0;
 }

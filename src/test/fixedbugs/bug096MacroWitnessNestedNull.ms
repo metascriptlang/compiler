@@ -22,15 +22,15 @@ test "inline-cast witness decodes a nested struct" {
 	assert pr.ok;
 	const errs: string[] = [];
 	const v: B96Employee = jsonValueToStructE(pr.value, null as B96Employee | null, errs, "");
-	assert errs.length === 0;
-	assert v.addr.city === "HN";
-	assert v.addr.zip === 100;
+	assert errs.length == 0;
+	assert v.addr.city == "HN";
+	assert v.addr.zip == 100;
 }
 
 test "JSON.parse facade decodes the same nested struct" {
 	const r = JSON.parse<B96Employee>(`{"name":"b","addr":{"city":"SG","zip":700}}`);
 	assert r.ok;
 	if (r.ok) {
-		assert r.value.addr.zip === 700;
+		assert r.value.addr.zip == 700;
 	}
 }

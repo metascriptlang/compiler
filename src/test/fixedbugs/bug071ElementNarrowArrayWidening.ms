@@ -28,11 +28,11 @@ test "bug071: uint8[] indexOf/includes/count via generic surface" {
 	b.push(10);
 	b.push(20);
 	b.push(30);
-	assert b.indexOf(20) === 1;
-	assert b.indexOf(99) === -1;
+	assert b.indexOf(20) == 1;
+	assert b.indexOf(99) == -1;
 	assert b.includes(30);
 	assert !b.includes(99);
-	assert b.count(20) === 1;
+	assert b.count(20) == 1;
 }
 
 test "bug071: uint8[] pop and shift return real bytes" {
@@ -40,55 +40,55 @@ test "bug071: uint8[] pop and shift return real bytes" {
 	b.push(10);
 	b.push(20);
 	b.push(30);
-	assert b.pop() === 30;
-	assert b.shift() === 10;
-	assert b.length === 1;
-	assert b[0] === 20;
+	assert b.pop() == 30;
+	assert b.shift() == 10;
+	assert b.length == 1;
+	assert b[0] == 20;
 }
 
 test "bug071: uint8[] slice copies at byte stride" {
 	const b: uint8[] = [1, 2, 3, 4];
 	const s = b.slice(1, 3);
-	assert s.length === 2;
-	assert s[0] === 2;
-	assert s[1] === 3;
+	assert s.length == 2;
+	assert s[0] == 2;
+	assert s[1] == 3;
 }
 
 test "bug071: uint8[] fill and reverse in place" {
 	const b: uint8[] = [1, 2, 3];
 	b.fill(9);
-	assert b[0] === 9;
-	assert b[2] === 9;
+	assert b[0] == 9;
+	assert b[2] == 9;
 	const c: uint8[] = [1, 2, 3];
 	c.reverse();
-	assert c[0] === 3;
-	assert c[2] === 1;
+	assert c[0] == 3;
+	assert c[2] == 1;
 }
 
 test "bug071: uint8[] concat builds a fresh byte array" {
 	const a: uint8[] = [1, 2];
 	const b: uint8[] = [3];
 	const out = a.concat(b);
-	assert out.length === 3;
-	assert out[0] === 1;
-	assert out[2] === 3;
-	assert a.length === 2;
+	assert out.length == 3;
+	assert out[0] == 1;
+	assert out[2] == 3;
+	assert a.length == 2;
 }
 
 test "bug071: unannotated int literal array (int32[]) indexOf" {
 	const n = [10, 20, 30];
-	assert n.indexOf(20) === 1;
+	assert n.indexOf(20) == 1;
 	const i32: int32[] = [10, 20, 30];
-	assert i32.indexOf(20) === 1;
+	assert i32.indexOf(20) == 1;
 	assert i32.includes(30);
 }
 
 test "bug071: asBytes view reads through the generic surface" {
 	const v = "abc".asBytes();
-	assert v.indexOf(98) === 1;
+	assert v.indexOf(98) == 1;
 	const s = v.slice(1, 3);
-	assert s.length === 2;
-	assert s[0] === 98;
+	assert s.length == 2;
+	assert s[0] == 98;
 }
 
 // The rows below guard the LOUD half of the fix: once a repr-mismatched
@@ -147,8 +147,8 @@ function main(): void {
 
 test "bug071: number[] and string[] keep their extern fast paths" {
 	const nums: number[] = [10.5, 20.5];
-	assert nums.indexOf(20.5) === 1;
+	assert nums.indexOf(20.5) == 1;
 	assert nums.includes(10.5);
 	const strs: string[] = ["a", "b"];
-	assert strs.indexOf("b") === 1;
+	assert strs.indexOf("b") == 1;
 }

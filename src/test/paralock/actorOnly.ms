@@ -39,10 +39,10 @@ function main(): void {
 	c.setTag(makeHeapStr());
 
 	const n = await c.get();
-	if (n !== 12) { console.log("FAIL n=" + n); return; }
+	if (n != 12) { console.log("FAIL n=" + n); return; }
 
 	const t = await c.getTag();
-	if (t !== "topic-room") { console.log("FAIL tag=[" + t + "]"); return; }
+	if (t != "topic-room") { console.log("FAIL tag=[" + t + "]"); return; }
 
 	console.log("PASS: actorOnly");
 }

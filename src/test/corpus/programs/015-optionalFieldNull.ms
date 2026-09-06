@@ -10,12 +10,12 @@ interface Box { a: int32; cb?: (x: int32) => int32; }
 interface Cfg { title?: string; width?: number; tags?: string[]; }
 
 function useBox(b: Box): string {
-	if (b.cb !== null) { return "cb=" + b.cb(20).toString(); }
+	if (b.cb != null) { return "cb=" + b.cb(20).toString(); }
 	return "cb=null";
 }
 
 function pick(p: { when: boolean; fb?: string }): string {
-	if (p.fb !== null) { return p.fb; }
+	if (p.fb != null) { return p.fb; }
 	return "d";
 }
 
@@ -27,14 +27,14 @@ function main(): void {
 
 	const c1: Cfg = {};
 	const c2: Cfg = { title: "t", width: 3.5, tags: ["x", "y"] };
-	console.log("t=" + (c1.title === null ? "null" : "set")
-		+ " w=" + (c1.width === null ? "null" : "set")
-		+ " g=" + (c1.tags === null ? "null" : "set"));
+	console.log("t=" + (c1.title == null ? "null" : "set")
+		+ " w=" + (c1.width == null ? "null" : "set")
+		+ " g=" + (c1.tags == null ? "null" : "set"));
 	let w = "none";
-	if (c2.width !== null) { w = c2.width.toString(); }
+	if (c2.width != null) { w = c2.width.toString(); }
 	let tg = "none";
-	if (c2.tags !== null) { tg = c2.tags.length.toString(); }
-	console.log("t2=" + (c2.title !== null ? c2.title : "?") + " w2=" + w + " g2=" + tg);
+	if (c2.tags != null) { tg = c2.tags.length.toString(); }
+	console.log("t2=" + (c2.title != null ? c2.title : "?") + " w2=" + w + " g2=" + tg);
 
 	console.log("p1=" + pick({ when: true, fb: "hit" }) + " p2=" + pick({ when: false }));
 }

@@ -39,13 +39,13 @@ function bug093Root<T>(fn: (dispose: () => void) => T): T {
 test "bug093: T=void instance with identifier return runs the callback" {
 	bug093Hits = 0;
 	bug093RunId((tag: number) => { bug093Hits = bug093Hits + tag; });
-	assert bug093Hits === 7;
+	assert bug093Hits == 7;
 }
 
 test "bug093: T=void instance with direct call return runs the callback" {
 	bug093Hits = 0;
 	bug093RunDirect((tag: number) => { bug093Hits = bug093Hits + tag; });
-	assert bug093Hits === 3;
+	assert bug093Hits == 3;
 }
 
 test "bug093: createRoot shape — void body receiving a dispose callback" {
@@ -54,7 +54,7 @@ test "bug093: createRoot shape — void body receiving a dispose callback" {
 		bug093Hits = bug093Hits + 1;
 		dispose();
 	});
-	assert bug093Hits === 101;
+	assert bug093Hits == 101;
 }
 
 test "bug093: control — the same generics at T=number still return values" {
@@ -62,8 +62,8 @@ test "bug093: control — the same generics at T=number still return values" {
 	const a = bug093RunId((tag: number) => tag + 35);
 	const b = bug093RunDirect((tag: number) => tag * 2);
 	const c = bug093Root((dispose: () => void) => { dispose(); return 9; });
-	assert a === 42;
-	assert b === 6;
-	assert c === 9;
-	assert bug093Hits === 100;
+	assert a == 42;
+	assert b == 6;
+	assert c == 9;
+	assert bug093Hits == 100;
 }

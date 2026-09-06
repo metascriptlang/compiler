@@ -56,12 +56,12 @@ function main(): number {
 	// (wrong id) and the array's own teardown decrefs them a second time.
 	const kept: Node2[] = [];
 	for (let i = 0; i < 2000; i++) {
-		kept.push(pickPtrFirst(arena, i, i % 2 === 0));
+		kept.push(pickPtrFirst(arena, i, i % 2 == 0));
 	}
 	let acc = 0;
 	for (const k of kept) { acc = acc + k.id; }
 	// 1000 borrowed steps (id 1) + the odd i in [0,2000) = 1000 + 1000000.
-	if (acc !== 1001000) {
+	if (acc != 1001000) {
 		console.log("GUARD RED: ptr-first Ref/Ptr join lost the owner, acc=" + acc.toString());
 		return 1;
 	}
@@ -70,4 +70,4 @@ function main(): number {
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

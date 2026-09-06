@@ -68,62 +68,62 @@ class Joiner {
 
 function main(): void {
 	const many = joinStrings("hello", "a", "b", "c");
-	if (many !== "helloabc") { throw "GUARD RED: trailing args = " + many; }
+	if (many != "helloabc") { throw "GUARD RED: trailing args = " + many; }
 
 	const none = joinStrings("hello");
-	if (none !== "hello") { throw "GUARD RED: zero trailing args = " + none; }
+	if (none != "hello") { throw "GUARD RED: zero trailing args = " + none; }
 
 	const one = joinStrings("x", "y");
-	if (one !== "xy") { throw "GUARD RED: single trailing arg = " + one; }
+	if (one != "xy") { throw "GUARD RED: single trailing arg = " + one; }
 
 	const nums = sumNumbers(1, 2, 3);
-	if (nums !== 6) { throw "GUARD RED: numeric rest sum = " + nums.toString(); }
+	if (nums != 6) { throw "GUARD RED: numeric rest sum = " + nums.toString(); }
 
 	const numsNone = sumNumbers(41);
-	if (numsNone !== 41) { throw "GUARD RED: numeric rest with no trailing args = " + numsNone.toString(); }
+	if (numsNone != 41) { throw "GUARD RED: numeric rest with no trailing args = " + numsNone.toString(); }
 
 	const c0 = countRest();
-	if (c0 !== 0) { throw "GUARD RED: rest.length with no args = " + c0.toString(); }
+	if (c0 != 0) { throw "GUARD RED: rest.length with no args = " + c0.toString(); }
 
 	const c3 = countRest("a", "b", "c");
-	if (c3 !== 3) { throw "GUARD RED: rest.length with three args = " + c3.toString(); }
+	if (c3 != 3) { throw "GUARD RED: rest.length with three args = " + c3.toString(); }
 
 	// The packed array must reach the callee as a pointer, exactly like an
 	// ordinary array argument — this is the value/pointer shim path.
 	const plain = takesArray("h", ["a", "b"]);
-	if (plain !== "hab") { throw "GUARD RED: ordinary array parameter = " + plain; }
+	if (plain != "hab") { throw "GUARD RED: ordinary array parameter = " + plain; }
 
 	// Method receiver occupies typeChildren[0], so the rest slot index shifts.
 	const j = new Joiner("-");
 	const joined = j.join("a", "b", "c");
-	if (joined !== "a-b-c") { throw "GUARD RED: rest through a method receiver = " + joined; }
+	if (joined != "a-b-c") { throw "GUARD RED: rest through a method receiver = " + joined; }
 
 	const joinedNone = j.join("solo");
-	if (joinedNone !== "solo") { throw "GUARD RED: method rest with no trailing args = " + joinedNone; }
+	if (joinedNone != "solo") { throw "GUARD RED: method rest with no trailing args = " + joinedNone; }
 
 	// Through a generic parameter — the rest element type is only concrete
 	// after instantiation, and the wrapper still has to peel to T.
 	const gStr = firstOr("z", "a", "b");
-	if (gStr !== "a") { throw "GUARD RED: generic rest, string instantiation = " + gStr; }
+	if (gStr != "a") { throw "GUARD RED: generic rest, string instantiation = " + gStr; }
 
 	const gNum = firstOr(9, 7);
-	if (gNum !== 7) { throw "GUARD RED: generic rest, number instantiation = " + gNum.toString(); }
+	if (gNum != 7) { throw "GUARD RED: generic rest, number instantiation = " + gNum.toString(); }
 
 	const gEmpty = firstOr("fallback");
-	if (gEmpty !== "fallback") { throw "GUARD RED: generic rest with no trailing args = " + gEmpty; }
+	if (gEmpty != "fallback") { throw "GUARD RED: generic rest with no trailing args = " + gEmpty; }
 
 	// Non-primitive element type: the packed array holds references.
 	const weight = totalWeight(1, new Weighted(2), new Weighted(3));
-	if (weight !== 6) { throw "GUARD RED: struct element rest = " + weight.toString(); }
+	if (weight != 6) { throw "GUARD RED: struct element rest = " + weight.toString(); }
 
 	const packed = new Summed(1, 2, 3);
-	if (packed.total !== 6) {
+	if (packed.total != 6) {
 		console.log("FAIL: constructor rest, total=" + packed.total.toString());
 		exit(1);
 	}
 
 	const packedNone = new Summed(41);
-	if (packedNone.total !== 41) {
+	if (packedNone.total != 41) {
 		console.log("FAIL: constructor rest with no trailing args, total=" + packedNone.total.toString());
 		exit(1);
 	}

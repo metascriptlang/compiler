@@ -10,6 +10,6 @@ export interface Own {
 export type SV = number | string | null;
 
 export function setField(o: Own, name: string, v: SV): void {
-	if (name === "w") { o.w = v; return; }
+	if (name == "w") { o.w = v; return; }
 	o.h = v;
 }

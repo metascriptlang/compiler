@@ -54,11 +54,11 @@ export function lowerTailCall(program: Node, ctx: TransformContext): Node {
 
 function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 	return (node: Node): Node => {
-		if (node.kind === NodeKind.ClassDecl) return lowerClassMethods(node, ctx);
-		if (node.kind === NodeKind.VariableDecl) return lowerBoundRoutine(node, ctx);
-		if (node.kind !== NodeKind.FunctionDecl) return node;
+		if (node.kind == NodeKind.ClassDecl) return lowerClassMethods(node, ctx);
+		if (node.kind == NodeKind.VariableDecl) return lowerBoundRoutine(node, ctx);
+		if (node.kind != NodeKind.FunctionDecl) return node;
 		const d = node.data as FunctionDeclData;
-		if (d.fnName === "") return node;
+		if (d.fnName == "") return node;
 		d.fnBody = lowerSelfTailCalls(d.fnBody, d.fnName, node.resolvedSym, d.params, node.location, ctx);
 		return node;
 	};
@@ -70,52 +70,52 @@ function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 // class whose type cannot be resolved stays untouched.
 function lowerBoundRoutine(node: Node, ctx: TransformContext): Node {
 	const d = node.data as VariableDeclData;
-	if (d.declName === "" || d.initializer === null) return node;
-	if (d.declKind !== DeclKind.Const) return node;
+	if (d.declName == "" || d.initializer == null) return node;
+	if (d.declKind != DeclKind.Const) return node;
 	const init = d.initializer;
-	if (init.kind === NodeKind.ArrowFunction) {
+	if (init.kind == NodeKind.ArrowFunction) {
 		const ad = init.data as ArrowFunctionData;
 		const lowered = loweredRoutineBody(ad.arrowBody, d.declName, node.resolvedSym, ad.arrowParams, init.location, ctx);
-		if (lowered !== null) { ad.arrowBody = lowered; }
+		if (lowered != null) { ad.arrowBody = lowered; }
 		return node;
 	}
-	if (init.kind === NodeKind.FunctionExpr) {
+	if (init.kind == NodeKind.FunctionExpr) {
 		const fd = init.data as FunctionExprData;
 		const lowered = loweredRoutineBody(fd.funcExprBody, d.declName, node.resolvedSym, fd.funcExprParams, init.location, ctx);
-		if (lowered !== null) { fd.funcExprBody = lowered; }
+		if (lowered != null) { fd.funcExprBody = lowered; }
 		return node;
 	}
 	return node;
 }
 
 function loweredRoutineBody(body: Node, name: string, sym: Symbol | null, params: string[], loc: SourceLocation, ctx: TransformContext): Node | null {
-	const stmtBody = body.kind === NodeKind.BlockStmt ? body : makeBlock([makeReturn(body, loc)], loc);
+	const stmtBody = body.kind == NodeKind.BlockStmt ? body : makeBlock([makeReturn(body, loc)], loc);
 	const lowered = lowerSelfTailCalls(stmtBody, name, sym, params, loc, ctx);
 	if (!holdsLoweredLoop(lowered)) return null;
 	return lowered;
 }
 
 function holdsLoweredLoop(body: Node): boolean {
-	if (body.kind !== NodeKind.BlockStmt) return false;
+	if (body.kind != NodeKind.BlockStmt) return false;
 	for (const stmt of (body.data as BlockStmtData).statements) {
-		if (stmt.kind === NodeKind.WhileStmt && (stmt.data as WhileStmtData).whileLabel === tcLoopLabel) return true;
+		if (stmt.kind == NodeKind.WhileStmt && (stmt.data as WhileStmtData).whileLabel == tcLoopLabel) return true;
 	}
 	return false;
 }
 
 function lowerClassMethods(node: Node, ctx: TransformContext): Node {
 	const classStruct = peelToStruct(node.nodeType);
-	if (classStruct === null) return node;
-	if ((classStruct.typeFlags & TypeFlag.OpenClass) !== 0) return node;
+	if (classStruct == null) return node;
+	if ((classStruct.typeFlags & TypeFlag.OpenClass) != 0) return node;
 	const cd = node.data as ClassDeclData;
 	for (const member of cd.classBody) {
-		if (member.kind !== NodeKind.MethodDecl) continue;
+		if (member.kind != NodeKind.MethodDecl) continue;
 		const md = member.data as MethodDeclData;
 		if (md.methodIsStatic) continue;
 		// The receiver is the same object on every iteration, so it carries no loop
 		// state; dropping it also keeps arguments aligned with parameters.
 		const params: string[] = [];
-		let first = md.methodParams.length > 0 && md.methodParams[0] === "this" ? 1 : 0;
+		let first = md.methodParams.length > 0 && md.methodParams[0] == "this" ? 1 : 0;
 		while (first < md.methodParams.length) {
 			params.push(md.methodParams[first]);
 			first += 1;
@@ -134,7 +134,7 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	const shadowDecls: Node[] = [];
 	for (let i = 0; i < params.length; i += 1) {
 		const ps = paramSyms[i];
-		if (ps === null) {
+		if (ps == null) {
 			localSyms.push(null);
 			continue;
 		}
@@ -177,15 +177,15 @@ function collectParamSyms(body: Node, params: string[]): (Symbol | null)[] {
 }
 
 function collectInScope(n: Node, params: string[], result: (Symbol | null)[]): void {
-	if (n === null) return;
+	if (n == null) return;
 	const k = n.kind;
-	if (k === NodeKind.FunctionDecl || k === NodeKind.FunctionExpr
-		|| k === NodeKind.ArrowFunction || k === NodeKind.MethodDecl) return;
-	if (k === NodeKind.Identifier && n.resolvedSym !== null
-		&& n.resolvedSym.symbolKind === SymbolKind.Parameter) {
+	if (k == NodeKind.FunctionDecl || k == NodeKind.FunctionExpr
+		|| k == NodeKind.ArrowFunction || k == NodeKind.MethodDecl) return;
+	if (k == NodeKind.Identifier && n.resolvedSym != null
+		&& n.resolvedSym.symbolKind == SymbolKind.Parameter) {
 		const id = n.data as IdentifierData;
 		for (let i = 0; i < params.length; i += 1) {
-			if (params[i] === id.name && result[i] === null) {
+			if (params[i] == id.name && result[i] == null) {
 				result[i] = n.resolvedSym;
 			}
 		}
@@ -200,10 +200,10 @@ function collectInScope(n: Node, params: string[], result: (Symbol | null)[]): v
 // identity makes this safe) to its loop-carried local.
 function rewriteParamRefs(body: Node, fromSyms: (Symbol | null)[], toSyms: (Symbol | null)[]): void {
 	walkNode(body, (n: Node): Node => {
-		if (n.kind !== NodeKind.Identifier) return n;
-		if (n.resolvedSym === null) return n;
+		if (n.kind != NodeKind.Identifier) return n;
+		if (n.resolvedSym == null) return n;
 		for (let i = 0; i < fromSyms.length; i += 1) {
-			if (fromSyms[i] !== null && n.resolvedSym === fromSyms[i] && toSyms[i] !== null) {
+			if (fromSyms[i] != null && n.resolvedSym == fromSyms[i] && toSyms[i] != null) {
 				const id = n.data as IdentifierData;
 				id.name = toSyms[i].name;
 				n.resolvedSym = toSyms[i];
@@ -229,22 +229,22 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 		NodeKind.IfStmt => {
 			const id = stmt.data as IfStmtData;
 			id.consequent = statementizeTailPositions(id.consequent, fnName, fnSym, ctx);
-			if (id.alternate !== null) {
+			if (id.alternate != null) {
 				id.alternate = statementizeTailPositions(id.alternate, fnName, fnSym, ctx);
 			}
 			return stmt;
 		},
 		NodeKind.ReturnStmt => {
 			const rd = stmt.data as ReturnStmtData;
-			if (rd.argument === null) return stmt;
-			if (rd.argument.kind === NodeKind.ConditionalExpr) {
+			if (rd.argument == null) return stmt;
+			if (rd.argument.kind == NodeKind.ConditionalExpr) {
 				if (!ternaryHoldsTailCall(rd.argument, fnName, fnSym)) return stmt;
 				const expanded = makeBlock(lowerTernaryInReturn(stmt, ctx), stmt.location);
 				return statementizeTailPositions(expanded, fnName, fnSym, ctx);
 			}
-			if (rd.argument.kind === NodeKind.BinaryExpr) {
+			if (rd.argument.kind == NodeKind.BinaryExpr) {
 				const bd = rd.argument.data as BinaryExprData;
-				if (bd.operator !== "&&" && bd.operator !== "||") return stmt;
+				if (bd.operator != "&&" && bd.operator != "||") return stmt;
 				if (!ternaryHoldsTailCall(bd.right, fnName, fnSym)) return stmt;
 				const loc = stmt.location;
 				const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
@@ -252,7 +252,7 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 				lhsDecl.resolvedSym = lhsSym;
 				const keepBlk = makeBlock([makeReturn(makeIdentResolved(lhsSym, loc), loc)], loc);
 				const callBlk = makeBlock([tailArmStmt(bd.right, loc)], loc);
-				const isAnd = bd.operator === "&&";
+				const isAnd = bd.operator == "&&";
 				const guard = makeIf(makeIdentResolved(lhsSym, loc), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
 				return makeBlock([lhsDecl, statementizeTailPositions(guard, fnName, fnSym, ctx)], loc);
 			}
@@ -263,15 +263,15 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 }
 
 function tailArmStmt(arm: Node, loc: SourceLocation): Node {
-	if (arm.nodeType !== null && arm.nodeType.kind === TypeKind.Never) {
+	if (arm.nodeType != null && arm.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(arm, loc);
 	}
 	return makeReturn(arm, loc);
 }
 
 function ternaryHoldsTailCall(expr: Node, fnName: string, fnSym: Symbol | null): boolean {
-	if (expr === null) return false;
-	if (expr.kind !== NodeKind.ConditionalExpr) return isTailCallExpr(expr, fnName, fnSym);
+	if (expr == null) return false;
+	if (expr.kind != NodeKind.ConditionalExpr) return isTailCallExpr(expr, fnName, fnSym);
 	const cd = expr.data as ConditionalExprData;
 	if (ternaryHoldsTailCall(cd.ternaryConsequent, fnName, fnSym)) return true;
 	return ternaryHoldsTailCall(cd.ternaryAlternate, fnName, fnSym);
@@ -279,7 +279,7 @@ function ternaryHoldsTailCall(expr: Node, fnName: string, fnSym: Symbol | null):
 
 // Check if a function body contains any tail calls (return f(args) where f === name)
 function hasTailCall(body: Node, fnName: string, fnSym: Symbol | null): boolean {
-	if (body.kind === NodeKind.ReturnStmt) {
+	if (body.kind == NodeKind.ReturnStmt) {
 		const rd = body.data as ReturnStmtData;
 		return isTailCallExpr(rd.argument, fnName, fnSym);
 	}
@@ -294,30 +294,30 @@ function hasTailCall(body: Node, fnName: string, fnSym: Symbol | null): boolean 
 // Check if an expression is a call to fnName. Symbol identity when both sides
 // carry one (rules out shadowing and overload sets); name match as fallback.
 function isTailCallExpr(expr: Node | null, fnName: string, fnSym: Symbol | null): boolean {
-	if (expr === null) return false;
-	if (expr.kind !== NodeKind.CallExpr) return false;
+	if (expr == null) return false;
+	if (expr.kind != NodeKind.CallExpr) return false;
 	const cd = expr.data as CallExprData;
-	if (cd.callee.kind === NodeKind.MemberExpr) return isThisMethodCall(cd.callee, fnName, fnSym);
-	if (cd.callee.kind !== NodeKind.Identifier) return false;
-	if (fnSym !== null && cd.callee.resolvedSym !== null) {
-		return cd.callee.resolvedSym === fnSym;
+	if (cd.callee.kind == NodeKind.MemberExpr) return isThisMethodCall(cd.callee, fnName, fnSym);
+	if (cd.callee.kind != NodeKind.Identifier) return false;
+	if (fnSym != null && cd.callee.resolvedSym != null) {
+		return cd.callee.resolvedSym == fnSym;
 	}
 	const id = cd.callee.data as IdentifierData;
-	return id.name === fnName;
+	return id.name == fnName;
 }
 
 function isThisMethodCall(callee: Node, fnName: string, fnSym: Symbol | null): boolean {
 	const md = callee.data as MemberExprData;
-	if (md.property !== fnName) return false;
-	if (md.object.kind !== NodeKind.Identifier) return false;
-	if ((md.object.data as IdentifierData).name !== "this") return false;
-	if (fnSym !== null && callee.resolvedSym !== null) return callee.resolvedSym === fnSym;
+	if (md.property != fnName) return false;
+	if (md.object.kind != NodeKind.Identifier) return false;
+	if ((md.object.data as IdentifierData).name != "this") return false;
+	if (fnSym != null && callee.resolvedSym != null) return callee.resolvedSym == fnSym;
 	return true;
 }
 
 function tailOpaque(stmt: Node): boolean {
-	return stmt.kind === NodeKind.TryCatchStmt ||
-		stmt.kind === NodeKind.DeferStmt ||
+	return stmt.kind == NodeKind.TryCatchStmt ||
+		stmt.kind == NodeKind.DeferStmt ||
 		isFuncBoundary(stmt);
 }
 
@@ -362,7 +362,7 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 	// 1. Evaluate all arguments into temps (avoid order-of-evaluation issues)
 	const tempSyms: Symbol[] = [];
 	for (let i = 0; i < cd.arguments.length && i < params.length; i += 1) {
-		const argType = cd.arguments[i].nodeType !== null ? cd.arguments[i].nodeType : noneType();
+		const argType = cd.arguments[i].nodeType != null ? cd.arguments[i].nodeType : noneType();
 		const sym = freshTempSym(ctx, "tc", argType);
 		tempSyms.push(sym);
 		const tcDecl = makeVarDecl(sym.name, cd.arguments[i], DeclKind.Const, loc);
@@ -373,7 +373,7 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 	// 2. Reassign loop-carried locals from temps
 	for (let j = 0; j < tempSyms.length; j += 1) {
 		const ls = localSyms[j];
-		const target = ls !== null ? makeIdentResolved(ls, loc) : makeIdent(params[j], loc);
+		const target = ls != null ? makeIdentResolved(ls, loc) : makeIdent(params[j], loc);
 		const assignExpr = makeAssign(target, makeIdentResolved(tempSyms[j], loc), loc);
 		stmts.push(makeExprStmt(assignExpr, loc));
 	}
@@ -387,14 +387,14 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 }
 
 // ===== Tests =====
-test "non-recursive unchanged" { assert firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl; }
+test "non-recursive unchanged" { assert firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) == NodeKind.FunctionDecl; }
 
-test "simple passthrough" { assert stmtCountAfter("const x = 1;", lowerTailCall) === 1; }
+test "simple passthrough" { assert stmtCountAfter("const x = 1;", lowerTailCall) == 1; }
 
-test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt; }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerTailCall) == NodeKind.WhileStmt; }
 
-test "if stmt unchanged" { assert firstStmtKindAfter("if (x) {}", lowerTailCall) === NodeKind.IfStmt; }
+test "if stmt unchanged" { assert firstStmtKindAfter("if (x) {}", lowerTailCall) == NodeKind.IfStmt; }
 
-test "non-function passthrough" { assert stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2; }
+test "non-function passthrough" { assert stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) == 2; }
 
-test "arrow function unchanged" { assert firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) === NodeKind.VariableDecl; }
+test "arrow function unchanged" { assert firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) == NodeKind.VariableDecl; }

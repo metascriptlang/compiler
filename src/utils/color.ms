@@ -174,10 +174,10 @@ export function stripAnsi(text: string): string {
 	let result = "";
 	let i = 0;
 	while (i < text.byteLength) {
-		if (text.slice(i, i + 2) === "\x1b[") {
+		if (text.slice(i, i + 2) == "\x1b[") {
 			// Skip until 'm'
 			i += 2;
-			while (i < text.byteLength && text.slice(i, i + 1) !== "m") {
+			while (i < text.byteLength && text.slice(i, i + 1) != "m") {
 				i += 1;
 			}
 			i += 1;
@@ -248,16 +248,16 @@ test "path is underline cyan" {
 test "strip removes codes" {
 	const colored = red("hello");
 	const stripped = stripAnsi(colored);
-	assert stripped === "hello";
+	assert stripped == "hello";
 }
 
 test "strip handles nested" {
 	const colored = bold(red("x"));
 	const stripped = stripAnsi(colored);
-	assert stripped === "x";
+	assert stripped == "x";
 }
 
 test "strip preserves plain text" {
 	const stripped = stripAnsi("plain");
-	assert stripped === "plain";
+	assert stripped == "plain";
 }

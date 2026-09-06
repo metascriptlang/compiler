@@ -15,9 +15,9 @@
 import { Node, NodeKind, childCount, childAt } from "std/meta";
 
 function containsCall(n: Node): boolean {
-	if (n === null) return false;
-	if (n.kind === NodeKind.CallExpr) return true;
-	if (n.kind === NodeKind.ArrowFunction || n.kind === NodeKind.FunctionExpr) return false;
+	if (n == null) return false;
+	if (n.kind == NodeKind.CallExpr) return true;
+	if (n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr) return false;
 	const c = childCount(n);
 	for (let i = 0; i < c; i = i + 1) {
 		if (containsCall(childAt(n, i))) return true;
@@ -48,22 +48,22 @@ function main(): void {
 	const inArray = reactiveFlag([1, f(), 3]);
 	const inTernary = reactiveFlag(gate ? f() : 1);
 	const behindArrow = reactiveFlag(() => f());
-	console.log(plain === 0 ? "plain:ok" : "plain:RED");
-	console.log(direct === 1 ? "direct:ok" : "direct:RED");
-	console.log(inArray === 1 ? "inArray:ok" : "inArray:RED");
-	console.log(inTernary === 1 ? "inTernary:ok" : "inTernary:RED");
-	console.log(behindArrow === 0 ? "behindArrow:ok" : "behindArrow:RED");
+	console.log(plain == 0 ? "plain:ok" : "plain:RED");
+	console.log(direct == 1 ? "direct:ok" : "direct:RED");
+	console.log(inArray == 1 ? "inArray:ok" : "inArray:RED");
+	console.log(inTernary == 1 ? "inTernary:ok" : "inTernary:RED");
+	console.log(behindArrow == 0 ? "behindArrow:ok" : "behindArrow:RED");
 	const metaSolo = kidCount(f);
 	const callKids = kidCount(f());
-	console.log(metaSolo === 0 ? "metaSolo:ok" : "metaSolo:RED");
-	console.log(callKids === 1 ? "callKids:ok" : "callKids:RED");
-	if (plain !== 0) { throw "GUARD RED: static expr classified reactive"; }
-	if (direct !== 1) { throw "GUARD RED: call in binary expr missed"; }
-	if (inArray !== 1) { throw "GUARD RED: call inside array literal missed"; }
-	if (inTernary !== 1) { throw "GUARD RED: call inside ternary missed"; }
-	if (behindArrow !== 0) { throw "GUARD RED: arrow boundary not respected"; }
-	if (metaSolo !== 0) { throw "GUARD RED: metadata field counted as child"; }
-	if (callKids !== 1) { throw "GUARD RED: callee child missed"; }
+	console.log(metaSolo == 0 ? "metaSolo:ok" : "metaSolo:RED");
+	console.log(callKids == 1 ? "callKids:ok" : "callKids:RED");
+	if (plain != 0) { throw "GUARD RED: static expr classified reactive"; }
+	if (direct != 1) { throw "GUARD RED: call in binary expr missed"; }
+	if (inArray != 1) { throw "GUARD RED: call inside array literal missed"; }
+	if (inTernary != 1) { throw "GUARD RED: call inside ternary missed"; }
+	if (behindArrow != 0) { throw "GUARD RED: arrow boundary not respected"; }
+	if (metaSolo != 0) { throw "GUARD RED: metadata field counted as child"; }
+	if (callKids != 1) { throw "GUARD RED: callee child missed"; }
 	console.log("macroChildIndexTraversal ok");
 }
 main();

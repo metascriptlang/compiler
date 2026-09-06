@@ -25,16 +25,16 @@ class Box<T> {
 
 test "bug128: explicit type arg instantiates static of generic class" {
 	const a = Box.make<int32>(5);
-	assert a.v === 5;
+	assert a.v == 5;
 }
 
 test "bug128: annotated destination instantiates static of generic class" {
 	const b: Box<int32> = Box.make(7);
-	assert b.v === 7;
+	assert b.v == 7;
 }
 
 test "bug128: per-type instantiations coexist" {
 	const c = Box.make<string>("hey");
-	assert c.v === "hey";
-	assert c.v.length === 3;
+	assert c.v == "hey";
+	assert c.v.length == 3;
 }

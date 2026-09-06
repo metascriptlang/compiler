@@ -25,7 +25,7 @@ function main(): void {
 	for (let i = 0; i < n; i++) {
 		if (!seen.has(`name-${i}-mono`)) { missing = missing + 1; }
 	}
-	if (missing === 0 && seen.size === n) {
+	if (missing == 0 && seen.size == n) {
 		console.log(`hashset-enlarge-keep ok n=${n}`);
 	} else {
 		console.log(`hashset-enlarge-keep MISSING=${missing} size=${seen.size}`);

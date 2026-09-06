@@ -164,7 +164,7 @@ test "AST: resolvedSym on call — static vs exported callee" {
 		"  return handleB(item);\n" +
 		"}";
 	const ast = fullPipeline(src);
-	if (ast === null) { console.log("AST is null"); return; }
+	if (ast == null) { console.log("AST is null"); return; }
 	console.log("AST kind=" + ast.kind + " Program=" + NodeKind.Program);
 	const pd = ast.data as ProgramData;
 	console.log("stmts=" + pd.programStmts.length);
@@ -173,14 +173,14 @@ test "AST: resolvedSym on call — static vs exported callee" {
 		const s = pd.programStmts[i];
 		let inner = s;
 		// Unwrap ExportDecl
-		if (inner.kind === NodeKind.ExportDecl) {
+		if (inner.kind == NodeKind.ExportDecl) {
 			const ed = inner.data as ExportDeclData;
 			inner = ed.exportedDecl;
 		}
-		if (inner.kind === NodeKind.FunctionDecl) {
+		if (inner.kind == NodeKind.FunctionDecl) {
 			const fd = inner.data as FunctionDeclData;
 			console.log("  fn: " + fd.fnName);
-			if (fd.fnName === "dispatch") {
+			if (fd.fnName == "dispatch") {
 				walkCalls(fd.fnBody);
 			}
 		}
@@ -189,46 +189,46 @@ test "AST: resolvedSym on call — static vs exported callee" {
 }
 
 function walkCalls(node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	console.log("  walk kind=" + node.kind);
-	if (node.kind === NodeKind.CallExpr) {
+	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		const sym = node.resolvedSym;
-		const name = sym !== null ? sym.name : "null";
-		let info = "CALL " + name + ": resolvedSym=" + (sym !== null ? "Y" : "N");
-		if (sym !== null && sym.symbolType !== null) {
+		const name = sym != null ? sym.name : "null";
+		let info = "CALL " + name + ": resolvedSym=" + (sym != null ? "Y" : "N");
+		if (sym != null && sym.symbolType != null) {
 			const st = sym.symbolType;
 			info = info + " symTypeKind=" + st.kind;
-			if (st.typeChildren !== null && st.typeChildren.length > 0) {
+			if (st.typeChildren != null && st.typeChildren.length > 0) {
 				info = info + " param0Kind=" + st.typeChildren[0].kind + " param0IsPtr=" + isPointerType(st.typeChildren[0]);
 			}
 		}
-		if (cd.callee.nodeType !== null) {
+		if (cd.callee.nodeType != null) {
 			const cnt = cd.callee.nodeType;
 			info = info + " calleeNTKind=" + cnt.kind;
-			if (cnt.typeChildren !== null && cnt.typeChildren.length > 0) {
+			if (cnt.typeChildren != null && cnt.typeChildren.length > 0) {
 				info = info + " cParam0Kind=" + cnt.typeChildren[0].kind + " cParam0IsPtr=" + isPointerType(cnt.typeChildren[0]);
 			}
 		}
 		if (cd.arguments.length > 0) {
 			const a = cd.arguments[0];
-			info = info + " arg0Kind=" + a.kind + " arg0NTKind=" + (a.nodeType !== null ? a.nodeType.kind : -1);
+			info = info + " arg0Kind=" + a.kind + " arg0NTKind=" + (a.nodeType != null ? a.nodeType.kind : -1);
 		}
 		console.log(info);
 		return;
 	}
-	if (node.kind === NodeKind.BlockStmt) {
+	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
 		let j = 0;
 		while (j < bd.statements.length) { walkCalls(bd.statements[j]); j = j + 1; }
-	} else if (node.kind === NodeKind.IfStmt) {
+	} else if (node.kind == NodeKind.IfStmt) {
 		const id = node.data as IfStmtData;
 		walkCalls(id.consequent);
-		if (id.alternate !== null) walkCalls(id.alternate);
-	} else if (node.kind === NodeKind.ReturnStmt) {
+		if (id.alternate != null) walkCalls(id.alternate);
+	} else if (node.kind == NodeKind.ReturnStmt) {
 		const rd = node.data as ReturnStmtData;
 		walkCalls(rd.argument);
-	} else if (node.kind === NodeKind.ExprStmt) {
+	} else if (node.kind == NodeKind.ExprStmt) {
 		const ed = node.data as ExprStmtData;
 		walkCalls(ed.expr);
 	}
@@ -314,17 +314,17 @@ test "E2E ccgPtr: try desugar - arg nodeType check" {
 		"  return Result.ok(inner);\n" +
 		"}";
 	const ast = fullPipeline(src);
-	if (ast === null) { console.log("AST null"); return; }
+	if (ast == null) { console.log("AST null"); return; }
 	const pd = ast.data as ProgramData;
 	let i = 0;
 	while (i < pd.programStmts.length) {
 		let s = pd.programStmts[i];
-		if (s.kind === NodeKind.ExportDecl) {
+		if (s.kind == NodeKind.ExportDecl) {
 			s = (s.data as ExportDeclData).exportedDecl;
 		}
-		if (s.kind === NodeKind.FunctionDecl) {
+		if (s.kind == NodeKind.FunctionDecl) {
 			const fd = s.data as FunctionDeclData;
-			if (fd.fnName === "caller") {
+			if (fd.fnName == "caller") {
 				console.log("=== CALLER AST ===");
 				walkCalls(fd.fnBody);
 			}

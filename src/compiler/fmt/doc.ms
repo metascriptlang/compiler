@@ -143,7 +143,7 @@ export function docJoinFlat(docs: Doc[], sep: Doc): Doc[] {
 // when `trailing` is true. Items separated by Line (inherits parent break mode).
 // Returns Doc[] suitable for wrapping in docIndent.
 export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
-	if (items.length === 0) return [];
+	if (items.length == 0) return [];
 	const parts: Doc[] = [docSoftLine()];
 	for (let i = 0; i < items.length; i += 1) {
 		if (i > 0) {

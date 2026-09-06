@@ -47,16 +47,16 @@ export function `<`(this a: Vec, b: Vec): boolean { return a.x < b.x; }
 export function main(): void {
 	const two: int32 = 2;
 	const three: int32 = 3;
-	if ((two ** three) !== 8) { throw "GUARD RED: flat operator on builtin operands not resolved"; }
+	if ((two ** three) != 8) { throw "GUARD RED: flat operator on builtin operands not resolved"; }
 
 	const p: Vec = { x: 3 } as Vec;
 	const q: Vec = { x: 3 } as Vec;
 	if (p == q) { throw "GUARD RED: builtin struct-eq silently beat the user's flat `==`"; }
 
 	const m = p * q;
-	if (m.x !== 9) { throw "GUARD RED: flat operator on struct operands not resolved"; }
+	if (m.x != 9) { throw "GUARD RED: flat operator on struct operands not resolved"; }
 
-	if (!(p < q) === false) { /* keep the receiver-form call live */ }
+	if (!(p < q) == false) { /* keep the receiver-form call live */ }
 	const r: Vec = { x: 9 } as Vec;
 	if (!(p < r)) { throw "GUARD RED: receiver-form operator regressed"; }
 

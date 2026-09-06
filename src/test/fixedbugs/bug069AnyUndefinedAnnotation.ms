@@ -32,7 +32,7 @@ test "bug069: compound 'any' positions are rejected too" {
 
 test "bug069: annotation 'undefined' warns but stays legal" {
 	assert hasWarning("let x: undefined = null;", "'undefined' is an alias of 'null'");
-	assert strictErrorCount("let x: undefined = null;") === 0;
+	assert strictErrorCount("let x: undefined = null;") == 0;
 }
 
 // Measured as a DELTA against the same program spelled with `null`: the
@@ -41,17 +41,17 @@ test "bug069: annotation 'undefined' warns but stays legal" {
 test "bug069: the 'undefined' warning is emitted once per annotation" {
 	const base = warningCount("let x: null = null;");
 	const warned = warningCount("let x: undefined = null;");
-	assert warned - base === 1;
+	assert warned - base == 1;
 }
 
 test "bug069: 'undefined' aliases null in a union position" {
-	assert strictErrorCount("function f(s: string | undefined): boolean { return s === null; }") === 0;
+	assert strictErrorCount("function f(s: string | undefined): boolean { return s === null; }") == 0;
 }
 
 test "bug069: 'unknown' stays legal" {
-	assert errorCount("function f(x: unknown): void {}") === 0;
+	assert errorCount("function f(x: unknown): void {}") == 0;
 }
 
 test "bug069: the null cast idiom stays legal" {
-	assert errorCount("interface T { v: int32; } function f(): T { return null as unknown as T; }") === 0;
+	assert errorCount("interface T { v: int32; } function f(): T { return null as unknown as T; }") == 0;
 }

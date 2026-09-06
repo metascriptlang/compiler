@@ -57,7 +57,7 @@ export interface ZipWriter {
 // copy of `data`, so callers may free their reference after this call.
 export function openZip(data: string): Result<ZipReader, CompressError> {
 	const h = msZipReaderOpen(data);
-	if (h === 0) {
+	if (h == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "failed to open zip archive"));
 	}
 	return Result.ok({ handle: h });
@@ -77,7 +77,7 @@ export function zipEntries(r: ZipReader): ZipEntry[] {
 		out.push({
 			name: msZipReaderEntryName(r.handle, i),
 			size: msZipReaderEntrySize(r.handle, i),
-			isDir: msZipReaderEntryIsDir(r.handle, i) === 1,
+			isDir: msZipReaderEntryIsDir(r.handle, i) == 1,
 		});
 		i = i + 1;
 	}
@@ -93,11 +93,11 @@ export function zipExtract(r: ZipReader, index: int32): Result<string, CompressE
 	if (isDir < 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "invalid entry index"));
 	}
-	if (isDir === 1) return Result.ok("");
+	if (isDir == 1) return Result.ok("");
 	const expectedSize = msZipReaderEntrySize(r.handle, index);
-	if (expectedSize === 0) return Result.ok("");
+	if (expectedSize == 0) return Result.ok("");
 	const data = msZipReaderExtract(r.handle, index);
-	if (data.length === 0) {
+	if (data.length == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "failed to extract zip entry"));
 	}
 	return Result.ok(data);
@@ -108,7 +108,7 @@ export function zipFindByName(r: ZipReader, name: string): int32 {
 	const n = msZipReaderCount(r.handle);
 	let i: int32 = 0;
 	while (i < n) {
-		if (msZipReaderEntryName(r.handle, i) === name) return i;
+		if (msZipReaderEntryName(r.handle, i) == name) return i;
 		i = i + 1;
 	}
 	return -1;
@@ -125,7 +125,7 @@ export function zipExtractByName(r: ZipReader, name: string): Result<string, Com
 
 // Release all reader resources. The ZipReader must not be used after this call.
 export function closeZip(r: ZipReader): void {
-	if (r.handle !== 0) {
+	if (r.handle != 0) {
 		msZipReaderClose(r.handle);
 		r.handle = 0;
 	}
@@ -136,7 +136,7 @@ export function closeZip(r: ZipReader): void {
 // Create a new in-memory ZIP writer.
 export function newZipWriter(): Result<ZipWriter, CompressError> {
 	const h = msZipWriterNew();
-	if (h === 0) {
+	if (h == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "failed to create zip writer"));
 	}
 	return Result.ok({ handle: h, finalized: false });
@@ -146,7 +146,7 @@ export function newZipWriter(): Result<ZipWriter, CompressError> {
 // level (0-9, 6 is the default). For a "stored" entry pass level=0.
 // Returns Result<boolean, CompressError> — true on success.
 export function zipAdd(w: ZipWriter, name: string, data: string, level: int32 = 6): Result<boolean, CompressError> {
-	if (w.handle === 0 || w.finalized) {
+	if (w.handle == 0 || w.finalized) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed or finalized"));
 	}
 	const st = msZipWriterAdd(w.handle, name, data, level);
@@ -159,7 +159,7 @@ export function zipAdd(w: ZipWriter, name: string, data: string, level: int32 = 
 // Finalise the archive and return its bytes. The writer is still valid and
 // must be closed via closeZipWriter, but no further entries can be added.
 export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
-	if (w.handle === 0) {
+	if (w.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "writer already closed"));
 	}
 	if (w.finalized) {
@@ -167,7 +167,7 @@ export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
 	}
 	const out = msZipWriterFinalize(w.handle);
 	w.finalized = true;
-	if (out.length === 0) {
+	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.ZipError, "finalize failed"));
 	}
 	return Result.ok(out);
@@ -175,7 +175,7 @@ export function zipFinalize(w: ZipWriter): Result<string, CompressError> {
 
 // Release all writer resources.
 export function closeZipWriter(w: ZipWriter): void {
-	if (w.handle !== 0) {
+	if (w.handle != 0) {
 		msZipWriterClose(w.handle);
 		w.handle = 0;
 	}

@@ -74,37 +74,37 @@ export function execFastModule(mod: RaiserModule): number {
 		ip = ip + 1;
 		const op = inst.op;
 
-		if (op === RaiserOpcode.LoadConst) {
+		if (op == RaiserOpcode.LoadConst) {
 			const bx = getBx(inst);
 			regs[inst.a] = constants[bx];
-		} else if (op === RaiserOpcode.Move) {
+		} else if (op == RaiserOpcode.Move) {
 			regs[inst.a] = regs[inst.b];
-		} else if (op === RaiserOpcode.LoadNil) {
+		} else if (op == RaiserOpcode.LoadNil) {
 			regs[inst.a] = 0;
-		} else if (op === RaiserOpcode.AddI64) {
+		} else if (op == RaiserOpcode.AddI64) {
 			regs[inst.a] = regs[inst.b] + regs[inst.c];
-		} else if (op === RaiserOpcode.SubI64) {
+		} else if (op == RaiserOpcode.SubI64) {
 			regs[inst.a] = regs[inst.b] - regs[inst.c];
-		} else if (op === RaiserOpcode.MulI64) {
+		} else if (op == RaiserOpcode.MulI64) {
 			regs[inst.a] = regs[inst.b] * regs[inst.c];
-		} else if (op === RaiserOpcode.NegI64) {
+		} else if (op == RaiserOpcode.NegI64) {
 			regs[inst.a] = -regs[inst.b];
-		} else if (op === RaiserOpcode.BeqI64) {
-			if (regs[inst.a] === regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.BneI64) {
-			if (regs[inst.a] !== regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.BltI64) {
+		} else if (op == RaiserOpcode.BeqI64) {
+			if (regs[inst.a] == regs[inst.b]) ip = ip + inst.c;
+		} else if (op == RaiserOpcode.BneI64) {
+			if (regs[inst.a] != regs[inst.b]) ip = ip + inst.c;
+		} else if (op == RaiserOpcode.BltI64) {
 			if (regs[inst.a] < regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.BleI64) {
+		} else if (op == RaiserOpcode.BleI64) {
 			if (regs[inst.a] <= regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.BgtI64) {
+		} else if (op == RaiserOpcode.BgtI64) {
 			if (regs[inst.a] > regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.BgeI64) {
+		} else if (op == RaiserOpcode.BgeI64) {
 			if (regs[inst.a] >= regs[inst.b]) ip = ip + inst.c;
-		} else if (op === RaiserOpcode.Jump) {
+		} else if (op == RaiserOpcode.Jump) {
 			const offset = getSignedAx(inst);
 			ip = ip + offset;
-		} else if (op === RaiserOpcode.Halt) {
+		} else if (op == RaiserOpcode.Halt) {
 			halted = true;
 			exitValue = regs[inst.a];
 		} else {

@@ -14,42 +14,42 @@ function check(name: string, ok: boolean): boolean {
 }
 
 function literals(): boolean {
-	let ok = check("dec", (255n).toString() === "255");
-	ok = check("hex", (0xffn).toString() === "255") && ok;
-	ok = check("bin", (0b1111n).toString() === "15") && ok;
-	ok = check("oct", (0o17n).toString() === "15") && ok;
-	ok = check("underscore", (1_000_000n).toString() === "1000000") && ok;
-	ok = check("neg", (-42n).toString() === "-42") && ok;
+	let ok = check("dec", (255n).toString() == "255");
+	ok = check("hex", (0xffn).toString() == "255") && ok;
+	ok = check("bin", (0b1111n).toString() == "15") && ok;
+	ok = check("oct", (0o17n).toString() == "15") && ok;
+	ok = check("underscore", (1_000_000n).toString() == "1000000") && ok;
+	ok = check("neg", (-42n).toString() == "-42") && ok;
 	return ok;
 }
 
 function arithmetic(): boolean {
-	let ok = check("add", (2n + 3n).toString() === "5");
-	ok = check("sub", (2n - 5n).toString() === "-3") && ok;
-	ok = check("mul", (7n * 6n).toString() === "42") && ok;
-	ok = check("divTrunc", (7n / 2n).toString() === "3") && ok;
-	ok = check("divNegNum", (-7n / 2n).toString() === "-3") && ok;
-	ok = check("divNegDen", (7n / -2n).toString() === "-3") && ok;
-	ok = check("divNegBoth", (-7n / -2n).toString() === "3") && ok;
-	ok = check("remSign", (-7n % 2n).toString() === "-1") && ok;
-	ok = check("remSignDen", (7n % -2n).toString() === "1") && ok;
-	ok = check("pow", (2n ** 64n).toString() === "18446744073709551616") && ok;
-	ok = check("huge", (2n ** 100n + 1n).toString() === "1267650600228229401496703205377") && ok;
+	let ok = check("add", (2n + 3n).toString() == "5");
+	ok = check("sub", (2n - 5n).toString() == "-3") && ok;
+	ok = check("mul", (7n * 6n).toString() == "42") && ok;
+	ok = check("divTrunc", (7n / 2n).toString() == "3") && ok;
+	ok = check("divNegNum", (-7n / 2n).toString() == "-3") && ok;
+	ok = check("divNegDen", (7n / -2n).toString() == "-3") && ok;
+	ok = check("divNegBoth", (-7n / -2n).toString() == "3") && ok;
+	ok = check("remSign", (-7n % 2n).toString() == "-1") && ok;
+	ok = check("remSignDen", (7n % -2n).toString() == "1") && ok;
+	ok = check("pow", (2n ** 64n).toString() == "18446744073709551616") && ok;
+	ok = check("huge", (2n ** 100n + 1n).toString() == "1267650600228229401496703205377") && ok;
 	return ok;
 }
 
 function bitwise(): boolean {
-	let ok = check("and", (12n & 10n).toString() === "8");
-	ok = check("or", (12n | 10n).toString() === "14") && ok;
-	ok = check("xor", (12n ^ 10n).toString() === "6") && ok;
-	ok = check("notPos", (~5n).toString() === "-6") && ok;
-	ok = check("notNeg", (~-5n).toString() === "4") && ok;
-	ok = check("andNeg", (-12n & 10n).toString() === "0") && ok;
-	ok = check("orNeg", (-12n | 10n).toString() === "-2") && ok;
-	ok = check("xorNeg", (-12n ^ 10n).toString() === "-2") && ok;
-	ok = check("shl", (1n << 70n).toString() === "1180591620717411303424") && ok;
-	ok = check("shr", (1024n >> 3n).toString() === "128") && ok;
-	ok = check("shrNegFloor", (-5n >> 1n).toString() === "-3") && ok;
+	let ok = check("and", (12n & 10n).toString() == "8");
+	ok = check("or", (12n | 10n).toString() == "14") && ok;
+	ok = check("xor", (12n ^ 10n).toString() == "6") && ok;
+	ok = check("notPos", (~5n).toString() == "-6") && ok;
+	ok = check("notNeg", (~-5n).toString() == "4") && ok;
+	ok = check("andNeg", (-12n & 10n).toString() == "0") && ok;
+	ok = check("orNeg", (-12n | 10n).toString() == "-2") && ok;
+	ok = check("xorNeg", (-12n ^ 10n).toString() == "-2") && ok;
+	ok = check("shl", (1n << 70n).toString() == "1180591620717411303424") && ok;
+	ok = check("shr", (1024n >> 3n).toString() == "128") && ok;
+	ok = check("shrNegFloor", (-5n >> 1n).toString() == "-3") && ok;
 	return ok;
 }
 
@@ -58,8 +58,8 @@ function comparisons(): boolean {
 	ok = check("gt", 5n > 3n) && ok;
 	ok = check("le", 3n <= 3n) && ok;
 	ok = check("ge", 3n >= 3n) && ok;
-	ok = check("eq", 42n === 42n) && ok;
-	ok = check("ne", 42n !== 43n) && ok;
+	ok = check("eq", 42n == 42n) && ok;
+	ok = check("ne", 42n != 43n) && ok;
 	ok = check("mixedLt", 1n < 2) && ok;
 	ok = check("mixedGt", 2 > 1n) && ok;
 	ok = check("hugeCmp", 2n ** 90n > 2n ** 89n) && ok;
@@ -74,7 +74,7 @@ function truthiness(): boolean {
 	let hit = 0;
 	if (z) { hit = 1; }
 	if (nz) { hit = hit + 2; }
-	ok = check("branch", hit === 2) && ok;
+	ok = check("branch", hit == 2) && ok;
 	return ok;
 }
 
@@ -84,19 +84,19 @@ function conversions(): boolean {
 	const back: float64 = b as float64;
 	const narrowed: int32 = (255n) as int32;
 	const parsed: bigint = "0xff" as bigint;
-	let ok = check("intToBig", b.toString() === "1234");
-	ok = check("bigToFloat", back === 1234.0) && ok;
-	ok = check("bigToInt", narrowed === 255) && ok;
-	ok = check("strToBig", parsed.toString() === "255") && ok;
-	ok = check("typeofBig", typeof b === "bigint") && ok;
+	let ok = check("intToBig", b.toString() == "1234");
+	ok = check("bigToFloat", back == 1234.0) && ok;
+	ok = check("bigToInt", narrowed == 255) && ok;
+	ok = check("strToBig", parsed.toString() == "255") && ok;
+	ok = check("typeofBig", typeof b == "bigint") && ok;
 	return ok;
 }
 
 function radix(): boolean {
-	let ok = check("radix2", (255n).toString(2) === "11111111");
-	ok = check("radix16", (255n).toString(16) === "ff") && ok;
-	ok = check("radix36", (1295n).toString(36) === "zz") && ok;
-	ok = check("radixNeg", (-255n).toString(16) === "-ff") && ok;
+	let ok = check("radix2", (255n).toString(2) == "11111111");
+	ok = check("radix16", (255n).toString(16) == "ff") && ok;
+	ok = check("radix36", (1295n).toString(36) == "zz") && ok;
+	ok = check("radixNeg", (-255n).toString(16) == "-ff") && ok;
 	return ok;
 }
 
@@ -106,8 +106,8 @@ function mutation(): boolean {
 	let cnt: bigint = 0n;
 	cnt++;
 	cnt++;
-	let ok = check("compound", acc.toString() === "30");
-	ok = check("increment", cnt.toString() === "2") && ok;
+	let ok = check("compound", acc.toString() == "30");
+	ok = check("increment", cnt.toString() == "2") && ok;
 	return ok;
 }
 
@@ -119,11 +119,11 @@ function containers(): boolean {
 	const box: Box = { v: 0n };
 	for (let i = 0; i < 20; i += 1) { box.v = i as bigint; }
 	const sbox: SBox = { v: 99n };
-	let ok = check("arraySum", sum.toString() === "308");
-	ok = check("interfaceField", box.v.toString() === "19") && ok;
-	ok = check("structField", sbox.v.toString() === "99") && ok;
-	ok = check("interpolation", `v=${sbox.v}` === "v=99") && ok;
-	ok = check("concat", "n=" + box.v.toString() === "n=19") && ok;
+	let ok = check("arraySum", sum.toString() == "308");
+	ok = check("interfaceField", box.v.toString() == "19") && ok;
+	ok = check("structField", sbox.v.toString() == "99") && ok;
+	ok = check("interpolation", `v=${sbox.v}` == "v=99") && ok;
+	ok = check("concat", "n=" + box.v.toString() == "n=19") && ok;
 	return ok;
 }
 

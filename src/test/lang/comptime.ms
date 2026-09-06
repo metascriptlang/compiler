@@ -24,7 +24,7 @@ const PHASE_8A_LOCAL: number = @comptime {
 };
 
 test "phase 8a: pure local @comptime" {
-	assert PHASE_8A_LOCAL === 30;
+	assert PHASE_8A_LOCAL == 30;
 }
 
 // ===== Phase 8b: cross-module function call =====
@@ -48,7 +48,7 @@ const NOT_FOUND_OK: number = @comptime {
 };
 
 test "phase 8b: cross-module readFile error path returns !ok" {
-	assert NOT_FOUND_OK === 0;
+	assert NOT_FOUND_OK == 0;
 }
 
 // ===== Phase 8c: cross-module nested field access =====
@@ -98,21 +98,21 @@ function isoCtLen(): number {
 }
 
 test "isolation: comptime const survives concat in sibling fns" {
-	assert ("p=" + isoPlain()) === "p=plain";
-	assert ("s=" + isoCt()) === "s=hello";
+	assert ("p=" + isoPlain()) == "p=plain";
+	assert ("s=" + isoCt()) == "s=hello";
 }
 
 test "isolation: comptime const usable as value in loop and local" {
-	assert isoCtLen() === 5;
+	assert isoCtLen() == 5;
 	const local: string = ISO_CT;
-	assert local === "hello";
+	assert local == "hello";
 }
 
 function isoSeed(): number { return 42; }
 const ISO_CT2: number = @comptime { return isoSeed(); };
 
 test "isolation: second comptime block still resolves outer fns" {
-	assert ISO_CT2 === 42;
+	assert ISO_CT2 == 42;
 }
 
 // String ops on a PARAMETER receiver. exprIsString must consult the resolved
@@ -136,10 +136,10 @@ const PARAM_SLICE: string = @comptime { return paramSlice("abcdef"); };
 const PARAM_SCAN: string = @comptime { return paramScan("abc"); };
 
 test "comptime: string ops on a string-typed parameter" {
-	assert PARAM_LEN === 5;
-	assert PARAM_CHAR_AT === "b";
-	assert PARAM_SLICE === "bcd";
-	assert PARAM_SCAN === "abc";
+	assert PARAM_LEN == 5;
+	assert PARAM_CHAR_AT == "b";
+	assert PARAM_SLICE == "bcd";
+	assert PARAM_SCAN == "abc";
 }
 
 // String ORDERING. `isStrCmp` was computed for every comparison operator but
@@ -172,7 +172,7 @@ const ORD: string = @comptime {
 };
 
 test "comptime: string ordering compares text, not handles" {
-	assert ORD === "101010111111";
+	assert ORD == "101010111111";
 }
 
 const LOCAL_SLOT: string = @comptime {
@@ -202,5 +202,5 @@ const LOCAL_SLOT: string = @comptime {
 };
 
 test "comptime: a declared local owns its register, never aliases its initializer" {
-	assert LOCAL_SLOT === "keep/changed|7/9|true/false|base/base!";
+	assert LOCAL_SLOT == "keep/changed|7/9|true/false|base/base!";
 }

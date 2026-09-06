@@ -27,7 +27,7 @@ test "a user module listed in extra globalImports lands in the prelude scope" {
 
 	let found = false;
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (sym.name === "neonGuardPreludeProbe") found = true;
+		if (sym.name == "neonGuardPreludeProbe") found = true;
 	}
 	assert found, "user module in globalImports was not loaded into the prelude scope";
 }
@@ -50,8 +50,8 @@ test "prelude converter pair and macro body survive injectPrelude" {
 	injectPrelude(modCtx, preludeCtx);
 	assert modCtx.converterTargets.has("VNodeFix"), "converter pair not injected into module ctx";
 	const convName = modCtx.converterTargets.get("VNodeFix");
-	assert convName !== null, "converter name missing from injected pair table";
-	if (convName !== null) {
+	assert convName != null, "converter name missing from injected pair table";
+	if (convName != null) {
 		assert modCtx.macroBodyRegistry.has(convName), "converter macro body not injected into module ctx";
 	}
 }

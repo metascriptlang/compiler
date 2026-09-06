@@ -38,19 +38,19 @@ test "bug019: splitTopLevel preserves comma inside generic with arrow" {
 	// function returning a generic. Pre-fix this split into 3 elements;
 	// post-fix it correctly splits into 2.
 	const parts = splitTopLevel("string, (s: string) => Result<string, string>", ",");
-	assert parts.length === 2;
-	assert parts[0] === "string";
-	assert parts[1] === "(s: string) => Result<string, string>";
+	assert parts.length == 2;
+	assert parts[0] == "string";
+	assert parts[1] == "(s: string) => Result<string, string>";
 }
 
 test "bug019: splitTopLevel handles arrow-returning-arrow" {
 	// Nested arrow functions — the `>` of every `=>` must be ignored.
 	const parts = splitTopLevel("(x: number) => (y: string) => boolean", ",");
-	assert parts.length === 1;
+	assert parts.length == 1;
 }
 
 test "bug019: splitTopLevel still splits top-level commas in generic args" {
 	// Sanity check: the fix doesn't accidentally suppress legitimate splits.
 	const parts = splitTopLevel("string, number, boolean", ",");
-	assert parts.length === 3;
+	assert parts.length == 3;
 }

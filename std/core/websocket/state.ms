@@ -177,7 +177,7 @@ export function findCRLFCRLF(bytes: uint8[]): int32 {
 	const lf: int32 = 0x0A;
 	const limit = bytes.length - 3;
 	for (let i: int32 = 0; i < limit; i = i + 1) {
-		if (bytes[i] === cr && bytes[i + 1] === lf && bytes[i + 2] === cr && bytes[i + 3] === lf) {
+		if (bytes[i] == cr && bytes[i + 1] == lf && bytes[i + 2] == cr && bytes[i + 3] == lf) {
 			return i;
 		}
 	}
@@ -213,14 +213,14 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 	// Control frames — auto-reply or surface immediately. Per RFC §5.4 control
 	// frames may interleave between data frames of a fragmented message
 	// without disturbing the fragment state.
-	if (f.opcode === OPCODE_PING) {
+	if (f.opcode == OPCODE_PING) {
 		return decisionContinue(OPCODE_PONG, f.payload);
 	}
-	if (f.opcode === OPCODE_PONG) {
+	if (f.opcode == OPCODE_PONG) {
 		const empty: uint8[] = [];
 		return decisionContinue(0, empty);
 	}
-	if (f.opcode === OPCODE_CLOSE) {
+	if (f.opcode == OPCODE_CLOSE) {
 		const info = decodeClosePayload(f.payload);
 		// RFC 6455 §7.4.1: certain codes (1004/1005/1006/1015 + reserved
 		// ranges) MUST NOT appear on the wire. If a peer sends them, that's a
@@ -237,8 +237,8 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 	}
 
 	// Data frames — handle fragmentation.
-	if (f.opcode === OPCODE_CONTINUATION) {
-		if (fs.fragOpcode === 0) {
+	if (f.opcode == OPCODE_CONTINUATION) {
+		if (fs.fragOpcode == 0) {
 			return decisionError(WsCloseCode.ProtocolError as int32, "continuation frame with no in-progress message");
 		}
 		if (fs.fragments.length + f.payload.length > MAX_PAYLOAD_BYTES) {
@@ -251,19 +251,19 @@ export function processFrame(fs: FragState, f: ParsedFrame, isServerSide: boolea
 			const empty: uint8[] = [];
 			fs.fragments = empty;
 			fs.fragOpcode = 0;
-			const kind = op === OPCODE_TEXT ? WsMessageKind.Text : WsMessageKind.Binary;
+			const kind = op == OPCODE_TEXT ? WsMessageKind.Text : WsMessageKind.Binary;
 			return decisionDeliver({ kind: kind, data: data, closeCode: 0 });
 		}
 		const empty: uint8[] = [];
 		return decisionContinue(0, empty);
 	}
 
-	if (f.opcode === OPCODE_TEXT || f.opcode === OPCODE_BINARY) {
-		if (fs.fragOpcode !== 0) {
+	if (f.opcode == OPCODE_TEXT || f.opcode == OPCODE_BINARY) {
+		if (fs.fragOpcode != 0) {
 			return decisionError(WsCloseCode.ProtocolError as int32, "new data frame while fragmenting");
 		}
 		if (f.fin) {
-			const kind = f.opcode === OPCODE_TEXT ? WsMessageKind.Text : WsMessageKind.Binary;
+			const kind = f.opcode == OPCODE_TEXT ? WsMessageKind.Text : WsMessageKind.Binary;
 			return decisionDeliver({ kind: kind, data: f.payload, closeCode: 0 });
 		}
 		// Start fragmented message.
@@ -295,9 +295,9 @@ function makeFrame(opcode: int32, fin: boolean, masked: boolean, payload: uint8[
 }
 
 function bytesEqual(a: uint8[], b: uint8[]): boolean {
-	if (a.length !== b.length) return false;
+	if (a.length != b.length) return false;
 	for (let i: int32 = 0; i < a.length; i = i + 1) {
-		if (a[i] !== b[i]) return false;
+		if (a[i] != b[i]) return false;
 	}
 	return true;
 }
@@ -308,19 +308,19 @@ test "processFrame: single Text frame FIN=1 → deliver" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];  // "hello"
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, payload));
-	assert d.action === "deliver";
-	assert d.message.kind === WsMessageKind.Text;
+	assert d.action == "deliver";
+	assert d.message.kind == WsMessageKind.Text;
 	assert bytesEqual(d.message.data, payload);
-	assert fs.fragments.length === 0;
-	assert fs.fragOpcode === 0;
+	assert fs.fragments.length == 0;
+	assert fs.fragOpcode == 0;
 }
 
 test "processFrame: single Binary frame FIN=1 → deliver" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x01, 0x02, 0x03];
 	const d = processFrame(fs, makeFrame(OPCODE_BINARY, true, false, payload));
-	assert d.action === "deliver";
-	assert d.message.kind === WsMessageKind.Binary;
+	assert d.action == "deliver";
+	assert d.message.kind == WsMessageKind.Binary;
 	assert bytesEqual(d.message.data, payload);
 }
 
@@ -330,8 +330,8 @@ test "processFrame: Ping → continue + auto-reply Pong with same payload" {
 	const fs = newFragState();
 	const pingPayload: uint8[] = [0x01, 0x02, 0x03];
 	const d = processFrame(fs, makeFrame(OPCODE_PING, true, false, pingPayload));
-	assert d.action === "continue";
-	assert d.autoReplyOpcode === OPCODE_PONG;
+	assert d.action == "continue";
+	assert d.autoReplyOpcode == OPCODE_PONG;
 	assert bytesEqual(d.autoReplyPayload, pingPayload);
 }
 
@@ -339,34 +339,34 @@ test "processFrame: Pong → continue silently (no auto-reply)" {
 	const fs = newFragState();
 	const pongPayload: uint8[] = [0x42];
 	const d = processFrame(fs, makeFrame(OPCODE_PONG, true, false, pongPayload));
-	assert d.action === "continue";
-	assert d.autoReplyOpcode === 0;
+	assert d.action == "continue";
+	assert d.autoReplyOpcode == 0;
 }
 
 test "processFrame: Close (no payload) → delivered_close, code defaults to 1000" {
 	const fs = newFragState();
 	const empty: uint8[] = [];
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, empty));
-	assert d.action === "delivered_close";
-	assert d.message.kind === WsMessageKind.Close;
-	assert d.message.closeCode === 1000;
-	assert d.autoReplyOpcode === OPCODE_CLOSE;
+	assert d.action == "delivered_close";
+	assert d.message.kind == WsMessageKind.Close;
+	assert d.message.closeCode == 1000;
+	assert d.autoReplyOpcode == OPCODE_CLOSE;
 }
 
 test "processFrame: Close (code 1001 only) → delivered_close, code=1001" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x03, 0xE9];  // 1001
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
-	assert d.action === "delivered_close";
-	assert d.message.closeCode === 1001;
+	assert d.action == "delivered_close";
+	assert d.message.closeCode == 1001;
 }
 
 test "processFrame: Close (code + reason) → delivered_close echoes payload" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x03, 0xE8, 0x62, 0x79, 0x65];  // 1000 + "bye"
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
-	assert d.action === "delivered_close";
-	assert d.message.closeCode === 1000;
+	assert d.action == "delivered_close";
+	assert d.message.closeCode == 1000;
 	assert bytesEqual(d.autoReplyPayload, payload);
 }
 
@@ -374,15 +374,15 @@ test "processFrame: Close with illegal code 1006 → protocol error 1002" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x03, 0xEE];  // 1006 (Abnormal Closure — wire-illegal)
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
-	assert d.action === "error";
-	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
+	assert d.action == "error";
+	assert d.closeCode == (WsCloseCode.ProtocolError as int32);
 }
 
 test "processFrame: Close with illegal code 1015 → protocol error" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x03, 0xF7];  // 1015 (TLS — wire-illegal)
 	const d = processFrame(fs, makeFrame(OPCODE_CLOSE, true, false, payload));
-	assert d.action === "error";
+	assert d.action == "error";
 }
 
 // ----- Server-masked rejection (client-side direction, default isServerSide=false) -----
@@ -391,8 +391,8 @@ test "processFrame: server-masked frame → protocol error" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x68, 0x69];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload));  // masked=true
-	assert d.action === "error";
-	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
+	assert d.action == "error";
+	assert d.closeCode == (WsCloseCode.ProtocolError as int32);
 }
 
 // ----- Server-side direction (isServerSide=true): mask check is flipped -----
@@ -401,8 +401,8 @@ test "processFrame server-side: masked client frame → deliver" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x68, 0x65, 0x6C, 0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, true, payload), true);  // isServerSide=true, masked=true
-	assert d.action === "deliver";
-	assert d.message.kind === WsMessageKind.Text;
+	assert d.action == "deliver";
+	assert d.message.kind == WsMessageKind.Text;
 	assert bytesEqual(d.message.data, payload);
 }
 
@@ -410,17 +410,17 @@ test "processFrame server-side: unmasked client frame → protocol error" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x68, 0x69];
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, payload), true);  // isServerSide=true, masked=false
-	assert d.action === "error";
-	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
-	assert d.errorMsg === "client sent unmasked frame";
+	assert d.action == "error";
+	assert d.closeCode == (WsCloseCode.ProtocolError as int32);
+	assert d.errorMsg == "client sent unmasked frame";
 }
 
 test "processFrame server-side: ping with masked payload → auto-pong" {
 	const fs = newFragState();
 	const payload: uint8[] = [0x01, 0x02];
 	const d = processFrame(fs, makeFrame(OPCODE_PING, true, true, payload), true);
-	assert d.action === "continue";
-	assert d.autoReplyOpcode === OPCODE_PONG;
+	assert d.action == "continue";
+	assert d.autoReplyOpcode == OPCODE_PONG;
 	assert bytesEqual(d.autoReplyPayload, payload);
 }
 
@@ -428,7 +428,7 @@ test "processFrame server-side: fragmentation still works with masked frames" {
 	const fs = newFragState();
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, true, [0x48, 0x65, 0x6C]), true);
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, true, [0x6C, 0x6F]), true);
-	assert d.action === "deliver";
+	assert d.action == "deliver";
 	assert bytesEqual(d.message.data, [0x48, 0x65, 0x6C, 0x6C, 0x6F]);
 }
 
@@ -438,8 +438,8 @@ test "processFrame: fragmented Text — start FIN=0 sets state, no deliver" {
 	const fs = newFragState();
 	const part1: uint8[] = [0x48, 0x65, 0x6C];  // "Hel"
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, false, false, part1));
-	assert d.action === "continue";
-	assert fs.fragOpcode === OPCODE_TEXT;
+	assert d.action == "continue";
+	assert fs.fragOpcode == OPCODE_TEXT;
 	assert bytesEqual(fs.fragments, part1);
 }
 
@@ -448,8 +448,8 @@ test "processFrame: fragmented Text — middle Continuation FIN=0 appends, no de
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
 	const part2: uint8[] = [0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, false, false, part2));
-	assert d.action === "continue";
-	assert fs.fragOpcode === OPCODE_TEXT;
+	assert d.action == "continue";
+	assert fs.fragOpcode == OPCODE_TEXT;
 	assert bytesEqual(fs.fragments, [0x48, 0x65, 0x6C, 0x6C, 0x6F]);
 }
 
@@ -458,12 +458,12 @@ test "processFrame: fragmented Text — end Continuation FIN=1 delivers reassemb
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
 	const part2: uint8[] = [0x6C, 0x6F];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, part2));
-	assert d.action === "deliver";
-	assert d.message.kind === WsMessageKind.Text;
+	assert d.action == "deliver";
+	assert d.message.kind == WsMessageKind.Text;
 	assert bytesEqual(d.message.data, [0x48, 0x65, 0x6C, 0x6C, 0x6F]);
 	// Fragment state cleared after delivery.
-	assert fs.fragments.length === 0;
-	assert fs.fragOpcode === 0;
+	assert fs.fragments.length == 0;
+	assert fs.fragOpcode == 0;
 }
 
 test "processFrame: fragmented Binary multi-part (3 frames) reassembles in order" {
@@ -474,8 +474,8 @@ test "processFrame: fragmented Binary multi-part (3 frames) reassembles in order
 	processFrame(fs, makeFrame(OPCODE_BINARY, false, false, a));
 	processFrame(fs, makeFrame(OPCODE_CONTINUATION, false, false, b));
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, c));
-	assert d.action === "deliver";
-	assert d.message.kind === WsMessageKind.Binary;
+	assert d.action == "deliver";
+	assert d.message.kind == WsMessageKind.Binary;
 	assert bytesEqual(d.message.data, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
 }
 
@@ -483,8 +483,8 @@ test "processFrame: orphan Continuation (no prior data start) → protocol error
 	const fs = newFragState();
 	const payload: uint8[] = [0x01];
 	const d = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, payload));
-	assert d.action === "error";
-	assert d.closeCode === (WsCloseCode.ProtocolError as int32);
+	assert d.action == "error";
+	assert d.closeCode == (WsCloseCode.ProtocolError as int32);
 }
 
 test "processFrame: interleaved data frame during fragmentation → protocol error" {
@@ -492,7 +492,7 @@ test "processFrame: interleaved data frame during fragmentation → protocol err
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x68, 0x69]));
 	// New Text frame mid-fragment is illegal.
 	const d = processFrame(fs, makeFrame(OPCODE_TEXT, true, false, [0x6F]));
-	assert d.action === "error";
+	assert d.action == "error";
 }
 
 test "processFrame: Ping during fragmentation does NOT clear fragment state" {
@@ -500,14 +500,14 @@ test "processFrame: Ping during fragmentation does NOT clear fragment state" {
 	processFrame(fs, makeFrame(OPCODE_TEXT, false, false, [0x48, 0x65, 0x6C]));
 	const pingPayload: uint8[] = [0x9A];
 	const dPing = processFrame(fs, makeFrame(OPCODE_PING, true, false, pingPayload));
-	assert dPing.action === "continue";
-	assert dPing.autoReplyOpcode === OPCODE_PONG;
+	assert dPing.action == "continue";
+	assert dPing.autoReplyOpcode == OPCODE_PONG;
 	// Fragment state unchanged.
-	assert fs.fragOpcode === OPCODE_TEXT;
+	assert fs.fragOpcode == OPCODE_TEXT;
 	assert bytesEqual(fs.fragments, [0x48, 0x65, 0x6C]);
 	// Then continuation finishes the message.
 	const dEnd = processFrame(fs, makeFrame(OPCODE_CONTINUATION, true, false, [0x6C, 0x6F]));
-	assert dEnd.action === "deliver";
+	assert dEnd.action == "deliver";
 	assert bytesEqual(dEnd.message.data, [0x48, 0x65, 0x6C, 0x6C, 0x6F]);
 }
 
@@ -526,8 +526,8 @@ test "processFrame: fragment START below cap → accepted" {
 		payload.push(0);
 	}
 	const d = processFrame(fs, makeFrame(OPCODE_BINARY, false, false, payload));
-	assert d.action === "continue";
-	assert fs.fragOpcode === OPCODE_BINARY;
+	assert d.action == "continue";
+	assert fs.fragOpcode == OPCODE_BINARY;
 }
 
 // ----- Bytes helpers -----
@@ -555,7 +555,7 @@ test "dropPrefix removes leading bytes" {
 test "dropPrefix prefixLen == length yields empty" {
 	const arr: uint8[] = [1, 2, 3];
 	const out = dropPrefix(arr, 3);
-	assert out.length === 0;
+	assert out.length == 0;
 }
 
 test "sliceBytes slices half-open range" {
@@ -566,17 +566,17 @@ test "sliceBytes slices half-open range" {
 
 test "findCRLFCRLF locates separator" {
 	const arr: uint8[] = [0x41, 0x42, 0x0D, 0x0A, 0x0D, 0x0A, 0x43];
-	assert findCRLFCRLF(arr) === 2;
+	assert findCRLFCRLF(arr) == 2;
 }
 
 test "findCRLFCRLF returns -1 when absent" {
 	const arr: uint8[] = [0x41, 0x42, 0x43];
-	assert findCRLFCRLF(arr) === -1;
+	assert findCRLFCRLF(arr) == -1;
 }
 
 test "findCRLFCRLF skips a single CRLF" {
 	const arr: uint8[] = [0x0D, 0x0A, 0x41, 0x0D, 0x0A, 0x42];
-	assert findCRLFCRLF(arr) === -1;
+	assert findCRLFCRLF(arr) == -1;
 }
 
 // ----- Decision constructor sanity -----
@@ -584,14 +584,14 @@ test "findCRLFCRLF skips a single CRLF" {
 test "decisionContinue carries reply opcode + payload" {
 	const payload: uint8[] = [0x01];
 	const d = decisionContinue(OPCODE_PONG, payload);
-	assert d.action === "continue";
-	assert d.autoReplyOpcode === OPCODE_PONG;
+	assert d.action == "continue";
+	assert d.autoReplyOpcode == OPCODE_PONG;
 	assert bytesEqual(d.autoReplyPayload, payload);
 }
 
 test "decisionError carries close code + message" {
 	const d = decisionError(WsCloseCode.MessageTooBig as int32, "too big");
-	assert d.action === "error";
-	assert d.closeCode === 1009;
-	assert d.errorMsg === "too big";
+	assert d.action == "error";
+	assert d.closeCode == 1009;
+	assert d.errorMsg == "too big";
 }

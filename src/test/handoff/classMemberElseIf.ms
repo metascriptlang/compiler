@@ -18,7 +18,7 @@ function hasError(ctx: CheckerContext, needle: string): boolean {
 				let match = true;
 				let k = 0;
 				while (k < needle.length) {
-					if (msg[j + k] !== needle[k]) { match = false; }
+					if (msg[j + k] != needle[k]) { match = false; }
 					k = k + 1;
 				}
 				if (match) { found = true; }
@@ -35,7 +35,7 @@ function errorCount(ctx: CheckerContext): number {
 	let count = 0;
 	let i = 0;
 	while (i < ctx.errors.length) {
-		if (ctx.errors[i].severity === Severity.Error) {
+		if (ctx.errors[i].severity == Severity.Error) {
 			count = count + 1;
 		}
 		i = i + 1;
@@ -57,8 +57,8 @@ test "class field access in if condition" {
 			return 0;
 		}
 	`);
-	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx != null;
+	assert errorCount(ctx) == 0;
 }
 
 // Test 2: Pure null check — else branch SHOULD narrow to null (opposite narrowing valid)
@@ -75,8 +75,8 @@ test "pure null check narrows else to null" {
 			}
 		}
 	`);
-	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx != null;
+	assert errorCount(ctx) == 0;
 }
 
 // Test 3: Compound null check — else branch should NOT narrow to null
@@ -94,8 +94,8 @@ test "compound condition else branch keeps original type" {
 			}
 		}
 	`);
-	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx != null;
+	assert errorCount(ctx) == 0;
 }
 
 // Test 4: Class member access in else-if — was the main bug
@@ -116,8 +116,8 @@ test "class field access in else-if condition" {
 			return 0;
 		}
 	`);
-	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx != null;
+	assert errorCount(ctx) == 0;
 }
 
 // Test 5: Type alias as-cast should resolve fields
@@ -132,8 +132,8 @@ test "as cast with type alias resolves fields" {
 			return d.name;
 		}
 	`);
-	assert ctx !== null;
-	assert ctx.errors.length === 0;
+	assert ctx != null;
+	assert ctx.errors.length == 0;
 }
 
 // Test 6: Chained as-cast with union type
@@ -152,6 +152,6 @@ test "as cast on union member access" {
 			return d.name;
 		}
 	`);
-	assert ctx !== null;
-	assert errorCount(ctx) === 0;
+	assert ctx != null;
+	assert errorCount(ctx) == 0;
 }

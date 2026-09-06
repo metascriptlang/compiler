@@ -32,7 +32,7 @@ import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, unboxVoidPtr
 // Runtime type-tag for msFutureThenTyped / msFutureCatchTyped. Matches
 // MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string).
 function typeTagFor(t: Type | null): number {
-	if (t === null) return 0;
+	if (t == null) return 0;
 	return match (t.kind) {
 		TypeKind.Void => 0,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
@@ -49,7 +49,7 @@ function typeTagFor(t: Type | null): number {
 // exists (caller must fall back to the untyped/boxed path).
 // Correct for futures with inline typed storage (populated via msFutureCompleteT).
 function futureTypedSuffix(t: Type | null): string {
-	if (t === null) return "";
+	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
 		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
@@ -65,17 +65,17 @@ function futureTypedSuffix(t: Type | null): string {
 
 function futureThenFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
-	return suffix === "" ? "" : "msFutureThen_" + suffix;
+	return suffix == "" ? "" : "msFutureThen_" + suffix;
 }
 
 function futureCatchFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
-	return suffix === "" ? "" : "msFutureCatch_" + suffix;
+	return suffix == "" ? "" : "msFutureCatch_" + suffix;
 }
 
 function futureFinallyFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
-	return suffix === "" ? "" : "msFutureFinally_" + suffix;
+	return suffix == "" ? "" : "msFutureFinally_" + suffix;
 }
 
 // Per-type Promise.all variant name — picks msPromiseAllFor_msFuture_<suffix>
@@ -85,8 +85,8 @@ function futureFinallyFnForInner(t: Type | null): string {
 // names — genFutureType emits the matching MS_PROMISE_ALL_FOR instance.
 function promiseAllFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
-	if (suffix !== "") return "msPromiseAllFor_msFuture_" + suffix;
-	if (t !== null && t.kind === TypeKind.Struct && t.typeName !== "") {
+	if (suffix != "") return "msPromiseAllFor_msFuture_" + suffix;
+	if (t != null && t.kind == TypeKind.Struct && t.typeName != "") {
 		return "msPromiseAllFor_msFuture_" + t.typeName;
 	}
 	return "";
@@ -97,7 +97,7 @@ function promiseAllFnForInner(t: Type | null): string {
 // storage; no boxed path exists.
 // Exported for awaitLower.ms which selects the typed read per Promise<T>.
 export function typedFutureReadFn(t: Type): string {
-	if (t === null) return "";
+	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
 		TypeKind.Boolean => "msFutureReadBool",
@@ -123,8 +123,8 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 // Primitives get packed into the void* bits via msBox*; struct/string values
 // pass through unchanged (caller uses typed inline storage instead).
 function boxValueForFuture(node: Node, loc: SourceLocation): Node {
-	if (node === null) return makeNull(loc);
-	if (node.nodeType === null) return node;
+	if (node == null) return makeNull(loc);
+	if (node.nodeType == null) return node;
 	return match (node.nodeType.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [node], loc),
 		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [node], loc),
@@ -143,21 +143,21 @@ function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 // fall back to the legacy tag-dispatch path.
 function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.MemberExpr || cd.arguments.length < 1) return node;
+	if (cd.callee.kind != NodeKind.MemberExpr || cd.arguments.length < 1) return node;
 	const me = cd.callee.data as MemberExprData;
 	const innerType = awaitedType(me.object.nodeType);
 	const cb = cd.arguments[0];
 	return match (builtinKind) {
 		"PromiseThen" => {
 			const typedFn = futureThenFnForInner(innerType);
-			if (typedFn !== "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
+			if (typedFn != "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
 			const tag = typeTagFor(innerType);
 			return mkTypedCall("msFutureThenTyped", [me.object, cb, makeNumber(tag, loc)], node.nodeType, loc);
 		},
 		"PromiseCatch" => {
 			// Error handler always receives msString (MetaScript errors are strings).
 			const typedFn = futureCatchFnForInner(innerType);
-			if (typedFn !== "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
+			if (typedFn != "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
 			return mkTypedCall("msFutureCatchTyped", [me.object, cb, makeNumber(3, loc)], node.nodeType, loc);
 		},
 		_ => {
@@ -165,7 +165,7 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 			const typedFn = futureFinallyFnForInner(innerType);
 			const finallyArgs: Node[] = [me.object];
 			for (const a of cd.arguments) { finallyArgs.push(a); }
-			return mkTypedCall(typedFn !== "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
+			return mkTypedCall(typedFn != "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
 		},
 	};
 }
@@ -212,14 +212,14 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 // responsibility to type the argument correctly.
 function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
-	if (cd.arguments.length < 1 || cd.arguments[0].nodeType === null) return node;
+	if (cd.arguments.length < 1 || cd.arguments[0].nodeType == null) return node;
 	const argArrType = unwrapRef(cd.arguments[0].nodeType!);
 	// argArrType peels Ref<Array<Promise<T>>> to Array<Promise<T>>;
 	// typeReturn is Promise<T>; awaitedType is T.
 	const elementPromise = argArrType.typeReturn;
-	const innerT = elementPromise !== null ? awaitedType(elementPromise) : null;
+	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
-	if (typedFn === "") return node;  // void-returning: falls through to generic msPromiseAll
+	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
 	const typedCall = makeCall(makeIdent(typedFn, loc), cd.arguments, loc);
 	typedCall.nodeType = node.nodeType;
 	return typedCall;
@@ -232,7 +232,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 function lowerWaitFor(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const retType = node.nodeType;
-	if (retType === null || retType.kind === TypeKind.Void) {
+	if (retType == null || retType.kind == TypeKind.Void) {
 		return makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
 	}
 	if (inlineInFuture(retType)) {
@@ -256,13 +256,13 @@ function lowerWaitFor(node: Node, loc: SourceLocation): Node {
 //   if (promiseRewrite !== null) return promiseRewrite;
 export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: TransformContext): Node {
 	const loc = node.location;
-	if (builtinKind === "PromiseThen" || builtinKind === "PromiseCatch" || builtinKind === "PromiseFinally") {
+	if (builtinKind == "PromiseThen" || builtinKind == "PromiseCatch" || builtinKind == "PromiseFinally") {
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
 	}
-	if (builtinKind === "PromiseResolve") return lowerPromiseResolve(node, loc);
-	if (builtinKind === "PromiseSpawn") return lowerPromiseSpawn(node, loc);
-	if (builtinKind === "PromiseAll") return lowerPromiseAll(node, loc);
-	if (builtinKind === "WaitFor") return lowerWaitFor(node, loc);
+	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
+	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
+	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc);
+	if (builtinKind == "WaitFor") return lowerWaitFor(node, loc);
 	return null as unknown as Node;
 }
 
@@ -270,9 +270,9 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 // builtinLower's main walker for NewExpr nodes — only fires when the target
 // type is awaitable (Promise<T>).
 export function lowerNewPromise(node: Node): Node {
-	if (node.nodeType !== null && isAwaitable(node.nodeType)) {
+	if (node.nodeType != null && isAwaitable(node.nodeType)) {
 		const d = node.data as NewExprData;
-		if (d.newArguments.length === 1) {
+		if (d.newArguments.length == 1) {
 			const loc = node.location;
 			const newCall = makeCall(makeIdent("msPromiseNew", loc), d.newArguments, loc);
 			newCall.nodeType = node.nodeType;

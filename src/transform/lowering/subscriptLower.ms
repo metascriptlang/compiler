@@ -22,23 +22,23 @@ import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testU
 
 // Get the receiver type of a node — tries nodeType, resolvedSym, then symbol table.
 function getReceiverType(ctx: TransformContext, node: Node): Type {
-	if (node === null) return null as unknown as Type;
-	if (node.nodeType !== null) return node.nodeType;
-	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+	if (node == null) return null as unknown as Type;
+	if (node.nodeType != null) return node.nodeType;
+	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
 		return node.resolvedSym.symbolType;
 	}
-	if (ctx.checkerCtx === null) return null as unknown as Type;
-	if (node.kind !== NodeKind.Identifier) return null as unknown as Type;
+	if (ctx.checkerCtx == null) return null as unknown as Type;
+	if (node.kind != NodeKind.Identifier) return null as unknown as Type;
 	const d = node.data as IdentifierData;
 	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym === null) return null as unknown as Type;
+	if (sym == null) return null as unknown as Type;
 	return sym.symbolType;
 }
 
 // Builtin types that use native [] — never rewrite these.
 // Covers primitive "Array"/"string" plus any class tagged @builtin("IndexableMap").
 function isBuiltinIndexable(t: Type): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	if (isIndexableMapType(t)) return true;
 	const n = typeNameOf(t);
 	return match (n) {
@@ -50,19 +50,19 @@ function isBuiltinIndexable(t: Type): boolean {
 // ===== Visitor =====
 
 function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
-	if (ctx.checkerCtx === null) return node;
-	if (ctx.checkerCtx.extensionRegistry === null) return node;
+	if (ctx.checkerCtx == null) return node;
+	if (ctx.checkerCtx.extensionRegistry == null) return node;
 	const registry = ctx.checkerCtx.extensionRegistry;
 
 	// Case 1: Getter — obj[idx] → `[]`(obj, idx)
-	if (node.kind === NodeKind.ArrayAccess) {
+	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
 		const recvType = getReceiverType(ctx, d.array);
-		if (recvType === null) return node;
+		if (recvType == null) return node;
 		if (isBuiltinIndexable(recvType)) return node;
 		const typeName = typeNameOf(recvType);
-		if (typeName === "") return node;
-		if (findExtension(registry, typeName, "[]") === null) return node;
+		if (typeName == "") return node;
+		if (findExtension(registry, typeName, "[]") == null) return node;
 		const loc = node.location;
 		const args: Node[] = [];
 		args.push(d.array);
@@ -71,17 +71,17 @@ function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
 	}
 
 	// Case 2: Setter — obj[idx] = value → `[]=`(obj, idx, value)
-	if (node.kind === NodeKind.BinaryExpr) {
+	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator !== "=") return node;
-		if (d.left.kind !== NodeKind.ArrayAccess) return node;
+		if (d.operator != "=") return node;
+		if (d.left.kind != NodeKind.ArrayAccess) return node;
 		const ad = d.left.data as ArrayAccessData;
 		const recvType = getReceiverType(ctx, ad.array);
-		if (recvType === null) return node;
+		if (recvType == null) return node;
 		if (isBuiltinIndexable(recvType)) return node;
 		const typeName = typeNameOf(recvType);
-		if (typeName === "") return node;
-		if (findExtension(registry, typeName, "[]=") === null) return node;
+		if (typeName == "") return node;
+		if (findExtension(registry, typeName, "[]=") == null) return node;
 		const loc = node.location;
 		const args: Node[] = [];
 		args.push(ad.array);
@@ -131,13 +131,13 @@ function setupSubscriptCtx(input: string, receiverName: string, receiverType: st
 	const result = parseInput(input);
 	if (!result.ok) return null as unknown as Node;
 	const cc = createContext();
-	if (exts === "get" || exts === "both") {
+	if (exts == "get" || exts == "both") {
 		const getter = makeGetterExt(receiverType);
 		registerExtension(cc.extensionRegistry, getter);
 		const gSym = makeSymbol("[]", SymbolKind.Function, getter.fnType, false);
 		defineSymbol(cc.table, gSym);
 	}
-	if (exts === "set" || exts === "both") {
+	if (exts == "set" || exts == "both") {
 		const setter = makeSetterExt(receiverType);
 		registerExtension(cc.extensionRegistry, setter);
 		const sSym = makeSymbol("[]=", SymbolKind.Function, setter.fnType, false);
@@ -153,12 +153,12 @@ function setupSubscriptCtx(input: string, receiverName: string, receiverType: st
 // ===== Tests =====
 test "getter rewritten to call" {
 	const prog = setupSubscriptCtx("buf[0];", "buf", "Buffer", "get");
-	assert firstExprKind(prog) === NodeKind.CallExpr;
+	assert firstExprKind(prog) == NodeKind.CallExpr;
 }
 
 test "setter rewritten to call" {
 	const prog = setupSubscriptCtx("buf[0] = 1;", "buf", "Buffer", "set");
-	assert firstExprKind(prog) === NodeKind.CallExpr;
+	assert firstExprKind(prog) == NodeKind.CallExpr;
 }
 
 test "builtin array unchanged" {
@@ -172,7 +172,7 @@ test "builtin array unchanged" {
 	defineSymbol(cc.table, arrSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerSubscript(result.value, ctx);
-	assert firstExprKind(prog) === NodeKind.ArrayAccess;
+	assert firstExprKind(prog) == NodeKind.ArrayAccess;
 }
 
 test "no extension unchanged" {
@@ -184,7 +184,7 @@ test "no extension unchanged" {
 	defineSymbol(cc.table, objSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerSubscript(result.value, ctx);
-	assert firstExprKind(prog) === NodeKind.ArrayAccess;
+	assert firstExprKind(prog) == NodeKind.ArrayAccess;
 }
 
 test "no checker no rewrite" {
@@ -192,17 +192,17 @@ test "no checker no rewrite" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerSubscript(result.value, ctx);
-	assert firstExprKind(prog) === NodeKind.ArrayAccess;
+	assert firstExprKind(prog) == NodeKind.ArrayAccess;
 }
 
 test "getter has 2 args" {
 	const prog = setupSubscriptCtx("buf[i];", "buf", "Buffer", "get");
-	assert firstCallArgCount(prog) === 2;
+	assert firstCallArgCount(prog) == 2;
 }
 
 test "setter has 3 args" {
 	const prog = setupSubscriptCtx("buf[i] = v;", "buf", "Buffer", "set");
-	assert firstCallArgCount(prog) === 3;
+	assert firstCallArgCount(prog) == 3;
 }
 
 test "parser accepts backtick function name" {
@@ -211,5 +211,5 @@ test "parser accepts backtick function name" {
 	if (!result.ok) return;
 	const stmts = getStmts(result.value);
 	assert stmts.length > 0;
-	assert stmts[0].kind === NodeKind.FunctionDecl;
+	assert stmts[0].kind == NodeKind.FunctionDecl;
 }

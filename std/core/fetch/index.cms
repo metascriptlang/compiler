@@ -86,7 +86,7 @@ function fetchDispatch(opts: RequestOptions): Result<HttpResponse, HttpError> {
 
 export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
 	const u = try parseUrl(url);
-	if (u.protocol !== "http" && u.protocol !== "https") {
+	if (u.protocol != "http" && u.protocol != "https") {
 		return Result.err(invalidRequest("unsupported URL protocol: " + u.protocol));
 	}
 	const r = resolveFetchOptions(options, 30000, 5);
@@ -98,9 +98,9 @@ export function fetch(url: string, options: FetchOptions = null): Result<HttpRes
 		headers: r.headers,
 		body: r.body,
 		timeout: r.timeout,
-		tls: u.protocol === "https",
+		tls: u.protocol == "https",
 	};
-	if (r.maxRedirects === 0) {
+	if (r.maxRedirects == 0) {
 		// Manual mode — one request, return response even if 3xx.
 		return fetchDispatch(opts);
 	}

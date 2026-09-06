@@ -16,7 +16,7 @@ function encodeSemanticTokenDeltas(tokens: SgSemanticToken[]): string {
 		const col = t.col - 1;
 		const deltaLine = line - prevLine;
 		let deltaStart = col;
-		if (deltaLine === 0) deltaStart = col - prevCol;
+		if (deltaLine == 0) deltaStart = col - prevCol;
 		if (i > 0) arr = arr + ",";
 		arr = arr + lspJsonNumber(deltaLine) + "," + lspJsonNumber(deltaStart)
 			+ "," + lspJsonNumber(t.length)
@@ -41,15 +41,15 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 
 	const rev = db.revision.value;
 	const cachedRev = _semTokenRevision.get(path);
-	if (cachedRev !== null && cachedRev === rev) {
+	if (cachedRev != null && cachedRev == rev) {
 		return lspResponse(id, "{\"data\":" + (_semTokenCache.get(path) ?? "") + "}");
 	}
 
 	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "{\"data\":[]}");
+	if (program == null) return lspResponse(id, "{\"data\":[]}");
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "{\"data\":[]}");
+	if (ctx == null) return lspResponse(id, "{\"data\":[]}");
 
 	const tokens = sgCollectSemanticTokens(ctx, program);
 	const data = encodeSemanticTokenDeltas(tokens);

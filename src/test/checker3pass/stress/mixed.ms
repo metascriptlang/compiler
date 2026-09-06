@@ -39,7 +39,7 @@ test "stress mixed: no checker errors" {
 		console.log("[stress mixed errors]");
 		for (const e of result.errors) { console.log("  - " + e); }
 	}
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "stress mixed: no GenericParam leakage across constructor + method + compose chain" {

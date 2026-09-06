@@ -69,8 +69,8 @@ export function createJSGenerator(): JSGenerator {
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
 	for (let i = 0; i < gen.neededModules.length; i += 1) {
-		if (gen.neededModules[i] === modulePath) {
-			for (const n of gen.neededNames[i]) { if (n === name) return; }
+		if (gen.neededModules[i] == modulePath) {
+			for (const n of gen.neededNames[i]) { if (n == name) return; }
 			gen.neededNames[i].push(name);
 			return;
 		}
@@ -81,22 +81,22 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 
 export function lookupImportSpec(gen: JSGenerator, specifier: string): string {
 	for (let i = 0; i < gen.importSpecKeys.length; i += 1) {
-		if (gen.importSpecKeys[i] === specifier) return gen.importSpecVals[i];
+		if (gen.importSpecKeys[i] == specifier) return gen.importSpecVals[i];
 	}
 	return "";
 }
 
 export function lookupModuleSpec(gen: JSGenerator, modulePath: string): string {
 	for (let i = 0; i < gen.moduleSpecKeys.length; i += 1) {
-		if (gen.moduleSpecKeys[i] === modulePath) return gen.moduleSpecVals[i];
+		if (gen.moduleSpecKeys[i] == modulePath) return gen.moduleSpecVals[i];
 	}
 	return "";
 }
 
 export function moduleExportsName(gen: JSGenerator, modulePath: string, name: string): boolean {
 	for (let i = 0; i < gen.modExportKeys.length; i += 1) {
-		if (gen.modExportKeys[i] === modulePath) {
-			for (const n of gen.modExportVals[i]) { if (n === name) return true; }
+		if (gen.modExportKeys[i] == modulePath) {
+			for (const n of gen.modExportVals[i]) { if (n == name) return true; }
 			return false;
 		}
 	}
@@ -152,12 +152,12 @@ function advance(gen: JSGenerator, text: string): void {
 	let i: int32 = 0;
 	while (i < text.byteLength) {
 		const b = text.byteAt(i);
-		if (b === "\n".code) {
+		if (b == "\n".code) {
 			gen.genLine += 1;
 			gen.genCol = 0 as int32;
 			i += 1;
 		} else {
-			if (gen.pendingLine > 0 && b !== " ".code && b !== "\t".code && b !== "\r".code) {
+			if (gen.pendingLine > 0 && b != " ".code && b != "\t".code && b != "\r".code) {
 				flushPending(gen);
 			}
 			if (b < 128) { gen.genCol += 1; i += 1; }
@@ -177,7 +177,7 @@ export function emit(gen: JSGenerator, text: string): void {
 // own is overwritten by the child it delegates to, which is the better answer.
 export function mark(gen: JSGenerator, node: Node): void {
 	if (!gen.smap) return;
-	if (node === null || node.location === null) return;
+	if (node == null || node.location == null) return;
 	// A synthetic node carries no column. Leaving the enclosing node's mark in
 	// place points at real code instead of at the start of the line.
 	if (node.location.line <= 0 || node.location.column <= 0) return;
@@ -190,7 +190,7 @@ export function mark(gen: JSGenerator, node: Node): void {
 export function markNamed(gen: JSGenerator, node: Node, original: string): void {
 	if (!gen.smap) return;
 	mark(gen, node);
-	if (gen.pendingLine === 0 || original === "") return;
+	if (gen.pendingLine == 0 || original == "") return;
 	gen.pendingName = internName(gen.smapInfo, original);
 }
 
@@ -213,7 +213,7 @@ export function emitNewline(gen: JSGenerator): void {
 // ===== Composite Emit Helpers =====
 
 export function emitJoinedStrings(gen: JSGenerator, items: string[], sep: string): void {
-	if (items.length === 0) return;
+	if (items.length == 0) return;
 	emit(gen, items[0]);
 	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
@@ -224,7 +224,7 @@ export function emitJoinedStrings(gen: JSGenerator, items: string[], sep: string
 // Like emitJoinedStrings but applies safeJsName to each item (for parameter names).
 export type SafeNameFn = (name: string) => string;
 export function emitJoinedSafeStrings(gen: JSGenerator, items: string[], sep: string, safeFn: SafeNameFn): void {
-	if (items.length === 0) return;
+	if (items.length == 0) return;
 	emit(gen, safeFn(items[0]));
 	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
@@ -235,7 +235,7 @@ export function emitJoinedSafeStrings(gen: JSGenerator, items: string[], sep: st
 // Params carry no own location in the AST, so the declaration's position is
 // the closest honest origin; the name still lets a debugger un-rename them.
 export function emitJoinedSafeParams(gen: JSGenerator, declNode: Node, items: string[], sep: string, safeFn: SafeNameFn): void {
-	if (items.length === 0) return;
+	if (items.length == 0) return;
 	markNamed(gen, declNode, items[0]);
 	emit(gen, safeFn(items[0]));
 	for (let i = 1; i < items.length; i += 1) {
@@ -246,7 +246,7 @@ export function emitJoinedSafeParams(gen: JSGenerator, declNode: Node, items: st
 }
 
 export function emitJoinedNodes(gen: JSGenerator, items: Node[], sep: string): void {
-	if (items.length === 0) return;
+	if (items.length == 0) return;
 	emitNode(gen, items[0]);
 	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
@@ -269,7 +269,7 @@ export function emitBlockInline(gen: JSGenerator, node: Node): void {
 
 // Emit block content or wrap single statement in block
 export function emitBlockOrStmt(gen: JSGenerator, node: Node): void {
-	if (node.kind === NodeKind.BlockStmt) {
+	if (node.kind == NodeKind.BlockStmt) {
 		emitBlockInline(gen, node);
 	} else {
 		emit(gen, "{\n");
@@ -283,7 +283,7 @@ export function emitBlockOrStmt(gen: JSGenerator, node: Node): void {
 
 // Emit function/method body or empty block
 export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
-	if (body === null) {
+	if (body == null) {
 		emit(gen, "{}");
 	} else {
 		emitBlockOrStmt(gen, body);
@@ -296,12 +296,12 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 // that still contains an AwaitExpr must be emitted `async` — declared or not.
 // Pure syntax decision at emission; no semantic change on the C side.
 export function needsAutoAsync(flags: string, body: Node): boolean {
-	if (flags === "async" || flags === "async_generator") return false;
-	return body !== null && bodyContainsAwait(body);
+	if (flags == "async" || flags == "async_generator") return false;
+	return body != null && bodyContainsAwait(body);
 }
 
 function bodyContainsAwait(node: Node): boolean {
-	if (node.kind === NodeKind.AwaitExpr) return true;
+	if (node.kind == NodeKind.AwaitExpr) return true;
 	let found = false;
 	forEachChild(node, (child) => {
 		if (!found) found = bodyContainsAwait(child);
@@ -320,7 +320,7 @@ export function finalize(gen: JSGenerator): string {
 		result = result + slot;
 		if (gen.smap) {
 			for (let i: int32 = 0; i < slot.byteLength; i += 1) {
-				if (slot.byteAt(i) === "\n".code) slotLines += 1;
+				if (slot.byteAt(i) == "\n".code) slotLines += 1;
 			}
 		}
 	}
@@ -343,8 +343,8 @@ export function escapeJSString(s: string): string {
 	let i = 0;
 	while (i < s.byteLength) {
 		const b = s.byteAt(i);
-		if (b === "\\".code || b === "\"".code || b === "\n".code
-				|| b === "\r".code || b === "\t".code || b === 0) {
+		if (b == "\\".code || b == "\"".code || b == "\n".code
+				|| b == "\r".code || b == "\t".code || b == 0) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			result = result + match (b) {
 				"\\".code => "\\\\",
@@ -356,7 +356,7 @@ export function escapeJSString(s: string): string {
 			};
 			i += 1;
 			runStart = i;
-		} else if (b === 237 && i + 2 < s.byteLength
+		} else if (b == 237 && i + 2 < s.byteLength
 				&& s.byteAt(i + 1) >= 160 && s.byteAt(i + 1) <= 191) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			const cu = 53248 + (s.byteAt(i + 1) - 128) * 64 + (s.byteAt(i + 2) - 128);
@@ -376,7 +376,7 @@ export function escapeJSString(s: string): string {
 export function convertImportPath(path: string): string {
 	if (path.length >= 3) {
 		const suffix = path.slice(path.length - 3, path.length);
-		if (suffix === ".ms") {
+		if (suffix == ".ms") {
 			return path.slice(0, path.length - 3) + ".js";
 		}
 	}
@@ -389,7 +389,7 @@ test "StringBuf accumulation" {
 	emit(gen, "hello");
 	emit(gen, " ");
 	emit(gen, "world");
-	assert finalize(gen) === "hello world";
+	assert finalize(gen) == "hello world";
 }
 
 test "indentation" {
@@ -397,29 +397,29 @@ test "indentation" {
 	gen.indentLevel = 2;
 	emitIndent(gen);
 	emit(gen, "x");
-	assert finalize(gen) === "    x";
+	assert finalize(gen) == "    x";
 }
 
 test "emitLine" {
 	const gen = createJSGenerator();
 	emitLine(gen, "const x = 1;");
-	assert finalize(gen) === "const x = 1;\n";
+	assert finalize(gen) == "const x = 1;\n";
 }
 
 test "escapeJSString basics" {
-	assert escapeJSString("hello") === "hello";
-	assert escapeJSString("a\\b") === "a\\\\b";
+	assert escapeJSString("hello") == "hello";
+	assert escapeJSString("a\\b") == "a\\\\b";
 }
 
 test "escapeJSString keeps astral runs, escapes lone surrogates" {
 	const astral = fromCodePoint(128512);
-	assert escapeJSString(astral) === astral;
-	assert escapeJSString(fromCodePoint(55296)) === "\\" + "ud800";
-	assert escapeJSString(fromCodePoint(57343)) === "\\" + "udfff";
+	assert escapeJSString(astral) == astral;
+	assert escapeJSString(fromCodePoint(55296)) == "\\" + "ud800";
+	assert escapeJSString(fromCodePoint(57343)) == "\\" + "udfff";
 }
 
 test "convertImportPath" {
-	assert convertImportPath("./module.ms") === "./module.js";
-	assert convertImportPath("./module") === "./module";
-	assert convertImportPath("std/testing") === "std/testing";
+	assert convertImportPath("./module.ms") == "./module.js";
+	assert convertImportPath("./module") == "./module";
+	assert convertImportPath("std/testing") == "std/testing";
 }

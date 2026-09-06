@@ -75,39 +75,39 @@ export function execPackedModule(mod: RaiserModule): number {
 		const b: int32 = (packed >> 8) & 0xff;
 		const c: int32 = packed & 0xff;
 
-		if (op as number === RaiserOpcode.LoadConst) {
+		if (op as number == RaiserOpcode.LoadConst) {
 			const bx: int32 = (b << 8) | c;
 			regs[a as number] = constants[bx as number];
-		} else if (op as number === RaiserOpcode.Move) {
+		} else if (op as number == RaiserOpcode.Move) {
 			regs[a as number] = regs[b as number];
-		} else if (op as number === RaiserOpcode.LoadNil) {
+		} else if (op as number == RaiserOpcode.LoadNil) {
 			regs[a as number] = 0;
-		} else if (op as number === RaiserOpcode.AddI64) {
+		} else if (op as number == RaiserOpcode.AddI64) {
 			regs[a as number] = regs[b as number] + regs[c as number];
-		} else if (op as number === RaiserOpcode.SubI64) {
+		} else if (op as number == RaiserOpcode.SubI64) {
 			regs[a as number] = regs[b as number] - regs[c as number];
-		} else if (op as number === RaiserOpcode.MulI64) {
+		} else if (op as number == RaiserOpcode.MulI64) {
 			regs[a as number] = regs[b as number] * regs[c as number];
-		} else if (op as number === RaiserOpcode.NegI64) {
+		} else if (op as number == RaiserOpcode.NegI64) {
 			regs[a as number] = -regs[b as number];
-		} else if (op as number === RaiserOpcode.BeqI64) {
-			if (regs[a as number] === regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.BneI64) {
-			if (regs[a as number] !== regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.BltI64) {
+		} else if (op as number == RaiserOpcode.BeqI64) {
+			if (regs[a as number] == regs[b as number]) ip = ip + (c as number);
+		} else if (op as number == RaiserOpcode.BneI64) {
+			if (regs[a as number] != regs[b as number]) ip = ip + (c as number);
+		} else if (op as number == RaiserOpcode.BltI64) {
 			if (regs[a as number] < regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.BleI64) {
+		} else if (op as number == RaiserOpcode.BleI64) {
 			if (regs[a as number] <= regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.BgtI64) {
+		} else if (op as number == RaiserOpcode.BgtI64) {
 			if (regs[a as number] > regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.BgeI64) {
+		} else if (op as number == RaiserOpcode.BgeI64) {
 			if (regs[a as number] >= regs[b as number]) ip = ip + (c as number);
-		} else if (op as number === RaiserOpcode.Jump) {
+		} else if (op as number == RaiserOpcode.Jump) {
 			// Sign-extend low 24 bits.
 			let ax: int32 = packed & 0xffffff;
 			if ((ax as number) >= 8388608) ax = ax - 16777216;
 			ip = ip + (ax as number);
-		} else if (op as number === RaiserOpcode.Halt) {
+		} else if (op as number == RaiserOpcode.Halt) {
 			halted = true;
 			exitValue = regs[a as number];
 		} else {

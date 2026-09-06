@@ -51,7 +51,7 @@ const OUT_DIR = "out/corpus/";
 // code: the cell launcher (launchCell), the poll sleep, the peak-RSS reader
 // and the staleness probe. The helper both forks need is wintime.c, built
 // once per run — see ensureWintime.
-const IS_WIN = platform === "windows";
+const IS_WIN = platform == "windows";
 
 // cmd.exe will not execute a command token written with forward slashes:
 // `out/corpus/bin/x.exe` fails with "'out' is not recognized" while
@@ -135,7 +135,7 @@ function ccUsable(cc: string): boolean {
 	// this driver just failed, so the artifact must not pre-exist the compile.
 	if (exists(bin)) { remove(bin); }
 	const r = runCapture(cc + " " + winPath(src) + " -o " + winPath(bin));
-	return r.exitCode === 0 && exists(bin);
+	return r.exitCode == 0 && exists(bin);
 }
 
 const HAS_CLANG = ccUsable("clang");
@@ -301,7 +301,7 @@ function validateDirectives(specs: Spec[], t: Tally): void {
 
 function directiveValue(line: string, key: string): string {
 	const prefix = "// " + key + ":";
-	if (line.indexOf(prefix) === 0) { return line.slice(prefix.length, line.length).trim(); }
+	if (line.indexOf(prefix) == 0) { return line.slice(prefix.length, line.length).trim(); }
 	return "";
 }
 
@@ -316,20 +316,20 @@ function parseSpec(name: string, entry: string): Spec {
 	const lines = src.split("\n");
 	for (const line of lines) {
 		const t = line.trim();
-		if (t !== "" && t.indexOf("//") !== 0) { break; }
+		if (t != "" && t.indexOf("//") != 0) { break; }
 		const rss = directiveValue(t, "@maxrss");
-		if (rss !== "") { spec.maxRssMb = rss.parseInt() as float64; }
+		if (rss != "") { spec.maxRssMb = rss.parseInt() as float64; }
 		const sub = directiveValue(t, "@stdout");
-		if (sub !== "") { spec.stdoutSub = sub; }
+		if (sub != "") { spec.stdoutSub = sub; }
 		const ec = directiveValue(t, "@exit");
-		if (ec !== "") { spec.expectExit = ec.parseInt() as int32; }
-		if (t.indexOf("// @serial") === 0) { spec.serial = true; }
-		if (t.indexOf("// @skip-js") === 0) { spec.skipJs = true; }
-		if (t.indexOf("// @xfail(") === 0) {
+		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
+		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
+		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
+		if (t.indexOf("// @xfail(") == 0) {
 			const close = t.indexOf(")");
 			if (close > 10) { spec.xfailLanes.push(t.slice(10, close)); }
 		}
-		if (t.indexOf("// @ledger-slack(") === 0) {
+		if (t.indexOf("// @ledger-slack(") == 0) {
 			const close = t.indexOf(")");
 			if (close > 17) {
 				spec.slackTypes.push(t.slice(17, close));
@@ -356,7 +356,7 @@ function sortByNumber(items: string[]): string[] {
 		for (let j = i + 1; j < out.length; j = j + 1) {
 			if (entryNumber(out[j]) < entryNumber(out[min])) { min = j; }
 		}
-		if (min !== i) { const tmp = out[i]; out[i] = out[min]; out[min] = tmp; }
+		if (min != i) { const tmp = out[i]; out[i] = out[min]; out[min] = tmp; }
 	}
 	return out;
 }
@@ -377,7 +377,7 @@ function discoverSpecs(): Spec[] {
 			name = e.slice(0, dotMs);
 		}
 		if (entryNumber(name) < 0) { continue; }
-		if (FILTER !== "" && !name.contains(FILTER)) { continue; }
+		if (FILTER != "" && !name.contains(FILTER)) { continue; }
 		specs.push(parseSpec(name, entry));
 	}
 	return specs;
@@ -523,7 +523,7 @@ function finishRssCell(c: Cell): void {
 	const exitCode = died ? 0 : rawExit;
 	const rssMB = parseRssMB(timeLog);
 
-	const exitOk = signal === 0 && !died && exitCode === c.spec.expectExit;
+	const exitOk = signal == 0 && !died && exitCode == c.spec.expectExit;
 	const merged = stdoutLog + timeLog;
 	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
 	const rssOk = rssMB >= 0.0 && rssMB <= c.spec.maxRssMb;
@@ -540,7 +540,7 @@ function finishRssCell(c: Cell): void {
 function finishParityCell(c: Cell): void {
 	const rawExit = readExit(c);
 	const merged = readFileOr(c.dir + "out.log", "");
-	const exitOk = rawExit === c.spec.expectExit;
+	const exitOk = rawExit == c.spec.expectExit;
 	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
 
 	let detail = "exit=" + rawExit;
@@ -577,23 +577,23 @@ function ledgerSlackFor(spec: Spec, typeName: string): int32 {
 
 function parseLedgerFailure(err: string, spec: Spec): string {
 	for (const line of err.split("\n")) {
-		if (line.indexOf("LEDGER ") !== 0) { continue; }
+		if (line.indexOf("LEDGER ") != 0) { continue; }
 		let typeName = "";
 		let alloc = -1;
 		let destroy = -1;
 		let i = 0;
 		for (const tok of line.split(" ")) {
-			if (i === 1) { typeName = tok; }
-			if (tok.indexOf("alloc=") === 0) { alloc = tok.slice(6, tok.length).parseInt() as int32; }
-			if (tok.indexOf("destroy=") === 0) { destroy = tok.slice(8, tok.length).parseInt() as int32; }
+			if (i == 1) { typeName = tok; }
+			if (tok.indexOf("alloc=") == 0) { alloc = tok.slice(6, tok.length).parseInt() as int32; }
+			if (tok.indexOf("destroy=") == 0) { destroy = tok.slice(8, tok.length).parseInt() as int32; }
 			i = i + 1;
 		}
 		if (typeName == "TOTAL") { continue; }
 		if (destroy <= 0) { continue; }
 		const slack = ledgerSlackFor(spec, typeName);
 		const diff = alloc - destroy;
-		if (diff === slack) { continue; }
-		if (slack > 0 && diff === 0) {
+		if (diff == slack) { continue; }
+		if (slack > 0 && diff == 0) {
 			return typeName + " slack unused (declared " + slack + ", diff 0) — global-destroy landed? remove @ledger-slack";
 		}
 		return typeName + " alloc=" + alloc + " destroy=" + destroy + (slack > 0 ? " (slack " + slack + ")" : "");
@@ -606,7 +606,7 @@ function finishSanCell(c: Cell): void {
 	const stdoutLog = readFileOr(c.dir + "stdout.log", "");
 	const errLog = readFileOr(c.dir + "err.log", "");
 	const died = rawExit >= 128;
-	const exitOk = !died && rawExit === c.spec.expectExit;
+	const exitOk = !died && rawExit == c.spec.expectExit;
 	const merged = stdoutLog + errLog;
 	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
 	const asanLine = firstLineContaining(errLog, "AddressSanitizer");
@@ -618,9 +618,9 @@ function finishSanCell(c: Cell): void {
 	if (!ledgerLive) { detail = detail + " [no LEDGER output — instrumentation dropped?]"; }
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + "]"; }
 	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
-	if (asanLine !== "") { detail = detail + " [" + asanLine + "]"; }
-	if (doubleLine !== "") { detail = detail + " [" + doubleLine + "]"; }
-	if (imbalance !== "") { detail = detail + " [ledger " + imbalance + "]"; }
+	if (asanLine != "") { detail = detail + " [" + asanLine + "]"; }
+	if (doubleLine != "") { detail = detail + " [" + doubleLine + "]"; }
+	if (imbalance != "") { detail = detail + " [ledger " + imbalance + "]"; }
 	c.pass = exitOk && outOk && asanLine == "" && doubleLine == "" && imbalance == "" && ledgerLive;
 	c.detail = detail;
 	c.finished = true;
@@ -830,11 +830,11 @@ function main(): void {
 	for (const job of jobs) {
 		let b = runCapture(job.cmd);
 		const jsLane = job.lane == "js" || job.lane == "esm";
-		let builtOk = jsLane ? b.exitCode === 0 : nativeBuildOk(b.output);
+		let builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
 		if (!builtOk && isToolchainRace(b.output)) {
 			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilding");
 			b = runCapture(job.cmd);
-			builtOk = jsLane ? b.exitCode === 0 : nativeBuildOk(b.output);
+			builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
 		}
 		if (!builtOk) {
 			ensureDir(job.cell.dir);

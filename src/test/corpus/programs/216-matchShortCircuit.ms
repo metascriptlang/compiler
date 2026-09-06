@@ -18,7 +18,7 @@ function bump(): int32 { eff = eff + 1; return 1; }
 function main(): void {
 	const flags: int32[] = [];
 	const f: boolean = flags.length > 0;
-	const t: boolean = flags.length === 0;
+	const t: boolean = flags.length == 0;
 
 	// 1. && RHS, guard false → match must not run
 	const a: boolean = f && (match (bump()) { 1 => true, _ => false });

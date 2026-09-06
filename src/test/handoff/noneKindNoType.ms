@@ -20,16 +20,16 @@ import { lookupSymbol } from "../../checker/symbol";
 test "producer: a regex literal's binding carries TypeKind.None" {
 	// Pre-Batch-2 this read TypeKind.Pending — the cell discriminates the flip.
 	const ctx = checkSource("const r = /ab+/;");
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "r");
-	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.None;
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.None;
 }
 
 test "None is its own kind, not Pending, not user unknown" {
-	assert noneType().kind === TypeKind.None;
-	assert noneType().kind !== TypeKind.Pending;
+	assert noneType().kind == TypeKind.None;
+	assert noneType().kind != TypeKind.Pending;
 	assert !isUnknownType(noneType());
 }
 
@@ -44,19 +44,19 @@ test "None stays lenient in assignability — JSX macro args must keep matching"
 }
 
 test "None scores as generic in overload relation" {
-	assert typeRelation(noneType(), numberType()) === TypeRelation.Generic;
-	assert typeRelation(numberType(), noneType()) === TypeRelation.Generic;
+	assert typeRelation(noneType(), numberType()) == TypeRelation.Generic;
+	assert typeRelation(numberType(), noneType()) == TypeRelation.Generic;
 }
 
 test "None displays as <none>" {
-	assert typeDisplayName(noneType()) === "<none>";
+	assert typeDisplayName(noneType()) == "<none>";
 }
 
 test "None at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	// Inverted 2026-08-06 when B4 armed the seam: a None type reaching
 	// emission is a compiler bug, Nim's else-branch.
 	const ctx = checkSource("function main(): void { }");
-	assert ctx !== null;
+	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, noneType());
 	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";

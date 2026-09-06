@@ -131,8 +131,8 @@ extern function msStringConcat(a: string, b: string): string;
 extern function msStringCompare(a: string, b: string): number;
 
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (encoding === "hex") return msBufferFromHex(value);
-	if (encoding === "base64") return msBufferFromBase64(value);
+	if (encoding == "hex") return msBufferFromHex(value);
+	if (encoding == "base64") return msBufferFromBase64(value);
 	return msBufferFromString(value);
 }
 
@@ -159,41 +159,41 @@ export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
 }
 
 export function isAscii(this typeof Buffer, value: Buffer): boolean {
-	return msBufferIsAscii(value) === 1;
+	return msBufferIsAscii(value) == 1;
 }
 
 export function isUtf8(this typeof Buffer, value: Buffer): boolean {
-	return msBufferIsUtf8(value) === 1;
+	return msBufferIsUtf8(value) == 1;
 }
 
 export function byteLength(this typeof string, str: string, encoding: string = "utf-8"): number {
-	if (encoding === "" || encoding === "utf8" || encoding === "utf-8" ||
-			encoding === "ascii" || encoding === "latin1" || encoding === "binary") {
+	if (encoding == "" || encoding == "utf8" || encoding == "utf-8" ||
+			encoding == "ascii" || encoding == "latin1" || encoding == "binary") {
 		return str.byteLength;
 	}
-	if (encoding === "hex") return str.byteLength / 2;
-	if (encoding === "base64" || encoding === "base64url") {
+	if (encoding == "hex") return str.byteLength / 2;
+	if (encoding == "base64" || encoding == "base64url") {
 		let padding = 0;
-		if (str.byteLength > 0 && str.byteAt(str.byteLength - 1) === "=".code) {
+		if (str.byteLength > 0 && str.byteAt(str.byteLength - 1) == "=".code) {
 			padding = padding + 1;
 		}
-		if (str.byteLength > 1 && str.byteAt(str.byteLength - 2) === "=".code) {
+		if (str.byteLength > 1 && str.byteAt(str.byteLength - 2) == "=".code) {
 			padding = padding + 1;
 		}
 		return (str.byteLength * 3) / 4 - padding;
 	}
-	if (encoding === "utf16le" || encoding === "ucs2" || encoding === "ucs-2") {
+	if (encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") {
 		return str.byteLength * 2;
 	}
 	return str.byteLength;
 }
 
 export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
-	if (encoding === "utf8" || encoding === "utf-8" ||
-			encoding === "hex" || encoding === "ascii" ||
-			encoding === "latin1" || encoding === "binary" ||
-			encoding === "base64" || encoding === "base64url" ||
-			encoding === "utf16le" || encoding === "ucs2" || encoding === "ucs-2") {
+	if (encoding == "utf8" || encoding == "utf-8" ||
+			encoding == "hex" || encoding == "ascii" ||
+			encoding == "latin1" || encoding == "binary" ||
+			encoding == "base64" || encoding == "base64url" ||
+			encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") {
 		return true;
 	}
 	return false;
@@ -259,7 +259,7 @@ export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number)
 }
 
 export function includes(this buf: Buffer, value: number, byteOffset: number): boolean {
-	return msBufferIndexOf(buf, value, byteOffset) !== -1;
+	return msBufferIndexOf(buf, value, byteOffset) != -1;
 }
 
 // --- Buffer-in-buffer search (Boyer-Moore Horspool) ---
@@ -273,7 +273,7 @@ export function lastIndexOfBuffer(this buf: Buffer, needle: Buffer, byteOffset: 
 }
 
 export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: number): boolean {
-	return msBufferIndexOfBuffer(buf, needle, byteOffset) !== -1;
+	return msBufferIndexOfBuffer(buf, needle, byteOffset) != -1;
 }
 
 // --- Encoding-aware write ---

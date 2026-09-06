@@ -25,7 +25,7 @@ function isoClosureHelper(): number {
 
 function isoGuardHelper(n: number, big: boolean): number {
 	return match (n) {
-		_ when (big === true) => 100,
+		_ when (big == true) => 100,
 		_ => 5,
 	};
 }
@@ -43,7 +43,7 @@ function main(): void {
 	const rt: number = isoClosureHelper();
 	const gd: number = isoGd(0);
 	const gdRt: number = isoGuardHelper(1, false);
-	if (ct === 42 && rt === 42 && gd === 5 && gdRt === 5) { console.log("macro-helper-isolation PASS"); }
+	if (ct == 42 && rt == 42 && gd == 5 && gdRt == 5) { console.log("macro-helper-isolation PASS"); }
 	else { console.log("macro-helper-isolation FAIL ct=" + ct.toString() + " rt=" + rt.toString() + " gd=" + gd.toString() + " gdRt=" + gdRt.toString()); }
 }
 main();

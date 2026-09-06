@@ -36,7 +36,7 @@ function memoApply<T>(produce: () => T, equals: ((a: T, b: T) => boolean) | null
 	const b = produce();
 	// Root B: `equals !== null` MUST survive substitution (not fold constant-true),
 	// and `equals(a, b)` MUST unwrap to the Maybe's `.value.fn`, not call a struct.
-	if (equals !== null && equals(a, b)) {
+	if (equals != null && equals(a, b)) {
 		return true;
 	}
 	return false;
@@ -47,12 +47,12 @@ function main(): void {
 	// `equals(a,b)` invokes a zeroed struct -> build fail / crash.
 	const nullPath = memoApply(() => 7);
 	// present-arrow paths (untyped params): call-site wrap + unwrap, result flows.
-	const eqTrue = memoApply(() => 7, (a, b) => a === b);
-	const eqFalse = memoApply(() => 7, (a, b) => a !== b);
+	const eqTrue = memoApply(() => 7, (a, b) => a == b);
+	const eqFalse = memoApply(() => 7, (a, b) => a != b);
 
-	if (nullPath !== false) { throw "GUARD RED: null-equals guard vanished (IsMaybe dropped)"; }
-	if (eqTrue !== true) { throw "GUARD RED: present-equals not unwrapped (true arm)"; }
-	if (eqFalse !== false) { throw "GUARD RED: present-equals result not flowing (false arm)"; }
+	if (nullPath != false) { throw "GUARD RED: null-equals guard vanished (IsMaybe dropped)"; }
+	if (eqTrue != true) { throw "GUARD RED: present-equals not unwrapped (true arm)"; }
+	if (eqFalse != false) { throw "GUARD RED: present-equals result not flowing (false arm)"; }
 	console.log("maybeIdentitySubst ok");
 }
 

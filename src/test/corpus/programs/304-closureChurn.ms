@@ -25,7 +25,7 @@ function main(): void {
 	let kept = "";
 	for (let i: int64 = 0; i < 2000; i = i + 1) {
 		const p = makeProducer("t" + (i % 10).toString());
-		if (i % 500 === 0) {
+		if (i % 500 == 0) {
 			kept = kept + p().length.toString() + ",";
 		}
 	}
@@ -33,7 +33,7 @@ function main(): void {
 
 	for (let i: int64 = 0; i < 1000; i = i + 1) {
 		const q = relay(makeProducer("r"));
-		if (i === 999) { console.log("lastLen=" + q().length.toString()); }
+		if (i == 999) { console.log("lastLen=" + q().length.toString()); }
 	}
 
 	let caught: int64 = 0;

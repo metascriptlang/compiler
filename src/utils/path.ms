@@ -10,13 +10,13 @@ import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 // This is the Go/Rust convention: the manifest defines the project root.
 export function findProjectRoot(entryFile: string = ""): string {
 	// Strategy 1: walk up from entry file's directory
-	if (entryFile !== "" && isAbsolute(entryFile)) {
+	if (entryFile != "" && isAbsolute(entryFile)) {
 		let dir = dirname(entryFile);
 		let depth = 0;
 		while (depth < 20) {
 			if (exists(join(dir, "build.ms"))) return dir;
 			const parent = dirname(dir);
-			if (parent === dir) { depth = 20; }
+			if (parent == dir) { depth = 20; }
 			else { dir = parent; depth = depth + 1; }
 		}
 	}
@@ -26,7 +26,7 @@ export function findProjectRoot(entryFile: string = ""): string {
 	while (depth < 20) {
 		if (exists(join(dir, "build.ms"))) return dir;
 		const parent = dirname(dir);
-		if (parent === dir) return cwd();
+		if (parent == dir) return cwd();
 		dir = parent;
 		depth = depth + 1;
 	}
@@ -41,24 +41,24 @@ export function resolveArgv0(arg0: string): string {
 	let i = 0;
 	while (i < arg0.length) {
 		const c = arg0.charAt(i);
-		if (c === "/" || c === "\\") return arg0;
+		if (c == "/" || c == "\\") return arg0;
 		i = i + 1;
 	}
-	if (arg0.length >= 2 && arg0.charAt(1) === ":") return arg0;  // "C:foo"
+	if (arg0.length >= 2 && arg0.charAt(1) == ":") return arg0;  // "C:foo"
 	const pathEnv = env.get("PATH");
-	if (pathEnv === "") return arg0;
+	if (pathEnv == "") return arg0;
 	// Detect delimiter: ";" if present in PATH (Windows), else ":" (Unix).
 	let hasSemi = false;
 	let pi = 0;
 	while (pi < pathEnv.length) {
-		if (pathEnv.charAt(pi) === ";") { hasSemi = true; break; }
+		if (pathEnv.charAt(pi) == ";") { hasSemi = true; break; }
 		pi = pi + 1;
 	}
 	const delim = hasSemi ? ";" : ":";
 	let start = 0;
 	let idx = 0;
 	while (idx <= pathEnv.length) {
-		if (idx === pathEnv.length || pathEnv.charAt(idx) === delim) {
+		if (idx == pathEnv.length || pathEnv.charAt(idx) == delim) {
 			if (idx > start) {
 				const dir = pathEnv.slice(start, idx);
 				const candidate = join(dir, arg0);
@@ -86,7 +86,7 @@ export function resolveArgv0(arg0: string): string {
 // link line — `duplicate symbol: msPrintln` and ~100 more, with no hint that a
 // path spelling was the cause.
 function canonicalRootDir(dir: string): string {
-	if (dir === "" || dir === ".") return cwd();
+	if (dir == "" || dir == ".") return cwd();
 	return normalize(dir);
 }
 
@@ -109,18 +109,18 @@ export function resolveRuntimeDir(): string {
 }
 
 test "canonicalRootDir — a trailing dot segment is dropped" {
-	assert canonicalRootDir("C:/proj/compiler/.") === "C:/proj/compiler";
-	assert canonicalRootDir("/proj/compiler/.") === "/proj/compiler";
+	assert canonicalRootDir("C:/proj/compiler/.") == "C:/proj/compiler";
+	assert canonicalRootDir("/proj/compiler/.") == "/proj/compiler";
 }
 
 test "canonicalRootDir — separators are unified" {
-	assert canonicalRootDir("C:\\proj\\compiler") === "C:/proj/compiler";
+	assert canonicalRootDir("C:\\proj\\compiler") == "C:/proj/compiler";
 }
 
 test "canonicalRootDir — the two spellings of one root agree" {
-	assert canonicalRootDir("C:/proj/compiler/.") === canonicalRootDir("C:\\proj\\compiler");
+	assert canonicalRootDir("C:/proj/compiler/.") == canonicalRootDir("C:\\proj\\compiler");
 }
 
 test "canonicalRootDir — an already-clean root is unchanged" {
-	assert canonicalRootDir("C:/proj/compiler") === "C:/proj/compiler";
+	assert canonicalRootDir("C:/proj/compiler") == "C:/proj/compiler";
 }

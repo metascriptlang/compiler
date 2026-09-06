@@ -33,7 +33,7 @@ export function cacheResolveEdit(label: string, detail: string, editsJson: strin
 
 export function lookupResolveEdit(label: string, detail: string): string {
 	const cached = _resolveCache.get(label);
-	if (cached !== null) return cached;
+	if (cached != null) return cached;
 	return "";
 }
 
@@ -50,7 +50,7 @@ export function markFileChanged(path: string, uri: string): void {
 	_resolveCache = new HashMap<string, string>();
 	let found = false;
 	for (let ci = 0; ci < _changedFiles.length; ci += 1) {
-		if (_changedFiles[ci] === path) { found = true; break; }
+		if (_changedFiles[ci] == path) { found = true; break; }
 	}
 	if (!found) {
 		_changedFiles.push(path);
@@ -59,7 +59,7 @@ export function markFileChanged(path: string, uri: string): void {
 }
 
 export function drainChangedFiles(): string[][] {
-	if (_changedFiles.length === 0) return [];
+	if (_changedFiles.length == 0) return [];
 	const result: string[][] = [];
 	for (let i = 0; i < _changedFiles.length; i += 1) {
 		result.push([_changedFiles[i], _changedUris[i]]);
@@ -102,7 +102,7 @@ export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 		const readResult = readFile(filePath);
 		if (readResult.ok) {
 			let source = readResult.value;
-			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
+			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) == ".h") {
 				source = translateCHeader(source, []);
 			}
 			dbSetFileText(db, filePath, source);

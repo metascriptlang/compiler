@@ -36,13 +36,13 @@ class Greeter {
 test "bug004: non-static method with single default arg fires when omitted" {
 	const g = new Greeter("world");
 	const a = g.greet();
-	assert a === "Hello, world";
+	assert a == "Hello, world";
 }
 
 test "bug004: non-static method default is overridable" {
 	const g = new Greeter("world");
 	const b = g.greet("Hi");
-	assert b === "Hi, world";
+	assert b == "Hi, world";
 }
 
 class Counter {
@@ -57,19 +57,19 @@ class Counter {
 test "bug004: method with two trailing defaults — both fire when omitted" {
 	const c = new Counter();
 	const after = c.add();
-	assert after === 1;
+	assert after == 1;
 }
 
 test "bug004: method with two trailing defaults — only the second fires" {
 	const c = new Counter();
 	const after = c.add(5);
-	assert after === 5;
+	assert after == 5;
 }
 
 test "bug004: method with two trailing defaults — neither fires when both supplied" {
 	const c = new Counter();
 	const after = c.add(3, 2);
-	assert after === 6;
+	assert after == 6;
 }
 
 class Mix {
@@ -84,11 +84,11 @@ class Mix {
 test "bug004: required + default mix — default fires when omitted" {
 	const m = new Mix(">>");
 	const out = m.wrap("hi");
-	assert out === ">>hi!";
+	assert out == ">>hi!";
 }
 
 test "bug004: required + default mix — default overridable" {
 	const m = new Mix(">>");
 	const out = m.wrap("hi", "?");
-	assert out === ">>hi?";
+	assert out == ">>hi?";
 }

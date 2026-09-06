@@ -42,41 +42,41 @@ export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
 }
 
 function materializeIntOp(node: Node, ctx: TransformContext): Node {
-	if (node.kind === NodeKind.UnaryExpr) return unaryAsUnsigned(node);
-	if (node.kind !== NodeKind.BinaryExpr) return node;
+	if (node.kind == NodeKind.UnaryExpr) return unaryAsUnsigned(node);
+	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
-	if (base !== "") return compoundAsInteger(node, d, base, ctx);
-	if (d.operator === "/") return divideAsInteger(node);
+	if (base != "") return compoundAsInteger(node, d, base, ctx);
+	if (d.operator == "/") return divideAsInteger(node);
 	return binaryAsUnsigned(node);
 }
 
 function divideAsInteger(node: Node): Node {
 	const t = node.nodeType;
-	if (t === null || !isIntConvKind(t.kind)) return node;
+	if (t == null || !isIntConvKind(t.kind)) return node;
 	// BigInt division already truncates; Math.trunc on a BigInt throws.
-	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return node;
+	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
 	return truncateTo(node, t.kind, node.location);
 }
 
 function binaryAsUnsigned(node: Node): Node {
 	const d = node.data as BinaryExprData;
 	const t = node.nodeType;
-	if (t === null || t.kind !== TypeKind.Uint32) return node;
-	if (d.operator === ">>") {
+	if (t == null || t.kind != TypeKind.Uint32) return node;
+	if (d.operator == ">>") {
 		d.operator = ">>>";
 		return node;
 	}
-	if (d.operator === "*") return truncateTo(exactMul(d.left, d.right, node.location), t.kind, node.location);
+	if (d.operator == "*") return truncateTo(exactMul(d.left, d.right, node.location), t.kind, node.location);
 	if (!wrapsOnUint32(d.operator)) return node;
 	return truncateTo(node, t.kind, node.location);
 }
 
 function unaryAsUnsigned(node: Node): Node {
 	const t = node.nodeType;
-	if (t === null || t.kind !== TypeKind.Uint32) return node;
+	if (t == null || t.kind != TypeKind.Uint32) return node;
 	const d = node.data as UnaryExprData;
-	if (d.unaryOp !== "-" && d.unaryOp !== "~") return node;
+	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
 	return truncateTo(node, t.kind, node.location);
 }
 
@@ -114,20 +114,20 @@ function compoundBaseOf(op: string): string {
 // refused by name instead.
 function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
 	const t = d.left.nodeType;
-	if (t === null || !isIntConvKind(t.kind)) return node;
-	if (t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint64) return node;
-	const unsigned = t.kind === TypeKind.Uint32;
-	if (base !== "/" && !unsigned) return node;
+	if (t == null || !isIntConvKind(t.kind)) return node;
+	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
+	const unsigned = t.kind == TypeKind.Uint32;
+	if (base != "/" && !unsigned) return node;
 	const readBack = cloneIfPure(d.left);
-	if (readBack === null) {
-		if (ctx.checkerCtx !== null) {
+	if (readBack == null) {
+		if (ctx.checkerCtx != null) {
 			addError(ctx.checkerCtx, "integer '" + base + "=' needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
 		}
 		return node;
 	}
 	// makeBinary carries the left operand's type onto the result, which is what
 	// keeps this synthesized node visible to the width table above.
-	const widened = base === "*" && unsigned
+	const widened = base == "*" && unsigned
 		? exactMul(readBack, d.right, node.location)
 		: makeBinary(readBack, base, d.right, node.location);
 	return makeBinary(d.left, "=", truncateTo(widened, t.kind, node.location), node.location);
@@ -137,33 +137,33 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 // anything or move anything — identifiers, field chains over them, and indexes
 // that are themselves identifiers or literals.
 function cloneIfPure(node: Node): Node | null {
-	if (node.kind === NodeKind.Identifier) {
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		const c = makeIdent(d.name, node.location);
 		c.nodeType = node.nodeType;
 		c.resolvedSym = node.resolvedSym;
 		return c;
 	}
-	if (node.kind === NodeKind.MemberExpr) {
+	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
 		const obj = cloneIfPure(d.object);
-		if (obj === null) return null;
+		if (obj == null) return null;
 		const c = makeMember(obj, d.property, node.location);
 		c.nodeType = node.nodeType;
 		c.resolvedSym = node.resolvedSym;
 		return c;
 	}
-	if (node.kind === NodeKind.ArrayAccess) {
+	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
 		const arr = cloneIfPure(d.array);
-		if (arr === null) return null;
+		if (arr == null) return null;
 		const idx = cloneIfPure(d.index);
-		if (idx === null) return null;
+		if (idx == null) return null;
 		const c = makeArrayAccess(arr, idx, node.location);
 		c.nodeType = node.nodeType;
 		return c;
 	}
-	if (node.kind === NodeKind.NumberLiteral) {
+	if (node.kind == NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
 		const c = makeNumber(d.value, node.location);
 		c.nodeType = node.nodeType;
@@ -172,11 +172,11 @@ function cloneIfPure(node: Node): Node | null {
 	// A deref/addr wrapper evaluates nothing of its own, so re-reading it costs
 	// exactly what re-reading its operand costs. conditionalExprLower walks the
 	// same pair transparently when it hoists assignment-target effects.
-	if (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr) {
+	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) {
 		const d = node.data as HiddenDerefData;
 		const inner = cloneIfPure(d.expr);
-		if (inner === null) return null;
-		const c = node.kind === NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
+		if (inner == null) return null;
+		const c = node.kind == NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
 		c.nodeType = node.nodeType;
 		return c;
 	}

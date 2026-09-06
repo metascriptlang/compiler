@@ -19,7 +19,7 @@ import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 const defaultLoc = makeLoc(0, 0);
 
 function safeLoc(node: Node): SourceLocation {
-	if (node !== null && node.location !== null) return node.location;
+	if (node != null && node.location != null) return node.location;
 	return defaultLoc;
 }
 
@@ -35,17 +35,17 @@ const PTR_THRESHOLD: number = 24;
 const TF_CCG_INTRODUCED: number = 32;
 
 export function ccgIntroducedPtr(t: Type): boolean {
-	if (t === null) return false;
-	if (t.kind === TypeKind.Var) return true;  // out params always by pointer
+	if (t == null) return false;
+	if (t.kind == TypeKind.Var) return true;  // out params always by pointer
 	const inner = skipModifier(t);
-	if (inner === null) return false;
+	if (inner == null) return false;
 	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
-	if (inner.kind === TypeKind.Tuple) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (inner.kind == TypeKind.Tuple) return getTypeSize(inner) > PTR_THRESHOLD;
 	if (isResult(inner)) return true;
-	if (inner.kind === TypeKind.Array) return true;  // arrays always by pointer
-	if (inner.kind === TypeKind.Union) return true;
-	if (inner.kind === TypeKind.Span) return true;
-	if (inner.kind === TypeKind.GenericInstance) return !isAwaitable(inner);
+	if (inner.kind == TypeKind.Array) return true;  // arrays always by pointer
+	if (inner.kind == TypeKind.Union) return true;
+	if (inner.kind == TypeKind.Span) return true;
+	if (inner.kind == TypeKind.GenericInstance) return !isAwaitable(inner);
 	return false;
 }
 
@@ -54,13 +54,13 @@ export function ccgIntroducedPtr(t: Type): boolean {
 export function markPointerParams(program: Node, ctx: TransformContext): Node {
 	// Pass 1: Rewrite function declarations — modify param types + insert HiddenDeref in body
 	walkNode(program, (node: Node): Node => {
-		if (node.kind === NodeKind.FunctionDecl) transformFunction(node);
-		if (node.kind === NodeKind.ExternDecl) transformExternDecl(node);
+		if (node.kind == NodeKind.FunctionDecl) transformFunction(node);
+		if (node.kind == NodeKind.ExternDecl) transformExternDecl(node);
 		return node;
 	});
 	// Pass 2: Rewrite call sites — insert HiddenAddr for pointer param args
 	walkNode(program, (node: Node): Node => {
-		if (node.kind === NodeKind.CallExpr) transformCallSite(node);
+		if (node.kind == NodeKind.CallExpr) transformCallSite(node);
 		return node;
 	});
 	return program;
@@ -71,7 +71,7 @@ export function markPointerParams(program: Node, ctx: TransformContext): Node {
 function transformFunction(node: Node): void {
 	const d = node.data as FunctionDeclData;
 	const fnType = node.nodeType;
-	if (fnType === null || fnType.typeChildren === null) return;
+	if (fnType == null || fnType.typeChildren == null) return;
 
 	// Collect pointer param names + wrap types
 	const ptrParams: string[] = [];
@@ -90,12 +90,12 @@ function transformFunction(node: Node): void {
 		i += 1;
 	}
 
-	if (ptrParams.length === 0) return;
+	if (ptrParams.length == 0) return;
 
 	// Also update the symbol's function type (for call-site resolution in Pass 2)
-	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
 		const symType = node.resolvedSym.symbolType;
-		if (symType.typeChildren !== null) {
+		if (symType.typeChildren != null) {
 			i = 0;
 			while (i < d.params.length && i < symType.typeChildren.length) {
 				if (ccgIntroducedPtr(symType.typeChildren[i])) {
@@ -113,9 +113,9 @@ function transformFunction(node: Node): void {
 // ExternDecl has no body but its symbol's function type needs Ptr wrapping
 // so that Pass 2 can add HiddenAddr at call sites.
 function transformExternDecl(node: Node): void {
-	if (node.resolvedSym === null || node.resolvedSym.symbolType === null) return;
+	if (node.resolvedSym == null || node.resolvedSym.symbolType == null) return;
 	const symType = node.resolvedSym.symbolType;
-	if (symType.kind !== TypeKind.Function || symType.typeChildren === null) return;
+	if (symType.kind != TypeKind.Function || symType.typeChildren == null) return;
 	let changed = false;
 	let i = 0;
 	while (i < symType.typeChildren.length) {
@@ -128,7 +128,7 @@ function transformExternDecl(node: Node): void {
 		i += 1;
 	}
 	// Also update nodeType if present
-	if (changed && node.nodeType !== null && node.nodeType.kind === TypeKind.Function && node.nodeType.typeChildren !== null) {
+	if (changed && node.nodeType != null && node.nodeType.kind == TypeKind.Function && node.nodeType.typeChildren != null) {
 		i = 0;
 		while (i < node.nodeType.typeChildren.length) {
 			if (ccgIntroducedPtr(node.nodeType.typeChildren[i])) {
@@ -145,7 +145,7 @@ function transformExternDecl(node: Node): void {
 // with HiddenDeref. Does NOT recurse into nested FunctionDecl/ArrowFunction
 // (those have their own scope).
 export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	match (node.kind) {
 		NodeKind.BlockStmt => {
@@ -162,17 +162,17 @@ export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer !== null) d.initializer = wrapExpr(d.initializer, ptrParams);
+			if (d.initializer != null) d.initializer = wrapExpr(d.initializer, ptrParams);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument !== null) d.argument = wrapExpr(d.argument, ptrParams);
+			if (d.argument != null) d.argument = wrapExpr(d.argument, ptrParams);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			d.condition = wrapExpr(d.condition, ptrParams);
 			wrapBodyIdentifiers(d.consequent, ptrParams);
-			if (d.alternate !== null) wrapBodyIdentifiers(d.alternate, ptrParams);
+			if (d.alternate != null) wrapBodyIdentifiers(d.alternate, ptrParams);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
@@ -186,9 +186,9 @@ export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			if (d.forInit !== null) wrapBodyIdentifiers(d.forInit, ptrParams);
-			if (d.forCondition !== null) d.forCondition = wrapExpr(d.forCondition, ptrParams);
-			if (d.forUpdate !== null) d.forUpdate = wrapExpr(d.forUpdate, ptrParams);
+			if (d.forInit != null) wrapBodyIdentifiers(d.forInit, ptrParams);
+			if (d.forCondition != null) d.forCondition = wrapExpr(d.forCondition, ptrParams);
+			if (d.forUpdate != null) d.forUpdate = wrapExpr(d.forUpdate, ptrParams);
 			wrapBodyIdentifiers(d.forBody, ptrParams);
 		},
 		NodeKind.ForOfStmt => {
@@ -199,8 +199,8 @@ export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			wrapBodyIdentifiers(d.tryBody, ptrParams);
-			if (d.catchBody !== null) wrapBodyIdentifiers(d.catchBody, ptrParams);
-			if (d.finallyBody !== null) wrapBodyIdentifiers(d.finallyBody, ptrParams);
+			if (d.catchBody != null) wrapBodyIdentifiers(d.catchBody, ptrParams);
+			if (d.finallyBody != null) wrapBodyIdentifiers(d.finallyBody, ptrParams);
 		},
 		// Do NOT recurse into nested functions — they have their own scope
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
@@ -211,7 +211,7 @@ export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
 // Wrap an expression: if it's an Identifier matching a pointer param, wrap with HiddenDeref.
 // For compound expressions, recurse into sub-expressions.
 function wrapExpr(node: Node, ptrParams: string[]): Node {
-	if (node === null) return node;
+	if (node == null) return node;
 
 	match (node.kind) {
 		NodeKind.Identifier => {
@@ -316,7 +316,7 @@ function wrapExpr(node: Node, ptrParams: string[]): Node {
 function isPtrParam(name: string, ptrParams: string[]): boolean {
 	let i = 0;
 	while (i < ptrParams.length) {
-		if (ptrParams[i] === name) return true;
+		if (ptrParams[i] == name) return true;
 		i += 1;
 	}
 	return false;
@@ -331,14 +331,14 @@ function transformCallSite(node: Node): void {
 
 	// Resolve the callee's function type — prefer resolvedSym.symbolType
 	let fnType: Type = null;
-	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null) {
+	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.symbolType != null) {
 		fnType = cd.callee.resolvedSym.symbolType;
 	}
-	if ((fnType === null || fnType.kind !== TypeKind.Function) && cd.callee.nodeType !== null) {
+	if ((fnType == null || fnType.kind != TypeKind.Function) && cd.callee.nodeType != null) {
 		fnType = cd.callee.nodeType;
 	}
-	if (fnType === null || fnType.kind !== TypeKind.Function) return;
-	if (fnType.typeChildren === null) return;
+	if (fnType == null || fnType.kind != TypeKind.Function) return;
+	if (fnType.typeChildren == null) return;
 
 	const paramTypes = fnType.typeChildren;
 	let i = 0;
@@ -346,10 +346,10 @@ function transformCallSite(node: Node): void {
 	while (i < minLen) {
 		// If Pass 1 wrapped the param type in Ptr<T>, the arg needs HiddenAddr
 		// Only match ccg-introduced Ptrs (TF_CCG_INTRODUCED flag), not user-declared Ptr<T>
-		if (paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Ptr && (paramTypes[i].typeFlags & TF_CCG_INTRODUCED) !== 0) {
+		if (paramTypes[i] != null && paramTypes[i].kind == TypeKind.Ptr && (paramTypes[i].typeFlags & TF_CCG_INTRODUCED) != 0) {
 			const arg = cd.arguments[i];
 			// Don't double-wrap: if already HiddenAddr, skip
-			if (arg.kind !== NodeKind.HiddenAddr) {
+			if (arg.kind != NodeKind.HiddenAddr) {
 				cd.arguments[i] = makeHiddenAddr(arg, safeLoc(arg));
 			}
 		}
@@ -368,11 +368,11 @@ export function isPrimitiveTypeName(typeName: string): boolean {
 }
 
 // ===== Tests =====
-test "non-function passthrough" { assert stmtCountAfter("const x = 1;", markPointerParams) === 1; }
+test "non-function passthrough" { assert stmtCountAfter("const x = 1;", markPointerParams) == 1; }
 
-test "function stays FunctionDecl" { assert firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl; }
+test "function stays FunctionDecl" { assert firstStmtKindAfter("function foo() {}", markPointerParams) == NodeKind.FunctionDecl; }
 
-test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2; }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", markPointerParams) == 2; }
 
 test "isPrimitive number" { assert isPrimitiveTypeName("number"); }
 

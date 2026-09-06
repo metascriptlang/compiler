@@ -3,12 +3,12 @@
 // borrowing the earlier variable's hoisted C slot (uninit-destroy shape).
 
 function pick(sel: int32, tag: string): string {
-	if (sel === 0) {
+	if (sel == 0) {
 		let kw = "";
 		kw = "var-" + tag;
 		console.log("first=" + kw);
 	}
-	if (sel === 1) {
+	if (sel == 1) {
 		const kw = match (sel) {
 			1 => "uno",
 			_ => "y",

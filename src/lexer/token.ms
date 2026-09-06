@@ -15,7 +15,7 @@ export function formatToken(token: Token): string {
 // Returns true for Ident and all keyword tokens.
 // Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
 export function isIdentOrKeyword(kind: TokenKind): boolean {
-	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Comment && kind !== TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
 }
 
 // Map identifier string to keyword TokenKind (or Ident)
@@ -292,18 +292,18 @@ export function tokenKindToString(kind: TokenKind): string {
 }
 
 // ===== Token Tests =====
-test "identToKeyword const" { assert identToKeyword("const") === TokenKind.Const; }
+test "identToKeyword const" { assert identToKeyword("const") == TokenKind.Const; }
 
-test "identToKeyword let" { assert identToKeyword("let") === TokenKind.Let; }
+test "identToKeyword let" { assert identToKeyword("let") == TokenKind.Let; }
 
-test "identToKeyword ident" { assert identToKeyword("foo") === TokenKind.Ident; }
+test "identToKeyword ident" { assert identToKeyword("foo") == TokenKind.Ident; }
 
-test "identToKeyword sizeof" { assert identToKeyword("sizeof") === TokenKind.Sizeof; }
+test "identToKeyword sizeof" { assert identToKeyword("sizeof") == TokenKind.Sizeof; }
 
-test "identToKeyword underscore" { assert identToKeyword("_") === TokenKind.Ident; }
+test "identToKeyword underscore" { assert identToKeyword("_") == TokenKind.Ident; }
 
-test "kindToString Plus" { assert tokenKindToString(TokenKind.Plus) === "PLUS"; }
+test "kindToString Plus" { assert tokenKindToString(TokenKind.Plus) == "PLUS"; }
 
-test "kindToString Eof" { assert tokenKindToString(TokenKind.Eof) === "EOF"; }
+test "kindToString Eof" { assert tokenKindToString(TokenKind.Eof) == "EOF"; }
 
-test "kindToString Const" { assert tokenKindToString(TokenKind.Const) === "CONST"; }
+test "kindToString Const" { assert tokenKindToString(TokenKind.Const) == "CONST"; }

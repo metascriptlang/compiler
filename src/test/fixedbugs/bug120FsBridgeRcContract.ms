@@ -33,11 +33,11 @@ import { env } from "std/process";
 // OS temp dir without std/os's C header (same shape as package/walker.ms).
 function bug120TmpDir(): string {
 	const t = env.get("TMP");
-	if (t !== "") return t;
+	if (t != "") return t;
 	const t2 = env.get("TEMP");
-	if (t2 !== "") return t2;
+	if (t2 != "") return t2;
 	const t3 = env.get("TMPDIR");
-	if (t3 !== "") return t3;
+	if (t3 != "") return t3;
 	return "/tmp";
 }
 
@@ -59,10 +59,10 @@ test "bug120: mkdir bridge reports success as 1, matching the C ABI" {
 	const mkdirFn = lookupHostFn("msFsMkdir");
 	const errno = lookupHostFn("msFsLastErrno");
 	const rv = mkdirFn([raiserString(dir)]);
-	assert rv.kind === RaiserValueKind.Int;
+	assert rv.kind == RaiserValueKind.Int;
 	// Pre-fix: 0 here — while the directory below already existed.
-	assert rv.intVal === 1;
-	assert errno([]).intVal === 0;
+	assert rv.intVal == 1;
+	assert errno([]).intVal == 0;
 	assert exists(dir) && isDir(dir);
 	removeAll(dir);
 }
@@ -73,8 +73,8 @@ test "bug120: mkdir bridge reports failure as 0 with errno set" {
 	const errno = lookupHostFn("msFsLastErrno");
 	const bad = join(bug120TmpDir(), "msbug120missing/deep/child");
 	const rv = mkdirFn([raiserString(bad)]);
-	assert rv.intVal === 0;
-	assert errno([]).intVal !== 0;
+	assert rv.intVal == 0;
+	assert errno([]).intVal != 0;
 	assert !exists(bad);
 }
 
@@ -84,11 +84,11 @@ test "bug120: writeFileMode bridge reports success as 1 and writes the bytes" {
 	const writeFn = lookupHostFn("msFsWriteFileMode");
 	const errno = lookupHostFn("msFsLastErrno");
 	const rv = writeFn([raiserString(path), raiserString("hello"), raiserString("wb")]);
-	assert rv.intVal === 1;
-	assert errno([]).intVal === 0;
+	assert rv.intVal == 1;
+	assert errno([]).intVal == 0;
 	const back = readFile(path);
 	assert back.ok;
-	if (back.ok) assert back.value === "hello";
+	if (back.ok) assert back.value == "hello";
 	removeAll(path);
 }
 
@@ -96,12 +96,12 @@ test "bug120: writeFileMode bridge honors the append mode instead of truncating"
 	bug120Ready();
 	const path = bug120Fresh("msbug120append.txt");
 	const writeFn = lookupHostFn("msFsWriteFileMode");
-	assert writeFn([raiserString(path), raiserString("aa"), raiserString("wb")]).intVal === 1;
+	assert writeFn([raiserString(path), raiserString("aa"), raiserString("wb")]).intVal == 1;
 	// Pre-fix: the mode argument was dropped, so this overwrote "aa".
-	assert writeFn([raiserString(path), raiserString("bb"), raiserString("ab")]).intVal === 1;
+	assert writeFn([raiserString(path), raiserString("bb"), raiserString("ab")]).intVal == 1;
 	const back = readFile(path);
 	assert back.ok;
-	if (back.ok) assert back.value === "aabb";
+	if (back.ok) assert back.value == "aabb";
 	removeAll(path);
 }
 
@@ -112,18 +112,18 @@ test "bug120: msFsChmod is bridged and reports success as 1" {
 	const chmodFn = lookupHostFn("msFsChmod");
 	// Pre-fix: null — the extern existed in std/fs but had no bridge, so a
 	// @comptime chmod died with "Unknown host function: msFsChmod".
-	assert chmodFn !== null;
+	assert chmodFn != null;
 	const rv = chmodFn([raiserString(path), raiserInt(420)]);  // 0644
-	assert rv.kind === RaiserValueKind.Int;
-	assert rv.intVal === 1;
+	assert rv.kind == RaiserValueKind.Int;
+	assert rv.intVal == 1;
 	removeAll(path);
 }
 
 test "bug120: msFsIsExecutable is bridged and answers 0 for a missing path" {
 	bug120Ready();
 	const execFn = lookupHostFn("msFsIsExecutable");
-	assert execFn !== null;
+	assert execFn != null;
 	const rv = execFn([raiserString(join(bug120TmpDir(), "msbug120nosuchbinary"))]);
-	assert rv.kind === RaiserValueKind.Int;
-	assert rv.intVal === 0;
+	assert rv.kind == RaiserValueKind.Int;
+	assert rv.intVal == 0;
 }

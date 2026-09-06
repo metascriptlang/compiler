@@ -40,7 +40,7 @@ import { nodeHasPositionalNew } from "./newExprLower";
 // A noreturn arm never yields a value (Nim endsInNoReturn): emit the bare call,
 // not an assignment — its result type has no C carrier to assign from.
 function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node {
-	if (branch.nodeType !== null && branch.nodeType.kind === TypeKind.Never) {
+	if (branch.nodeType != null && branch.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(branch, loc);
 	}
 	return makeExprStmt(makeAssign(target, branch, loc), loc);
@@ -53,22 +53,22 @@ function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node 
 // lowers whatever they contain in the correct (guarded) scope. `&&`/`||` RHS
 // is conditionally evaluated → never descended (LHS is).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	if (expr === null) return expr;
-	if (expr.kind === NodeKind.BinaryExpr) {
+	if (expr == null) return expr;
+	if (expr.kind == NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
-		if (bd.operator === "&&" || bd.operator === "||") {
+		if (bd.operator == "&&" || bd.operator == "||") {
 			bd.left = hoistTernaries(bd.left, hoisted, ctx);
 			return lowerShortCircuitExpr(expr, hoisted, ctx);
 		}
 	}
-	if (expr.kind === NodeKind.ConditionalExpr) {
+	if (expr.kind == NodeKind.ConditionalExpr) {
 		const cd = expr.data as ConditionalExprData;
 		cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, hoisted, ctx);
 		const loc = expr.location;
 		const t = freshTempSym(ctx, "tern", expr.nodeType);
 		const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
 		letDecl.resolvedSym = t;
-		if (expr.nodeType !== null) { letDecl.nodeType = expr.nodeType; }
+		if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
 		hoisted.push(letDecl);
 		const thenStmt = branchValueStmt(makeIdentResolved(t, loc), cd.ternaryConsequent, loc);
 		const elseStmt = branchValueStmt(makeIdentResolved(t, loc), cd.ternaryAlternate, loc);
@@ -92,12 +92,12 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
 	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
 	resDecl.resolvedSym = resSym;
-	if (expr.nodeType !== null) { resDecl.nodeType = expr.nodeType; }
+	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
 
 	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
 	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
-	const isAnd = bd.operator === "&&";
+	const isAnd = bd.operator == "&&";
 	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
 	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
 	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
@@ -119,19 +119,19 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer !== null && d.initializer.kind === NodeKind.ConditionalExpr) {
+			if (d.initializer != null && d.initializer.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInVar(stmt, ctx);
 			}
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument !== null && d.argument.kind === NodeKind.ConditionalExpr) {
+			if (d.argument != null && d.argument.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInReturn(stmt, ctx);
 			}
 		},
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr.kind === NodeKind.ConditionalExpr) {
+			if (d.expr.kind == NodeKind.ConditionalExpr) {
 				const cd = d.expr.data as ConditionalExprData;
 				const pre: Node[] = [];
 				cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, pre, ctx);
@@ -140,7 +140,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 				pre.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
 				return pre;
 			}
-			if (d.expr.kind === NodeKind.BinaryExpr) {
+			if (d.expr.kind == NodeKind.BinaryExpr) {
 				const bd = d.expr.data as BinaryExprData;
 				if (isAssignOperator(bd.operator)) { return expandAssignStmt(stmt, ctx); }
 			}
@@ -167,7 +167,7 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, result, ctx);
 	const letDecl = makeVarDecl(vd.declName, makeNull(loc), DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
-	if (stmt.nodeType !== null) { letDecl.nodeType = stmt.nodeType; }
+	if (stmt.nodeType != null) { letDecl.nodeType = stmt.nodeType; }
 	result.push(letDecl);
 	const thenTarget = makeIdent(vd.declName, loc);
 	thenTarget.resolvedSym = stmt.resolvedSym;
@@ -186,10 +186,10 @@ export function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] 
 	const loc = stmt.location;
 	const result: Node[] = [];
 	cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, result, ctx);
-	const thenStmt = (cd.ternaryConsequent.nodeType !== null && cd.ternaryConsequent.nodeType.kind === TypeKind.Never)
+	const thenStmt = (cd.ternaryConsequent.nodeType != null && cd.ternaryConsequent.nodeType.kind == TypeKind.Never)
 		? makeExprStmt(cd.ternaryConsequent, loc)
 		: makeReturn(cd.ternaryConsequent, loc);
-	const elseStmt = (cd.ternaryAlternate.nodeType !== null && cd.ternaryAlternate.nodeType.kind === TypeKind.Never)
+	const elseStmt = (cd.ternaryAlternate.nodeType != null && cd.ternaryAlternate.nodeType.kind == TypeKind.Never)
 		? makeExprStmt(cd.ternaryAlternate, loc)
 		: makeReturn(cd.ternaryAlternate, loc);
 	result.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
@@ -203,7 +203,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
 	const pre: Node[] = [];
 	const cond = hoistTernaries(wd.whileCondition, pre, ctx);
-	if (pre.length === 0) return [stmt];
+	if (pre.length == 0) return [stmt];
 	const loc = stmt.location;
 	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
 	for (const s of extractBodyStmts(wd.whileBody)) { pre.push(s); }
@@ -213,7 +213,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function isAssignOperator(op: string): boolean {
-	return op === "=" || op === "+=" || op === "-=" || op === "*=" || op === "/=" || op === "%=";
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
 }
 
 // Assignment statement: TS evaluates the target reference BEFORE the RHS.
@@ -230,7 +230,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 		bd.left = hoistAssignTargetEffects(bd.left, pre, ctx);
 		for (const s of rhsPre) { pre.push(s); }
 	}
-	if (pre.length === 0) return [stmt];
+	if (pre.length == 0) return [stmt];
 	pre.push(stmt);
 	return pre;
 }
@@ -241,37 +241,37 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 // rvalue-producing parts are hoisted: index expressions, and Call/New in
 // object position (their result is a reference; temping preserves identity).
 function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformContext): Node {
-	if (target === null) return target;
-	if (target.kind === NodeKind.ArrayAccess) {
+	if (target == null) return target;
+	if (target.kind == NodeKind.ArrayAccess) {
 		const ad = target.data as ArrayAccessData;
 		ad.array = hoistAssignTargetEffects(ad.array, pre, ctx);
 		ad.index = hoistRvalueToTemp(ad.index, pre, ctx);
 		return target;
 	}
-	if (target.kind === NodeKind.MemberExpr) {
+	if (target.kind == NodeKind.MemberExpr) {
 		const md = target.data as MemberExprData;
 		md.object = hoistAssignTargetEffects(md.object, pre, ctx);
 		return target;
 	}
-	if (target.kind === NodeKind.HiddenDeref || target.kind === NodeKind.HiddenAddr) {
+	if (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
 		const hd = target.data as HiddenDerefData;
 		hd.expr = hoistAssignTargetEffects(hd.expr, pre, ctx);
 		return target;
 	}
-	if (target.kind === NodeKind.CallExpr || target.kind === NodeKind.NewExpr) {
+	if (target.kind == NodeKind.CallExpr || target.kind == NodeKind.NewExpr) {
 		return hoistRvalueToTemp(target, pre, ctx);
 	}
 	return target;
 }
 
 function hoistRvalueToTemp(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	if (expr.kind === NodeKind.Identifier || expr.kind === NodeKind.NumberLiteral
-		|| expr.kind === NodeKind.StringLiteral || expr.kind === NodeKind.BooleanLiteral) return expr;
+	if (expr.kind == NodeKind.Identifier || expr.kind == NodeKind.NumberLiteral
+		|| expr.kind == NodeKind.StringLiteral || expr.kind == NodeKind.BooleanLiteral) return expr;
 	const loc = expr.location;
 	const sym = freshTempSym(ctx, "lhs", expr.nodeType);
 	const decl = makeVarDecl(sym.name, expr, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
-	if (expr.nodeType !== null) { decl.nodeType = expr.nodeType; }
+	if (expr.nodeType != null) { decl.nodeType = expr.nodeType; }
 	pre.push(decl);
 	return makeIdentResolved(sym, loc);
 }
@@ -285,7 +285,7 @@ function expandDoWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as DoWhileStmtData;
 	const pre: Node[] = [];
 	const cond = hoistTernaries(wd.doCondition, pre, ctx);
-	if (pre.length === 0) return [stmt];
+	if (pre.length == 0) return [stmt];
 	if (bodyHasLoopContinue(wd.doBody)) {
 		ctx.errors.push("do-while: a condition that lowers to statements (ternary / '&&' / '||') combined with 'continue' in the loop body is not supported on the C backend yet");
 		return [stmt];
@@ -300,12 +300,12 @@ function expandDoWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function bodyHasLoopContinue(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.ContinueStmt) return true;
-	if (node.kind === NodeKind.WhileStmt || node.kind === NodeKind.DoWhileStmt
-		|| node.kind === NodeKind.ForStmt || node.kind === NodeKind.ForOfStmt
-		|| node.kind === NodeKind.ForInStmt || node.kind === NodeKind.FunctionDecl
-		|| node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return false;
+	if (node == null) return false;
+	if (node.kind == NodeKind.ContinueStmt) return true;
+	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.DoWhileStmt
+		|| node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt
+		|| node.kind == NodeKind.ForInStmt || node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
 		if (!found && bodyHasLoopContinue(child)) { found = true; }
@@ -321,30 +321,30 @@ export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node
 }
 
 // ===== Tests =====
-test "ternary in stmt becomes if" { assert firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt; }
+test "ternary in stmt becomes if" { assert firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) == NodeKind.IfStmt; }
 
-test "non-ternary ExprStmt unchanged" { assert firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt; }
+test "non-ternary ExprStmt unchanged" { assert firstStmtKindAfter("f();", lowerConditionalExpr) == NodeKind.ExprStmt; }
 
-test "pure var-init ternary lowers to let + if" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) === 2; }
+test "pure var-init ternary lowers to let + if" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) == 2; }
 
-test "call-arg ternary hoisted" { assert stmtCountAfter("f(a ? b : c);", lowerConditionalExpr) === 3; }
+test "call-arg ternary hoisted" { assert stmtCountAfter("f(a ? b : c);", lowerConditionalExpr) == 3; }
 
-test "concat-operand ternary hoisted" { assert stmtCountAfter("g(s + (a ? b : c));", lowerConditionalExpr) === 3; }
+test "concat-operand ternary hoisted" { assert stmtCountAfter("g(s + (a ? b : c));", lowerConditionalExpr) == 3; }
 
-test "if-condition ternary hoisted" { assert stmtCountAfter("if (a ? b : c) {}", lowerConditionalExpr) === 3; }
+test "if-condition ternary hoisted" { assert stmtCountAfter("if (a ? b : c) {}", lowerConditionalExpr) == 3; }
 
-test "short-circuit lowers to guarded branches" { assert stmtCountAfter("const x = a && b;", lowerConditionalExpr) === 4; }
+test "short-circuit lowers to guarded branches" { assert stmtCountAfter("const x = a && b;", lowerConditionalExpr) == 4; }
 
-test "short-circuit RHS ternary re-lowers inside its branch" { assert stmtCountAfter("const x = a && (b ? c : d);", lowerConditionalExpr) === 4; }
+test "short-circuit RHS ternary re-lowers inside its branch" { assert stmtCountAfter("const x = a && (b ? c : d);", lowerConditionalExpr) == 4; }
 
-test "short-circuit LHS ternary hoisted before the guard" { assert stmtCountAfter("const x = (a ? b : c) && d;", lowerConditionalExpr) === 6; }
+test "short-circuit LHS ternary hoisted before the guard" { assert stmtCountAfter("const x = (a ? b : c) && d;", lowerConditionalExpr) == 6; }
 
-test "do-while condition ternary lowers into body end" { assert firstStmtKindAfter("do { f(); } while (a ? b : c);", lowerConditionalExpr) === NodeKind.DoWhileStmt; }
+test "do-while condition ternary lowers into body end" { assert firstStmtKindAfter("do { f(); } while (a ? b : c);", lowerConditionalExpr) == NodeKind.DoWhileStmt; }
 
-test "while-condition ternary lowers into body" { assert firstStmtKindAfter("while (a ? b : c) { f(); }", lowerConditionalExpr) === NodeKind.WhileStmt; }
+test "while-condition ternary lowers into body" { assert firstStmtKindAfter("while (a ? b : c) { f(); }", lowerConditionalExpr) == NodeKind.WhileStmt; }
 
-test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt; }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerConditionalExpr) == NodeKind.WhileStmt; }
 
-test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2; }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) == 2; }
 
-test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr; }
+test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerConditionalExpr) == NodeKind.BinaryExpr; }

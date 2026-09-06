@@ -26,7 +26,7 @@ function parseJsxChildCount(src: string): number {
 	if (!lr.ok) return -1;
 	const pr = parseExpression(lr.value);
 	if (!pr.ok) return -1;
-	if (pr.value.kind !== NodeKind.JSXElement) return -1;
+	if (pr.value.kind != NodeKind.JSXElement) return -1;
 	const d = pr.value.data as JSXElementData;
 	return d.jsxChildren.length;
 }
@@ -34,7 +34,7 @@ function parseJsxChildCount(src: string): number {
 function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 5000; i = i + 1) {
-		if (parseJsxChildCount("<p>hi {a}<b/></p>") === 3) {
+		if (parseJsxChildCount("<p>hi {a}<b/></p>") == 3) {
 			acc = (acc + 1) % 1000000;
 		}
 	}

@@ -8,8 +8,8 @@ import { DefineTable, createDefineTable } from "../compiler/defines";
 // Must stay in sync with the canonical version in util.ms.
 function isIdentLikeToken(token: Token): boolean {
 	const k = token.kind;
-	if (k === TokenKind.Ident) { return true; }
-	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
+	if (k == TokenKind.Ident) { return true; }
+	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // ===== Parser State =====
@@ -34,7 +34,7 @@ export function createState(tokens: Token[]): ParserState {
 // Stamp a node's end position from the last consumed token (position - 1).
 // Call AFTER the node is fully parsed. Safe to call multiple times.
 export function stampEnd(state: ParserState, node: Node): void {
-	if (node === null || node.location === null) return;
+	if (node == null || node.location == null) return;
 	const prevIdx = state.position - 1;
 	if (prevIdx < 0 || prevIdx >= state.tokens.length) return;
 	const prev = state.tokens[prevIdx];
@@ -52,25 +52,25 @@ function rawCurrent(state: ParserState): Token {
 // Transparently skips comments so parser logic remains focused on semantics.
 export function current(state: ParserState): Token {
 	let pos = state.position;
-	while (pos < state.tokens.length && state.tokens[pos].kind === TokenKind.Comment) {
+	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) {
 		pos += 1;
 	}
 	if (pos < state.tokens.length) return state.tokens[pos];
-	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+	if (state.tokens.length == 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	return state.tokens[state.tokens.length - 1]; // Safe EOF fallback
 }
 
 export function advance(state: ParserState): Token {
 	// Skip and collect comment tokens into the side-channel.
 	// Comments are attached to the NEXT non-comment token (leading comments).
-	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
+	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
 		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
 
 	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	const token = state.tokens[state.position];
-	if (token.kind !== TokenKind.Eof) {
+	if (token.kind != TokenKind.Eof) {
 		state.position += 1;
 	}
 	return token;
@@ -81,7 +81,7 @@ export function advance(state: ParserState): Token {
 // advanced over yet. This ensures comments immediately before a construct
 // are attached to it (e.g., leading comments before a function parameter).
 export function takePendingComments(state: ParserState): Token[] {
-	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
+	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
 		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
@@ -93,11 +93,11 @@ export function takePendingComments(state: ParserState): Token[] {
 export function isAtEnd(state: ParserState): boolean {
 	let pos = state.position;
 	// Skip comments to see if we are genuinely at EOF
-	while (pos < state.tokens.length && state.tokens[pos].kind === TokenKind.Comment) {
+	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) {
 		pos += 1;
 	}
 	if (pos >= state.tokens.length) return true;
-	return state.tokens[pos].kind === TokenKind.Eof;
+	return state.tokens[pos].kind == TokenKind.Eof;
 }
 
 // ===== Lookahead =====
@@ -106,13 +106,13 @@ export function peek(state: ParserState, offset: int32): Token {
 	let pos = state.position;
 	let count = 0;
 	while (pos < state.tokens.length) {
-		if (state.tokens[pos].kind !== TokenKind.Comment) {
-			if (count === offset) return state.tokens[pos];
+		if (state.tokens[pos].kind != TokenKind.Comment) {
+			if (count == offset) return state.tokens[pos];
 			count += 1;
 		}
 		pos += 1;
 	}
-	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+	if (state.tokens.length == 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	return state.tokens[state.tokens.length - 1]; // EOF
 }
 
@@ -133,27 +133,27 @@ export function synchronize(state: ParserState): void {
 	while (!isAtEnd(state)) {
 		const kind = current(state).kind;
 		// Statement-starting keywords — resume here
-		if (kind === TokenKind.Const || kind === TokenKind.Let ||
-			kind === TokenKind.If || kind === TokenKind.While ||
-			kind === TokenKind.For || kind === TokenKind.Function ||
-			kind === TokenKind.Return || kind === TokenKind.Import ||
-			kind === TokenKind.Export || kind === TokenKind.Class ||
-			kind === TokenKind.Enum || kind === TokenKind.Interface ||
-			kind === TokenKind.Type || kind === TokenKind.Throw ||
-			kind === TokenKind.Try || kind === TokenKind.Match ||
-			kind === TokenKind.Switch || kind === TokenKind.Defer ||
-			kind === TokenKind.At || kind === TokenKind.Break ||
-			kind === TokenKind.Continue || kind === TokenKind.Async) {
+		if (kind == TokenKind.Const || kind == TokenKind.Let ||
+			kind == TokenKind.If || kind == TokenKind.While ||
+			kind == TokenKind.For || kind == TokenKind.Function ||
+			kind == TokenKind.Return || kind == TokenKind.Import ||
+			kind == TokenKind.Export || kind == TokenKind.Class ||
+			kind == TokenKind.Enum || kind == TokenKind.Interface ||
+			kind == TokenKind.Type || kind == TokenKind.Throw ||
+			kind == TokenKind.Try || kind == TokenKind.Match ||
+			kind == TokenKind.Switch || kind == TokenKind.Defer ||
+			kind == TokenKind.At || kind == TokenKind.Break ||
+			kind == TokenKind.Continue || kind == TokenKind.Async) {
 			return;
 		}
 		// Closing brace — consume it and resume
-		if (kind === TokenKind.RBrace) {
+		if (kind == TokenKind.RBrace) {
 			advance(state);
 			return;
 		}
 		advance(state);
 		// Past semicolon — resume on next token
-		if (kind === TokenKind.Semicolon) { return; }
+		if (kind == TokenKind.Semicolon) { return; }
 	}
 }
 
@@ -165,22 +165,22 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 	let text = "";
 	for (let i = start; i < end; i += 1) {
 		const tok = state.tokens[i];
-		if (tok.kind === TokenKind.Comment) continue;
+		if (tok.kind == TokenKind.Comment) continue;
 		// Smart spacing: reproduce original token adjacency for type annotations.
 		// No space around brackets [], angles <>, parens (), commas, colons, dots.
-		if (text !== "") {
+		if (text != "") {
 			const lastCh = text.byteAt(text.byteLength - 1);
 			const v = tok.value;
-			const noSpaceBefore = v === "[" || v === "]" || v === ">" || v === ">>" || v === ">>>"
-				|| v === ")" || v === "," || v === "." || v === "?" || v === ":"
-				|| v === "<" || v === "(";
-			const noSpaceAfter = lastCh === "[".code || lastCh === "<".code || lastCh === "(".code
-				|| lastCh === ".".code || lastCh === "?".code;
+			const noSpaceBefore = v == "[" || v == "]" || v == ">" || v == ">>" || v == ">>>"
+				|| v == ")" || v == "," || v == "." || v == "?" || v == ":"
+				|| v == "<" || v == "(";
+			const noSpaceAfter = lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
+				|| lastCh == ".".code || lastCh == "?".code;
 			if (!noSpaceBefore && !noSpaceAfter) text = text + " ";
 		}
 		// Preserve quotes on string literal tokens so resolveAnnotation can
 		// distinguish string literal union members ("r8unorm") from type names.
-		if (tok.kind === TokenKind.String) {
+		if (tok.kind == TokenKind.String) {
 			text = text + "\"" + tok.value + "\"";
 		} else {
 			text = text + tok.value;
@@ -191,7 +191,7 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 
 // Consume optional trailing semicolon
 export function consumeSemicolon(state: ParserState): void {
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 		advance(state);
 	}
 }
@@ -200,28 +200,28 @@ export function consumeSemicolon(state: ParserState): void {
 // Consumes the opening token and everything through the matching close.
 // Caller must ensure current token is `open` before calling.
 export function skipBalanced(state: ParserState, open: TokenKind, close: TokenKind): void {
-	if (isAtEnd(state) || current(state).kind !== open) { return; }
+	if (isAtEnd(state) || current(state).kind != open) { return; }
 	advance(state);
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		if (current(state).kind === open) { depth += 1; }
-		if (current(state).kind === close) { depth -= 1; }
+		if (current(state).kind == open) { depth += 1; }
+		if (current(state).kind == close) { depth -= 1; }
 		if (depth > 0) { advance(state); }
 	}
-	if (!isAtEnd(state) && current(state).kind === close) { advance(state); }
+	if (!isAtEnd(state) && current(state).kind == close) { advance(state); }
 }
 
 // Skip balanced <...> generic type parameters (e.g., class Foo<T> or extends Bar<T>)
 // Handles >> and >>> for nested generics like Result<Array<number>>
 export function skipGenericParams(state: ParserState): void {
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) { return; }
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) { return; }
 	advance(state);
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		if (current(state).kind === TokenKind.Lt) { depth += 1; }
-		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
-		if (current(state).kind === TokenKind.GtGt) { depth -= 2; }
-		if (current(state).kind === TokenKind.GtGtGt) { depth -= 3; }
+		if (current(state).kind == TokenKind.Lt) { depth += 1; }
+		if (current(state).kind == TokenKind.Gt) { depth -= 1; }
+		if (current(state).kind == TokenKind.GtGt) { depth -= 2; }
+		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
 		advance(state);
 	}
 }
@@ -230,17 +230,17 @@ export function skipGenericParams(state: ParserState): void {
 // Capture generic param names: <T, U> → "T,U", no generics → ""
 // Same depth-tracking as skipGenericParams but returns names instead of discarding.
 export function captureGenericParams(state: ParserState): string {
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return "";
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return "";
 	advance(state); // consume <
 	let names = "";
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		if (isIdentLikeToken(current(state)) && depth === 1) {
-			if (names !== "") { names = `${names},`; }
+		if (isIdentLikeToken(current(state)) && depth == 1) {
+			if (names != "") { names = `${names},`; }
 			names = `${names}${current(state).value}`;
 			advance(state);
 			// Check for constraint: T extends Type
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Extends && depth === 1) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Extends && depth == 1) {
 				advance(state); // skip 'extends'
 				// Capture constraint type name
 				if (!isAtEnd(state) && isIdentLikeToken(current(state))) {
@@ -250,10 +250,10 @@ export function captureGenericParams(state: ParserState): string {
 			}
 			continue;
 		}
-		if (current(state).kind === TokenKind.Lt) { depth += 1; }
-		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
-		if (current(state).kind === TokenKind.GtGt) { depth -= 2; }
-		if (current(state).kind === TokenKind.GtGtGt) { depth -= 3; }
+		if (current(state).kind == TokenKind.Lt) { depth += 1; }
+		if (current(state).kind == TokenKind.Gt) { depth -= 1; }
+		if (current(state).kind == TokenKind.GtGt) { depth -= 2; }
+		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
 		advance(state);
 	}
 	return names;
@@ -264,35 +264,35 @@ export function captureGenericParams(state: ParserState): string {
 // Does NOT consume tokens — only peeks.
 export function isGenericCallAhead(state: ParserState): boolean {
 	// Current token should be '<'
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return false;
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return false;
 	let angleDepth = 1;
 	let braceDepth = 0;
 	let bracketDepth = 0;
 	let parenDepth = 0;
 	for (let pos = 1; pos < 100; pos += 1) {
 		const tok = peek(state, pos);
-		if (tok.kind === TokenKind.Eof) return false;
-		if (tok.kind === TokenKind.LBrace) { braceDepth += 1; }
-		if (tok.kind === TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return false; }
-		if (tok.kind === TokenKind.LBracket) { bracketDepth += 1; }
-		if (tok.kind === TokenKind.RBracket) { bracketDepth -= 1; if (bracketDepth < 0) return false; }
-		if (tok.kind === TokenKind.LParen) { parenDepth += 1; }
-		if (tok.kind === TokenKind.RParen) { parenDepth -= 1; if (parenDepth < 0) return false; }
+		if (tok.kind == TokenKind.Eof) return false;
+		if (tok.kind == TokenKind.LBrace) { braceDepth += 1; }
+		if (tok.kind == TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return false; }
+		if (tok.kind == TokenKind.LBracket) { bracketDepth += 1; }
+		if (tok.kind == TokenKind.RBracket) { bracketDepth -= 1; if (bracketDepth < 0) return false; }
+		if (tok.kind == TokenKind.LParen) { parenDepth += 1; }
+		if (tok.kind == TokenKind.RParen) { parenDepth -= 1; if (parenDepth < 0) return false; }
 		// Only count angle brackets at top level (not inside {} [] ())
-		if (braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
-			if (tok.kind === TokenKind.Lt) { angleDepth += 1; }
-			if (tok.kind === TokenKind.Gt) { angleDepth -= 1; }
-			if (tok.kind === TokenKind.GtGt) { angleDepth -= 2; }
-			if (tok.kind === TokenKind.GtGtGt) { angleDepth -= 3; }
+		if (braceDepth == 0 && bracketDepth == 0 && parenDepth == 0) {
+			if (tok.kind == TokenKind.Lt) { angleDepth += 1; }
+			if (tok.kind == TokenKind.Gt) { angleDepth -= 1; }
+			if (tok.kind == TokenKind.GtGt) { angleDepth -= 2; }
+			if (tok.kind == TokenKind.GtGtGt) { angleDepth -= 3; }
 			if (angleDepth <= 0) {
 				// Found matching '>' — check if next token is '('
 				const next = peek(state, pos + 1);
-				return next.kind === TokenKind.LParen;
+				return next.kind == TokenKind.LParen;
 			}
 		}
 		// Bail on tokens that can't appear in type args
-		if (tok.kind === TokenKind.Semicolon) return false;
-		if (tok.kind === TokenKind.Assign) return false;
+		if (tok.kind == TokenKind.Semicolon) return false;
+		if (tok.kind == TokenKind.Assign) return false;
 	}
 	return false;
 }
@@ -301,7 +301,7 @@ export function isGenericCallAhead(state: ParserState): boolean {
 // Unlike captureGenericParams (which captures parameter NAMES like T, U),
 // this captures full type expressions (identifiers, keywords, nested generics).
 export function captureGenericTypeArgs(state: ParserState): string {
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return "";
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return "";
 	advance(state); // consume <
 	// Two-pass: first collect token values with separators, then split.
 	// Avoid `let str = ""; str = "";` — DRC generates msDecref on struct msString.
@@ -310,10 +310,10 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
 		const tok = current(state);
-		if (tok.kind === TokenKind.Lt) { depth += 1; }
-		else if (tok.kind === TokenKind.Gt) { depth -= 1; }
-		else if (tok.kind === TokenKind.GtGt) { depth -= 2; }
-		else if (tok.kind === TokenKind.GtGtGt) { depth -= 3; }
+		if (tok.kind == TokenKind.Lt) { depth += 1; }
+		else if (tok.kind == TokenKind.Gt) { depth -= 1; }
+		else if (tok.kind == TokenKind.GtGt) { depth -= 2; }
+		else if (tok.kind == TokenKind.GtGtGt) { depth -= 3; }
 		if (depth > 0) {
 			tokens.push(tok.value);
 			depths.push(depth);
@@ -327,7 +327,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	let afterSep = false;
 	let argHasTokens = false;
 	for (let i = 0; i < tokens.length; i += 1) {
-		if (tokens[i] === "," && depths[i] === 1) {
+		if (tokens[i] == "," && depths[i] == 1) {
 			afterSep = true;
 			argHasTokens = false;
 		} else {
@@ -335,7 +335,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 				result = result + ",";
 				afterSep = false;
 			}
-			if (argHasTokens && tokens[i] !== ",") {
+			if (argHasTokens && tokens[i] != ",") {
 				result = result + " ";
 			}
 			result = result + tokens[i];
@@ -352,13 +352,13 @@ export function captureGenericTypeArgs(state: ParserState): string {
 export function skipDestructurePattern(state: ParserState): void {
 	let depth = 0;
 	while (!isAtEnd(state)) {
-		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
+		if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
 			depth += 1;
 		}
-		if (current(state).kind === TokenKind.RBrace || current(state).kind === TokenKind.RBracket) {
+		if (current(state).kind == TokenKind.RBrace || current(state).kind == TokenKind.RBracket) {
 			depth -= 1;
 			advance(state);
-			if (depth === 0) { return; }
+			if (depth == 0) { return; }
 			continue;
 		}
 		advance(state);
@@ -399,7 +399,7 @@ export function addExplicitTypeArg(line: int32, col: int32, typeArgStr: string):
 export function getExplicitTypeArg(line: int32, col: int32): string {
 	const key = `${line}:${col}`;
 	for (const item of _typeArgStore.items) {
-		if (item.key === key) return item.val;
+		if (item.key == key) return item.val;
 	}
 	return "";
 }
@@ -408,31 +408,31 @@ export function getExplicitTypeArg(line: int32, col: int32): string {
 // but CallExpr node location is at '('. Compute '<' position from callee name.
 export function findCallTypeArg(node: Node): string {
 	// Primary: read from AST-resident field (set by parser, survives C compilation)
-	if (node.typeArg !== null && node.typeArg !== "") return node.typeArg;
+	if (node.typeArg != null && node.typeArg != "") return node.typeArg;
 	// Fallback: legacy side-channel lookup (for nodes created without pendingTypeArg, e.g. NewExpr)
 	const cd = node.data as CallExprData;
 	let result = getExplicitTypeArg(node.location.line, node.location.column);
-	if (result !== "") return result;
-	if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier) {
+	if (result != "") return result;
+	if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
 		const calleeName = (cd.callee.data as IdentifierData).name;
 		const ltCol = cd.callee.location.column + calleeName.length;
 		result = getExplicitTypeArg(cd.callee.location.line, ltCol);
-		if (result !== "") return result;
+		if (result != "") return result;
 	}
-	if (cd.callee !== null && cd.callee.kind === NodeKind.MemberExpr) {
+	if (cd.callee != null && cd.callee.kind == NodeKind.MemberExpr) {
 		const me = cd.callee.data as MemberExprData;
 		const propLen = me.property.length;
 		const ltCol1 = cd.callee.location.column + propLen;
 		result = getExplicitTypeArg(cd.callee.location.line, ltCol1);
-		if (result !== "") return result;
+		if (result != "") return result;
 		result = getExplicitTypeArg(cd.callee.location.line, ltCol1 + 1);
-		if (result !== "") return result;
-		if (me.object !== null && me.object.kind === NodeKind.Identifier) {
+		if (result != "") return result;
+		if (me.object != null && me.object.kind == NodeKind.Identifier) {
 			const objName = (me.object.data as IdentifierData).name;
 			const propCol = me.object.location.column + objName.length + 1;
 			const ltCol2 = propCol + propLen;
 			result = getExplicitTypeArg(cd.callee.location.line, ltCol2);
-			if (result !== "") return result;
+			if (result != "") return result;
 		}
 	}
 	return "";
@@ -480,7 +480,7 @@ export function addGenericDecl(name: string, genericParams: string): void {
 export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
 	let i = 0;
 	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key === name) {
+		if (_genericDeclStore.items[i].key == name) {
 			_genericDeclStore.items[i].fieldNames = fieldNames;
 			_genericDeclStore.items[i].fieldTypes = fieldTypes;
 			return;
@@ -492,7 +492,7 @@ export function updateGenericDeclFields(name: string, fieldNames: string, fieldT
 export function getGenericDecl(name: string): string {
 	let i = 0;
 	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
+		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].val;
 		i = i + 1;
 	}
 	// Built-in generic types — never parsed, so never registered via
@@ -516,7 +516,7 @@ export function getGenericDecl(name: string): string {
 export function getGenericDeclFieldNames(name: string): string {
 	let i = 0;
 	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldNames;
+		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].fieldNames;
 		i = i + 1;
 	}
 	return "";
@@ -526,7 +526,7 @@ export function getGenericDeclFieldNames(name: string): string {
 export function getGenericDeclFieldTypes(name: string): string {
 	let i = 0;
 	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldTypes;
+		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].fieldTypes;
 		i = i + 1;
 	}
 	return "";
@@ -570,7 +570,7 @@ export function resetAllSideChannels(): void {
 export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string): void {
 	// Dedup: skip if same baseName + typeArgKey already exists
 	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
-		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return;
+		if (_genericTypeInstStore.baseNames[i] == baseName && _genericTypeInstStore.typeArgKeys[i] == typeArgKey) return;
 	}
 	_genericTypeInstStore.keys.push(mangledName);
 	_genericTypeInstStore.baseNames.push(baseName);
@@ -605,18 +605,18 @@ export function getGenericTypeInstFieldTypes(idx: int32): string {
 
 export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): int32 {
 	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
-		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return i;
+		if (_genericTypeInstStore.baseNames[i] == baseName && _genericTypeInstStore.typeArgKeys[i] == typeArgKey) return i;
 	}
 	return -1;
 }
 
 // Count pipe-separated segments in a string
 function pipeCount(s: string): int32 {
-	if (s === "") return 0;
+	if (s == "") return 0;
 	let count = 1;
 	for (let i = 0; i < s.length; i += 1) {
 		const ch = s[i];
-		if (ch === "|") count += 1;
+		if (ch == "|") count += 1;
 	}
 	return count;
 }
@@ -627,8 +627,8 @@ function pipeAt(s: string, idx: int32): string {
 	let start = 0;
 	for (let i = 0; i < s.length; i += 1) {
 		const ch = s[i];
-		if (ch === "|") {
-			if (count === idx) {
+		if (ch == "|") {
+			if (count == idx) {
 				let result = "";
 				for (let j = start; j < i; j += 1) { result = result + s[j]; }
 				return result;
@@ -637,7 +637,7 @@ function pipeAt(s: string, idx: int32): string {
 			start = i + 1;
 		}
 	}
-	if (count === idx) {
+	if (count == idx) {
 		let result = "";
 		for (let j = start; j < s.length; j += 1) { result = result + s[j]; }
 		return result;

@@ -22,8 +22,8 @@ function main(): void {
 	const viaNumber = take(42);
 	console.log(viaCString);
 	console.log(viaNumber);
-	if (viaCString !== 1) { throw "GUARD RED: string literal did not select the cstring overload"; }
-	if (viaNumber !== 2) { throw "GUARD RED: number did not select the number overload"; }
+	if (viaCString != 1) { throw "GUARD RED: string literal did not select the cstring overload"; }
+	if (viaNumber != 2) { throw "GUARD RED: number did not select the number overload"; }
 	console.log("cstringOverloadConv ok");
 }
 main();

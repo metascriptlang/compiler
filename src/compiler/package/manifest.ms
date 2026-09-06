@@ -10,11 +10,11 @@ import { PackageSection, DepsSection, loadBuildConfig } from "../buildConfig";
 // Windows sets TMP/TEMP; POSIX falls back to /tmp (same as std/os tmpDir).
 function testTmpDir(): string {
 	const t = env.get("TMP");
-	if (t !== "") return t;
+	if (t != "") return t;
 	const t2 = env.get("TEMP");
-	if (t2 !== "") return t2;
+	if (t2 != "") return t2;
 	const t3 = env.get("TMPDIR");
-	if (t3 !== "") return t3;
+	if (t3 != "") return t3;
 	return "/tmp";
 }
 
@@ -31,7 +31,7 @@ function findStr(content: string, needle: string, from: number): number {
 		let match = true;
 		let j = 0;
 		while (j < needle.length) {
-			if (content.charAt(i + j) !== needle.charAt(j)) { match = false; j = needle.length; }
+			if (content.charAt(i + j) != needle.charAt(j)) { match = false; j = needle.length; }
 			j = j + 1;
 		}
 		if (match) return i;
@@ -44,10 +44,10 @@ function findClosingBrace(content: string, openPos: number): number {
 	let depth = 0;
 	let i = openPos;
 	while (i < content.length) {
-		if (content.charAt(i) === "{") depth = depth + 1;
-		if (content.charAt(i) === "}") {
+		if (content.charAt(i) == "{") depth = depth + 1;
+		if (content.charAt(i) == "}") {
 			depth = depth - 1;
-			if (depth === 0) return i;
+			if (depth == 0) return i;
 		}
 		i = i + 1;
 	}
@@ -59,7 +59,7 @@ function findClosingBrace(content: string, openPos: number): number {
 export function addDepToManifest(buildPath: string, name: string, version: string, scope: string): boolean {
 	if (!exists(buildPath)) return false;
 	const content = try readFile(buildPath) catch "";
-	if (content === "") return false;
+	if (content == "") return false;
 
 	const quotedName = "\"" + name + "\"";
 	const newEntry = quotedName + ": \"" + version + "\"";
@@ -69,7 +69,7 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 
 	if (blockStart >= 0) {
 		let bracePos = blockStart + blockKey.length;
-		while (bracePos < content.length && content.charAt(bracePos) !== "{") bracePos = bracePos + 1;
+		while (bracePos < content.length && content.charAt(bracePos) != "{") bracePos = bracePos + 1;
 		if (bracePos >= content.length) return false;
 
 		const closeBrace = findClosingBrace(content, bracePos);
@@ -79,9 +79,9 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 		const nameIdx = findStr(content, quotedName, bracePos);
 		if (nameIdx >= 0 && nameIdx < closeBrace) {
 			let valQuote1 = nameIdx + quotedName.length;
-			while (valQuote1 < closeBrace && content.charAt(valQuote1) !== "\"") valQuote1 = valQuote1 + 1;
+			while (valQuote1 < closeBrace && content.charAt(valQuote1) != "\"") valQuote1 = valQuote1 + 1;
 			let valQuote2 = valQuote1 + 1;
-			while (valQuote2 < closeBrace && content.charAt(valQuote2) !== "\"") valQuote2 = valQuote2 + 1;
+			while (valQuote2 < closeBrace && content.charAt(valQuote2) != "\"") valQuote2 = valQuote2 + 1;
 			const updated = content.slice(0, valQuote1 + 1) + version + content.slice(valQuote2, content.length);
 			return writeFile(buildPath, updated).ok;
 		}
@@ -89,14 +89,14 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 		// Insert new entry
 		const blockInner = content.slice(bracePos + 1, closeBrace).trim();
 		let newContent = "";
-		if (blockInner === "") {
+		if (blockInner == "") {
 			newContent = content.slice(0, bracePos + 1) + "\n\t\t" + newEntry + ",\n\t" + content.slice(closeBrace, content.length);
 		} else {
 			let lastChar = closeBrace - 1;
-			while (lastChar > bracePos && (content.charAt(lastChar) === " " || content.charAt(lastChar) === "\t" || content.charAt(lastChar) === "\n")) {
+			while (lastChar > bracePos && (content.charAt(lastChar) == " " || content.charAt(lastChar) == "\t" || content.charAt(lastChar) == "\n")) {
 				lastChar = lastChar - 1;
 			}
-			const needsComma = lastChar > bracePos && content.charAt(lastChar) !== ",";
+			const needsComma = lastChar > bracePos && content.charAt(lastChar) != ",";
 			const comma = needsComma ? "," : "";
 			newContent = content.slice(0, lastChar + 1) + comma + "\n\t\t" + newEntry + ",\n\t" + content.slice(closeBrace, content.length);
 		}
@@ -108,14 +108,14 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 	if (exportIdx < 0) return false;
 
 	let configClose = exportIdx - 1;
-	while (configClose > 0 && content.charAt(configClose) !== "}") configClose = configClose - 1;
+	while (configClose > 0 && content.charAt(configClose) != "}") configClose = configClose - 1;
 	if (configClose <= 0) return false;
 
 	let lastNonWs = configClose - 1;
-	while (lastNonWs > 0 && (content.charAt(lastNonWs) === " " || content.charAt(lastNonWs) === "\t" || content.charAt(lastNonWs) === "\n")) {
+	while (lastNonWs > 0 && (content.charAt(lastNonWs) == " " || content.charAt(lastNonWs) == "\t" || content.charAt(lastNonWs) == "\n")) {
 		lastNonWs = lastNonWs - 1;
 	}
-	const needsComma = lastNonWs > 0 && content.charAt(lastNonWs) !== ",";
+	const needsComma = lastNonWs > 0 && content.charAt(lastNonWs) != ",";
 	const comma = needsComma ? "," : "";
 
 	const insertion = comma + "\n\t" + scope + ": {\n\t\t" + newEntry + ",\n\t},\n";
@@ -126,16 +126,16 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 export function removeDepFromManifest(buildPath: string, name: string): boolean {
 	if (!exists(buildPath)) return false;
 	const content = try readFile(buildPath) catch "";
-	if (content === "") return false;
+	if (content == "") return false;
 
 	const quotedName = "\"" + name + "\"";
 	const idx = findStr(content, quotedName, 0);
 	if (idx < 0) return false;
 
 	let lineStart = idx;
-	while (lineStart > 0 && content.charAt(lineStart - 1) !== "\n") lineStart = lineStart - 1;
+	while (lineStart > 0 && content.charAt(lineStart - 1) != "\n") lineStart = lineStart - 1;
 	let lineEnd = idx;
-	while (lineEnd < content.length && content.charAt(lineEnd) !== "\n") lineEnd = lineEnd + 1;
+	while (lineEnd < content.length && content.charAt(lineEnd) != "\n") lineEnd = lineEnd + 1;
 
 	const newContent = content.slice(0, lineStart) + content.slice(lineEnd + 1, content.length);
 	return writeFile(buildPath, newContent).ok;

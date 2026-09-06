@@ -39,19 +39,19 @@ import { stmtCountAfter } from "../testUtil";
 interface VarTypeInfo { name: string; varType: Type; }
 
 function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			let varType = node.nodeType;
-			if (varType === null && d.initializer !== null && d.initializer.nodeType !== null) {
+			if (varType == null && d.initializer != null && d.initializer.nodeType != null) {
 				varType = d.initializer.nodeType;
 			}
-			if (varType === null && node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+			if (varType == null && node.resolvedSym != null && node.resolvedSym.symbolType != null) {
 				varType = node.resolvedSym.symbolType;
 			}
-			if (varType !== null) {
+			if (varType != null) {
 				result.push({ name: d.declName, varType });
 			}
 		},
@@ -76,14 +76,14 @@ function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 
 function findVarType(entries: VarTypeInfo[], name: string): Type {
 	for (const e of entries) {
-		if (e.name === name) return e.varType;
+		if (e.name == name) return e.varType;
 	}
 	return null as unknown as Type;
 }
 
 // Promise<T> from inner type, or Promise<void> if null
 function promiseTypeFor(inner: Type | null): Type {
-	return inner !== null ? createPromise(inner) : createPromise(voidType());
+	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
 import { isStructLikeType, inlineInFuture, boxedInFuture } from "../util";
@@ -104,7 +104,7 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
 function zeroValueForType(t: Type, loc: SourceLocation): Node {
-	if (t === null) return makeNull(loc);
+	if (t == null) return makeNull(loc);
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
 			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeNumber(0, loc),
@@ -119,7 +119,7 @@ function zeroValueForType(t: Type, loc: SourceLocation): Node {
 // Check if this function body contains any yield (from asyncDesugar converting await→yield).
 // If no yield, the async function is synchronous and can use the simple wrapper pattern.
 function hasYieldInBody(node: Node | null): boolean {
-	if (node === null) return false;
+	if (node == null) return false;
 	return match (node.kind) {
 		NodeKind.YieldExpr => true,
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => false,
@@ -158,7 +158,7 @@ function hasYieldInBody(node: Node | null): boolean {
 let asyncNameCounter = 0;
 
 function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string): Node[] {
-	if (isVoid || valueExpr === null) {
+	if (isVoid || valueExpr == null) {
 		return [makeExprStmt(makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
 			[makeTypedIdent(retFutName, promiseType, loc)],
@@ -207,11 +207,11 @@ function finalliesBeforeReturn(pending: Node[][]): Node[] {
 function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string, pendingFinallies: Node[][]): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
-		if (stmt === null) continue;
+		if (stmt == null) continue;
 		match (stmt.kind) {
 			NodeKind.ReturnStmt => {
 				const rd = stmt.data as ReturnStmtData;
-				const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
+				const isVoidReturn = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
 
 				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutName);
 				const blockStmts: Node[] = [];
@@ -230,16 +230,16 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 			},
 			NodeKind.IfStmt => {
 				const id = stmt.data as IfStmtData;
-				if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
+				if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
 					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
-				if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
+				if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
 					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
 			},
 			NodeKind.WhileStmt => {
 				const wd = stmt.data as WhileStmtData;
-				if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
+				if (wd.whileBody != null && wd.whileBody.kind == NodeKind.BlockStmt) {
 					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
 				}
 			},
@@ -249,16 +249,16 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 				// finally body itself must stay yield-free) loses its C-level
 				// finally; those and only those contribute to the pending list.
 				let childPending: Node[][] = pendingFinallies;
-				const hasFin = td.finallyBody !== null && !isEmptyBlock(td.finallyBody);
+				const hasFin = td.finallyBody != null && !isEmptyBlock(td.finallyBody);
 				if (hasFin && (containsYield(td.tryBody) || containsYield(td.catchBody))) {
 					childPending = [];
 					for (const p of pendingFinallies) childPending.push(p);
 					childPending.push(extractBodyStmts(td.finallyBody));
 				}
-				if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
+				if (td.tryBody != null && td.tryBody.kind == NodeKind.BlockStmt) {
 					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
 				}
-				if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
+				if (td.catchBody != null && td.catchBody.kind == NodeKind.BlockStmt) {
 					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
 				}
 			},
@@ -274,9 +274,9 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 function extractYieldArgDeep(stmts: Node[]): Node {
 	for (let i = stmts.length - 1; i >= 0; i -= 1) {
 		const s = stmts[i];
-		if (s.kind === NodeKind.ReturnStmt) {
+		if (s.kind == NodeKind.ReturnStmt) {
 			const rd = s.data as ReturnStmtData;
-			if (rd.argument !== null && rd.argument.kind === NodeKind.ObjectLiteral) {
+			if (rd.argument != null && rd.argument.kind == NodeKind.ObjectLiteral) {
 				const od = rd.argument.data as { properties: Node[], keys: string[] };
 				if (od.properties.length > 0) {
 					const yieldArg = od.properties[0];
@@ -288,20 +288,20 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 			}
 		}
 		// Recurse into blocks
-		if (s.kind === NodeKind.BlockStmt) {
+		if (s.kind == NodeKind.BlockStmt) {
 			const bd = s.data as BlockStmtData;
 			const found = extractYieldArgDeep(bd.statements);
-			if (found !== null) return found;
+			if (found != null) return found;
 		}
-		if (s.kind === NodeKind.IfStmt) {
+		if (s.kind == NodeKind.IfStmt) {
 			const id = s.data as IfStmtData;
-			if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
+			if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
 				const found = extractYieldArgDeep((id.consequent.data as BlockStmtData).statements);
-				if (found !== null) return found;
+				if (found != null) return found;
 			}
-			if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
+			if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
 				const found = extractYieldArgDeep((id.alternate.data as BlockStmtData).statements);
-				if (found !== null) return found;
+				if (found != null) return found;
 			}
 		}
 	}
@@ -311,7 +311,7 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 // Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
 // Per-type smart read function — handles both boxed (spawn) and typed (async) via isBoxed flag
 function readFnForAwait(t: Type): string {
-	if (t === null) return "";
+	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
 		TypeKind.Boolean => "msFutureReadBool",
@@ -341,8 +341,8 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		let voidPrevIdx = -1;
 		let pi = 0;
 		while (pi < sc.items.length) {
-			if (sc.items[pi].isYield && sc.items[pi].nextState === i) {
-				if (sc.items[pi].yieldVarName !== "") prevIdx = pi;
+			if (sc.items[pi].isYield && sc.items[pi].nextState == i) {
+				if (sc.items[pi].yieldVarName != "") prevIdx = pi;
 				else voidPrevIdx = pi;
 			}
 			pi = pi + 1;
@@ -361,11 +361,11 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			const varName = sc.items[prevIdx].yieldVarName;
 			let varType = sc.items[prevIdx].yieldVarType;
 			// Defensive: if yieldVarType is still a Promise wrapper, extract inner type
-			if (varType !== null && isAwaitable(varType)) varType = awaitedType(varType);
+			if (varType != null && isAwaitable(varType)) varType = awaitedType(varType);
 			const prevYfType = promiseTypeFor(varType);
 			const readFn = readFnForAwait(varType);
 			let readExpr: Node | null = null;
-			if (readFn !== "") {
+			if (readFn != "") {
 				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
 			} else {
@@ -400,9 +400,9 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			// Try top-level pattern first (most common: last 2 stmts)
 			if (copyEnd >= 2) {
 				const returnStmt = state.stmts[copyEnd - 1];
-				if (returnStmt.kind === NodeKind.ReturnStmt) {
+				if (returnStmt.kind == NodeKind.ReturnStmt) {
 					const rd = returnStmt.data as ReturnStmtData;
-					if (rd.argument !== null && rd.argument.kind === NodeKind.ObjectLiteral) {
+					if (rd.argument != null && rd.argument.kind == NodeKind.ObjectLiteral) {
 						const od = rd.argument.data as { properties: Node[], keys: string[] };
 						if (od.properties.length > 0) {
 							yieldArg = od.properties[0];
@@ -443,7 +443,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				// Nested yield: yield return is inside an if/while block (from splitIf/splitWhile).
 				// Extract it recursively and replace with stepper pattern.
 				const deepArg = extractYieldArgDeep(state.stmts);
-				if (deepArg !== null) {
+				if (deepArg != null) {
 					yieldArg = deepArg;
 					// Copy remaining stmts (extractYieldArgDeep removed the yield return)
 					for (const s of state.stmts) { stateStmts.push(s); }
@@ -477,8 +477,8 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 }
 
 function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
-	if (body === null) return body;
-	if (body.kind !== NodeKind.BlockStmt) return body;
+	if (body == null) return body;
+	if (body.kind != NodeKind.BlockStmt) return body;
 
 	const loc = body.location;
 	asyncNameCounter += 1;
@@ -519,9 +519,9 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// 5. Patch yieldVarType from collected varTypes (nodeType may be cleared by transforms)
 	for (let si = 0; si < sc.items.length; si += 1) {
-		if (sc.items[si].isYield && sc.items[si].yieldVarName !== "") {
+		if (sc.items[si].isYield && sc.items[si].yieldVarName != "") {
 			const collected = findVarType(varTypes, sc.items[si].yieldVarName);
-			if (collected !== null) {
+			if (collected != null) {
 				// Collected type may be Promise<T> from async call return type — extract T
 				sc.items[si].yieldVarType = isAwaitable(collected) ? awaitedType(collected) : collected;
 			}
@@ -603,9 +603,9 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
 	for (const localName of nc.items) {
 		const origType = findVarType(varTypes, localName);
-		const defaultInit = (origType !== null) ? makeDefaultValue(origType, loc) : makeNull(loc);
+		const defaultInit = (origType != null) ? makeDefaultValue(origType, loc) : makeNull(loc);
 		const localDecl = makeVarDecl(localName, defaultInit, DeclKind.Let, loc);
-		if (origType !== null) {
+		if (origType != null) {
 			localDecl.nodeType = origType;
 		}
 		outerStmts.push(localDecl);
@@ -637,19 +637,19 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
 function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Type | null, retFutName: string): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			const newStmts: Node[] = [];
 			for (const stmt of d.statements) {
-				if (stmt.kind === NodeKind.ReturnStmt) {
+				if (stmt.kind == NodeKind.ReturnStmt) {
 					const rd = stmt.data as ReturnStmtData;
 					const loc = stmt.location;
-					const isVoid = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
+					const isVoid = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
 					let completeCall: Node | null = null;
-					if (isVoid || rd.argument === null) {
+					if (isVoid || rd.argument == null) {
 						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
 							[makeTypedIdent(retFutName, promiseType, loc)], loc);
 					} else if (boxedInFuture(fnReturnInner)) {
@@ -694,8 +694,8 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
 function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
-	if (body === null) return body;
-	if (body.kind !== NodeKind.BlockStmt) return body;
+	if (body == null) return body;
+	if (body.kind != NodeKind.BlockStmt) return body;
 
 	const bd = body.data as BlockStmtData;
 	const loc = body.location;
@@ -724,7 +724,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// If no explicit return at end, add implicit void completion. No incref on
 	// $retFut — DRC's caller-side `ensureDestructionIfNeeded` (inject.ms) emits
 	// msFutureDrcDestroy, balancing the rc=0 sole-owner allocation.
-	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
+	if (rewrittenStmts.length == 0 || rewrittenStmts[rewrittenStmts.length - 1].kind != NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureCompleteVoid", loc),
 			[makeTypedIdent(retFutName, retFutType, loc)],
@@ -754,20 +754,20 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 // ===== Walk: Find was-async functions and rewrite =====
 
 function isWasAsync(node: Node): boolean {
-	return (node.flags & NodeFlag.WasAsync) !== 0;
+	return (node.flags & NodeFlag.WasAsync) != 0;
 }
 
 // Extract Promise<T>'s inner type from a function's declared return type.
 function getFnReturnInner(fnNode: Node): Type | null {
-	if (fnNode === null || fnNode.nodeType === null) return null;
+	if (fnNode == null || fnNode.nodeType == null) return null;
 	const fnType = fnNode.nodeType;
-	if (fnType.kind !== TypeKind.Function || fnType.typeReturn === null) return null;
+	if (fnType.kind != TypeKind.Function || fnType.typeReturn == null) return null;
 	if (isAwaitable(fnType.typeReturn)) return awaitedType(fnType.typeReturn);
 	return null;
 }
 
 function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
-	if (body !== null && body.kind !== NodeKind.BlockStmt) {
+	if (body != null && body.kind != NodeKind.BlockStmt) {
 		throw "internal: async fn body reached asyncBridge un-normalized (expected BlockStmt)";
 	}
 	if (!hasYieldInBody(body)) {
@@ -778,7 +778,7 @@ function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
 
 // Walk expressions to find async FunctionExpr/ArrowFunction nodes
 function walkBridgeExpr(node: Node | null): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
@@ -800,7 +800,7 @@ function walkBridgeExpr(node: Node | null): void {
 }
 
 function walkBridge(node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
@@ -873,9 +873,9 @@ export function lowerAsyncBridge(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 
 test "non-async passthrough" {
-	assert stmtCountAfter("function f() { return 1; }", lowerAsyncBridge) === 1;
+	assert stmtCountAfter("function f() { return 1; }", lowerAsyncBridge) == 1;
 }
 
 test "non-generator passthrough" {
-	assert stmtCountAfter("const x = 1;", lowerAsyncBridge) === 1;
+	assert stmtCountAfter("const x = 1;", lowerAsyncBridge) == 1;
 }

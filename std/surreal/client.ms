@@ -52,7 +52,7 @@ export function connectSurreal(url: string): Result<SurrealClient, SurrealError>
 	const wsResult = connectSync(url, wsOpts);
 	if (!wsResult.ok) return Result.err(connectionFailed("ws connect: " + wsResult.error.message));
 	const ws = wsResult.value;
-	if (ws.subprotocol !== "cbor") {
+	if (ws.subprotocol != "cbor") {
 		// Server didn't negotiate cbor — we can't speak any other format.
 		ws.closeSync(WsCloseCode.UnsupportedData as int32, "");
 		return Result.err(connectionFailed("server did not negotiate 'cbor' subprotocol (got '" + ws.subprotocol + "')"));
@@ -67,19 +67,19 @@ export function connectSurreal(url: string): Result<SurrealClient, SurrealError>
 // registered subscriptions). Surreal sends UUIDs as a Tag wrapping either
 // raw 16-byte Bytes or a Text representation; we handle both.
 export function cborTagEquals(a: CborValue, b: CborValue): boolean {
-	if (a.kind !== CborKind.Tag || b.kind !== CborKind.Tag) return false;
-	if (a.tagNum !== b.tagNum) return false;
+	if (a.kind != CborKind.Tag || b.kind != CborKind.Tag) return false;
+	if (a.tagNum != b.tagNum) return false;
 	const ai = a.tagged;
 	const bi = b.tagged;
-	if (ai.kind !== bi.kind) return false;
-	if (ai.kind === CborKind.Text && bi.kind === CborKind.Text) {
-		return ai.textVal === bi.textVal;
+	if (ai.kind != bi.kind) return false;
+	if (ai.kind == CborKind.Text && bi.kind == CborKind.Text) {
+		return ai.textVal == bi.textVal;
 	}
-	if (ai.kind === CborKind.Bytes && bi.kind === CborKind.Bytes) {
-		if (ai.bytesVal.byteLength !== bi.bytesVal.byteLength) return false;
+	if (ai.kind == CborKind.Bytes && bi.kind == CborKind.Bytes) {
+		if (ai.bytesVal.byteLength != bi.bytesVal.byteLength) return false;
 		const n = ai.bytesVal.byteLength;
 		for (let i: int64 = 0; i < n; i = i + 1) {
-			if (ai.bytesVal.byteAt(i) !== bi.bytesVal.byteAt(i)) return false;
+			if (ai.bytesVal.byteAt(i) != bi.bytesVal.byteAt(i)) return false;
 		}
 		return true;
 	}
@@ -100,16 +100,16 @@ export function cborTagEquals(a: CborValue, b: CborValue): boolean {
 // (the rpc() loop or dispatchOnce()). A slow callback delays delivery of
 // the original RPC's response by the same amount.
 export function tryDispatchNotification(c: SurrealClient, root: CborValue): boolean {
-	if (root.kind !== CborKind.Map) return false;
+	if (root.kind != CborKind.Map) return false;
 	// A real RPC response always carries top-level `id: Text`. If we see one,
 	// not a notification — let the caller parse it as a response.
 	const idField = getDynamicField(root, "id");
-	if (idField.kind === CborKind.Text) return false;
+	if (idField.kind == CborKind.Text) return false;
 	// Otherwise inspect result.id for a Tag.
 	const result = getDynamicField(root, "result");
-	if (result.kind !== CborKind.Map) return false;
+	if (result.kind != CborKind.Map) return false;
 	const liveId = getDynamicField(result, "id");
-	if (liveId.kind !== CborKind.Tag) return false;
+	if (liveId.kind != CborKind.Tag) return false;
 	for (const sub of c._liveSubs) {
 		if (cborTagEquals(sub.uuid, liveId)) {
 			sub.callback(result);
@@ -123,23 +123,23 @@ export function tryDispatchNotification(c: SurrealClient, root: CborValue): bool
 // Parse an already-decoded CborValue into an RpcResponse. Returns
 // Result.err on shape violations.
 function decodedToResponse(root: CborValue): Result<RpcResponse, SurrealError> {
-	if (root.kind !== CborKind.Map) {
+	if (root.kind != CborKind.Map) {
 		return Result.err(decodeError("response is not a CBOR Map (kind=" + root.kind.toString() + ")"));
 	}
 	const idField = getDynamicField(root, "id");
-	if (idField.kind !== CborKind.Text) {
+	if (idField.kind != CborKind.Text) {
 		return Result.err(decodeError("response missing or non-text id field"));
 	}
 	const id = asString(idField);
 	const errorField = getDynamicField(root, "error");
-	if (errorField.kind !== CborKind.Null) {
-		if (errorField.kind !== CborKind.Map) {
+	if (errorField.kind != CborKind.Null) {
+		if (errorField.kind != CborKind.Map) {
 			return Result.err(decodeError("response.error is not a Map"));
 		}
 		const code = getDynamicField(errorField, "code");
 		const message = getDynamicField(errorField, "message");
-		const codeI = code.kind === CborKind.Int ? code.intVal as int32 : 0 as int32;
-		const messageS = message.kind === CborKind.Text ? asString(message) : "(no message)";
+		const codeI = code.kind == CborKind.Int ? code.intVal as int32 : 0 as int32;
+		const messageS = message.kind == CborKind.Text ? asString(message) : "(no message)";
 		const empty: CborValue = { kind: CborKind.Null };
 		return Result.ok({ id: id, ok: false, result: empty, error: rpcError(codeI, messageS) });
 	}
@@ -178,7 +178,7 @@ export function rpcVoid(c: SurrealClient, method: string, params: CborValue[]): 
 export function rpcText(c: SurrealClient, method: string, params: CborValue[], label: string): Result<string, SurrealError> {
 	const r = rpc(c, method, params);
 	if (!r.ok) return Result.err(r.error);
-	if (r.value.kind !== CborKind.Text) {
+	if (r.value.kind != CborKind.Text) {
 		return Result.err(decodeError(label + ": expected Text, got kind=" + r.value.kind.toString()));
 	}
 	return Result.ok(asString(r.value));
@@ -188,7 +188,7 @@ export function rpcText(c: SurrealClient, method: string, params: CborValue[], l
 // Used by signin / signup / authenticate to surface bad-credentials as a
 // dedicated kind callers can branch on.
 export function mapAuthErr(err: SurrealError): SurrealError {
-	if (err.kind === SurrealErrorKind.Rpc) return authFailed(err.message);
+	if (err.kind == SurrealErrorKind.Rpc) return authFailed(err.message);
 	return err;
 }
 
@@ -215,11 +215,11 @@ export function rpc(c: SurrealClient, method: string, params: CborValue[]): Resu
 			return Result.err(connectionFailed("recv: " + recvResult.error.message));
 		}
 		const msg = recvResult.value;
-		if (msg.kind === WsMessageKind.Close) {
+		if (msg.kind == WsMessageKind.Close) {
 			abortConnection(c);
 			return Result.err(closed("server closed connection"));
 		}
-		if (msg.kind !== WsMessageKind.Binary) continue;   // text frames aren't Surreal RPC
+		if (msg.kind != WsMessageKind.Binary) continue;   // text frames aren't Surreal RPC
 		const dr = decodeAll(msg.data);
 		if (!dr.ok) return Result.err(decodeError("cbor parse: " + dr.error));
 		// Notification first — Surreal notifications have no top-level `id`
@@ -228,7 +228,7 @@ export function rpc(c: SurrealClient, method: string, params: CborValue[]): Resu
 		const parsed = decodedToResponse(dr.value);
 		if (!parsed.ok) return Result.err(parsed.error);
 		const resp = parsed.value;
-		if (resp.id !== id) continue;   // stray mismatched response — drop & keep draining
+		if (resp.id != id) continue;   // stray mismatched response — drop & keep draining
 		if (!resp.ok) return Result.err(resp.error);
 		return Result.ok(resp.result);
 	}

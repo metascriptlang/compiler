@@ -59,15 +59,15 @@ export type CborValue = Ref<CborValueData>;
 test "CborKind enum values are stable" {
 	// Stable ordering is part of the API: external consumers may rely on
 	// numeric values for serialization/deserialization. Locking these in.
-	assert CborKind.Int       === 0;
-	assert CborKind.Bytes     === 1;
-	assert CborKind.Text      === 2;
-	assert CborKind.Array     === 3;
-	assert CborKind.Map       === 4;
-	assert CborKind.Tag       === 5;
-	assert CborKind.Bool      === 6;
-	assert CborKind.Null      === 7;
-	assert CborKind.Undefined === 8;
-	assert CborKind.Float     === 9;
-	assert CborKind.Simple    === 10;
+	assert CborKind.Int       == 0;
+	assert CborKind.Bytes     == 1;
+	assert CborKind.Text      == 2;
+	assert CborKind.Array     == 3;
+	assert CborKind.Map       == 4;
+	assert CborKind.Tag       == 5;
+	assert CborKind.Bool      == 6;
+	assert CborKind.Null      == 7;
+	assert CborKind.Undefined == 8;
+	assert CborKind.Float     == 9;
+	assert CborKind.Simple    == 10;
 }

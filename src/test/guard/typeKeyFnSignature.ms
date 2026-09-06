@@ -47,11 +47,11 @@ function main(): void {
 	cell.setter = (v: number) => { stored = v as int32; };
 
 	let got = 0;
-	if (cell.getter !== null) { got = cell.getter() as int32; }
-	if (cell.setter !== null) { cell.setter(7); }
+	if (cell.getter != null) { got = cell.getter() as int32; }
+	if (cell.setter != null) { cell.setter(7); }
 
-	if (got !== 42) { throw "GUARD RED: getter signature dropped (arity-0 collision)"; }
-	if (stored !== 7) { throw "GUARD RED: setter signature dropped (arity-0 collision)"; }
+	if (got != 42) { throw "GUARD RED: getter signature dropped (arity-0 collision)"; }
+	if (stored != 7) { throw "GUARD RED: setter signature dropped (arity-0 collision)"; }
 	console.log("typeKeyFnSignature ok");
 }
 

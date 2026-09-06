@@ -30,7 +30,7 @@ function main(): void {
 	for (let i = 0; i < 2000000; i = i + 1) {
 		const b = wrap({ data: [i % 7, i % 5, i % 3] });
 		hub.subs.push(b);
-		if (i % 8 === 7) {
+		if (i % 8 == 7) {
 			for (const s of hub.subs) { acc = (acc + s.e.data.length) % 100; }
 			hub.subs = [];
 		}

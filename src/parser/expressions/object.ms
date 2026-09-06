@@ -22,44 +22,44 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 	const keyLocs: SourceLocation[] = [];
 
 	advance(state);
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		// Spread in object: { ...obj }
-		if (current(state).kind === TokenKind.DotDotDot) {
+		if (current(state).kind == TokenKind.DotDotDot) {
 			const spreadToken = current(state);
 			advance(state);
 			const spreadVal = try exprParser(state, 0);
 			keys.push("...");
 			keyLocs.push(makeLoc(spreadToken.line, spreadToken.column));
 			values.push(createNode(NodeKind.SpreadExpr, { spreadArg: spreadVal }, spreadToken));
-			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
 
 		// Computed property: { [expr]: value }
-		if (current(state).kind === TokenKind.LBracket) {
+		if (current(state).kind == TokenKind.LBracket) {
 			const compToken = current(state);
 			advance(state);
 			const keyExpr = try exprParser(state, 0);
-			if (current(state).kind === TokenKind.RBracket) { advance(state); }
-			if (current(state).kind === TokenKind.Colon) { advance(state); }
+			if (current(state).kind == TokenKind.RBracket) { advance(state); }
+			if (current(state).kind == TokenKind.Colon) { advance(state); }
 			const compVal = try exprParser(state, 0);
 			keys.push("__computed__");
 			keyLocs.push(makeLoc(compToken.line, compToken.column));
 			values.push(compVal);
-			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
 
 		// String key: { "key": value }
-		if (current(state).kind === TokenKind.String) {
+		if (current(state).kind == TokenKind.String) {
 			const strKeyToken = current(state);
 			advance(state);
-			if (current(state).kind === TokenKind.Colon) { advance(state); }
+			if (current(state).kind == TokenKind.Colon) { advance(state); }
 			keys.push(strKeyToken.value);
 			keyLocs.push(makeLoc(strKeyToken.line, strKeyToken.column));
 			const strVal = try exprParser(state, 0);
 			values.push(strVal);
-			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
 
@@ -73,7 +73,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 		advance(state);
 
 		const keyLoc = makeLoc(keyToken.line, keyToken.column);
-		if (current(state).kind === TokenKind.Colon) {
+		if (current(state).kind == TokenKind.Colon) {
 			// Full property: { key: value }
 			advance(state);
 			keys.push(keyToken.value);
@@ -90,14 +90,14 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			values.push(ident);
 		}
 
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		} else {
 			break;
 		}
 	}
 
-	if (current(state).kind === TokenKind.RBrace) { advance(state); }
+	if (current(state).kind == TokenKind.RBrace) { advance(state); }
 
 	const objNode = createNode(NodeKind.ObjectLiteral, {
 		properties: values,
@@ -128,15 +128,15 @@ function objOk(input: string): boolean {
 	return result.ok;
 }
 
-test "empty" { assert objKeyCount("{}") === 0; }
+test "empty" { assert objKeyCount("{}") == 0; }
 
-test "two props" { assert objKeyCount("{ x: 1, y: 2 }") === 2; }
+test "two props" { assert objKeyCount("{ x: 1, y: 2 }") == 2; }
 
-test "shorthand" { assert objKeyCount("{ x }") === 1; }
+test "shorthand" { assert objKeyCount("{ x }") == 1; }
 
-test "mixed" { assert objKeyCount("{ x, y: 2 }") === 2; }
+test "mixed" { assert objKeyCount("{ x, y: 2 }") == 2; }
 
-test "trailing comma" { assert objKeyCount("{ x: 1, }") === 1; }
+test "trailing comma" { assert objKeyCount("{ x: 1, }") == 1; }
 
 test "non-ident key fails" { assert !objOk("{ 42: x }"); }
 // Integration

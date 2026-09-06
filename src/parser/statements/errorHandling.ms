@@ -31,13 +31,13 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	advance(state);
 	const tryBlock = try callBlockParser(state);
 	// Case 1: try-catch[-finally]
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Catch) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Catch) {
 		advance(state);
 		let catchParam = "";
 		let catchParamLine: int32 = 0;
 		let catchParamCol: int32 = 0;
 		// Optional catch parameter: catch (e)
-		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
 			advance(state);
 			if (isIdentLike(current(state))) {
 				const catchToken = current(state);
@@ -47,7 +47,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 				advance(state);
 				skipOptionalType(state);
 			}
-			if (current(state).kind !== TokenKind.RParen) {
+			if (current(state).kind != TokenKind.RParen) {
 				return Result.err(`Expected ')' after catch parameter at line ${current(state).line}`);
 			}
 			advance(state);
@@ -55,7 +55,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 		const catchBlock = try callBlockParser(state);
 
 		// try-catch-finally
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Finally) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Finally) {
 			advance(state);
 			const finallyBlock = try callBlockParser(state);
 			return Result.ok(createNode(NodeKind.TryCatchStmt, {
@@ -74,7 +74,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	}
 
 	// Case 2: try-finally only
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Finally) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Finally) {
 		advance(state);
 		const finallyBlock = try callBlockParser(state);
 		return Result.ok(createNode(NodeKind.TryCatchStmt, {

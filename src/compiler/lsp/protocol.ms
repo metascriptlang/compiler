@@ -33,7 +33,7 @@ export function lspJsonString(val: string): string {
 			continue;
 		}
 		const ch = val.charAt(i);
-		if (ch === "\\" || ch === "\"" || ch === "\n" || ch === "\r" || ch === "\t") {
+		if (ch == "\\" || ch == "\"" || ch == "\n" || ch == "\r" || ch == "\t") {
 			if (start < i) parts.push(val.slice(start, i));
 			parts.push(match (ch) {
 				"\\" => "\\\\",
@@ -85,9 +85,9 @@ export function lspGetField(json: string, field: string): string {
 		if (i < 0) return "";
 		// Skip whitespace after colon
 		let j = i + pattern.byteLength;
-		while (j < json.byteLength && (json.charAt(j) === " " || json.charAt(j) === "\t")) { j = j + 1; }
+		while (j < json.byteLength && (json.charAt(j) == " " || json.charAt(j) == "\t")) { j = j + 1; }
 		// Expect opening quote for string value (skip past non-string matches like nested keys)
-		if (j >= json.byteLength || json.charAt(j) !== "\"") {
+		if (j >= json.byteLength || json.charAt(j) != "\"") {
 			pos = i + 1;
 			continue;
 		}
@@ -95,13 +95,13 @@ export function lspGetField(json: string, field: string): string {
 		let k = j + 1;
 		while (k < json.byteLength) {
 			const c = json.charAt(k);
-			if (c === "\\") {
-				if (k + 1 < json.byteLength && json.charAt(k + 1) === "u") {
+			if (c == "\\") {
+				if (k + 1 < json.byteLength && json.charAt(k + 1) == "u") {
 					k = k + 6;
 				} else {
 					k = k + 2;
 				}
-			} else if (c === "\"") {
+			} else if (c == "\"") {
 				k = k + 1;
 				break;
 			} else {
@@ -112,7 +112,7 @@ export function lspGetField(json: string, field: string): string {
 		const token = json.slice(j, k);
 		const parsed = parseJson(token);
 		if (!parsed.ok) return "";
-		if (parsed.value.kind !== JsonKind.String) return "";
+		if (parsed.value.kind != JsonKind.String) return "";
 		return parsed.value.strVal;
 	}
 	return "";
@@ -126,9 +126,9 @@ export function lspGetNumberField(json: string, field: string): number {
 	if (i < 0) return -1;
 	// Found key. Parse digits.
 	let j = i + pattern.byteLength;
-	while (j < json.byteLength && json.charAt(j) === " ") { j = j + 1; }
+	while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
 	let neg = false;
-	if (j < json.byteLength && json.charAt(j) === "-") {
+	if (j < json.byteLength && json.charAt(j) == "-") {
 		neg = true;
 		j = j + 1;
 	}
@@ -156,26 +156,26 @@ export function lspGetObjectField(json: string, field: string): string {
 		const i = json.indexOf(pattern, pos);
 		if (i < 0) return "";
 		let j = i + pattern.byteLength;
-		while (j < json.byteLength && json.charAt(j) === " ") { j = j + 1; }
+		while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
 		const opener = j < json.byteLength ? json.charAt(j) : "";
-		if (opener === "{" || opener === "[") {
-			const closer = opener === "{" ? "}" : "]";
+		if (opener == "{" || opener == "[") {
+			const closer = opener == "{" ? "}" : "]";
 			// Find matching closing delimiter
 			let depth = 0;
 			let start = j;
 			while (j < json.byteLength) {
 				const c = json.charAt(j);
-				if (c === opener) { depth = depth + 1; }
-				else if (c === closer) {
+				if (c == opener) { depth = depth + 1; }
+				else if (c == closer) {
 					depth = depth - 1;
-					if (depth === 0) {
+					if (depth == 0) {
 						return json.slice(start, j + 1);
 					}
-				} else if (c === "\"") {
+				} else if (c == "\"") {
 					// Skip quoted string
 					j = j + 1;
-					while (j < json.byteLength && json.charAt(j) !== "\"") {
-						if (json.charAt(j) === "\\") { j = j + 1; }
+					while (j < json.byteLength && json.charAt(j) != "\"") {
+						if (json.charAt(j) == "\\") { j = j + 1; }
 						j = j + 1;
 					}
 				}
@@ -193,7 +193,7 @@ export function lspGetObjectField(json: string, field: string): string {
 export function lspParseContentLength(headerLine: string): int32 {
 	const prefix = "Content-Length: ";
 	if (headerLine.byteLength <= prefix.byteLength) return -1;
-	if (headerLine.slice(0, prefix.byteLength) !== prefix) return -1;
+	if (headerLine.slice(0, prefix.byteLength) != prefix) return -1;
 	const numPart = headerLine.slice(prefix.byteLength, headerLine.byteLength);
 	return parseSimpleInt(numPart);
 }
@@ -311,10 +311,10 @@ export function lspUriToPath(uri: string): string {
 	// "file:///C:/Users/foo.ms" → "C:/Users/foo.ms" (drop leading slash before drive)
 	const prefix = "file://";
 	if (uri.byteLength > prefix.byteLength) {
-		if (uri.slice(0, prefix.byteLength) === prefix) {
+		if (uri.slice(0, prefix.byteLength) == prefix) {
 			const stripped = lspPercentDecode(uri.slice(prefix.byteLength, uri.byteLength));
 			// Windows: "/C:/..." → "C:/..." (RFC 8089 file URIs)
-			if (stripped.length >= 3 && stripped.charAt(0) === "/" && stripped.charAt(2) === ":") {
+			if (stripped.length >= 3 && stripped.charAt(0) == "/" && stripped.charAt(2) == ":") {
 				return stripped.slice(1, stripped.length);
 			}
 			return stripped;
@@ -340,23 +340,23 @@ export function dirname(p: string): string { return _dirname(p); }
 // Handles "./foo", "../bar", "../../baz". Auto-appends ".ms" if missing.
 // Returns "" for non-relative imports (std/*, bare module names).
 export function lspResolveImport(basePath: string, importSpec: string): string {
-	if (importSpec.byteLength === 0) return "";
+	if (importSpec.byteLength == 0) return "";
 	// Must start with "./" or "../" to be relative
-	if (importSpec.charAt(0) !== ".") return "";
+	if (importSpec.charAt(0) != ".") return "";
 	if (importSpec.byteLength < 2) return "";
 	const second = importSpec.charAt(1);
-	if (second !== "/" && second !== ".") return "";
+	if (second != "/" && second != ".") return "";
 
 	let dir = dirname(basePath);
 	let spec = importSpec;
 
 	// Process "../" prefixes
-	while (spec.byteLength >= 3 && spec.slice(0, 3) === "../") {
+	while (spec.byteLength >= 3 && spec.slice(0, 3) == "../") {
 		dir = dirname(dir);
 		spec = spec.slice(3, spec.byteLength);
 	}
 	// Process "./" prefix
-	if (spec.byteLength >= 2 && spec.slice(0, 2) === "./") {
+	if (spec.byteLength >= 2 && spec.slice(0, 2) == "./") {
 		spec = spec.slice(2, spec.byteLength);
 	}
 
@@ -373,7 +373,7 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 // Used by LSP and TransAm for directory-style imports (e.g., "./platform/sdl" → "sdl/index.ms").
 export function lspResolveImportCandidates(basePath: string, importSpec: string): string[] {
 	const first = lspResolveImport(basePath, importSpec);
-	if (first === "") return [];
+	if (first == "") return [];
 	// Already has extension — single candidate
 	if (importSpec.endsWith(".ms") || importSpec.endsWith(".h") || importSpec.endsWith(".cms")) {
 		return [first];
@@ -384,162 +384,162 @@ export function lspResolveImportCandidates(basePath: string, importSpec: string)
 }
 
 // ===== Tests =====
-test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"; }
+test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms"; }
 
-test "path to uri" { assert lspPathToUri("/a/b.ms") === "file:///a/b.ms"; }
+test "path to uri" { assert lspPathToUri("/a/b.ms") == "file:///a/b.ms"; }
 
-test "non-file uri unchanged" { assert lspUriToPath("http://example.com") === "http://example.com"; }
+test "non-file uri unchanged" { assert lspUriToPath("http://example.com") == "http://example.com"; }
 
-test "simple string" { assert lspJsonString("hello") === "\"hello\""; }
+test "simple string" { assert lspJsonString("hello") == "\"hello\""; }
 
-test "escapes backslash" { assert lspJsonString("a\\b") === "\"a\\\\b\""; }
+test "escapes backslash" { assert lspJsonString("a\\b") == "\"a\\\\b\""; }
 
-test "escapes quote" { assert lspJsonString("a\"b") === "\"a\\\"b\""; }
+test "escapes quote" { assert lspJsonString("a\"b") == "\"a\\\"b\""; }
 
-test "escapes newline" { assert lspJsonString("a\nb") === "\"a\\nb\""; }
+test "escapes newline" { assert lspJsonString("a\nb") == "\"a\\nb\""; }
 
-test "empty string" { assert lspJsonString("") === "\"\""; }
+test "empty string" { assert lspJsonString("") == "\"\""; }
 
 test "number" {
-	assert lspJsonNumber(42) === "42";
-	assert lspJsonNumber(0) === "0";
+	assert lspJsonNumber(42) == "42";
+	assert lspJsonNumber(0) == "0";
 }
 
-test "bool true" { assert lspJsonBool(true) === "true"; }
+test "bool true" { assert lspJsonBool(true) == "true"; }
 
-test "bool false" { assert lspJsonBool(false) === "false"; }
+test "bool false" { assert lspJsonBool(false) == "false"; }
 
-test "null" { assert lspJsonNull() === "null"; }
+test "null" { assert lspJsonNull() == "null"; }
 
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
-	assert lspGetField(json, "method") === "initialize";
+	assert lspGetField(json, "method") == "initialize";
 }
 
 test "extract nested value" {
 	const json = "{\"uri\":\"file:///a.ms\",\"text\":\"const x = 1;\"}";
-	assert lspGetField(json, "uri") === "file:///a.ms";
-	assert lspGetField(json, "text") === "const x = 1;";
+	assert lspGetField(json, "uri") == "file:///a.ms";
+	assert lspGetField(json, "text") == "const x = 1;";
 }
 
 test "missing field" {
 	const json = "{\"a\":\"1\"}";
-	assert lspGetField(json, "b") === "";
+	assert lspGetField(json, "b") == "";
 }
 
 test "escaped value" {
 	const json = "{\"msg\":\"hello\\nworld\"}";
-	assert lspGetField(json, "msg") === "hello\nworld";
+	assert lspGetField(json, "msg") == "hello\nworld";
 }
 
 test "decodes \\uXXXX escape (LSP4IJ encodes = as \\u003d)" {
 	// LSP4IJ over-conservative: emits `=` as `=`. Server must decode.
 	const json = "{\"text\":\"const a \\u003d 1\"}";
-	assert lspGetField(json, "text") === "const a = 1";
+	assert lspGetField(json, "text") == "const a = 1";
 }
 
 test "decodes \\u with multiple escapes including arrows" {
 	// (req, res) => { ... }  →  (req, res) => { ... }
 	const json = "{\"text\":\"(req, res) \\u003d\\u003e {\"}";
-	assert lspGetField(json, "text") === "(req, res) => {";
+	assert lspGetField(json, "text") == "(req, res) => {";
 }
 
 test "decodes \\b \\f \\/ escapes (full JSON spec)" {
 	const json = "{\"x\":\"\\b\\f\\/\"}";
-	assert lspGetField(json, "x") === "\b\f/";
+	assert lspGetField(json, "x") == "\b\f/";
 }
 
 test "decodes UTF-16 surrogate pair (emoji 😀 = U+1F600)" {
 	// 😀 is the surrogate pair encoding of U+1F600
 	const json = "{\"x\":\"\\uD83D\\uDE00\"}";
 	const decoded = lspGetField(json, "x");
-	assert decoded === fromCodePoint(128512);
+	assert decoded == fromCodePoint(128512);
 }
 
 test "extract id" {
 	const json = "{\"jsonrpc\":\"2.0\",\"id\":42}";
-	assert lspGetNumberField(json, "id") === 42;
+	assert lspGetNumberField(json, "id") == 42;
 }
 
 test "extract zero" {
 	const json = "{\"line\":0,\"character\":5}";
-	assert lspGetNumberField(json, "line") === 0;
-	assert lspGetNumberField(json, "character") === 5;
+	assert lspGetNumberField(json, "line") == 0;
+	assert lspGetNumberField(json, "character") == 5;
 }
 
 test "missing field" {
 	const json = "{\"a\":1}";
-	assert lspGetNumberField(json, "b") === -1;
+	assert lspGetNumberField(json, "b") == -1;
 }
 
 test "extract params" {
 	const json = "{\"method\":\"hover\",\"params\":{\"line\":1,\"col\":5}}";
 	const params = lspGetObjectField(json, "params");
-	assert params === "{\"line\":1,\"col\":5}";
+	assert params == "{\"line\":1,\"col\":5}";
 }
 
 test "nested object" {
 	const json = "{\"params\":{\"position\":{\"line\":0}}}";
 	const params = lspGetObjectField(json, "params");
-	assert params === "{\"position\":{\"line\":0}}";
+	assert params == "{\"position\":{\"line\":0}}";
 }
 
 test "missing object" {
 	const json = "{\"a\":1}";
-	assert lspGetObjectField(json, "b") === "";
+	assert lspGetObjectField(json, "b") == "";
 }
 
 test "response format" {
 	const r = lspResponse("1", "{\"capabilities\":{}}");
-	assert lspGetField(r, "jsonrpc") === "2.0";
-	assert lspGetNumberField(r, "id") === 1;
+	assert lspGetField(r, "jsonrpc") == "2.0";
+	assert lspGetNumberField(r, "id") == 1;
 }
 
 test "notification format" {
 	const n = lspNotification("textDocument/publishDiagnostics", "{\"uri\":\"file:///a.ms\"}");
-	assert lspGetField(n, "method") === "textDocument/publishDiagnostics";
+	assert lspGetField(n, "method") == "textDocument/publishDiagnostics";
 }
 
 test "error response format" {
 	const e = lspErrorResponse("1", -32601, "Method not found");
-	assert lspGetNumberField(e, "id") === 1;
+	assert lspGetNumberField(e, "id") == 1;
 }
 
 test "parse content length" {
-	assert lspParseContentLength("Content-Length: 123") === 123;
-	assert lspParseContentLength("Content-Length: 0") === 0;
+	assert lspParseContentLength("Content-Length: 123") == 123;
+	assert lspParseContentLength("Content-Length: 0") == 0;
 }
 
 test "not content length" {
-	assert lspParseContentLength("Content-Type: json") === -1;
-	assert lspParseContentLength("") === -1;
+	assert lspParseContentLength("Content-Type: json") == -1;
+	assert lspParseContentLength("") == -1;
 }
 
 test "format message" {
 	const msg = lspFormatMessage("{\"id\":1}");
 	// Should start with Content-Length header
-	assert msg.slice(0, 16) === "Content-Length: ";
+	assert msg.slice(0, 16) == "Content-Length: ";
 }
 
 test "dirname basic" {
-	assert dirname("/a/b/c.ms") === "/a/b";
-	assert dirname("/a/b.ms") === "/a";
-	assert dirname("/a.ms") === "/";
+	assert dirname("/a/b/c.ms") == "/a/b";
+	assert dirname("/a/b.ms") == "/a";
+	assert dirname("/a.ms") == "/";
 }
 
 test "resolve import same dir" {
-	assert lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms";
-	assert lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms";
+	assert lspResolveImport("/a/b/c.ms", "./utils") == "/a/b/utils.ms";
+	assert lspResolveImport("/a/b/c.ms", "./utils.ms") == "/a/b/utils.ms";
 }
 
 test "resolve import parent dir" {
-	assert lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms";
-	assert lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms";
+	assert lspResolveImport("/a/b/c.ms", "../utils") == "/a/utils.ms";
+	assert lspResolveImport("/a/b/c/d.ms", "../../utils") == "/a/utils.ms";
 }
 
 test "resolve import non-relative returns empty" {
-	assert lspResolveImport("/a/b.ms", "std/testing") === "";
-	assert lspResolveImport("/a/b.ms", "lodash") === "";
+	assert lspResolveImport("/a/b.ms", "std/testing") == "";
+	assert lspResolveImport("/a/b.ms", "lodash") == "";
 }
 
 test "uri to path decodes the escaped windows drive colon" {

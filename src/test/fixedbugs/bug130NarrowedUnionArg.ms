@@ -41,30 +41,30 @@ function b130pick(circle: boolean): B130Shape {
 
 test "bug130: guard-narrowed reference passes to a union formal" {
 	const s = b130pick(true);
-	assert s.kind === "circle";
-	assert b130area(s) === 9.0;
+	assert s.kind == "circle";
+	assert b130area(s) == 9.0;
 }
 
 test "bug130: narrowing in the else branch is the same shape" {
 	const s = b130pick(false);
-	if (s.kind === "circle") {
+	if (s.kind == "circle") {
 		assert false;
 	} else {
-		assert b130area(s) === 16.0;
+		assert b130area(s) == 16.0;
 	}
 }
 
 test "bug130: narrowed reference used twice in one expression" {
 	const s = b130pick(true);
-	if (s.kind === "circle") {
-		assert b130area(s) + b130area(s) === 18.0;
+	if (s.kind == "circle") {
+		assert b130area(s) + b130area(s) == 18.0;
 	}
 }
 
 test "bug130: narrowed reference re-bound to a union local" {
 	const s = b130pick(false);
-	if (s.kind === "square") {
+	if (s.kind == "square") {
 		const again: B130Shape = s;
-		assert b130area(again) === 16.0;
+		assert b130area(again) == 16.0;
 	}
 }

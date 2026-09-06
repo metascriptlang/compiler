@@ -14,7 +14,7 @@ import { booleanType } from "../../checker/types";
 // Inject cancellation checks at loop backedges in the given function body.
 // `groupIdent` is the AwaitGroup identifier node used for msSpawnCheckCancel.
 export function injectCancelSafePoints(body: Node, groupIdent: Node, loc: SourceLocation): void {
-	if (body === null) return;
+	if (body == null) return;
 	walkInjectCancel(body, groupIdent, loc);
 }
 
@@ -29,7 +29,7 @@ function makeCancelCheck(groupIdent: Node, loc: SourceLocation): Node {
 // Walk statements, injecting cancel check at the start of loop bodies.
 // Stops at nested function boundaries (FunctionExpr, ArrowFunction, FunctionDecl).
 function walkInjectCancel(node: Node, groupIdent: Node, loc: SourceLocation): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
@@ -60,7 +60,7 @@ function walkInjectCancel(node: Node, groupIdent: Node, loc: SourceLocation): vo
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			walkInjectCancel(d.consequent, groupIdent, loc);
-			if (d.alternate !== null) walkInjectCancel(d.alternate, groupIdent, loc);
+			if (d.alternate != null) walkInjectCancel(d.alternate, groupIdent, loc);
 		},
 		// Stop at nested function boundaries — don't inject into nested closures
 		NodeKind.FunctionExpr | NodeKind.ArrowFunction | NodeKind.FunctionDecl => {},
@@ -70,8 +70,8 @@ function walkInjectCancel(node: Node, groupIdent: Node, loc: SourceLocation): vo
 
 // Prepend a cancel check as the first statement of a loop body block.
 function injectAtLoopBody(body: Node, groupIdent: Node, loc: SourceLocation): void {
-	if (body === null) return;
-	if (body.kind !== NodeKind.BlockStmt) return;
+	if (body == null) return;
+	if (body.kind != NodeKind.BlockStmt) return;
 	const bd = body.data as BlockStmtData;
 	const check = makeCancelCheck(groupIdent, loc);
 	const newStmts: Node[] = [check];

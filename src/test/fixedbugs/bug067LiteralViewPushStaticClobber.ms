@@ -33,21 +33,21 @@ test "bug067: literal byte view push must not clobber static neighbors" {
 		k = k + 1;
 	}
 	const neighbor = "hello-neighbor";
-	assert neighbor.charCodeAt(0) === 104;
-	assert neighbor.charCodeAt(13) === 114;
-	assert neighbor.length === 14;
-	assert v.length === 43;
-	assert v[0] === 97;
-	assert v[2] === 99;
-	assert v[3] === 88;
-	assert v[42] === 88;
+	assert neighbor.charCodeAt(0) == 104;
+	assert neighbor.charCodeAt(13) == 114;
+	assert neighbor.length == 14;
+	assert v.length == 43;
+	assert v[0] == 97;
+	assert v[2] == 99;
+	assert v[3] == 88;
+	assert v[42] == 88;
 }
 
 test "bug067: heap-source byte view push still grows coherently" {
 	const src = "ab" + "c";
 	const v = src.asBytes();
 	v.push(33);
-	assert v.length === 4;
-	assert v[0] === 97;
-	assert v[3] === 33;
+	assert v.length == 4;
+	assert v[0] == 97;
+	assert v[3] == 33;
 }

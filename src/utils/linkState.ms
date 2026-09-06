@@ -11,12 +11,12 @@ let _linkFlags: Set<string> = null as unknown as Set<string>;
 let _linkObjects: Set<string> = null as unknown as Set<string>;
 
 export function linkFlags(): Set<string> {
-	if (_linkFlags === null) _linkFlags = new Set<string>();
+	if (_linkFlags == null) _linkFlags = new Set<string>();
 	return _linkFlags;
 }
 
 export function linkObjects(): Set<string> {
-	if (_linkObjects === null) _linkObjects = new Set<string>();
+	if (_linkObjects == null) _linkObjects = new Set<string>();
 	return _linkObjects;
 }
 

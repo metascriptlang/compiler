@@ -21,7 +21,7 @@ function bind(o: Own, name: string, get: () => SV): number {
 	let writes = 0;
 	const run = () => {
 		const v = get();
-		if (bound && v === prev) { return; }
+		if (bound && v == prev) { return; }
 		bound = true;
 		prev = v;
 		writes += 1;
@@ -35,11 +35,11 @@ function bind(o: Own, name: string, get: () => SV): number {
 function main(): void {
 	const o: Own = { w: null, h: null };
 	const writes = bind(o, "w", () => 7);
-	if (writes !== 1) {
+	if (writes != 1) {
 		console.log("FAIL: carrier equality did not dedup the second write, writes=" + writes.toString());
 		exit(1);
 	}
-	if (o.w === null) {
+	if (o.w == null) {
 		console.log("FAIL: field not written through the shared carrier");
 		exit(1);
 	}

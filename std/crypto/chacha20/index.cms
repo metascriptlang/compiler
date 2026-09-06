@@ -20,7 +20,7 @@ extern function msChacha20Open(key: string, sealed: string, aad: string): string
 // ===== AEAD Encryption =====
 
 function validateKey(key: string, op: string): Result<boolean, CryptoError> {
-	if (key.byteLength !== 32) {
+	if (key.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "key must be 32 bytes"));
 	}
 	return Result.ok(true);
@@ -29,7 +29,7 @@ function validateKey(key: string, op: string): Result<boolean, CryptoError> {
 export function chacha20Seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
 	const _v = try validateKey(key, "chacha20Seal");
 	const result = msChacha20Seal(key, plainText, aad);
-	if (result === "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
+	if (result == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
 	return Result.ok(result);
 }
 
@@ -39,7 +39,7 @@ export function chacha20Open(key: string, sealed: string, aad: string = ""): Res
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "chacha20Open", "sealed data too short (need nonce+mac)"));
 	}
 	const result = msChacha20Open(key, sealed, aad);
-	if (result === "" && sealed.byteLength > 40) {
+	if (result == "" && sealed.byteLength > 40) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "chacha20Open", "authentication tag mismatch"));
 	}
 	return Result.ok(result);

@@ -65,7 +65,7 @@ export function newCborReader(bytes: uint8[]): CborReader {
 // --- Low-level byte primitives ---
 
 function setError(r: CborReader, msg: string): void {
-	if (r.error === "") r.error = msg;
+	if (r.error == "") r.error = msg;
 }
 
 function remaining(r: CborReader): number {
@@ -93,7 +93,7 @@ function peekByte(r: CborReader): number {
 // Returns true on consume, false if next byte is something else (caller
 // continues reading another chunk/item).
 function tryConsumeBreak(r: CborReader): boolean {
-	if (peekByte(r) === 0xff) { r.pos = r.pos + 1; return true; }
+	if (peekByte(r) == 0xff) { r.pos = r.pos + 1; return true; }
 	return false;
 }
 
@@ -148,26 +148,26 @@ export interface CborHead {
 
 export function readHead(r: CborReader): CborHead {
 	const ib = readByte(r);
-	if (r.error !== "") return { major: 0, arg: 0 as int64, info: 0 };
+	if (r.error != "") return { major: 0, arg: 0 as int64, info: 0 };
 	const major = (ib >> 5) & 0x07;
 	const info = ib & 0x1f;
 	if (info < 24) {
 		return { major, arg: info as int64, info };
 	}
-	if (info === 24) {
+	if (info == 24) {
 		const a = readByte(r);
 		return { major, arg: a as int64, info };
 	}
-	if (info === 25) {
+	if (info == 25) {
 		const a = readBE(r, 2);
 		return { major, arg: a as int64, info };
 	}
-	if (info === 26) {
+	if (info == 26) {
 		const a = readBE(r, 4);
 		return { major, arg: a as int64, info };
 	}
-	if (info === 27) {
-		if (major === 7) {
+	if (info == 27) {
+		if (major == 7) {
 			// Major 7 info 27 = double-precision float. Don't read the arg
 			// here — readInt64BE rejects bit patterns ≥ 2^63 (sign bit set,
 			// e.g. all negative floats including -0.0). Float decoding in
@@ -177,7 +177,7 @@ export function readHead(r: CborReader): CborHead {
 		const a = readInt64BE(r);
 		return { major, arg: a, info };
 	}
-	if (info === 31) {
+	if (info == 31) {
 		// Indefinite-length marker (RFC 8949 §3.2). Valid for major 2/3/4/5
 		// (content terminated by break code) and major 7 (the break code
 		// itself). Invalid for 0/1/6 — caller verifies after dispatch.
@@ -230,7 +230,7 @@ function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
 			// 1-byte ASCII
 			s = s + fromCodePoint(b1);
 			i = i + 1;
-		} else if ((b1 & MASK_E0) === MASK_C0) {
+		} else if ((b1 & MASK_E0) == MASK_C0) {
 			// 2-byte sequence: 110xxxxx 10xxxxxx
 			if (i + 1 >= end) { i = end; }
 			else {
@@ -239,7 +239,7 @@ function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
 				s = s + fromCodePoint(cp);
 				i = i + 2;
 			}
-		} else if ((b1 & MASK_F0) === MASK_E0) {
+		} else if ((b1 & MASK_F0) == MASK_E0) {
 			// 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
 			if (i + 2 >= end) { i = end; }
 			else {
@@ -249,7 +249,7 @@ function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
 				s = s + fromCodePoint(cp);
 				i = i + 3;
 			}
-		} else if ((b1 & MASK_F8) === MASK_F0) {
+		} else if ((b1 & MASK_F8) == MASK_F0) {
 			// 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
 			if (i + 3 >= end) { i = end; }
 			else {
@@ -314,7 +314,7 @@ function decodeArrayLen(r: CborReader, length: number): CborValue {
 	let i: number = 0;
 	while (i < length) {
 		const v = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		items.push(v);
 		i = i + 1;
 	}
@@ -330,9 +330,9 @@ function decodeMapLen(r: CborReader, pairCount: number): CborValue {
 	let i: number = 0;
 	while (i < pairCount) {
 		const k = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		const v = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		keys.push(k);
 		values.push(v);
 		i = i + 1;
@@ -358,15 +358,15 @@ function decodeMapLen(r: CborReader, pairCount: number): CborValue {
 function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: string): uint8[] {
 	const out: uint8[] = [];
 	while (true) {
-		if (r.error !== "") return out;
+		if (r.error != "") return out;
 		if (tryConsumeBreak(r)) return out;
 		const head = readHead(r);
-		if (r.error !== "") return out;
-		if (head.major !== expectedMajor) {
+		if (r.error != "") return out;
+		if (head.major != expectedMajor) {
 			setError(r, `indefinite-length ${label}: chunk has wrong major type`);
 			return out;
 		}
-		if (head.info === 31) {
+		if (head.info == 31) {
 			setError(r, `indefinite-length ${label}: nested indefinite chunk prohibited (RFC 8949 §3.2.3)`);
 			return out;
 		}
@@ -394,7 +394,7 @@ function decodeBytesIndef(r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const bytes = readIndefiniteByteChunks(r, 2, "byte string");
 	exitDepth(r);
-	if (r.error !== "") return cborNull();
+	if (r.error != "") return cborNull();
 	const buf = bytesToBuffer(bytes, 0, bytes.length);
 	return cborBytes(buf);
 }
@@ -403,7 +403,7 @@ function decodeTextIndef(r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const bytes = readIndefiniteByteChunks(r, 3, "text string");
 	exitDepth(r);
-	if (r.error !== "") return cborNull();
+	if (r.error != "") return cborNull();
 	return cborText(utf8FromBytes(bytes, 0, bytes.length));
 }
 
@@ -411,7 +411,7 @@ function decodeArrayIndef(r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const items: CborValue[] = [];
 	while (true) {
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		if (tryConsumeBreak(r)) break;
 		if (items.length >= MAX_COLLECTION_SIZE) {
 			setError(r, "indefinite-length array exceeds sanity cap");
@@ -419,7 +419,7 @@ function decodeArrayIndef(r: CborReader): CborValue {
 			return cborNull();
 		}
 		const v = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		items.push(v);
 	}
 	exitDepth(r);
@@ -431,7 +431,7 @@ function decodeMapIndef(r: CborReader): CborValue {
 	const keys: CborValue[] = [];
 	const values: CborValue[] = [];
 	while (true) {
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		if (tryConsumeBreak(r)) break;
 		if (keys.length >= MAX_COLLECTION_SIZE) {
 			setError(r, "indefinite-length map exceeds sanity cap");
@@ -439,15 +439,15 @@ function decodeMapIndef(r: CborReader): CborValue {
 			return cborNull();
 		}
 		const k = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		// Break code after key but before value is malformed per RFC §3.2.2.
-		if (peekByte(r) === 0xff) {
+		if (peekByte(r) == 0xff) {
 			setError(r, "indefinite-length map: break code between key and value");
 			exitDepth(r);
 			return cborNull();
 		}
 		const v = decodeValue(r);
-		if (r.error !== "") { exitDepth(r); return cborNull(); }
+		if (r.error != "") { exitDepth(r); return cborNull(); }
 		keys.push(k);
 		values.push(v);
 	}
@@ -529,14 +529,14 @@ function decodeHalfFloat(arg: int64): CborValue {
 	const sign: int32 = (v >> 15) & 0x1;
 	const exp: int32 = (v >> 10) & 0x1f;
 	const mant: int32 = v & 0x3ff;
-	const signMul: number = sign === 0 ? 1.0 : -1.0;
+	const signMul: number = sign == 0 ? 1.0 : -1.0;
 
-	if (exp === 0) {
-		if (mant === 0) return cborFloat(0.0);
+	if (exp == 0) {
+		if (mant == 0) return cborFloat(0.0);
 		return cborFloat(signMul * (mant as float64) / 16777216.0);
 	}
-	if (exp === 31) {
-		if (mant === 0) return cborFloat(bitsToDouble(sign === 0 ? 0x7F : 0xFF, 0xF0));
+	if (exp == 31) {
+		if (mant == 0) return cborFloat(bitsToDouble(sign == 0 ? 0x7F : 0xFF, 0xF0));
 		return cborFloat(bitsToDouble(0x7F, 0xF8));
 	}
 	return cborFloat(signMul * pow2(exp - 15) * (1.0 + (mant as float64) / 1024.0));
@@ -570,14 +570,14 @@ function decodeDoubleFloat(r: CborReader): CborValue {
 // --- Generic dispatch ---
 
 export function decodeValue(r: CborReader): CborValue {
-	if (r.error !== "") return cborNull();
+	if (r.error != "") return cborNull();
 	const head = readHead(r);
-	if (r.error !== "") return cborNull();
+	if (r.error != "") return cborNull();
 	// Indefinite-length (info=31) — RFC 8949 §3.2 allows only for major
 	// 2/3/4/5 (content + break) and major 7 (the break code itself).
 	// At top level (and inside arrays/maps), break code is illegal —
 	// indefinite-collection decoders consume their own terminator.
-	if (head.info === 31) {
+	if (head.info == 31) {
 		return match (head.major) {
 			2 => decodeBytesIndef(r),
 			3 => decodeTextIndef(r),
@@ -606,7 +606,7 @@ function decodeTag(r: CborReader, tagNum: int64): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const inner = decodeValue(r);
 	exitDepth(r);
-	if (r.error !== "") return cborNull();
+	if (r.error != "") return cborNull();
 	return cborTag(tagNum, inner);
 }
 
@@ -615,7 +615,7 @@ function decodeTag(r: CborReader, tagNum: int64): CborValue {
 export function decodeAll(bytes: uint8[]): Result<CborValue, string> {
 	const r = newCborReader(bytes);
 	const v = decodeValue(r);
-	if (r.error !== "") return Result.err(r.error);
+	if (r.error != "") return Result.err(r.error);
 	if (r.pos < r.buf.length) {
 		return Result.err(`trailing bytes after CBOR value at offset ${r.pos}`);
 	}
@@ -639,109 +639,109 @@ function decOk(bytes: uint8[]): CborValue {
 
 test "decode 0x00 → int 0" {
 	const v = decOk([0x00]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (0 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (0 as int64);
 }
 
 test "decode 0x17 → int 23 (max inline)" {
 	const v = decOk([0x17]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (23 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (23 as int64);
 }
 
 test "decode 0x18 0x18 → int 24" {
 	const v = decOk([0x18, 0x18]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (24 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (24 as int64);
 }
 
 test "decode 0x18 0x64 → int 100" {
 	const v = decOk([0x18, 0x64]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (100 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (100 as int64);
 }
 
 test "decode 0x19 0x03 0xe8 → int 1000" {
 	const v = decOk([0x19, 0x03, 0xe8]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (1000 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (1000 as int64);
 }
 
 test "decode 0x1a 0x00 0x0f 0x42 0x40 → int 1000000" {
 	const v = decOk([0x1a, 0x00, 0x0f, 0x42, 0x40]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (1000000 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (1000000 as int64);
 }
 
 test "decode 0x1b 0x00 0x00 0x00 0xe8 0xd4 0xa5 0x10 0x00 → int 1000000000000" {
 	const v = decOk([0x1b, 0x00, 0x00, 0x00, 0xe8, 0xd4, 0xa5, 0x10, 0x00]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (1000000000000 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (1000000000000 as int64);
 }
 
 test "decode 0x20 → int -1" {
 	const v = decOk([0x20]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (-1 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (-1 as int64);
 }
 
 test "decode 0x29 → int -10" {
 	const v = decOk([0x29]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (-10 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (-10 as int64);
 }
 
 test "decode 0x38 0x63 → int -100" {
 	const v = decOk([0x38, 0x63]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (-100 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (-100 as int64);
 }
 
 test "decode 0x39 0x03 0xe7 → int -1000" {
 	const v = decOk([0x39, 0x03, 0xe7]);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (-1000 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (-1000 as int64);
 }
 
 // === Text decoding ===
 
 test "decode 0x60 → text \"\"" {
 	const v = decOk([0x60]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "";
 }
 
 test "decode 0x61 0x61 → text \"a\"" {
 	const v = decOk([0x61, 0x61]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "a";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "a";
 }
 
 test "decode 0x64 IETF → text \"IETF\"" {
 	const v = decOk([0x64, 0x49, 0x45, 0x54, 0x46]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "IETF";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "IETF";
 }
 
 test "decode UTF-8 2-byte: ü (0xC3 0xBC) → text \"ü\"" {
 	// 0x62 = text length 2; 0xC3 0xBC = U+00FC (ü) in UTF-8
 	const v = decOk([0x62, 0xc3, 0xbc]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "ü";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "ü";
 }
 
 test "decode UTF-8 3-byte: 水 (0xE6 0xB0 0xB4) → text \"水\"" {
 	// 0x63 = text length 3; 0xE6 0xB0 0xB4 = U+6C34 (水) in UTF-8
 	const v = decOk([0x63, 0xe6, 0xb0, 0xb4]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "水";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "水";
 }
 
 test "decode UTF-8 4-byte: 𐅑 (0xF0 0x90 0x85 0x91) → text \"𐅑\"" {
 	// 0x64 = text length 4; 0xF0 0x90 0x85 0x91 = U+10151 (𐅑 — Greek acrophonic) in UTF-8
 	const v = decOk([0x64, 0xf0, 0x90, 0x85, 0x91]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "𐅑";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "𐅑";
 }
 
 test "decode UTF-8 mixed ASCII + multi-byte" {
@@ -749,48 +749,48 @@ test "decode UTF-8 mixed ASCII + multi-byte" {
 	// Use: "hé" → 'h' (0x68) + 'é' (0xC3 0xA9) = 3 bytes
 	// 0x63 = text length 3
 	const v = decOk([0x63, 0x68, 0xc3, 0xa9]);
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "hé";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "hé";
 }
 
 // === Array decoding ===
 
 test "decode 0x80 → array []" {
 	const v = decOk([0x80]);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 0;
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 0;
 }
 
 test "decode 0x83 0x01 0x02 0x03 → array [1, 2, 3]" {
 	const v = decOk([0x83, 0x01, 0x02, 0x03]);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 3;
-	assert v.items[0].kind === CborKind.Int;
-	assert v.items[0].intVal === (1 as int64);
-	assert v.items[2].kind === CborKind.Int;
-	assert v.items[2].intVal === (3 as int64);
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 3;
+	assert v.items[0].kind == CborKind.Int;
+	assert v.items[0].intVal == (1 as int64);
+	assert v.items[2].kind == CborKind.Int;
+	assert v.items[2].intVal == (3 as int64);
 }
 
 test "decode nested array [1, [2, 3], [4, 5]]" {
 	const v = decOk([0x83, 0x01, 0x82, 0x02, 0x03, 0x82, 0x04, 0x05]);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 3;
-	assert v.items[1].kind === CborKind.Array;
-	assert v.items[1].items.length === 2;
-	assert v.items[1].items[0].kind === CborKind.Int;
-	assert v.items[1].items[0].intVal === (2 as int64);
-	assert v.items[2].kind === CborKind.Array;
-	assert v.items[2].items[1].kind === CborKind.Int;
-	assert v.items[2].items[1].intVal === (5 as int64);
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 3;
+	assert v.items[1].kind == CborKind.Array;
+	assert v.items[1].items.length == 2;
+	assert v.items[1].items[0].kind == CborKind.Int;
+	assert v.items[1].items[0].intVal == (2 as int64);
+	assert v.items[2].kind == CborKind.Array;
+	assert v.items[2].items[1].kind == CborKind.Int;
+	assert v.items[2].items[1].intVal == (5 as int64);
 }
 
 // === Map decoding ===
 
 test "decode 0xa0 → map {}" {
 	const v = decOk([0xa0]);
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 0;
-	assert v.values.length === 0;
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 0;
+	assert v.values.length == 0;
 }
 
 test "decode 0xa2 ... → map {1: 2, 3: 4}" {
@@ -798,16 +798,16 @@ test "decode 0xa2 ... → map {1: 2, 3: 4}" {
 	// 0x01 0x02 → (1, 2)
 	// 0x03 0x04 → (3, 4)
 	const v = decOk([0xa2, 0x01, 0x02, 0x03, 0x04]);
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 2;
-	assert v.keys[0].kind === CborKind.Int;
-	assert v.keys[0].intVal === (1 as int64);
-	assert v.values[0].kind === CborKind.Int;
-	assert v.values[0].intVal === (2 as int64);
-	assert v.keys[1].kind === CborKind.Int;
-	assert v.keys[1].intVal === (3 as int64);
-	assert v.values[1].kind === CborKind.Int;
-	assert v.values[1].intVal === (4 as int64);
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 2;
+	assert v.keys[0].kind == CborKind.Int;
+	assert v.keys[0].intVal == (1 as int64);
+	assert v.values[0].kind == CborKind.Int;
+	assert v.values[0].intVal == (2 as int64);
+	assert v.keys[1].kind == CborKind.Int;
+	assert v.keys[1].intVal == (3 as int64);
+	assert v.values[1].kind == CborKind.Int;
+	assert v.values[1].intVal == (4 as int64);
 }
 
 // === Tag decoding ===
@@ -816,20 +816,20 @@ test "decode 0xc0 + text → tag(0, \"x\")" {
 	// 0xc0 = tag 0 (standard datetime string)
 	// 0x61 0x78 = text "x"
 	const v = decOk([0xc0, 0x61, 0x78]);
-	assert v.kind === CborKind.Tag;
-	assert v.tagNum === (0 as int64);
-	assert v.tagged.kind === CborKind.Text;
-	assert v.tagged.textVal === "x";
+	assert v.kind == CborKind.Tag;
+	assert v.tagNum == (0 as int64);
+	assert v.tagged.kind == CborKind.Text;
+	assert v.tagged.textVal == "x";
 }
 
 test "decode 0xc1 + uint → tag(1, 1363896240) (epoch timestamp)" {
 	// 0xc1 = tag 1 (epoch-based date/time)
 	// 0x1a 0x51 0x4b 0x67 0xb0 = 4-byte uint 1363896240
 	const v = decOk([0xc1, 0x1a, 0x51, 0x4b, 0x67, 0xb0]);
-	assert v.kind === CborKind.Tag;
-	assert v.tagNum === (1 as int64);
-	assert v.tagged.kind === CborKind.Int;
-	assert v.tagged.intVal === (1363896240 as int64);
+	assert v.kind == CborKind.Tag;
+	assert v.tagNum == (1 as int64);
+	assert v.tagged.kind == CborKind.Int;
+	assert v.tagged.intVal == (1363896240 as int64);
 }
 
 test "decode 0xd8 0x20 + text → tag(32, \"http://...\") (URI)" {
@@ -841,10 +841,10 @@ test "decode 0xd8 0x20 + text → tag(32, \"http://...\") (URI)" {
 		0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x77, 0x77, 0x77, 0x2e,
 		0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d];
 	const v = decOk(bytes);
-	assert v.kind === CborKind.Tag;
-	assert v.tagNum === (32 as int64);
-	assert v.tagged.kind === CborKind.Text;
-	assert v.tagged.textVal === "http://www.example.com";
+	assert v.kind == CborKind.Tag;
+	assert v.tagNum == (32 as int64);
+	assert v.tagged.kind == CborKind.Text;
+	assert v.tagged.textVal == "http://www.example.com";
 }
 
 // === Long array (1-byte length head) ===
@@ -862,16 +862,16 @@ test "decode 0x98 0x19 + 25 items → array of 25" {
 		0x18, 0x18,                                // 24
 		0x18, 0x19];                               // 25
 	const v = decOk(bytes);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 25;
-	assert v.items[0].kind === CborKind.Int;
-	assert v.items[0].intVal === (1 as int64);
-	assert v.items[22].kind === CborKind.Int;
-	assert v.items[22].intVal === (23 as int64);
-	assert v.items[23].kind === CborKind.Int;
-	assert v.items[23].intVal === (24 as int64);
-	assert v.items[24].kind === CborKind.Int;
-	assert v.items[24].intVal === (25 as int64);
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 25;
+	assert v.items[0].kind == CborKind.Int;
+	assert v.items[0].intVal == (1 as int64);
+	assert v.items[22].kind == CborKind.Int;
+	assert v.items[22].intVal == (23 as int64);
+	assert v.items[23].kind == CborKind.Int;
+	assert v.items[23].intVal == (24 as int64);
+	assert v.items[24].kind == CborKind.Int;
+	assert v.items[24].intVal == (25 as int64);
 }
 
 // === Mixed-type map ===
@@ -883,20 +883,20 @@ test "decode {\"a\": 1, \"b\": [2, 3]}" {
 	// 0x61 0x62 = text "b"
 	// 0x82 0x02 0x03 = array [2, 3]
 	const v = decOk([0xa2, 0x61, 0x61, 0x01, 0x61, 0x62, 0x82, 0x02, 0x03]);
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 2;
-	assert v.keys[0].kind === CborKind.Text;
-	assert v.keys[0].textVal === "a";
-	assert v.values[0].kind === CborKind.Int;
-	assert v.values[0].intVal === (1 as int64);
-	assert v.keys[1].kind === CborKind.Text;
-	assert v.keys[1].textVal === "b";
-	assert v.values[1].kind === CborKind.Array;
-	assert v.values[1].items.length === 2;
-	assert v.values[1].items[0].kind === CborKind.Int;
-	assert v.values[1].items[0].intVal === (2 as int64);
-	assert v.values[1].items[1].kind === CborKind.Int;
-	assert v.values[1].items[1].intVal === (3 as int64);
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 2;
+	assert v.keys[0].kind == CborKind.Text;
+	assert v.keys[0].textVal == "a";
+	assert v.values[0].kind == CborKind.Int;
+	assert v.values[0].intVal == (1 as int64);
+	assert v.keys[1].kind == CborKind.Text;
+	assert v.keys[1].textVal == "b";
+	assert v.values[1].kind == CborKind.Array;
+	assert v.values[1].items.length == 2;
+	assert v.values[1].items[0].kind == CborKind.Int;
+	assert v.values[1].items[0].intVal == (2 as int64);
+	assert v.values[1].items[1].kind == CborKind.Int;
+	assert v.values[1].items[1].intVal == (3 as int64);
 }
 
 test "decode [\"a\", {\"b\": \"c\"}]" {
@@ -906,15 +906,15 @@ test "decode [\"a\", {\"b\": \"c\"}]" {
 	// 0x61 0x62 = text "b"
 	// 0x61 0x63 = text "c"
 	const v = decOk([0x82, 0x61, 0x61, 0xa1, 0x61, 0x62, 0x61, 0x63]);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 2;
-	assert v.items[0].kind === CborKind.Text;
-	assert v.items[0].textVal === "a";
-	assert v.items[1].kind === CborKind.Map;
-	assert v.items[1].keys[0].kind === CborKind.Text;
-	assert v.items[1].keys[0].textVal === "b";
-	assert v.items[1].values[0].kind === CborKind.Text;
-	assert v.items[1].values[0].textVal === "c";
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 2;
+	assert v.items[0].kind == CborKind.Text;
+	assert v.items[0].textVal == "a";
+	assert v.items[1].kind == CborKind.Map;
+	assert v.items[1].keys[0].kind == CborKind.Text;
+	assert v.items[1].keys[0].textVal == "b";
+	assert v.items[1].values[0].kind == CborKind.Text;
+	assert v.items[1].values[0].textVal == "c";
 }
 
 test "decode 5-pair text-keyed map" {
@@ -925,46 +925,46 @@ test "decode 5-pair text-keyed map" {
 		0x61, 0x63, 0x61, 0x43,  // "c": "C"
 		0x61, 0x64, 0x61, 0x44,  // "d": "D"
 		0x61, 0x65, 0x61, 0x45]); // "e": "E"
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 5;
-	assert v.values[4].kind === CborKind.Text;
-	assert v.values[4].textVal === "E";
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 5;
+	assert v.values[4].kind == CborKind.Text;
+	assert v.values[4].textVal == "E";
 }
 
 // === Major 7 simple ===
 
 test "decode 0xf4 → bool false" {
 	const v = decOk([0xf4]);
-	assert v.kind === CborKind.Bool;
-	assert v.boolVal === false;
+	assert v.kind == CborKind.Bool;
+	assert v.boolVal == false;
 }
 
 test "decode 0xf5 → bool true" {
 	const v = decOk([0xf5]);
-	assert v.kind === CborKind.Bool;
-	assert v.boolVal === true;
+	assert v.kind == CborKind.Bool;
+	assert v.boolVal == true;
 }
 
 test "decode 0xf6 → null" {
 	const v = decOk([0xf6]);
-	assert v.kind === CborKind.Null;
+	assert v.kind == CborKind.Null;
 }
 
 test "decode 0xf7 → undefined" {
 	const v = decOk([0xf7]);
-	assert v.kind === CborKind.Undefined;
+	assert v.kind == CborKind.Undefined;
 }
 
 test "decode 0xf0 → simple 16" {
 	const v = decOk([0xf0]);
-	assert v.kind === CborKind.Simple;
-	assert v.simpleVal === 16;
+	assert v.kind == CborKind.Simple;
+	assert v.simpleVal == 16;
 }
 
 test "decode 0xf8 0xff → simple 255" {
 	const v = decOk([0xf8, 0xff]);
-	assert v.kind === CborKind.Simple;
-	assert v.simpleVal === 255;
+	assert v.kind == CborKind.Simple;
+	assert v.simpleVal == 255;
 }
 
 // === Error cases ===
@@ -987,26 +987,26 @@ test "decode trailing bytes → error" {
 test "decode indefinite-length empty array (0x9f 0xff)" {
 	const r = decodeAll([0x9f, 0xff]);
 	assert r.ok;
-	assert r.value.kind === CborKind.Array;
-	if (r.value.kind === CborKind.Array) assert r.value.items.length === 0;
+	assert r.value.kind == CborKind.Array;
+	if (r.value.kind == CborKind.Array) assert r.value.items.length == 0;
 }
 
 test "decode indefinite-length array [1, 2, 3] (0x9f 0x01 0x02 0x03 0xff)" {
 	const r = decodeAll([0x9f, 0x01, 0x02, 0x03, 0xff]);
 	assert r.ok;
-	assert r.value.kind === CborKind.Array;
-	if (r.value.kind === CborKind.Array) {
-		assert r.value.items.length === 3;
+	assert r.value.kind == CborKind.Array;
+	if (r.value.kind == CborKind.Array) {
+		assert r.value.items.length == 3;
 		const i0 = r.value.items[0];
-		if (i0.kind === CborKind.Int) assert i0.intVal === (1 as int64);
+		if (i0.kind == CborKind.Int) assert i0.intVal == (1 as int64);
 	}
 }
 
 test "decode indefinite-length empty map (0xbf 0xff)" {
 	const r = decodeAll([0xbf, 0xff]);
 	assert r.ok;
-	assert r.value.kind === CborKind.Map;
-	if (r.value.kind === CborKind.Map) assert r.value.keys.length === 0;
+	assert r.value.kind == CborKind.Map;
+	if (r.value.kind == CborKind.Map) assert r.value.keys.length == 0;
 }
 
 test "decode indefinite-length map {a: 1} (0xbf 0x61 'a' 0x01 0xff)" {
@@ -1014,15 +1014,15 @@ test "decode indefinite-length map {a: 1} (0xbf 0x61 'a' 0x01 0xff)" {
 	assert r.ok;
 	if (!r.ok) return;
 	const m = r.value;
-	assert m.kind === CborKind.Map;
-	if (m.kind !== CborKind.Map) return;
-	assert m.keys.length === 1;
+	assert m.kind == CborKind.Map;
+	if (m.kind != CborKind.Map) return;
+	assert m.keys.length == 1;
 	const k0 = m.keys[0];
-	assert k0.kind === CborKind.Text;
-	if (k0.kind === CborKind.Text) assert k0.textVal === "a";
+	assert k0.kind == CborKind.Text;
+	if (k0.kind == CborKind.Text) assert k0.textVal == "a";
 	const v0 = m.values[0];
-	assert v0.kind === CborKind.Int;
-	if (v0.kind === CborKind.Int) assert v0.intVal === (1 as int64);
+	assert v0.kind == CborKind.Int;
+	if (v0.kind == CborKind.Int) assert v0.intVal == (1 as int64);
 }
 
 test "decode indefinite-length text 'foobar' (0x7f 'foo' 'bar' 0xff)" {
@@ -1031,8 +1031,8 @@ test "decode indefinite-length text 'foobar' (0x7f 'foo' 'bar' 0xff)" {
 	assert r.ok;
 	if (!r.ok) return;
 	const t = r.value;
-	assert t.kind === CborKind.Text;
-	if (t.kind === CborKind.Text) assert t.textVal === "foobar";
+	assert t.kind == CborKind.Text;
+	if (t.kind == CborKind.Text) assert t.textVal == "foobar";
 }
 
 test "decode indefinite-length array — break after key in map → error" {
@@ -1118,7 +1118,7 @@ test "decode tag chain just under depth limit succeeds" {
 	bytes.push(0x00);
 	const r = decodeAll(bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Tag;
+	assert r.value.kind == CborKind.Tag;
 }
 
 test "decode half-precision float marker (parses without error)" {
@@ -1130,7 +1130,7 @@ test "decode half-precision float marker (parses without error)" {
 	// erroring — value correctness verified at native run.
 	const r = decodeAll([0xf9, 0x3c, 0x00]);
 	assert r.ok;
-	assert r.value.kind === CborKind.Float;
+	assert r.value.kind == CborKind.Float;
 }
 
 // === Round-trip via encoder integration ===
@@ -1142,8 +1142,8 @@ test "round-trip int 42" {
 	encodeValue(w, cborInt(42 as int64));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Int;
-	assert r.value.intVal === (42 as int64);
+	assert r.value.kind == CborKind.Int;
+	assert r.value.intVal == (42 as int64);
 }
 
 test "round-trip int -100" {
@@ -1151,8 +1151,8 @@ test "round-trip int -100" {
 	encodeValue(w, cborInt(-100 as int64));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Int;
-	assert r.value.intVal === (-100 as int64);
+	assert r.value.kind == CborKind.Int;
+	assert r.value.intVal == (-100 as int64);
 }
 
 test "round-trip text \"hello\"" {
@@ -1160,8 +1160,8 @@ test "round-trip text \"hello\"" {
 	encodeValue(w, cborText("hello"));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Text;
-	assert r.value.textVal === "hello";
+	assert r.value.kind == CborKind.Text;
+	assert r.value.textVal == "hello";
 }
 
 test "round-trip array [1, 2, 3]" {
@@ -1170,12 +1170,12 @@ test "round-trip array [1, 2, 3]" {
 	encodeValue(w, cborArray(items));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Array;
-	assert r.value.items.length === 3;
-	assert r.value.items[0].kind === CborKind.Int;
-	assert r.value.items[0].intVal === (1 as int64);
-	assert r.value.items[2].kind === CborKind.Int;
-	assert r.value.items[2].intVal === (3 as int64);
+	assert r.value.kind == CborKind.Array;
+	assert r.value.items.length == 3;
+	assert r.value.items[0].kind == CborKind.Int;
+	assert r.value.items[0].intVal == (1 as int64);
+	assert r.value.items[2].kind == CborKind.Int;
+	assert r.value.items[2].intVal == (3 as int64);
 }
 
 test "round-trip map {a: 1, b: 2}" {
@@ -1185,12 +1185,12 @@ test "round-trip map {a: 1, b: 2}" {
 	encodeValue(w, cborMap(keys, vals));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Map;
-	assert r.value.keys.length === 2;
-	assert r.value.keys[0].kind === CborKind.Text;
-	assert r.value.keys[0].textVal === "a";
-	assert r.value.values[1].kind === CborKind.Int;
-	assert r.value.values[1].intVal === (2 as int64);
+	assert r.value.kind == CborKind.Map;
+	assert r.value.keys.length == 2;
+	assert r.value.keys[0].kind == CborKind.Text;
+	assert r.value.keys[0].textVal == "a";
+	assert r.value.values[1].kind == CborKind.Int;
+	assert r.value.values[1].intVal == (2 as int64);
 }
 
 test "round-trip tagged value" {
@@ -1198,8 +1198,8 @@ test "round-trip tagged value" {
 	encodeValue(w, cborTag(123 as int64, cborText("x")));
 	const r = decodeAll(w.bytes);
 	assert r.ok;
-	assert r.value.kind === CborKind.Tag;
-	assert r.value.tagNum === (123 as int64);
-	assert r.value.tagged.kind === CborKind.Text;
-	assert r.value.tagged.textVal === "x";
+	assert r.value.kind == CborKind.Tag;
+	assert r.value.tagNum == (123 as int64);
+	assert r.value.tagged.kind == CborKind.Text;
+	assert r.value.tagged.textVal == "x";
 }

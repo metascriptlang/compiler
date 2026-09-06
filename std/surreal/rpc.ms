@@ -62,20 +62,20 @@ export function parseResponse(bytes: uint8[]): Result<RpcResponse, SurrealError>
 		return Result.err(decodeError("cbor parse: " + dr.error));
 	}
 	const root = dr.value;
-	if (root.kind !== CborKind.Map) {
+	if (root.kind != CborKind.Map) {
 		return Result.err(decodeError("response is not a CBOR Map (kind=" + root.kind.toString() + ")"));
 	}
 
 	const idField = getDynamicField(root, "id");
-	if (idField.kind !== CborKind.Text) {
+	if (idField.kind != CborKind.Text) {
 		return Result.err(decodeError("response missing or non-text id field"));
 	}
 	const id = asString(idField);
 
 	const errorField = getDynamicField(root, "error");
-	if (errorField.kind !== CborKind.Null) {
+	if (errorField.kind != CborKind.Null) {
 		// Server reported an error.
-		if (errorField.kind !== CborKind.Map) {
+		if (errorField.kind != CborKind.Map) {
 			return Result.err(decodeError("response.error is not a Map"));
 		}
 		const code = asInt32(getDynamicField(errorField, "code"));
@@ -116,9 +116,9 @@ test "buildRequest emits Map with id/method/params and decodes back" {
 	const r = decodeAll(bytes);
 	assert r.ok;
 	const v = r.value;
-	assert v.kind === CborKind.Map;
-	assert asString(getDynamicField(v, "id")) === "p1";
-	assert asString(getDynamicField(v, "method")) === "ping";
+	assert v.kind == CborKind.Map;
+	assert asString(getDynamicField(v, "id")) == "p1";
+	assert asString(getDynamicField(v, "method")) == "ping";
 }
 
 test "buildRequest preserves params array" {
@@ -127,7 +127,7 @@ test "buildRequest preserves params array" {
 	const r = decodeAll(bytes);
 	assert r.ok;
 	const paramsField = getDynamicField(r.value, "params");
-	assert paramsField.kind === CborKind.Array;
+	assert paramsField.kind == CborKind.Array;
 }
 
 test "parseResponse success — id + result map" {
@@ -140,9 +140,9 @@ test "parseResponse success — id + result map" {
 	assert r.ok;
 	const resp = r.value;
 	assert resp.ok;
-	assert resp.id === "p1";
-	assert resp.result.kind === CborKind.Text;
-	assert asString(resp.result) === "ok";
+	assert resp.id == "p1";
+	assert resp.result.kind == CborKind.Text;
+	assert asString(resp.result) == "ok";
 }
 
 test "parseResponse failure — server error map" {
@@ -159,8 +159,8 @@ test "parseResponse failure — server error map" {
 	assert r.ok;
 	const resp = r.value;
 	assert !resp.ok;
-	assert resp.id === "q1";
-	assert resp.error.message === "Invalid Request";
+	assert resp.id == "q1";
+	assert resp.error.message == "Invalid Request";
 }
 
 test "parseResponse rejects non-map root" {

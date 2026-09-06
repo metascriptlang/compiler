@@ -49,15 +49,15 @@ test "bug024: Pass 3 contextual mono for value-type T (enum)" {
 	// contextual return Color[]. Post-mono reconciliation wraps null to
 	// Maybe<Color> for codegen.
 	const r: Color[] = takeNull(null);
-	assert r.length === 0;
+	assert r.length == 0;
 }
 
 test "bug024: Pass 3 contextual mono for ref-type T (interface)" {
 	const r: Item[] = takeNull(null);
-	assert r.length === 0;
+	assert r.length == 0;
 }
 
 test "bug024: Pass 3 contextual mono for type-alias T (UserId = int32)" {
 	const r: UserId[] = takeNull(null);
-	assert r.length === 0;
+	assert r.length == 0;
 }

@@ -53,7 +53,7 @@ async function asyncUnusedVar(): Promise<int32> {
 function main(): int32 {
     const a = syncBareLoop();
     const b = waitFor(asyncUnusedVar());
-    if (a !== 8 || b !== 8) {
+    if (a != 8 || b != 8) {
         console.log("GUARD-FAIL a=" + a.toString() + " b=" + b.toString());
         return 1;
     }
@@ -62,4 +62,4 @@ function main(): int32 {
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

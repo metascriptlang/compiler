@@ -73,7 +73,7 @@ export function writeFile(path: string, content: string): Result<void, IoError> 
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "write failed"));
 	}
 }
@@ -84,7 +84,7 @@ export function appendFile(path: string, content: string): Result<void, IoError>
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "append failed"));
 	}
 }
@@ -97,7 +97,7 @@ export function chmod(path: string, mode: int32): Result<void, IoError> {
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "chmod failed"));
 	}
 }
@@ -110,8 +110,8 @@ export function mkdir(path: string): Result<void, IoError> {
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err === 17) return Result.ok(null);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err == 17) return Result.ok(null);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "mkdir failed"));
 	}
 }
@@ -122,7 +122,7 @@ export function rmdir(path: string): Result<void, IoError> {
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "rmdir failed"));
 	}
 }
@@ -133,7 +133,7 @@ export function remove(path: string): Result<void, IoError> {
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, path));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "remove failed"));
 	}
 }
@@ -163,7 +163,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err !== 0) return Result.err(ioErrorFromErrno(err, oldPath));
+		if (err != 0) return Result.err(ioErrorFromErrno(err, oldPath));
 		return Result.err(writeFailed(oldPath, "rename failed"));
 	}
 }
@@ -208,7 +208,7 @@ export function readDir(path: string): string[] {
 
 export function readLines(path: string): Result<string[], IoError> {
 	const content = try readFile(path);
-	if (content.length === 0) return Result.ok([]);
+	if (content.length == 0) return Result.ok([]);
 	return Result.ok(content.split("\n"));
 }
 
@@ -225,7 +225,7 @@ export function ensureDir(path: string): Result<void, IoError> {
 	if (existsSync(path)) return Result.ok(null);
 	let i = 0;
 	while (i < path.length) {
-		if (path.charCodeAt(i) === "/".code) {
+		if (path.charCodeAt(i) == "/".code) {
 			if (i > 0) {
 				const prefix = path.slice(0, i);
 				if (!existsSync(prefix)) {

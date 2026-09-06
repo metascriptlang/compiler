@@ -17,19 +17,19 @@ function takeString(s: string): string { return s; }
 
 test "bug074: brand widens to base implicitly" {
 	const c: CubeId = "abc" as CubeId;
-	assert takeString(c) === "abc";
-	assert c.length === 3;
+	assert takeString(c) == "abc";
+	assert c.length == 3;
 }
 
 test "bug074: same brand literal is one type across aliases" {
 	const a: AltCube = "xyz" as AltCube;
-	assert takeCube(a) === "xyz";
+	assert takeCube(a) == "xyz";
 }
 
 test "bug074: brand equality lowers as base equality" {
 	const c1: CubeId = "k" as CubeId;
 	const c2: CubeId = "k" as CubeId;
-	assert c1 === c2;
+	assert c1 == c2;
 }
 
 test "bug074: cross-brand argument is rejected" {

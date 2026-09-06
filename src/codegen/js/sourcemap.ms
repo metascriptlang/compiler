@@ -50,7 +50,7 @@ export function createSourceInfo(): SourceInfo {
 
 export function internFile(info: SourceInfo, file: string): int32 {
 	for (let i: int32 = 0; i < info.files.length; i += 1) {
-		if (info.files[i] === file) return i;
+		if (info.files[i] == file) return i;
 	}
 	info.files.push(file);
 	return (info.files.length - 1) as int32;
@@ -58,7 +58,7 @@ export function internFile(info: SourceInfo, file: string): int32 {
 
 export function internName(info: SourceInfo, name: string): int32 {
 	for (let i: int32 = 0; i < info.names.length; i += 1) {
-		if (info.names[i] === name) return i;
+		if (info.names[i] == name) return i;
 	}
 	info.names.push(name);
 	return (info.names.length - 1) as int32;
@@ -76,7 +76,7 @@ export function recordSegment(info: SourceInfo, genLine: int32, genCol: int32,
 		fileIdx: int32, line: int32, original: int32, nameIdx: int32): void {
 	ensureLine(info, genLine);
 	const segs = info.mappings[genLine].segments;
-	if (segs.length > 0 && segs[segs.length - 1].generated === genCol) {
+	if (segs.length > 0 && segs[segs.length - 1].generated == genCol) {
 		segs[segs.length - 1] = { generated: genCol, fileIdx, line, original, nameIdx };
 		return;
 	}
@@ -129,7 +129,7 @@ export function encodeVLQ(values: int32[]): string {
 			rest = rest >> shift;
 			if (rest > 0) { masked = masked | continueBit; }
 			result = result + VLQ_ALPHABET.slice(masked, masked + 1);
-			if (rest === 0) { more = false; }
+			if (rest == 0) { more = false; }
 		}
 	}
 	return result;
@@ -145,7 +145,7 @@ export function jsonEscape(s: string): string {
 	let i: int32 = 0;
 	while (i < s.byteLength) {
 		const b = s.byteAt(i);
-		if (b === "\\".code || b === "\"".code || b < 32) {
+		if (b == "\\".code || b == "\"".code || b < 32) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			result = result + match (b) {
 				"\\".code => "\\\\",
@@ -159,7 +159,7 @@ export function jsonEscape(s: string): string {
 			};
 			i += 1;
 			runStart = i;
-		} else if (b === 237 && i + 2 < s.byteLength
+		} else if (b == 237 && i + 2 < s.byteLength
 				&& s.byteAt(i + 1) >= 160 && s.byteAt(i + 1) <= 191) {
 			if (runStart < i) result = result + s.byteSlice(runStart, i);
 			const cu = 53248 + (s.byteAt(i + 1) - 128) * 64 + (s.byteAt(i + 2) - 128);
@@ -193,10 +193,10 @@ function sourcesJson(info: SourceInfo, mapDir: string, read: SourceReader): stri
 	for (let i: int32 = 0; i < info.files.length; i += 1) {
 		if (i > 0) { sources = sources + ","; contents = contents + ","; }
 		const abs = info.files[i];
-		const rel = mapDir === "" ? abs : relative(mapDir, abs);
-		sources = `${sources}"${jsonEscape(rel === "" ? abs : rel)}"`;
+		const rel = mapDir == "" ? abs : relative(mapDir, abs);
+		sources = `${sources}"${jsonEscape(rel == "" ? abs : rel)}"`;
 		const text = read(abs);
-		contents = text === "" ? contents + "null" : `${contents}"${jsonEscape(text)}"`;
+		contents = text == "" ? contents + "null" : `${contents}"${jsonEscape(text)}"`;
 	}
 	return `"sources":[${sources}],"sourcesContent":[${contents}]`;
 }
@@ -250,22 +250,22 @@ export function toSourceMapJson(info: SourceInfo, file: string, mapDir: string, 
 function noSource(path: string): string { return ""; }
 
 test "VLQ encodes the sign in the low bit" {
-	assert encodeVLQ([0]) === "A";
-	assert encodeVLQ([1]) === "C";
-	assert encodeVLQ([-1]) === "D";
-	assert encodeVLQ([2]) === "E";
-	assert encodeVLQ([-2]) === "F";
+	assert encodeVLQ([0]) == "A";
+	assert encodeVLQ([1]) == "C";
+	assert encodeVLQ([-1]) == "D";
+	assert encodeVLQ([2]) == "E";
+	assert encodeVLQ([-2]) == "F";
 }
 
 test "VLQ continues past five bits" {
-	assert encodeVLQ([16]) === "gB";
-	assert encodeVLQ([123]) === "2H";
-	assert encodeVLQ([-123]) === "3H";
+	assert encodeVLQ([16]) == "gB";
+	assert encodeVLQ([123]) == "2H";
+	assert encodeVLQ([-123]) == "3H";
 }
 
 test "VLQ concatenates a segment without separators" {
-	assert encodeVLQ([0, 1, 2, 3]) === "ACEG";
-	assert encodeVLQ([0, 0, 0, 0]) === "AAAA";
+	assert encodeVLQ([0, 1, 2, 3]) == "ACEG";
+	assert encodeVLQ([0, 0, 0, 0]) == "AAAA";
 }
 
 function oneSegment(file: string, genLine: int32, genCol: int32, line: int32, col: int32): SourceInfo {
@@ -276,19 +276,19 @@ function oneSegment(file: string, genLine: int32, genCol: int32, line: int32, co
 
 test "a file is interned once" {
 	const info = createSourceInfo();
-	assert internFile(info, "/a.ms") === 0;
-	assert internFile(info, "/b.ms") === 1;
-	assert internFile(info, "/a.ms") === 0;
-	assert info.files.length === 2;
+	assert internFile(info, "/a.ms") == 0;
+	assert internFile(info, "/b.ms") == 1;
+	assert internFile(info, "/a.ms") == 0;
+	assert info.files.length == 2;
 }
 
 test "recording fills the generated lines it skipped over" {
 	const info = oneSegment("/a.ms", 3 as int32, 2 as int32, 4 as int32, 1 as int32);
-	assert info.mappings.length === 4;
-	assert info.mappings[0].segments.length === 0;
-	assert info.mappings[3].segments.length === 1;
-	assert info.mappings[3].segments[0].generated === 2;
-	assert info.mappings[3].segments[0].line === 4;
+	assert info.mappings.length == 4;
+	assert info.mappings[0].segments.length == 0;
+	assert info.mappings[3].segments.length == 1;
+	assert info.mappings[3].segments[0].generated == 2;
+	assert info.mappings[3].segments[0].line == 4;
 }
 
 test "the innermost record wins at one generated column" {
@@ -296,27 +296,27 @@ test "the innermost record wins at one generated column" {
 	const f = internFile(info, "/a.ms");
 	recordSegment(info, 0 as int32, 5 as int32, f, 10 as int32, 0 as int32, -1 as int32);
 	recordSegment(info, 0 as int32, 5 as int32, f, 12 as int32, 4 as int32, -1 as int32);
-	assert info.mappings[0].segments.length === 1;
-	assert info.mappings[0].segments[0].line === 12;
-	assert info.mappings[0].segments[0].original === 4;
+	assert info.mappings[0].segments.length == 1;
+	assert info.mappings[0].segments[0].line == 12;
+	assert info.mappings[0].segments[0].original == 4;
 }
 
 test "shifting moves every mapping down" {
 	const info = oneSegment("/a.ms", 1 as int32, 0 as int32, 7 as int32, 0 as int32);
 	shiftLines(info, 3 as int32);
-	assert info.mappings.length === 5;
-	assert info.mappings[1].segments.length === 0;
-	assert info.mappings[4].segments[0].line === 7;
+	assert info.mappings.length == 5;
+	assert info.mappings[1].segments.length == 0;
+	assert info.mappings[4].segments[0].line == 7;
 }
 
 test "appending re-indexes sources into the destination" {
 	const dst = oneSegment("/a.ms", 0 as int32, 0 as int32, 1 as int32, 0 as int32);
 	const src = oneSegment("/b.ms", 0 as int32, 0 as int32, 9 as int32, 2 as int32);
 	appendInfo(dst, src, 2 as int32);
-	assert dst.files.length === 2;
-	assert dst.mappings.length === 3;
-	assert dst.mappings[2].segments[0].fileIdx === 1;
-	assert dst.mappings[2].segments[0].line === 9;
+	assert dst.files.length == 2;
+	assert dst.mappings.length == 3;
+	assert dst.mappings[2].segments[0].fileIdx == 1;
+	assert dst.mappings[2].segments[0].line == 9;
 }
 
 test "map json carries version, source list and mappings" {
@@ -360,18 +360,18 @@ test "a named segment encodes its fifth field" {
 }
 
 test "json escape covers what escapeJSString cannot" {
-	assert jsonEscape("a\"b\\c") === "a\\\"b\\\\c";
-	assert jsonEscape("a\nb\tc") === "a\\nb\\tc";
-	assert jsonEscape(fromCodePoint(12)) === "\\f";
-	assert jsonEscape(fromCodePoint(11)) === "\\u000b";
-	assert jsonEscape(fromCodePoint(0)) === "\\u0000";
-	assert jsonEscape(fromCodePoint(1)) === "\\u0001";
+	assert jsonEscape("a\"b\\c") == "a\\\"b\\\\c";
+	assert jsonEscape("a\nb\tc") == "a\\nb\\tc";
+	assert jsonEscape(fromCodePoint(12)) == "\\f";
+	assert jsonEscape(fromCodePoint(11)) == "\\u000b";
+	assert jsonEscape(fromCodePoint(0)) == "\\u0000";
+	assert jsonEscape(fromCodePoint(1)) == "\\u0001";
 }
 
 test "json escape keeps astral runs intact" {
 	const astral = fromCodePoint(128512);
-	assert jsonEscape(astral) === astral;
-	assert jsonEscape(fromCodePoint(55296)) === "\\" + "ud800";
+	assert jsonEscape(astral) == astral;
+	assert jsonEscape(fromCodePoint(55296)) == "\\" + "ud800";
 }
 
 test "ignored sources land in x_google_ignoreList" {
@@ -379,8 +379,8 @@ test "ignored sources land in x_google_ignoreList" {
 	recordSegment(info, 0 as int32, 0 as int32, internFile(info, "/std/a.ms"), 0 as int32, 0 as int32, -1 as int32);
 	recordSegment(info, 0 as int32, 4 as int32, internFile(info, "/app/b.ms"), 0 as int32, 0 as int32, -1 as int32);
 	const idx = ignoredFileIndexes(info, (p: string): boolean => p.startsWith("/std/"));
-	assert idx.length === 1;
-	assert idx[0] === 0;
+	assert idx.length == 1;
+	assert idx[0] == 0;
 	const json = toSourceMapJson(info, "out.js", "", noSource, idx);
 	assert json.includes("\"x_google_ignoreList\":[0]");
 	const none = toSourceMapJson(info, "out.js", "", noSource, []);

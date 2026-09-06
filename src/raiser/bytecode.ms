@@ -199,78 +199,78 @@ export function getSignedAx(inst: RaiserInstruction): number {
 // --- Tests ---
 test "ABC round-trip" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-	assert inst.op === RaiserOpcode.AddI64;
-	assert inst.a === 2;
-	assert inst.b === 0;
-	assert inst.c === 1;
+	assert inst.op == RaiserOpcode.AddI64;
+	assert inst.a == 2;
+	assert inst.b == 0;
+	assert inst.c == 1;
 }
 
 test "ABx round-trip small" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 3, 42);
-	assert inst.op === RaiserOpcode.LoadConst;
-	assert inst.a === 3;
-	assert getBx(inst) === 42;
+	assert inst.op == RaiserOpcode.LoadConst;
+	assert inst.a == 3;
+	assert getBx(inst) == 42;
 }
 
 test "ABx round-trip large" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 1000);
-	assert getBx(inst) === 1000;
+	assert getBx(inst) == 1000;
 }
 
 test "ABx max value" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-	assert getBx(inst) === 65535;
+	assert getBx(inst) == 65535;
 }
 
 test "Ax positive jump" {
 	const inst = raiserAx(RaiserOpcode.Jump, 10);
-	assert inst.op === RaiserOpcode.Jump;
-	assert getSignedAx(inst) === 10;
+	assert inst.op == RaiserOpcode.Jump;
+	assert getSignedAx(inst) == 10;
 }
 
 test "Ax negative jump" {
 	const inst = raiserAx(RaiserOpcode.Jump, -5);
-	assert getSignedAx(inst) === -5;
+	assert getSignedAx(inst) == -5;
 }
 
 test "Ax zero" {
 	const inst = raiserAx(RaiserOpcode.Jump, 0);
-	assert getSignedAx(inst) === 0;
+	assert getSignedAx(inst) == 0;
 }
 
 test "signed Bx negative" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-	assert getSignedBx(inst) === -1;
+	assert getSignedBx(inst) == -1;
 }
 
 test "signed Bx positive" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 100);
-	assert getSignedBx(inst) === 100;
+	assert getSignedBx(inst) == 100;
 }
 
 test "first opcode is LoadConst" {
 	const inst = raiserABC(RaiserOpcode.LoadConst, 0, 0, 0);
-	assert inst.op === RaiserOpcode.LoadConst;
+	assert inst.op == RaiserOpcode.LoadConst;
 }
 
 test "opcodes are distinct" {
-	assert RaiserOpcode.AddI64 !== RaiserOpcode.SubI64;
-	assert RaiserOpcode.Jump !== RaiserOpcode.Call;
-	assert RaiserOpcode.Halt !== RaiserOpcode.Ret;
+	assert RaiserOpcode.AddI64 != RaiserOpcode.SubI64;
+	assert RaiserOpcode.Jump != RaiserOpcode.Call;
+	assert RaiserOpcode.Halt != RaiserOpcode.Ret;
 }
 
 test "CallHost ABC round-trip" {
 	// A = dst register, B = name constant index, C = argc
 	const inst = raiserABC(RaiserOpcode.CallHost, 3, 7, 2);
-	assert inst.op === RaiserOpcode.CallHost;
-	assert inst.a === 3;
-	assert inst.b === 7;
-	assert inst.c === 2;
+	assert inst.op == RaiserOpcode.CallHost;
+	assert inst.a == 3;
+	assert inst.b == 7;
+	assert inst.c == 2;
 }
 
 test "CallHost zero args" {
 	// Edge case: void-arg native (e.g., msFsLastErrno)
 	const inst = raiserABC(RaiserOpcode.CallHost, 0, 0, 0);
-	assert inst.op === RaiserOpcode.CallHost;
-	assert inst.c === 0;
+	assert inst.op == RaiserOpcode.CallHost;
+	assert inst.c == 0;
 }

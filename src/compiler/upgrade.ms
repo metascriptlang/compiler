@@ -39,14 +39,14 @@ function emptyCache(): UpdateCache {
 function cacheFilePath(): string {
 	const home = env.get("HOME");
 	// Windows fallback — HOME isn't set by default there.
-	const base = home !== "" ? home : env.get("USERPROFILE");
-	if (base === "") return "";
+	const base = home != "" ? home : env.get("USERPROFILE");
+	if (base == "") return "";
 	return base + "/.metascript/.update-check";
 }
 
 function readCache(): UpdateCache {
 	const path = cacheFilePath();
-	if (path === "") return emptyCache();
+	if (path == "") return emptyCache();
 	// readFile returns Err for missing/unreadable — no need to pre-check exists.
 	const r = readFile(path);
 	if (!r.ok) return emptyCache();
@@ -56,13 +56,13 @@ function readCache(): UpdateCache {
 	const ver = lines[1].trim();
 	// parseFloat on a non-number returns NaN; NaN comparisons are always false,
 	// so ts !== ts is true iff ts is NaN. Avoids isNaN (not in the prelude).
-	if (ts !== ts) return emptyCache();
+	if (ts != ts) return emptyCache();
 	return { lastCheckMs: ts, latestVersion: ver };
 }
 
 function writeCache(c: UpdateCache): void {
 	const path = cacheFilePath();
-	if (path === "") return;
+	if (path == "") return;
 	writeFile(path, `${c.lastCheckMs}\n${c.latestVersion}\n`);  // silent on failure
 }
 
@@ -76,14 +76,14 @@ function extractTagName(body: string): string {
 	if (keyIdx < 0) return "";
 	// Find the value string: : "<value>"
 	let i = keyIdx + key.length;
-	while (i < body.length && body.charAt(i) !== "\"") { i = i + 1; }
+	while (i < body.length && body.charAt(i) != "\"") { i = i + 1; }
 	if (i >= body.length) return "";
 	const start = i + 1;
 	let end = start;
-	while (end < body.length && body.charAt(end) !== "\"") { end = end + 1; }
+	while (end < body.length && body.charAt(end) != "\"") { end = end + 1; }
 	if (end >= body.length) return "";
 	let tag = body.slice(start, end);
-	if (tag.length > 0 && tag.charAt(0) === "v") tag = tag.slice(1, tag.length);
+	if (tag.length > 0 && tag.charAt(0) == "v") tag = tag.slice(1, tag.length);
 	return tag;
 }
 
@@ -97,16 +97,16 @@ function fetchLatestVersion(): string {
 	};
 	const r = fetch(RELEASES_API, opts);
 	if (!r.ok) return "";
-	if (r.value.status !== 200) return "";
+	if (r.value.status != 200) return "";
 	return extractTagName(r.value.body);
 }
 
 // ===== Opt-out =====
 
 function shouldSkipCheck(): boolean {
-	if (env.get("MSC_NO_UPDATE_CHECK") !== "") return true;
-	if (env.get("CI") !== "") return true;
-	if (env.get("GITHUB_ACTIONS") !== "") return true;
+	if (env.get("MSC_NO_UPDATE_CHECK") != "") return true;
+	if (env.get("CI") != "") return true;
+	if (env.get("GITHUB_ACTIONS") != "") return true;
 	return false;
 }
 
@@ -123,13 +123,13 @@ export function maybeShowUpdateNotice(): void {
 	// Stale or never checked → refresh. Clock skew (negative age) → treat as fresh.
 	if (age < 0 || age > CACHE_TTL_MS) {
 		const latest = fetchLatestVersion();
-		if (latest !== "") {
+		if (latest != "") {
 			cache = { lastCheckMs: now, latestVersion: latest };
 			writeCache(cache);
 		}
 	}
 
-	if (cache.latestVersion === "") return;
+	if (cache.latestVersion == "") return;
 	if (compareVersionStrings(cache.latestVersion, VERSION) <= 0) return;
 
 	// Notice: one line, indented, yellow. Goes to stdout (same stream as command
@@ -144,7 +144,7 @@ export function maybeShowUpdateNotice(): void {
 
 // Windows detection via env vars (no std/os dependency).
 function isWindows(): boolean {
-	return env.get("OS") === "Windows_NT" || env.get("SystemRoot") !== "";
+	return env.get("OS") == "Windows_NT" || env.get("SystemRoot") != "";
 }
 
 export function cmdUpgrade(opts: CliOptions): number {
@@ -154,13 +154,13 @@ export function cmdUpgrade(opts: CliOptions): number {
 	console.log("Running installer...");
 	const r = exec(cmd);
 	if (r.ok) {
-		if (r.value !== "") console.log(r.value);
+		if (r.value != "") console.log(r.value);
 		return 0;
 	}
-	if (r.error.output !== "") console.log(r.error.output);
-	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
+	if (r.error.output != "") console.log(r.error.output);
+	if (r.error.errorOutput != "") console.log(r.error.errorOutput);
 	console.log(`${yellow("warn")}: installer exited with code ${r.error.exitCode}`);
-	return r.error.exitCode !== 0 ? r.error.exitCode : 1;
+	return r.error.exitCode != 0 ? r.error.exitCode : 1;
 }
 
 // Windows only: delete stale msc.exe.bak-* files left by previous upgrades.
@@ -171,12 +171,12 @@ export function cmdUpgrade(opts: CliOptions): number {
 export function sweepUpgradeBackups(): void {
 	if (!isWindows()) return;
 	const root = resolveRuntimeDir();
-	if (root === "") return;
+	if (root == "") return;
 	const binDir = `${root}/bin`;
 	const entries = readDir(binDir);
 	for (const e of entries) {
 		// readDir marks directories with trailing "/" — skip those.
-		if (e.length > 0 && e.charAt(e.length - 1) === "/") continue;
+		if (e.length > 0 && e.charAt(e.length - 1) == "/") continue;
 		if (!e.startsWith("msc.exe.bak-")) continue;
 		remove(`${binDir}/${e}`);  // Result discarded: if still locked, try next time.
 	}

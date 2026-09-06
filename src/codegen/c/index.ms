@@ -35,12 +35,12 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <stddef.h>");
-	if (ctx === null || ctx.targetOs !== "solana") {
+	if (ctx == null || ctx.targetOs != "solana") {
 		// Solana/BPF has no libc — manual.h provides memcpy/memset/strlen
 		addLine(sec(g, CSection.Headers), "#include <string.h>");
 		addLine(sec(g, CSection.Headers), "#include <math.h>");
 	}
-	if (ctx !== null && ctx.gcMode === GcMode.Manual) {
+	if (ctx != null && ctx.gcMode == GcMode.Manual) {
 		// manual.h uses the same SYSTEM_H include guard as core.h,
 		// so any subsequent @include("runtime/core/system.h") from prelude is a C-level no-op.
 		match (ctx.targetOs) {
@@ -57,16 +57,16 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		nameSetAdd(g.declaredThings, "inc:runtime/manual.h");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	} else {
-		if (ctx !== null && ctx.targetOs === "wasm") {
+		if (ctx != null && ctx.targetOs == "wasm") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_WASM");
 		}
-		if (ctx !== null && ctx.targetOs === "emcc") {
+		if (ctx != null && ctx.targetOs == "emcc") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_EMCC");
 		}
-		if (ctx !== null && ctx.targetOs === "ios") {
+		if (ctx != null && ctx.targetOs == "ios") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_IOS");
 		}
-		if (ctx !== null && ctx.targetOs === "android") {
+		if (ctx != null && ctx.targetOs == "android") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_ANDROID");
 		}
 		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
@@ -76,11 +76,11 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 
 
 	// Emit additional @include directives from checker (user code @include pragmas)
-	if (ctx !== null && ctx.includeDirectives !== "") {
+	if (ctx != null && ctx.includeDirectives != "") {
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	if (program !== null && program.kind === NodeKind.Program) {
+	if (program != null && program.kind == NodeKind.Program) {
 		const pd = program.data as ProgramData;
 		for (const stmt of pd.programStmts) {
 			registerDeclCName(g, stmt);
@@ -123,8 +123,8 @@ function genModuleInitFns(g: CGen): void {
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
-	if (datContent.length === 0) _emptyDatInits.add(g.modulePath);
-	if (initContent.length === 0) _emptyInits.add(g.modulePath);
+	if (datContent.length == 0) _emptyDatInits.add(g.modulePath);
+	if (initContent.length == 0) _emptyInits.add(g.modulePath);
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
@@ -135,8 +135,8 @@ function genModuleInitFns(g: CGen): void {
 
 	// Contract targets (solana, bare): single entry point, init called once in sequence.
 	// Skip mutable static guard variables — no re-entry possible.
-	const ost = g.checkerCtx !== null ? g.checkerCtx.targetOs : "";
-	const skipGuard = ost === "solana" || ost === "bare";
+	const ost = g.checkerCtx != null ? g.checkerCtx.targetOs : "";
+	const skipGuard = ost == "solana" || ost == "bare";
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
 	addLine(hdrs, `void ${datInitName}(void);`);
@@ -189,7 +189,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	for (const mp of modulePaths) {
 		const modName = mangleModuleName(mp);
 		if (!_emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
-		if (!_emptyInits.has(mp) || mp === entryPath) addLine(b, `void ${modName}__Init000(void);`);
+		if (!_emptyInits.has(mp) || mp == entryPath) addLine(b, `void ${modName}__Init000(void);`);
 	}
 	addNewline(b);
 
@@ -214,7 +214,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "static void MsMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		if (mp !== entryPath && !_emptyInits.has(mp)) {
+		if (mp != entryPath && !_emptyInits.has(mp)) {
 			addLine(b, `${mangleModuleName(mp)}__Init000();`);
 		}
 	}

@@ -11,7 +11,7 @@ import { JSGenerator, emit, emitIndent, emitNode, emitNewline } from "./emit";
 export function emitTestDecl(gen: JSGenerator, node: Node): void {
 	if (!gen.isTestBuild) return;
 	const d = node.data as TestDeclData;
-	if (d.testBody === null) return;
+	if (d.testBody == null) return;
 
 	const funcName = `__ms_test_${gen.testNames.length.toString()}`;
 	gen.testNames.push(d.testName);
@@ -19,7 +19,7 @@ export function emitTestDecl(gen: JSGenerator, node: Node): void {
 
 	emitIndent(gen);
 	emit(gen, `export async function ${funcName}() `);
-	if (d.testBody.kind === NodeKind.BlockStmt) {
+	if (d.testBody.kind == NodeKind.BlockStmt) {
 		emitNode(gen, d.testBody);
 	} else {
 		emit(gen, "{}\n");

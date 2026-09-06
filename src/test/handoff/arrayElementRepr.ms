@@ -30,13 +30,13 @@ test "array-element int32[] into number[][] is rejected" {
 // ===== Allowed: same repr, or scalar widening (not a container reinterpret) =====
 
 test "var-decl number[] → number[] is allowed" {
-	assert strictErrorCount("function f(): number { const src: number[] = [1.0, 2.0]; const dst: number[] = src; return dst[0]; }") === 0;
+	assert strictErrorCount("function f(): number { const src: number[] = [1.0, 2.0]; const dst: number[] = src; return dst[0]; }") == 0;
 }
 
 test "var-decl int32[] → int32[] is allowed" {
-	assert strictErrorCount("function f(): int32 { const src: int32[] = [1, 2]; const dst: int32[] = src; return dst[0]; }") === 0;
+	assert strictErrorCount("function f(): int32 { const src: int32[] = [1, 2]; const dst: int32[] = src; return dst[0]; }") == 0;
 }
 
 test "scalar int32 → number widening is allowed (not a container)" {
-	assert strictErrorCount("function f(): number { const a: int32 = 5; const b: number = a; return b; }") === 0;
+	assert strictErrorCount("function f(): number { const a: int32 = 5; const b: number = a; return b; }") == 0;
 }

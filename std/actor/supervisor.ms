@@ -87,7 +87,7 @@ export actor Supervisor {
 	terminateChild(name: string): boolean {
 		const idx = this.findChildByName(name);
 		if (idx < 0) return false;
-		if (this.pids[idx] === 0) return false;
+		if (this.pids[idx] == 0) return false;
 		this.shutdownChild(idx);
 		return true;
 	}
@@ -95,7 +95,7 @@ export actor Supervisor {
 	deleteChild(name: string): boolean {
 		const idx = this.findChildByName(name);
 		if (idx < 0) return false;
-		if (this.pids[idx] !== 0) return false;
+		if (this.pids[idx] != 0) return false;
 		this.removeChildAt(idx);
 		return true;
 	}
@@ -103,7 +103,7 @@ export actor Supervisor {
 	restartChild(name: string): int64 {
 		const idx = this.findChildByName(name);
 		if (idx < 0) return 0;
-		if (this.pids[idx] !== 0) return 0;
+		if (this.pids[idx] != 0) return 0;
 		const pid = this.specs[idx].start();
 		this.pids[idx] = pid;
 		link(this.pid, pid);
@@ -115,7 +115,7 @@ export actor Supervisor {
 	countChildren(): number {
 		let count = 0;
 		for (let i = 0; i < this.pids.length; i = i + 1) {
-			if (this.pids[i] !== 0) count = count + 1;
+			if (this.pids[i] != 0) count = count + 1;
 		}
 		return count;
 	}
@@ -135,7 +135,7 @@ export actor Supervisor {
 		// Erlang do_restart parity: check restart type vs reason
 		const shouldRestart = match (this.specs[childIdx].restart) {
 			RestartType.Permanent => true,
-			RestartType.Transient => reason !== ExitReason.Normal,
+			RestartType.Transient => reason != ExitReason.Normal,
 			RestartType.Temporary => false,
 		};
 
@@ -162,7 +162,7 @@ export actor Supervisor {
 
 	// Idle timeout tick — checks pending shutdown deadlines (Erlang: shutdown timeout)
 	onIdle(): void {
-		if (this.pendingPids.length === 0) {
+		if (this.pendingPids.length == 0) {
 			setIdleTimeout(this.pid, 0);
 			return;
 		}
@@ -179,7 +179,7 @@ export actor Supervisor {
 			}
 		}
 		// Disable timer when no more pending shutdowns
-		if (this.pendingPids.length === 0) {
+		if (this.pendingPids.length == 0) {
 			setIdleTimeout(this.pid, 0);
 		}
 	}
@@ -192,7 +192,7 @@ export actor Supervisor {
 
 	private shutdownChild(idx: number): void {
 		const pid = this.pids[idx];
-		if (pid === 0) return;
+		if (pid == 0) return;
 		const spec = this.specs[idx];
 		match (spec.shutdown) {
 			ShutdownKind.BrutalKill => {
@@ -223,7 +223,7 @@ export actor Supervisor {
 		let i = this.pids.length;
 		while (i > startIdx) {
 			i = i - 1;
-			if (this.pids[i] !== 0) {
+			if (this.pids[i] != 0) {
 				this.shutdownChild(i);
 			}
 		}
@@ -263,14 +263,14 @@ export actor Supervisor {
 
 	private findChild(childPid: int64): number {
 		for (let i = 0; i < this.pids.length; i = i + 1) {
-			if (this.pids[i] === childPid) return i;
+			if (this.pids[i] == childPid) return i;
 		}
 		return -1;
 	}
 
 	private findChildByName(name: string): number {
 		for (let i = 0; i < this.specs.length; i = i + 1) {
-			if (this.specs[i].name === name) return i;
+			if (this.specs[i].name == name) return i;
 		}
 		return -1;
 	}
@@ -289,7 +289,7 @@ export actor Supervisor {
 
 	private clearPendingShutdown(pid: int64): void {
 		for (let i = 0; i < this.pendingPids.length; i = i + 1) {
-			if (this.pendingPids[i] === pid) {
+			if (this.pendingPids[i] == pid) {
 				this.removePendingAt(i);
 				return;
 			}
@@ -298,7 +298,7 @@ export actor Supervisor {
 
 	private removePendingAt(idx: number): void {
 		const last = this.pendingPids.length - 1;
-		if (idx !== last) {
+		if (idx != last) {
 			this.pendingPids[idx] = this.pendingPids[last];
 			this.pendingDeadlines[idx] = this.pendingDeadlines[last];
 		}
@@ -355,7 +355,7 @@ export actor DynSupervisor {
 		// Check restart type
 		const shouldRestart = match (this.spec.restart) {
 			RestartType.Permanent => true,
-			RestartType.Transient => reason !== ExitReason.Normal,
+			RestartType.Transient => reason != ExitReason.Normal,
 			RestartType.Temporary => false,
 		};
 		if (!shouldRestart) return;
@@ -397,7 +397,7 @@ export actor DynSupervisor {
 
 	private findChild(pid: int64): number {
 		for (let i = 0; i < this.pids.length; i = i + 1) {
-			if (this.pids[i] === pid) return i;
+			if (this.pids[i] == pid) return i;
 		}
 		return -1;
 	}

@@ -31,17 +31,17 @@
 
 test "bug063: asBytes through a local binding" {
 	const sb = "abc".asBytes();
-	assert sb.length === 3;
+	assert sb.length == 3;
 }
 
 test "bug063: asBytes direct chain" {
-	assert "abc".asBytes().length === 3;
+	assert "abc".asBytes().length == 3;
 }
 
 test "bug063: asBytes element reads see the string's bytes" {
 	const sb = "abc".asBytes();
-	assert sb[0] === 97;
-	assert sb[2] === 99;
+	assert sb[0] == 97;
+	assert sb[2] == 99;
 }
 
 test "bug063: asBytes borrow survives for-of" {
@@ -49,26 +49,26 @@ test "bug063: asBytes borrow survives for-of" {
 	for (const b of "xyz".asBytes()) {
 		total = total + (b as int32);
 	}
-	assert total === 363;
+	assert total == 363;
 }
 
 test "bug063: asString round-trips" {
 	const b = "hello".asBytes();
 	const s = b.asString();
-	assert s === "hello";
-	assert s.length === 5;
-	assert "round".asBytes().asString() === "round";
+	assert s == "hello";
+	assert s.length == 5;
+	assert "round".asBytes().asString() == "round";
 }
 
 test "bug063: empty string round-trips" {
 	const empty = "".asBytes();
-	assert empty.length === 0;
-	assert empty.asString().length === 0;
+	assert empty.length == 0;
+	assert empty.asString().length == 0;
 }
 
 test "bug063: asString on a built uint8[] (the buildString exit path)" {
 	const bytes: uint8[] = [];
 	bytes.push(104);
 	bytes.push(105);
-	assert bytes.asString() === "hi";
+	assert bytes.asString() == "hi";
 }

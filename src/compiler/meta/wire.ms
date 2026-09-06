@@ -7,7 +7,7 @@
 // silently turn it into a phantom child.
 
 export function isNodeWireMetaField(name: string): boolean {
-	return name === "kind" || name === "line" || name === "column"
-		|| name === "endLine" || name === "endColumn"
-		|| name === "nodeType" || name === "resolvedSym" || name === "symHandle";
+	return name == "kind" || name == "line" || name == "column"
+		|| name == "endLine" || name == "endColumn"
+		|| name == "nodeType" || name == "resolvedSym" || name == "symHandle";
 }

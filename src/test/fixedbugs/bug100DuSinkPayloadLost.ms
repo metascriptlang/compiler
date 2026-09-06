@@ -60,9 +60,9 @@ function b100Churn(): int32 {
 	let ok = 0;
 	for (let i = 1; i <= 40; i += 1) {
 		const before = b100read(u);
-		u = b100u(i % 2 === 0, i);
-		const want = i % 2 === 0 ? "L" + i.toString() : "M" + i.toString();
-		if (b100read(u) === want && before !== "") {
+		u = b100u(i % 2 == 0, i);
+		const want = i % 2 == 0 ? "L" + i.toString() : "M" + i.toString();
+		if (b100read(u) == want && before != "") {
 			ok += 1;
 		}
 	}
@@ -70,13 +70,13 @@ function b100Churn(): int32 {
 }
 
 test "bug100: sink carries the payload across variants" {
-	assert b100Cross() === "L1|b|M2";
+	assert b100Cross() == "L1|b|M2";
 }
 
 test "bug100: sink replaces same-variant fields" {
-	assert b100Same() === "L1|a|L8";
+	assert b100Same() == "L1|a|L8";
 }
 
 test "bug100: repeated sink assignment stays consistent" {
-	assert b100Churn() === 40;
+	assert b100Churn() == 40;
 }

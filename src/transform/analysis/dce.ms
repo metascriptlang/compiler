@@ -53,29 +53,29 @@ function isHoistedDecl(node: Node): boolean {
 }
 
 function isTrueLiteral(node: Node): boolean {
-	if (node.kind !== NodeKind.BooleanLiteral) return false;
+	if (node.kind != NodeKind.BooleanLiteral) return false;
 	const d = node.data as BooleanLiteralData;
-	return d.boolValue === true;
+	return d.boolValue == true;
 }
 
 function isFalseLiteral(node: Node): boolean {
-	if (node.kind !== NodeKind.BooleanLiteral) return false;
+	if (node.kind != NodeKind.BooleanLiteral) return false;
 	const d = node.data as BooleanLiteralData;
-	return d.boolValue === false;
+	return d.boolValue == false;
 }
 
 // ===== Never-Returning Call Detection (Standard reference pattern) =====
 
 function isNeverCall(node: Node, ctx: TransformContext): boolean {
-	if (ctx.checkerCtx === null) return false;
+	if (ctx.checkerCtx == null) return false;
 	const d = node.data as CallExprData;
-	if (d.callee.kind !== NodeKind.Identifier) return false;
+	if (d.callee.kind != NodeKind.Identifier) return false;
 	const name = (d.callee.data as IdentifierData).name;
 	const sym = lookupSymbol(ctx.checkerCtx.table, name);
-	if (sym === null) return false;
-	if (sym.symbolType.kind !== TypeKind.Function) return false;
+	if (sym == null) return false;
+	if (sym.symbolType.kind != TypeKind.Function) return false;
 	const ret = sym.symbolType.typeReturn;
-	return ret !== null && ret.kind === TypeKind.Never;
+	return ret != null && ret.kind == TypeKind.Never;
 }
 
 // ===== Level 2: Symbol-level Dead Declaration Elimination =====
@@ -86,20 +86,20 @@ function isNeverCall(node: Node, ctx: TransformContext): boolean {
 // Collect all Identifier names referenced in a subtree.
 // Uses forEachChild from ast/visitor.ms for exhaustive 40+ node kind coverage.
 function collectIdentifiers(node: Node, refs: NameSet): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		nameSetAdd(refs, d.name);
 		// Also add resolvedSym.name for on-demand instantiated functions
 		// (the identifier keeps the original name "mapRawGet" but resolvedSym
 		// points to the instantiated "mapRawGet__string_string")
-		if (node.resolvedSym !== null && node.resolvedSym.name !== d.name) {
+		if (node.resolvedSym != null && node.resolvedSym.name != d.name) {
 			nameSetAdd(refs, node.resolvedSym.name);
 		}
 		return;
 	}
 	// Also check resolvedSym on CallExpr (extension methods set sym on call, not callee)
-	if (node.resolvedSym !== null && node.resolvedSym.name !== "") {
+	if (node.resolvedSym != null && node.resolvedSym.name != "") {
 		nameSetAdd(refs, node.resolvedSym.name);
 	}
 	forEachChild(node, (child: Node): void => {
@@ -118,8 +118,8 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 // (annotation strings, not Identifier nodes), so any DU alias would be eliminated
 // before destructorLifting can emit `<Name>Destroy`. Keep them alive.
 function isEliminable(node: Node): boolean {
-	if (node.kind === NodeKind.EnumDecl) return true;
-	if (node.kind === NodeKind.TypeAliasDecl) {
+	if (node.kind == NodeKind.EnumDecl) return true;
+	if (node.kind == NodeKind.TypeAliasDecl) {
 		// Discriminated-union aliases need destructor lifting to emit per-variant
 		// hooks. DCE's identifier walker can't track type-level references
 		// (annotation strings, not Identifier nodes), so any DU alias would be
@@ -130,12 +130,12 @@ function isEliminable(node: Node): boolean {
 		//  - String-discriminator union: detected via findSharedStringDiscriminant.
 		// Other aliases stay eliminable (transparent to the C emitter).
 		const sym = node.resolvedSym;
-		if (sym !== null && sym.symbolType !== null) {
+		if (sym != null && sym.symbolType != null) {
 			const t = sym.symbolType;
-			if (t.kind === TypeKind.Union) {
-				if (t.typeNames !== null && t.typeNames.length > 0 && t.typeExtra !== null) return false;
-				if (findSharedBooleanDiscriminant(t) !== "") return false;
-				if (findSharedStringDiscriminant(t) !== "") return false;
+			if (t.kind == TypeKind.Union) {
+				if (t.typeNames != null && t.typeNames.length > 0 && t.typeExtra != null) return false;
+				if (findSharedBooleanDiscriminant(t) != "") return false;
+				if (findSharedStringDiscriminant(t) != "") return false;
 			}
 		}
 		return true;
@@ -145,12 +145,12 @@ function isEliminable(node: Node): boolean {
 
 // Compiler-generated names are always alive (produced by transforms).
 function isCompilerGenerated(name: string): boolean {
-	if (name.length === 0) return false;
+	if (name.length == 0) return false;
 	const first = name.slice(0, 1);
-	if (first === "$") return true;
+	if (first == "$") return true;
 	if (name.length >= 8) {
 		const prefix = name.slice(0, 8);
-		if (prefix === "__lifted") return true;
+		if (prefix == "__lifted") return true;
 	}
 	return false;
 }
@@ -160,10 +160,10 @@ type StmtNames = string[];
 
 // Main Level 2 algorithm: mark-sweep reachability on top-level declarations.
 function sweepDeadDecls(program: Node, ctx: TransformContext): void {
-	if (program.kind !== NodeKind.Program) return;
+	if (program.kind != NodeKind.Program) return;
 	const pd = program.data as ProgramData;
 	const stmts = pd.programStmts;
-	if (stmts.length === 0) return;
+	if (stmts.length == 0) return;
 
 	// Phase 1: Pre-compute names for ALL stmts (one getDeclName call per stmt, stored safely)
 	const names: StmtNames = [];
@@ -175,7 +175,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 			nameSetAdd(declNames, n);
 		}
 	}
-	if (declNames.items.length === 0) return;
+	if (declNames.items.length == 0) return;
 
 	// Phase 2: Seed — collect identifier refs from all non-eliminable stmts (entry points)
 	const refs: NameSet = createNameSet();
@@ -193,7 +193,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 		// Also seed refs from main's body
 		for (let mi = 0; mi < stmts.length; mi += 1) {
 			const mn = names[mi];
-			if (mn === "main") {
+			if (mn == "main") {
 				collectIdentifiers(stmts[mi], refs);
 			}
 		}
@@ -207,9 +207,9 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	// reference survives emitted `ReferenceError: Color_Red is not defined`
 	// at runtime (corpus 624/700, surfaced by the 2026-09-01 js audit).
 	for (let di = 0; di < stmts.length; di += 1) {
-		if (stmts[di].kind !== NodeKind.EnumDecl) continue;
+		if (stmts[di].kind != NodeKind.EnumDecl) continue;
 		const en = names[di];
-		if (en.length === 0 || nameSetContains(alive, en)) continue;
+		if (en.length == 0 || nameSetContains(alive, en)) continue;
 		const ed = stmts[di].data as EnumDeclData;
 		let hit = false;
 		for (const m of ed.enumMembers) {
@@ -282,7 +282,7 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		// Block: check last statement
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			if (d.statements.length === 0) { return false; }
+			if (d.statements.length == 0) { return false; }
 			else { return endsInNoReturn(d.statements[d.statements.length - 1], ctx); }
 		},
 
@@ -291,10 +291,10 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			// Must have a non-empty alternate (else branch)
-			if (d.alternate === null) { return false; }
-			else if (d.alternate.kind === NodeKind.BlockStmt) {
+			if (d.alternate == null) { return false; }
+			else if (d.alternate.kind == NodeKind.BlockStmt) {
 				const altBlock = d.alternate.data as BlockStmtData;
-				if (altBlock.statements.length === 0) { return false; }
+				if (altBlock.statements.length == 0) { return false; }
 				else {
 					// Both branches must terminate
 					return endsInNoReturn(d.consequent, ctx) && endsInNoReturn(d.alternate, ctx);
@@ -309,7 +309,7 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		// Switch: ALL cases must terminate AND must have default
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			if (d.switchCases.length === 0) { return false; }
+			if (d.switchCases.length == 0) { return false; }
 			else { return switchEndsInNoReturn(d.switchCases, ctx); }
 		},
 
@@ -319,12 +319,12 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			// Finally override: if finally always terminates, entire try is noReturn
-			if (d.finallyBody !== null && endsInNoReturn(d.finallyBody, ctx)) { return true; }
+			if (d.finallyBody != null && endsInNoReturn(d.finallyBody, ctx)) { return true; }
 			else {
 				// Try body must terminate
 				if (!endsInNoReturn(d.tryBody, ctx)) { return false; }
 				// Catch body must terminate (if present)
-				else if (d.catchBody !== null) { return endsInNoReturn(d.catchBody, ctx); }
+				else if (d.catchBody != null) { return endsInNoReturn(d.catchBody, ctx); }
 				// No catch: try body terminates but exceptions could escape
 				else { return false; }
 			}
@@ -339,11 +339,11 @@ function switchEndsInNoReturn(cases: Node[], ctx: TransformContext): boolean {
 	let hasDefault = false;
 	for (let i = 0; i < cases.length; i += 1) {
 		const c = cases[i];
-		if (c.kind === NodeKind.SwitchCase) {
+		if (c.kind == NodeKind.SwitchCase) {
 			const cd = c.data as SwitchCaseData;
 			if (cd.isDefault) { hasDefault = true; }
 			// Check if case body terminates
-			if (cd.caseStmts.length === 0) return false;
+			if (cd.caseStmts.length == 0) return false;
 			if (!endsInNoReturn(cd.caseStmts[cd.caseStmts.length - 1], ctx)) return false;
 		}
 	}
@@ -377,7 +377,7 @@ function stripDead(stmts: Node[], ctx: TransformContext): Node[] {
 // ===== Core: Dead Branch Elimination =====
 
 function eliminateDeadBranch(node: Node): Node {
-	if (node.kind !== NodeKind.IfStmt) return node;
+	if (node.kind != NodeKind.IfStmt) return node;
 	const d = node.data as IfStmtData;
 
 	if (isTrueLiteral(d.condition)) {
@@ -394,7 +394,7 @@ function eliminateDeadBranch(node: Node): Node {
 // ===== Core: Dead While Elimination =====
 
 function eliminateDeadWhile(node: Node): Node {
-	if (node.kind !== NodeKind.WhileStmt) return node;
+	if (node.kind != NodeKind.WhileStmt) return node;
 	const d = node.data as WhileStmtData;
 
 	if (isFalseLiteral(d.whileCondition)) {
@@ -417,7 +417,7 @@ function walkStmtList(stmts: Node[], ctx: TransformContext): void {
 // ===== Recursive DCE Walker =====
 
 function dceInNode(node: Node, ctx: TransformContext): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
@@ -488,10 +488,10 @@ function dceInNode(node: Node, ctx: TransformContext): void {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			dceInNode(d.tryBody, ctx);
-			if (d.catchBody !== null) {
+			if (d.catchBody != null) {
 				dceInNode(d.catchBody, ctx);
 			}
-			if (d.finallyBody !== null) {
+			if (d.finallyBody != null) {
 				dceInNode(d.finallyBody, ctx);
 			}
 		},
@@ -534,70 +534,70 @@ function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void
 }
 
 // ===== Tests =====
-test "passthrough unchanged" { assert stmtCountAfter("const x = 1;", lowerDCE) === 1; }
+test "passthrough unchanged" { assert stmtCountAfter("const x = 1;", lowerDCE) == 1; }
 
-test "strips after return" { assert stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) === 1; }
+test "strips after return" { assert stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) == 1; }
 
-test "strips after throw" { assert stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1; }
+test "strips after throw" { assert stmtCountAfter("throw 1; const x = 2;", lowerDCE) == 1; }
 
 test "hoisted function kept at transform level" {
 	// Functions not eliminated by transform DCE — codegen isDeclAlive handles cross-module DCE.
-	assert stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 2;
+	assert stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) == 2;
 }
 
 test "hoisted class kept at transform level" {
-	assert stmtCountAfter("return 1; class Foo {}", lowerDCE) === 2;
+	assert stmtCountAfter("return 1; class Foo {}", lowerDCE) == 2;
 }
 
 test "function body dead code removed" {
 	// foo() call keeps the function alive; Level 1 strips dead const inside body
-	assert stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === 2;
-	assert firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === NodeKind.FunctionDecl;
+	assert stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) == 2;
+	assert firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) == NodeKind.FunctionDecl;
 }
 
 test "if true keeps consequent" {
-	assert firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt;
-	assert stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === 1;
+	assert firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) == NodeKind.BlockStmt;
+	assert stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) == 1;
 }
 
-test "if false keeps alternate" { assert firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt; }
+test "if false keeps alternate" { assert firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) == NodeKind.BlockStmt; }
 
 test "if false no else becomes empty block" {
-	assert firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) === NodeKind.BlockStmt;
-	assert stmtCountAfter("if (false) { const x = 1; }", lowerDCE) === 1;
+	assert firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) == NodeKind.BlockStmt;
+	assert stmtCountAfter("if (false) { const x = 1; }", lowerDCE) == 1;
 }
 
-test "dynamic condition preserved" { assert firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) === NodeKind.IfStmt; }
+test "dynamic condition preserved" { assert firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) == NodeKind.IfStmt; }
 
-test "while false removed" { assert firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) === NodeKind.BlockStmt; }
+test "while false removed" { assert firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) == NodeKind.BlockStmt; }
 
-test "while true preserved" { assert firstStmtKindAfter("while (true) { break; }", lowerDCE) === NodeKind.WhileStmt; }
+test "while true preserved" { assert firstStmtKindAfter("while (true) { break; }", lowerDCE) == NodeKind.WhileStmt; }
 
-test "if-else both return strips after" { assert stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) === 1; }
+test "if-else both return strips after" { assert stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) == 1; }
 
-test "if-else one branch falls through keeps after" { assert stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) === 2; }
+test "if-else one branch falls through keeps after" { assert stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) == 2; }
 
-test "if without else keeps after" { assert stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) === 2; }
+test "if without else keeps after" { assert stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) == 2; }
 
 test "nested if-else both return" {
 	const code = "if (a) { if (b) { return 1; } else { return 2; } } else { return 3; } const dead = 4;";
-	assert stmtCountAfter(code, lowerDCE) === 1;
+	assert stmtCountAfter(code, lowerDCE) == 1;
 }
 
-test "block ending in return" { assert stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) === 1; }
+test "block ending in return" { assert stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) == 1; }
 
-test "block not ending in return" { assert stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) === 2; }
+test "block not ending in return" { assert stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) == 2; }
 
-test "throw in both if branches" { assert stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) === 1; }
+test "throw in both if branches" { assert stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) == 1; }
 
 test "else-if chain all return" {
 	const code = "if (a) { return 1; } else if (b) { return 2; } else { return 3; } const dead = 4;";
-	assert stmtCountAfter(code, lowerDCE) === 1;
+	assert stmtCountAfter(code, lowerDCE) == 1;
 }
 
 test "else-if chain missing else" {
 	const code = "if (a) { return 1; } else if (b) { return 2; } const alive = 3;";
-	assert stmtCountAfter(code, lowerDCE) === 2;
+	assert stmtCountAfter(code, lowerDCE) == 2;
 }
 
 test "never call strips after" {
@@ -606,7 +606,7 @@ test "never call strips after" {
 		const sym = makeSymbol("fail", SymbolKind.Function, fnType, false);
 		defineSymbol(cc.table, sym);
 	});
-	assert count === 1;
+	assert count == 1;
 }
 
 test "void call keeps after" {
@@ -615,41 +615,41 @@ test "void call keeps after" {
 		const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 		defineSymbol(cc.table, sym);
 	});
-	assert count === 2;
+	assert count == 2;
 }
 
 test "unknown function keeps after" {
 	// No symbol registered — conservative, keeps code
 	const count = stmtCountWithChecker("mystery(); const alive = 2;", (cc: CheckerContext) => {});
-	assert count === 2;
+	assert count == 2;
 }
 
 test "null checker graceful" {
 	// stmtCountAfter uses null checkerCtx — must not crash
-	assert stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2;
+	assert stmtCountAfter("foo(); const alive = 2;", lowerDCE) == 2;
 }
 
-test "unused function kept at transform level" { assert stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 2; }
+test "unused function kept at transform level" { assert stmtCountAfter("function unused() {} const x = 1;", lowerDCE) == 2; }
 
-test "used function kept" { assert stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2; }
+test "used function kept" { assert stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) == 2; }
 
-test "exported function always kept" { assert stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1; }
+test "exported function always kept" { assert stmtCountAfter("export function api() { return 1; }", lowerDCE) == 1; }
 
-test "mutual recursion kept at transform level" { assert stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 2; }
+test "mutual recursion kept at transform level" { assert stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) == 2; }
 
-test "mutual recursion alive via call" { assert stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3; }
+test "mutual recursion alive via call" { assert stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) == 3; }
 
-test "unused class kept at transform level" { assert stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 2; }
+test "unused class kept at transform level" { assert stmtCountAfter("class Dead {} const x = 1;", lowerDCE) == 2; }
 
-test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2; }
+test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) == 2; }
 
-test "transitive liveness" { assert stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) === 3; }
+test "transitive liveness" { assert stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) == 3; }
 
-test "unused enum removed" { assert stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) === 1; }
+test "unused enum removed" { assert stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) == 1; }
 
 test "variable decl always kept" {
 	// Variable declarations have side effects (initializer runs)
-	assert stmtCountAfter("const x = 1;", lowerDCE) === 1;
+	assert stmtCountAfter("const x = 1;", lowerDCE) == 1;
 }
 
 test "isAlive false for empty" {

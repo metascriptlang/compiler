@@ -26,24 +26,24 @@ test "bug064: pushed bytes read back as themselves" {
 	const bytes: uint8[] = [];
 	bytes.push(104);
 	bytes.push(105);
-	assert bytes.length === 2;
-	assert bytes[0] === 104;
-	assert bytes[1] === 105;
+	assert bytes.length == 2;
+	assert bytes[0] == 104;
+	assert bytes[1] == 105;
 }
 
 test "bug064: push from a variable, not just literals" {
 	const bytes: uint8[] = [];
 	const v: uint8 = 200;
 	bytes.push(v);
-	assert bytes[0] === 200;
+	assert bytes[0] == 200;
 }
 
 test "bug064: number[] push is untouched by the uint8 overload" {
 	const nums: number[] = [];
 	nums.push(1.5);
 	nums.push(2.5);
-	assert nums[0] === 1.5;
-	assert nums[1] === 2.5;
+	assert nums[0] == 1.5;
+	assert nums[1] == 2.5;
 }
 
 test "bug064: growth across the initial capacity keeps bytes intact" {
@@ -53,8 +53,8 @@ test "bug064: growth across the initial capacity keeps bytes intact" {
 		bytes.push((i % 256) as uint8);
 		i = i + 1;
 	}
-	assert bytes.length === 100;
-	assert bytes[0] === 0;
-	assert bytes[42] === 42;
-	assert bytes[99] === 99;
+	assert bytes.length == 100;
+	assert bytes[0] == 0;
+	assert bytes[42] == 42;
+	assert bytes[99] == 99;
 }

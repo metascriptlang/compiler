@@ -60,14 +60,14 @@ function bug039_makeTriple(x: int32): (y: int32) => (z: int32) => (w: int32) => 
 test "bug039: curried arrow with outer capture compiles and runs" {
 	const f = bug039_makeCurried(100 as int32);
 	const g = f(20 as int32);
-	assert g(3 as int32) === 123;
+	assert g(3 as int32) == 123;
 }
 
 test "bug039: triple-nested curried arrow with outer capture" {
 	const f = bug039_makeTriple(1000 as int32);
 	const g = f(100 as int32);
 	const h = g(10 as int32);
-	assert h(1 as int32) === 1111;
+	assert h(1 as int32) == 1111;
 }
 
 test "bug039: distinct env per top-level call (no shared state)" {
@@ -77,6 +77,6 @@ test "bug039: distinct env per top-level call (no shared state)" {
 	const f2 = bug039_makeCurried(200 as int32);
 	const g1 = f1(20 as int32);
 	const g2 = f2(20 as int32);
-	assert g1(3 as int32) === 123;
-	assert g2(3 as int32) === 223;
+	assert g1(3 as int32) == 123;
+	assert g2(3 as int32) == 223;
 }

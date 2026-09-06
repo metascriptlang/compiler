@@ -15,29 +15,29 @@ function inverseOf(fn: string): string {
 }
 
 function peelInverse(call: Node, fn: string): Node {
-	if (call.kind !== NodeKind.CallExpr) return call;
+	if (call.kind != NodeKind.CallExpr) return call;
 	const cd = call.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return call;
+	if (cd.callee.kind != NodeKind.Identifier) return call;
 	const innerName = (cd.callee.data as IdentifierData).name;
-	if (innerName !== inverseOf(fn)) return call;
-	if (cd.arguments.length !== 1) return call;
+	if (innerName != inverseOf(fn)) return call;
+	if (cd.arguments.length != 1) return call;
 	return cd.arguments[0];
 }
 
 export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
-		if (node.kind !== NodeKind.HiddenStdConv && node.kind !== NodeKind.HiddenSubConv) return node;
+		if (node.kind != NodeKind.HiddenStdConv && node.kind != NodeKind.HiddenSubConv) return node;
 		const d = node.data as HiddenStdConvData;
-		if (d.convType === null) return node;
+		if (d.convType == null) return node;
 		const srcType = d.convExpr.nodeType;
 		const loc = node.location;
 
-		const matchForward = d.convType.kind === TypeKind.CString
-			&& srcType !== null
-			&& (srcType.kind === TypeKind.String || srcType.kind === TypeKind.StringLiteral);
-		const matchReverse = d.convType.kind === TypeKind.String
-			&& srcType !== null
-			&& srcType.kind === TypeKind.CString;
+		const matchForward = d.convType.kind == TypeKind.CString
+			&& srcType != null
+			&& (srcType.kind == TypeKind.String || srcType.kind == TypeKind.StringLiteral);
+		const matchReverse = d.convType.kind == TypeKind.String
+			&& srcType != null
+			&& srcType.kind == TypeKind.CString;
 
 		if (!matchForward && !matchReverse) return node;
 
@@ -50,7 +50,7 @@ export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 		// so a nested inverse conversion has already been rewritten to its
 		// CallExpr form by the time we get here.
 		const inner = peelInverse(d.convExpr, fn);
-		if (inner !== d.convExpr) return inner;
+		if (inner != d.convExpr) return inner;
 
 		const result = makeCall(makeIdent(fn, loc), [d.convExpr], loc);
 		result.nodeType = d.convType;

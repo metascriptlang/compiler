@@ -10,7 +10,7 @@ import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./ch
 // `0xffn` / `0b1111n` / `0o17n` are bigint literals like `255n` — the radix
 // prefixes reach the same suffix check as the decimal tail.
 function addNumericToken(s: LexerState, val: string, line: int32, column: int32): void {
-	if (peek(s) === "n".code) {
+	if (peek(s) == "n".code) {
 		advanceChar(s);
 		addToken(s, TokenKind.BigInt, val + "n", line, column);
 		return;
@@ -24,33 +24,33 @@ export function scanNumber(s: LexerState): void {
 	let val = "";
 
 	// Handle hex, binary, octal prefixes
-	if (peek(s) === "0".code) {
+	if (peek(s) == "0".code) {
 		const next = peekAt(s, 1);
-		if (next === "x".code || next === "X".code) {
+		if (next == "x".code || next == "X".code) {
 			val = "0x";
 			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isHexDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
+			while (s.pos < s.source.byteLength && (isHexDigit(peek(s)) || peek(s) == "_".code)) {
+				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addNumericToken(s, val, startLine, startCol);
 			return;
 		}
-		if (next === "b".code || next === "B".code) {
+		if (next == "b".code || next == "B".code) {
 			val = "0b";
 			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isBinaryDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
+			while (s.pos < s.source.byteLength && (isBinaryDigit(peek(s)) || peek(s) == "_".code)) {
+				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addNumericToken(s, val, startLine, startCol);
 			return;
 		}
-		if (next === "o".code || next === "O".code) {
+		if (next == "o".code || next == "O".code) {
 			val = "0o";
 			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isOctalDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
+			while (s.pos < s.source.byteLength && (isOctalDigit(peek(s)) || peek(s) == "_".code)) {
+				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addNumericToken(s, val, startLine, startCol);
@@ -67,20 +67,20 @@ export function scanNumber(s: LexerState): void {
 		if (isDigit(ch)) {
 			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
-		} else if (ch === ".".code && !hasDecimal && isDigit(peekAt(s, 1))) {
+		} else if (ch == ".".code && !hasDecimal && isDigit(peekAt(s, 1))) {
 			val += ".";
 			hasDecimal = true;
 			advanceChar(s);
-		} else if ((ch === "e".code || ch === "E".code) && !hasExponent) {
+		} else if ((ch == "e".code || ch == "E".code) && !hasExponent) {
 			val += "e";
 			hasExponent = true;
 			advanceChar(s);
 			const next = peek(s);
-			if (next === "+".code || next === "-".code) {
+			if (next == "+".code || next == "-".code) {
 				val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
-		} else if (ch === "_".code) {
+		} else if (ch == "_".code) {
 			advanceChar(s); // skip underscore
 		} else {
 			break;
@@ -115,7 +115,7 @@ function scanHexDigits(s: LexerState, count: int32): int32 {
 }
 
 function scanUnicodeEscape(s: LexerState): string {
-	if (peek(s) === "{".code) {
+	if (peek(s) == "{".code) {
 		advanceChar(s);
 		let cp = 0;
 		let digits = 0;
@@ -124,7 +124,7 @@ function scanUnicodeEscape(s: LexerState): string {
 			advanceChar(s);
 			digits += 1;
 		}
-		if (digits === 0 || peek(s) !== "}".code) {
+		if (digits == 0 || peek(s) != "}".code) {
 			setLexError(s, "Invalid Unicode escape sequence");
 			return "";
 		}
@@ -138,7 +138,7 @@ function scanUnicodeEscape(s: LexerState): string {
 	const unit = scanHexDigits(s, 4);
 	if (unit < 0) return "";
 	if (unit >= 0xD800 && unit <= 0xDBFF
-			&& peek(s) === "\\".code && peekAt(s, 1) === "u".code
+			&& peek(s) == "\\".code && peekAt(s, 1) == "u".code
 			&& isHexDigit(peekAt(s, 2)) && isHexDigit(peekAt(s, 3))
 			&& isHexDigit(peekAt(s, 4)) && isHexDigit(peekAt(s, 5))) {
 		const low = hexDigitValue(peekAt(s, 2)) * 4096 + hexDigitValue(peekAt(s, 3)) * 256
@@ -155,17 +155,17 @@ function scanEscape(s: LexerState): string {
 	advanceChar(s); // skip backslash
 	const first = peek(s);
 
-	if (first === "x".code) {
+	if (first == "x".code) {
 		advanceChar(s);
 		const cu = scanHexDigits(s, 2);
 		if (cu < 0) return "";
 		return fromCodePoint(cu);
 	}
-	if (first === "u".code) {
+	if (first == "u".code) {
 		advanceChar(s);
 		return scanUnicodeEscape(s);
 	}
-	if (first === "0".code && !isDigit(peekAt(s, 1))) {
+	if (first == "0".code && !isDigit(peekAt(s, 1))) {
 		advanceChar(s);
 		return fromCodePoint(0);
 	}
@@ -174,13 +174,13 @@ function scanEscape(s: LexerState): string {
 		advanceChar(s);
 		return "";
 	}
-	if (first === "\n".code) {
+	if (first == "\n".code) {
 		advanceChar(s);
 		return "";
 	}
-	if (first === "\r".code) {
+	if (first == "\r".code) {
 		advanceChar(s);
-		if (peek(s) === "\n".code) advanceChar(s);
+		if (peek(s) == "\n".code) advanceChar(s);
 		return "";
 	}
 
@@ -226,7 +226,7 @@ export function scanString(s: LexerState, quote: int32): void {
 	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch === quote) {
+		if (ch == quote) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			const rawEnd = s.pos; // before closing quote
 			advanceChar(s);
@@ -235,7 +235,7 @@ export function scanString(s: LexerState, quote: int32): void {
 			tok.rawValue = s.source.byteSlice(rawStart, rawEnd);
 			return;
 		}
-		if (ch === "\\".code) {
+		if (ch == "\\".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			val += scanEscape(s);
 			runStart = s.pos;
@@ -267,13 +267,13 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		let tempPos = s.pos;
 		let hasInterpolation = false;
 		let hasNewline = false;
-		while (tempPos < s.source.byteLength && s.source.byteAt(tempPos) !== "`".code) {
+		while (tempPos < s.source.byteLength && s.source.byteAt(tempPos) != "`".code) {
 			const tc = s.source.byteAt(tempPos);
-			if (tc === "$".code && tempPos + 1 < s.source.byteLength && s.source.byteAt(tempPos + 1) === "{".code) {
+			if (tc == "$".code && tempPos + 1 < s.source.byteLength && s.source.byteAt(tempPos + 1) == "{".code) {
 				hasInterpolation = true;
 				break;
 			}
-			if (tc === "\n".code) { hasNewline = true; break; }
+			if (tc == "\n".code) { hasNewline = true; break; }
 			tempPos = tempPos + 1;
 		}
 		if (!hasInterpolation && !hasNewline && tempPos < s.source.byteLength) {
@@ -295,20 +295,20 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 	let runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch === "`".code) {
+		if (ch == "`".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			advanceChar(s);
 			addToken(s, isContinuation ? TokenKind.TemplateTail : TokenKind.TemplateNoSub, val, startLine, startCol);
 			return;
 		}
-		if (ch === "$".code && peekAt(s, 1) === "{".code) {
+		if (ch == "$".code && peekAt(s, 1) == "{".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			skip(s, 2);
 			s.templateDepth += 1;
 			addToken(s, isContinuation ? TokenKind.TemplateMiddle : TokenKind.TemplateHead, val, startLine, startCol);
 			return;
 		}
-		if (ch === "\\".code) {
+		if (ch == "\\".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			val += scanEscape(s);
 			runStart = s.pos;
@@ -320,16 +320,16 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 
 // Check if a backtick-quoted string is an operator name.
 function isOperatorChar(ch: int32): boolean {
-	return ch === "|".code || ch === ">".code || ch === "<".code || ch === "=".code
-		|| ch === "+".code || ch === "-".code || ch === "*".code || ch === "/".code
-		|| ch === "%".code || ch === "&".code || ch === "^".code || ch === "~".code
-		|| ch === "!".code || ch === "?".code || ch === ".".code || ch === "\\".code;
+	return ch == "|".code || ch == ">".code || ch == "<".code || ch == "=".code
+		|| ch == "+".code || ch == "-".code || ch == "*".code || ch == "/".code
+		|| ch == "%".code || ch == "&".code || ch == "^".code || ch == "~".code
+		|| ch == "!".code || ch == "?".code || ch == ".".code || ch == "\\".code;
 }
 
 function isOperatorName(name: string): boolean {
-	if (name.length === 0) return false;
+	if (name.length == 0) return false;
 	// Special case: subscript operators `[]` and `[]=`
-	if (name === "[]" || name === "[]=") return true;
+	if (name == "[]" || name == "[]=") return true;
 	let i = 0;
 	while (i < name.length) {
 		if (!isOperatorChar(name.byteAt(i))) return false;
@@ -347,7 +347,7 @@ export function scanIdentifier(s: LexerState): void {
 
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (isLetter(ch) || isDigit(ch) || ch === "_".code || ch === "$".code) {
+		if (isLetter(ch) || isDigit(ch) || ch == "_".code || ch == "$".code) {
 			ident += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		} else {
@@ -365,7 +365,7 @@ export function scanLineComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes //
 	const runStart = s.pos;
-	while (s.pos < s.source.byteLength && peek(s) !== "\n".code && peek(s) !== "\r".code) {
+	while (s.pos < s.source.byteLength && peek(s) != "\n".code && peek(s) != "\r".code) {
 		advanceChar(s);
 	}
 	addComment(s, "//" + s.source.byteSlice(runStart, s.pos), startLine, startCol);
@@ -376,7 +376,7 @@ export function scanBlockComment(s: LexerState): void {
 	const startCol = s.column - 2; // includes /*
 	const runStart = s.pos;
 	while (s.pos < s.source.byteLength) {
-		if (peek(s) === "*".code && peekAt(s, 1) === "/".code) {
+		if (peek(s) == "*".code && peekAt(s, 1) == "/".code) {
 			const content = "/*" + s.source.byteSlice(runStart, s.pos) + "*/";
 			skip(s, 2);
 			addComment(s, content, startLine, startCol);
@@ -398,16 +398,16 @@ function scanRegex(s: LexerState): void {
 	const bodyStart = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch === "/".code) {
+		if (ch == "/".code) {
 			advanceChar(s);
 			break;
 		}
-		if (ch === "\\".code) {
+		if (ch == "\\".code) {
 			advanceChar(s);
 			if (s.pos < s.source.byteLength) advanceChar(s);
 			continue;
 		}
-		if (ch === "\n".code) {
+		if (ch == "\n".code) {
 			// Regex cannot span lines
 			break;
 		}
@@ -432,82 +432,82 @@ export function scanOperator(s: LexerState): boolean {
 
 	return match (ch) {
 		"/".code => {
-			if (next === "/".code) { skip(s, 2); scanLineComment(s); }
-			else if (next === "*".code) { skip(s, 2); scanBlockComment(s); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.SlashEq, "/=", startLine, startCol); }
+			if (next == "/".code) { skip(s, 2); scanLineComment(s); }
+			else if (next == "*".code) { skip(s, 2); scanBlockComment(s); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.SlashEq, "/=", startLine, startCol); }
 			else if (allowsRegexAfter(s)) { scanRegex(s); }
 			else { advanceChar(s); addToken(s, TokenKind.Slash, "/", startLine, startCol); }
 			return true;
 		},
 		"=".code => {
-			if (next === "=".code && peekAt(s, 2) === "=".code) { skip(s, 3); addToken(s, TokenKind.EqEqEq, "===", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.EqEq, "==", startLine, startCol); }
-			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.Arrow, "=>", startLine, startCol); }
+			if (next == "=".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.EqEqEq, "===", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.EqEq, "==", startLine, startCol); }
+			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.Arrow, "=>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Assign, "=", startLine, startCol); }
 			return true;
 		},
 		"!".code => {
-			if (next === "=".code && peekAt(s, 2) === "=".code) { skip(s, 3); addToken(s, TokenKind.BangEqEq, "!==", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.BangEq, "!=", startLine, startCol); }
+			if (next == "=".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.BangEqEq, "!==", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.BangEq, "!=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Bang, "!", startLine, startCol); }
 			return true;
 		},
 		"<".code => {
-			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.LtEq, "<=", startLine, startCol); }
-			else if (next === "<".code) { skip(s, 2); addToken(s, TokenKind.LtLt, "<<", startLine, startCol); }
+			if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.LtEq, "<=", startLine, startCol); }
+			else if (next == "<".code) { skip(s, 2); addToken(s, TokenKind.LtLt, "<<", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Lt, "<", startLine, startCol); }
 			return true;
 		},
 		">".code => {
-			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
-			else if (next === ">".code && peekAt(s, 2) === ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
-			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.GtGt, ">>", startLine, startCol); }
+			if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
+			else if (next == ">".code && peekAt(s, 2) == ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
+			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.GtGt, ">>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Gt, ">", startLine, startCol); }
 			return true;
 		},
 		"+".code => {
-			if (next === "+".code) { skip(s, 2); addToken(s, TokenKind.PlusPlus, "++", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.PlusEq, "+=", startLine, startCol); }
+			if (next == "+".code) { skip(s, 2); addToken(s, TokenKind.PlusPlus, "++", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.PlusEq, "+=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Plus, "+", startLine, startCol); }
 			return true;
 		},
 		"-".code => {
-			if (next === "-".code) { skip(s, 2); addToken(s, TokenKind.MinusMinus, "--", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.MinusEq, "-=", startLine, startCol); }
+			if (next == "-".code) { skip(s, 2); addToken(s, TokenKind.MinusMinus, "--", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.MinusEq, "-=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Minus, "-", startLine, startCol); }
 			return true;
 		},
 		"*".code => {
-			if (next === "*".code) { skip(s, 2); addToken(s, TokenKind.StarStar, "**", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.StarEq, "*=", startLine, startCol); }
+			if (next == "*".code) { skip(s, 2); addToken(s, TokenKind.StarStar, "**", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.StarEq, "*=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Star, "*", startLine, startCol); }
 			return true;
 		},
 		"%".code => {
-			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.PercentEq, "%=", startLine, startCol); }
+			if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.PercentEq, "%=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Percent, "%", startLine, startCol); }
 			return true;
 		},
 		"&".code => {
-			if (next === "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
+			if (next == "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
 			return true;
 		},
 		"|".code => {
-			if (next === "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
-			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
+			if (next == "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
+			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
 			return true;
 		},
 		"?".code => {
-			if (next === ".".code && !isDigit(peekAt(s, 2))) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
-			else if (next === "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
+			if (next == ".".code && !isDigit(peekAt(s, 2))) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
+			else if (next == "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Question, "?", startLine, startCol); }
 			return true;
 		},
 		".".code => {
-			if (next === ".".code && peekAt(s, 2) === ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
-			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
+			if (next == ".".code && peekAt(s, 2) == ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
+			else if (next == ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Dot, ".", startLine, startCol); }
 			return true;
 		},

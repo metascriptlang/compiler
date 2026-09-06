@@ -15,9 +15,9 @@ import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, get
 // ===== Visitor =====
 
 function lowerUpdateNode(node: Node): Node {
-	if (node.kind !== NodeKind.ExprStmt) return node;
+	if (node.kind != NodeKind.ExprStmt) return node;
 	const d = node.data as ExprStmtData;
-	if (d.expr.kind !== NodeKind.UpdateExpr) return node;
+	if (d.expr.kind != NodeKind.UpdateExpr) return node;
 	const ud = d.expr.data as UpdateExprData;
 	const loc = node.location;
 	const delta = match (ud.updateOp) {
@@ -44,23 +44,23 @@ function innerExprKindAfterUpdate(input: string): NodeKind {
 	const ctx = createTransformContext();
 	const prog = lowerUpdateExpr(result.value, ctx);
 	const stmts = getStmts(prog);
-	if (stmts.length === 0) return NodeKind.Program;
-	if (stmts[0].kind !== NodeKind.ExprStmt) return stmts[0].kind;
+	if (stmts.length == 0) return NodeKind.Program;
+	if (stmts[0].kind != NodeKind.ExprStmt) return stmts[0].kind;
 	const sd = stmts[0].data as ExprStmtData;
 	return sd.expr.kind;
 }
 
 // ===== Tests =====
-test "x++ becomes assignment" { assert innerExprKindAfterUpdate("x++;") === NodeKind.BinaryExpr; }
+test "x++ becomes assignment" { assert innerExprKindAfterUpdate("x++;") == NodeKind.BinaryExpr; }
 
-test "--x becomes assignment" { assert innerExprKindAfterUpdate("--x;") === NodeKind.BinaryExpr; }
+test "--x becomes assignment" { assert innerExprKindAfterUpdate("--x;") == NodeKind.BinaryExpr; }
 
-test "x-- becomes assignment" { assert innerExprKindAfterUpdate("x--;") === NodeKind.BinaryExpr; }
+test "x-- becomes assignment" { assert innerExprKindAfterUpdate("x--;") == NodeKind.BinaryExpr; }
 
-test "++x becomes assignment" { assert innerExprKindAfterUpdate("++x;") === NodeKind.BinaryExpr; }
+test "++x becomes assignment" { assert innerExprKindAfterUpdate("++x;") == NodeKind.BinaryExpr; }
 
-test "non-update ExprStmt unchanged" { assert firstExprKindAfter("f();", lowerUpdateExpr) === NodeKind.CallExpr; }
+test "non-update ExprStmt unchanged" { assert firstExprKindAfter("f();", lowerUpdateExpr) == NodeKind.CallExpr; }
 
-test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerUpdateExpr) === NodeKind.WhileStmt; }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerUpdateExpr) == NodeKind.WhileStmt; }
 
-test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) === 2; }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) == 2; }

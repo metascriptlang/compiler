@@ -25,21 +25,21 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	let awAnnotated = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
-		if (dec.kind === NodeKind.MacroInvocation) {
+		if (dec.kind == NodeKind.MacroInvocation) {
 			const md = dec.data as MacroInvocationData;
-			if (md.macroName === "builtin" && md.macroArgs.length > 0) {
+			if (md.macroName == "builtin" && md.macroArgs.length > 0) {
 				const arg = md.macroArgs[0];
-				if (arg.kind === NodeKind.StringLiteral) {
+				if (arg.kind == NodeKind.StringLiteral) {
 					btKind = (arg.data as StringLiteralData).value;
 				}
-			} else if (md.macroName === "pure") {
+			} else if (md.macroName == "pure") {
 				btKind = "pure";
-			} else if (md.macroName === "nonisolated") {
+			} else if (md.macroName == "nonisolated") {
 				hasNonisolated = true;
-			} else if (md.macroName === "awaitable") {
+			} else if (md.macroName == "awaitable") {
 				awAnnotated = true;
 				// Plain @awaitable — non-affine, like Promise. No flag bits.
-			} else if (md.macroName === "affineAwaitable") {
+			} else if (md.macroName == "affineAwaitable") {
 				awAnnotated = true;
 				// Affine + scope-bound, like spawn-origin Promise. Both bits.
 				awFlags = (TypeFlag.AwaitableAffine | TypeFlag.AwaitableScopeBound) as int32;
@@ -54,7 +54,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		NodeKind.MethodDecl => (inner.data as MethodDeclData).nativeName,
 		_ => "",
 	};
-	if (natName === null) natName = "";
+	if (natName == null) natName = "";
 	return {
 		builtinKind: btKind,
 		nativeName: natName,

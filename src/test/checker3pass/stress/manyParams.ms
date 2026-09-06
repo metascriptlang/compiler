@@ -24,18 +24,18 @@ function mainMany(): void {
 
 test "stress many-params: no checker errors" {
 	const result = checkOnly(SRC_MANY);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "stress many-params: arrow's param is Int32 (T4 bound from explicit)" {
 	const result = checkOnly(SRC_MANY);
 	const main_fn = findFnDecl(result.program, "mainMany");
-	assert main_fn !== null;
+	assert main_fn != null;
 	const arrow = findFirstArrow(main_fn);
-	assert arrow !== null;
-	assert arrow.nodeType !== null;
+	assert arrow != null;
+	assert arrow.nodeType != null;
 	assert arrow.nodeType.typeChildren.length > 0;
-	assert arrow.nodeType.typeChildren[0].kind === TypeKind.Int32;
+	assert arrow.nodeType.typeChildren[0].kind == TypeKind.Int32;
 }
 
 test "stress many-params: no GenericParam leakage" {

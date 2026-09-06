@@ -6,11 +6,11 @@
 // ===== Character Classifiers =====
 
 export function isWhitespace(ch: int32): boolean {
-	return ch === " ".code || ch === "\t".code || ch === "\r".code;
+	return ch == " ".code || ch == "\t".code || ch == "\r".code;
 }
 
 export function isNewline(ch: int32): boolean {
-	return ch === "\n".code;
+	return ch == "\n".code;
 }
 
 export function isDigit(ch: int32): boolean {
@@ -22,7 +22,7 @@ export function isHexDigit(ch: int32): boolean {
 }
 
 export function isLetter(ch: int32): boolean {
-	return (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code) || ch === "_".code;
+	return (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code) || ch == "_".code;
 }
 
 export function isAlphanumeric(ch: int32): boolean {
@@ -30,7 +30,7 @@ export function isAlphanumeric(ch: int32): boolean {
 }
 
 export function isBinaryDigit(ch: int32): boolean {
-	return ch === "0".code || ch === "1".code;
+	return ch == "0".code || ch == "1".code;
 }
 
 export function isOctalDigit(ch: int32): boolean {

@@ -26,7 +26,7 @@
 
 test "bug038: 0.0 / 0.0 produces NaN, not panic" {
 	const nan: number = 0.0 / 0.0;
-	assert nan !== nan;  // NaN is the only value not equal to itself
+	assert nan != nan;  // NaN is the only value not equal to itself
 }
 
 test "bug038: 1.0 / 0.0 produces +Infinity" {

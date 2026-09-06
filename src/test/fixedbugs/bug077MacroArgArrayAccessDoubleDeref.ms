@@ -74,37 +74,37 @@ function rowsOf(): JsonValue[] {
 	const v: JsonValue = r.value;
 	// Narrow to the Array variant — `items` exists only there (the strict
 	// union-subset read rule); SRC is always a top-level array.
-	if (v.kind !== JsonKind.Array) return [];
+	if (v.kind != JsonKind.Array) return [];
 	return v.items;
 }
 
 test "bug077: ArrayAccess as a macro argument derefs exactly once" {
 	const rows = decodeIndexed(rowsOf());
-	assert rows.length === 2, "count: " + rows.length.toString();
-	assert rows[0].name === "a", "row0 name: " + rows[0].name;
-	assert rows[1].name === "b", "row1 name: " + rows[1].name;
-	assert rows[1].rank === 2, "row1 rank: " + rows[1].rank.toString();
+	assert rows.length == 2, "count: " + rows.length.toString();
+	assert rows[0].name == "a", "row0 name: " + rows[0].name;
+	assert rows[1].name == "b", "row1 name: " + rows[1].name;
+	assert rows[1].rank == 2, "row1 rank: " + rows[1].rank.toString();
 }
 
 test "bug077: hoisted element still decodes identically" {
 	const indexed = decodeIndexed(rowsOf());
 	const hoisted = decodeHoisted(rowsOf());
-	assert hoisted.length === indexed.length;
-	assert hoisted[0].name === indexed[0].name, "hoisted row0: " + hoisted[0].name;
-	assert hoisted[1].rank === indexed[1].rank, "hoisted row1: " + hoisted[1].rank.toString();
+	assert hoisted.length == indexed.length;
+	assert hoisted[0].name == indexed[0].name, "hoisted row0: " + hoisted[0].name;
+	assert hoisted[1].rank == indexed[1].rank, "hoisted row1: " + hoisted[1].rank.toString();
 }
 
 test "bug077: MemberExpr macro argument keeps working" {
 	const items = rowsOf();
 	const h: Holder = { v: items[0] };
 	const row = decodeMember(h);
-	assert row.name === "a", "member name: " + row.name;
-	assert row.rank === 1, "member rank: " + row.rank.toString();
+	assert row.name == "a", "member name: " + row.name;
+	assert row.rank == 1, "member rank: " + row.rank.toString();
 }
 
 test "bug077: ArrayAccess macro argument inside a generic body" {
 	const rows: Row[] = decodeGeneric(rowsOf(), null);
-	assert rows.length === 2, "generic count: " + rows.length.toString();
-	assert rows[0].name === "a", "generic row0: " + rows[0].name;
-	assert rows[1].rank === 2, "generic row1 rank: " + rows[1].rank.toString();
+	assert rows.length == 2, "generic count: " + rows.length.toString();
+	assert rows[0].name == "a", "generic row0: " + rows[0].name;
+	assert rows[1].rank == 2, "generic row1 rank: " + rows[1].rank.toString();
 }

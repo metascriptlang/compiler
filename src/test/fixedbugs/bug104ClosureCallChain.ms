@@ -34,28 +34,28 @@ function pickAdder104(useFirst: boolean, a: Adder104, b: Adder104): Adder104 {
 }
 
 test "bug104: a closure returned by a call is callable in place" {
-	assert makeAdder104(1)(2) === 3;
+	assert makeAdder104(1)(2) == 3;
 }
 
 test "bug104: a closure selected by a ternary is callable in place" {
 	const flag = true;
-	assert (flag ? makeAdder104(100) : makeAdder104(200))(5) === 105;
+	assert (flag ? makeAdder104(100) : makeAdder104(200))(5) == 105;
 }
 
 test "bug104: a closure read out of an array is callable in place" {
 	const table: Adder104[] = [makeAdder104(1000), makeAdder104(2000)];
-	assert table[0](7) === 1007;
-	assert table[1](7) === 2007;
+	assert table[0](7) == 1007;
+	assert table[1](7) == 2007;
 }
 
 test "bug104: a closure held in a field is callable in place" {
 	const holder: Holder104 = { fn: makeAdder104(30000) };
-	assert holder.fn(7) === 30007;
+	assert holder.fn(7) == 30007;
 }
 
 test "bug104: a closure relayed through a parameter is callable in place" {
-	assert pickAdder104(true, makeAdder104(3), makeAdder104(4))(1) === 4;
-	assert pickAdder104(false, makeAdder104(3), makeAdder104(4))(1) === 5;
+	assert pickAdder104(true, makeAdder104(3), makeAdder104(4))(1) == 4;
+	assert pickAdder104(false, makeAdder104(3), makeAdder104(4))(1) == 5;
 }
 
 test "bug104: a for-of generator still steps through its iterator" {
@@ -65,7 +65,7 @@ test "bug104: a for-of generator still steps through its iterator" {
 	for (const v of gen104()) {
 		total = total + v;
 	}
-	assert total === 6;
+	assert total == 6;
 }
 
 function* gen104(): Iterator<int32> {

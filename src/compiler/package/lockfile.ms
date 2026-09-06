@@ -29,13 +29,13 @@ export interface Lockfile {
 // --- Read ---
 
 function getStr(obj: JsonValue, field: string): string {
-	if (obj === null || obj.kind !== JsonKind.Object) return "";
+	if (obj == null || obj.kind != JsonKind.Object) return "";
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			const v = obj.values[i];
-			if (v !== null && v.kind === JsonKind.String) return v.strVal;
-			if (v !== null && v.kind === JsonKind.Number) return v.numVal.toString();
+			if (v != null && v.kind == JsonKind.String) return v.strVal;
+			if (v != null && v.kind == JsonKind.Number) return v.numVal.toString();
 		}
 		i = i + 1;
 	}
@@ -43,13 +43,13 @@ function getStr(obj: JsonValue, field: string): string {
 }
 
 function getNum(obj: JsonValue, field: string): number {
-	if (obj === null || obj.kind !== JsonKind.Object) return -1;
+	if (obj == null || obj.kind != JsonKind.Object) return -1;
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			const v = obj.values[i];
-			if (v !== null && v.kind === JsonKind.Number) return v.numVal;
-			if (v !== null && v.kind === JsonKind.Int) return v.intVal as number;
+			if (v != null && v.kind == JsonKind.Number) return v.numVal;
+			if (v != null && v.kind == JsonKind.Int) return v.intVal as number;
 		}
 		i = i + 1;
 	}
@@ -57,10 +57,10 @@ function getNum(obj: JsonValue, field: string): number {
 }
 
 function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj === null || obj.kind !== JsonKind.Object) return null as unknown as JsonValue;
+	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
 	let i = 0;
 	while (i < obj.keys.length) {
-		if (obj.keys[i] === field && i < obj.values.length) {
+		if (obj.keys[i] == field && i < obj.values.length) {
 			return obj.values[i];
 		}
 		i = i + 1;
@@ -71,13 +71,13 @@ function getObj(obj: JsonValue, field: string): JsonValue {
 function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
 	const keys: string[] = [];
 	const values: string[] = [];
-	if (depsObj === null || depsObj.kind !== JsonKind.Object) return { keys, values };
+	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys, values };
 	let i = 0;
 	while (i < depsObj.keys.length) {
 		keys.push(depsObj.keys[i]);
 		if (i < depsObj.values.length) {
 			const el = depsObj.values[i];
-			if (el !== null && el.kind === JsonKind.String) {
+			if (el != null && el.kind == JsonKind.String) {
 				values.push(el.strVal);
 			} else {
 				values.push("");
@@ -94,29 +94,29 @@ export function readLockfile(path: string): Lockfile {
 	const invalid: Lockfile = { version: 0, entries: [], valid: false };
 	if (!exists(path)) return invalid;
 	const content = try readFile(path) catch "";
-	if (content === "") return invalid;
+	if (content == "") return invalid;
 	const parsed = parseJson(content);
 	if (!parsed.ok) return invalid;
 	const root = parsed.value;
-	if (root === null || root.kind !== JsonKind.Object) return invalid;
+	if (root == null || root.kind != JsonKind.Object) return invalid;
 
 	const ver = getNum(root, "version");
-	if (ver !== 1) return invalid;
+	if (ver != 1) return invalid;
 
 	const pkgsObj = getObj(root, "packages");
-	if (pkgsObj === null || pkgsObj.kind !== JsonKind.Object) return invalid;
+	if (pkgsObj == null || pkgsObj.kind != JsonKind.Object) return invalid;
 
 	const entries: LockEntry[] = [];
 	let pi = 0;
 	while (pi < pkgsObj.keys.length) {
 		const key = pkgsObj.keys[pi];
 		const entryObj = pi < pkgsObj.values.length ? pkgsObj.values[pi] : null as unknown as JsonValue;
-		if (entryObj !== null && entryObj.kind === JsonKind.Object) {
+		if (entryObj != null && entryObj.kind == JsonKind.Object) {
 			const source = getStr(entryObj, "source");
 			const deps = parseDeps(getObj(entryObj, "deps"));
 			const entry: LockEntry = {
 				key,
-				source: source !== "" ? source : "registry",
+				source: source != "" ? source : "registry",
 				version: getStr(entryObj, "version"),
 				integrity: getStr(entryObj, "integrity"),
 				url: getStr(entryObj, "url"),
@@ -149,17 +149,17 @@ export function writeLockfile(path: string, lock: Lockfile): boolean {
 		eKeys.push("source");
 		eValues.push(jsonString(entry.source));
 
-		if (entry.source === "registry") {
+		if (entry.source == "registry") {
 			eKeys.push("version");
 			eValues.push(jsonString(entry.version));
 		}
 
-		if (entry.integrity !== "") {
+		if (entry.integrity != "") {
 			eKeys.push("integrity");
 			eValues.push(jsonString(entry.integrity));
 		}
 
-		if (entry.source === "git") {
+		if (entry.source == "git") {
 			eKeys.push("url");
 			eValues.push(jsonString(entry.url));
 			eKeys.push("ref");
@@ -197,7 +197,7 @@ export function writeLockfile(path: string, lock: Lockfile): boolean {
 export function findEntry(lock: Lockfile, name: string, version: string): LockEntry {
 	const key = name + "@" + version;
 	for (const entry of lock.entries) {
-		if (entry.key === key) return entry;
+		if (entry.key == key) return entry;
 	}
 	return null as unknown as LockEntry;
 }
@@ -209,17 +209,17 @@ export function findEntry(lock: Lockfile, name: string, version: string): LockEn
 // Org:       "@acme/router@1.0.0"          → "@acme/router"
 export function entryName(key: string): string {
 	// Org-scoped: starts with @, find / then find @ after /
-	if (key.length > 0 && key.charAt(0) === "@") {
+	if (key.length > 0 && key.charAt(0) == "@") {
 		let slashIdx = -1;
 		let si = 1;
 		while (si < key.length) {
-			if (key.charAt(si) === "/") { slashIdx = si; si = key.length; }
+			if (key.charAt(si) == "/") { slashIdx = si; si = key.length; }
 			si = si + 1;
 		}
 		if (slashIdx > 0) {
 			let ai = slashIdx + 1;
 			while (ai < key.length) {
-				if (key.charAt(ai) === "@") return key.slice(0, ai);
+				if (key.charAt(ai) == "@") return key.slice(0, ai);
 				ai = ai + 1;
 			}
 			return key;
@@ -230,20 +230,20 @@ export function entryName(key: string): string {
 	let firstSlash = -1;
 	let i = 0;
 	while (i < key.length) {
-		if (key.charAt(i) === "@" && firstAt === -1) firstAt = i;
-		if (key.charAt(i) === "/" && firstSlash === -1) firstSlash = i;
+		if (key.charAt(i) == "@" && firstAt == -1) firstAt = i;
+		if (key.charAt(i) == "/" && firstSlash == -1) firstSlash = i;
 		i = i + 1;
 	}
 	// If @ comes before / (or no /), it's unscoped or git — split on first @
 	// e.g. "cool-json@1.0.0" or "my-fork@git:github.com/..."
-	if (firstAt > 0 && (firstSlash === -1 || firstAt < firstSlash)) {
+	if (firstAt > 0 && (firstSlash == -1 || firstAt < firstSlash)) {
 		return key.slice(0, firstAt);
 	}
 	// User-scoped: / comes before @ — e.g. "alice/router@1.0.0"
 	if (firstSlash > 0) {
 		let ai = firstSlash + 1;
 		while (ai < key.length) {
-			if (key.charAt(ai) === "@") return key.slice(0, ai);
+			if (key.charAt(ai) == "@") return key.slice(0, ai);
 			ai = ai + 1;
 		}
 		return key;
@@ -260,25 +260,25 @@ test "readLockfile empty file" {
 }
 
 test "entryName registry" {
-	assert entryName("cool-json@v1.2.3") === "cool-json";
+	assert entryName("cool-json@v1.2.3") == "cool-json";
 }
 
 test "entryName git" {
-	assert entryName("my-fork@git:github.com/me/foo@abc123") === "my-fork";
+	assert entryName("my-fork@git:github.com/me/foo@abc123") == "my-fork";
 }
 
 test "entryName org-scoped" {
-	assert entryName("@acme/router@1.0.0") === "@acme/router";
+	assert entryName("@acme/router@1.0.0") == "@acme/router";
 }
 
 test "entryName user-scoped" {
-	assert entryName("alice/router@1.0.0") === "alice/router";
+	assert entryName("alice/router@1.0.0") == "alice/router";
 }
 
 test "entryName org-scoped no version" {
-	assert entryName("@acme/router") === "@acme/router";
+	assert entryName("@acme/router") == "@acme/router";
 }
 
 test "entryName user-scoped no version" {
-	assert entryName("alice/router") === "alice/router";
+	assert entryName("alice/router") == "alice/router";
 }

@@ -31,7 +31,7 @@ test "1: assert inside a concretely-typed non-void arrow" {
 		assert v > 0, "positive";
 		return v * 2;
 	};
-	assert double(3) === 6, "doubled";
+	assert double(3) == 6, "doubled";
 }
 
 test "2: assert inside a void arrow still works" {
@@ -41,18 +41,18 @@ test "2: assert inside a void arrow still works" {
 		seen = (seen + v) as int32;
 	};
 	bump(3);
-	assert seen === 3, "ran";
+	assert seen == 3, "ran";
 }
 
 test "3: assert directly in the test body still works" {
 	const x = 1 + 1;
-	assert x === 2, "x is 2";
+	assert x == 2, "x is 2";
 }
 
 test "4: assert inside a generic callback whose type param is unresolved" {
 	runGeneric((d) => {
 		const x = 1 + 1;
-		assert x === 2, "x is 2";
+		assert x == 2, "x is 2";
 		d();
 	});
 }
@@ -62,7 +62,7 @@ test "5: assert inside an arrow returning a string" {
 		assert v >= 0, "non-negative";
 		return v.toString();
 	};
-	assert label(7) === "7", "stringified";
+	assert label(7) == "7", "stringified";
 }
 
 test "6: assert nested two arrows deep in a non-void chain" {
@@ -74,5 +74,5 @@ test "6: assert nested two arrows deep in a non-void chain" {
 		assert v > 0, "outer positive";
 		return inner(v) * 2;
 	};
-	assert outer(2) === 6, "nested";
+	assert outer(2) == 6, "nested";
 }

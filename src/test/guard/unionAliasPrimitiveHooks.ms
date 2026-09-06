@@ -32,12 +32,12 @@ function main(): void {
 	let i = 0;
 	let acc = 0;
 	while (i < 500) {
-		const a = pick(i % 2 === 0);
+		const a = pick(i % 2 == 0);
 		const box: Box = { v: pick(true) };
 		acc = acc + useSN(a) + useSN(box.v);
 		i = i + 1;
 	}
-	if (acc !== 1000) { throw "GUARD RED: union alias values did not round-trip"; }
+	if (acc != 1000) { throw "GUARD RED: union alias values did not round-trip"; }
 	console.log("unionAliasPrimitiveHooks ok");
 }
 main();

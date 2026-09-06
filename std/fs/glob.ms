@@ -24,28 +24,28 @@ export interface Glob {
 // Compile a glob pattern into a matcher. Returns an error message if the
 // pattern is syntactically invalid (e.g. empty, unterminated character class).
 export function compileGlob(pattern: string): Result<Glob, string> {
-	if (pattern.length === 0) return Result.err("empty pattern");
+	if (pattern.length == 0) return Result.err("empty pattern");
 
 	let p = pattern;
 
 	// Leading slash → explicit anchor (strip the slash, remember).
 	let anchored = false;
-	if (p.charAt(0) === "/") {
+	if (p.charAt(0) == "/") {
 		anchored = true;
 		p = p.slice(1, p.length);
 	}
 
 	// Trailing slash → directory match, rewrite to "...foo/**".
-	if (p.length > 0 && p.charAt(p.length - 1) === "/") {
+	if (p.length > 0 && p.charAt(p.length - 1) == "/") {
 		p = p + "**";
 	}
 
 	// Validate character classes are balanced (cheap early check).
 	let i = 0;
 	while (i < p.length) {
-		if (p.charAt(i) === "[") {
+		if (p.charAt(i) == "[") {
 			let end = i + 1;
-			while (end < p.length && p.charAt(end) !== "]") end = end + 1;
+			while (end < p.length && p.charAt(end) != "]") end = end + 1;
 			if (end >= p.length) return Result.err("unterminated character class in: " + pattern);
 			i = end + 1;
 		} else {
@@ -60,8 +60,8 @@ export function compileGlob(pattern: string): Result<Glob, string> {
 	for (const seg of rawSegs) {
 		let k = 0;
 		while (k < seg.length - 1) {
-			if (seg.charAt(k) === "*" && seg.charAt(k + 1) === "*") {
-				if (seg !== "**") {
+			if (seg.charAt(k) == "*" && seg.charAt(k + 1) == "*") {
+				if (seg != "**") {
 					return Result.err("'**' must be a full path segment in: " + pattern);
 				}
 				k = k + 2;
@@ -80,16 +80,16 @@ export function compileGlob(pattern: string): Result<Glob, string> {
 	const segs: string[] = [];
 	for (let k = 0; k < rawSegs.length; k = k + 1) {
 		const seg = rawSegs[k];
-		if (seg === ".") {
-			if (segs.length === 0) anchored = true;
+		if (seg == ".") {
+			if (segs.length == 0) anchored = true;
 			continue;
 		}
-		if (seg === "..") {
+		if (seg == "..") {
 			return Result.err("'..' is not allowed in pattern: " + pattern);
 		}
 		segs.push(seg);
 	}
-	if (segs.length === 0) {
+	if (segs.length == 0) {
 		return Result.err("pattern collapses to empty: " + pattern);
 	}
 
@@ -146,9 +146,9 @@ export function globMatchAny(gs: Glob[], path: string): boolean {
 function matchSegments(pats: string[], pi: number, paths: string[], si: number): boolean {
 	while (pi < pats.length) {
 		const pat = pats[pi];
-		if (pat === "**") {
+		if (pat == "**") {
 			// Trailing "**" matches any remaining segments (including zero).
-			if (pi + 1 === pats.length) return true;
+			if (pi + 1 == pats.length) return true;
 			// Try consuming 0, 1, 2, ... path segments and continue matching the rest.
 			let k = si;
 			while (k <= paths.length) {
@@ -162,7 +162,7 @@ function matchSegments(pats: string[], pi: number, paths: string[], si: number):
 		pi = pi + 1;
 		si = si + 1;
 	}
-	return si === paths.length;
+	return si == paths.length;
 }
 
 // Match a single pattern segment against a single path component.
@@ -176,10 +176,10 @@ function segMatchAt(pat: string, piIn: number, s: string, siIn: number): boolean
 	let si = siIn;
 	while (pi < pat.length) {
 		const pc = pat.charAt(pi);
-		if (pc === "*") {
+		if (pc == "*") {
 			// Collapse consecutive stars.
-			while (pi < pat.length && pat.charAt(pi) === "*") pi = pi + 1;
-			if (pi === pat.length) return true; // trailing * matches rest
+			while (pi < pat.length && pat.charAt(pi) == "*") pi = pi + 1;
+			if (pi == pat.length) return true; // trailing * matches rest
 			// Try matching the remaining pattern at each position of s.
 			let k = si;
 			while (k <= s.length) {
@@ -188,48 +188,48 @@ function segMatchAt(pat: string, piIn: number, s: string, siIn: number): boolean
 			}
 			return false;
 		}
-		if (pc === "?") {
+		if (pc == "?") {
 			if (si >= s.length) return false;
 			pi = pi + 1;
 			si = si + 1;
 			continue;
 		}
-		if (pc === "[") {
+		if (pc == "[") {
 			if (si >= s.length) return false;
 			// Parse the class.
 			let end = pi + 1;
 			let negate = false;
-			if (end < pat.length && pat.charAt(end) === "!") { negate = true; end = end + 1; }
+			if (end < pat.length && pat.charAt(end) == "!") { negate = true; end = end + 1; }
 			const classStart = end;
-			while (end < pat.length && pat.charAt(end) !== "]") end = end + 1;
+			while (end < pat.length && pat.charAt(end) != "]") end = end + 1;
 			if (end >= pat.length) return false; // unterminated (shouldn't happen — compileGlob checks)
 			const ch = s.charAt(si);
 			let inClass = false;
 			let k = classStart;
 			while (k < end) {
-				if (k + 2 < end && pat.charAt(k + 1) === "-") {
+				if (k + 2 < end && pat.charAt(k + 1) == "-") {
 					// Range a-z
 					const lo = pat.charAt(k);
 					const hi = pat.charAt(k + 2);
 					if (ch >= lo && ch <= hi) inClass = true;
 					k = k + 3;
 				} else {
-					if (pat.charAt(k) === ch) inClass = true;
+					if (pat.charAt(k) == ch) inClass = true;
 					k = k + 1;
 				}
 			}
-			if (inClass === negate) return false;
+			if (inClass == negate) return false;
 			pi = end + 1;
 			si = si + 1;
 			continue;
 		}
 		// Literal character.
 		if (si >= s.length) return false;
-		if (s.charAt(si) !== pc) return false;
+		if (s.charAt(si) != pc) return false;
 		pi = pi + 1;
 		si = si + 1;
 	}
-	return si === s.length;
+	return si == s.length;
 }
 
 // ===== Tests =====
@@ -445,6 +445,6 @@ test "star matches empty" {
 
 test "compileGlobs collects errors" {
 	const result = compileGlobs(["*.ms", "a**b", "**/*.cms"]);
-	assert result.globs.length === 2;
-	assert result.errors.length === 1;
+	assert result.globs.length == 2;
+	assert result.errors.length == 1;
 }

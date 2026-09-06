@@ -41,7 +41,7 @@ async function asyncSum(arr: number[]): Promise<number> {
 async function asyncFind(arr: number[], target: number): Promise<number> {
 	let i = 0;
 	while (i < arr.length) {
-		if (arr[i] === target) return i;
+		if (arr[i] == target) return i;
 		i += 1;
 	}
 	return -1;
@@ -54,7 +54,7 @@ async function asyncFind(arr: number[], target: number): Promise<number> {
 async function asyncTakeUntil(arr: number[], stopAt: number): Promise<number> {
 	let sum = 0;
 	for (const v of arr) {
-		if (v === stopAt) break;
+		if (v == stopAt) break;
 		sum += v;
 	}
 	return sum;
@@ -63,7 +63,7 @@ async function asyncTakeUntil(arr: number[], stopAt: number): Promise<number> {
 async function asyncSumSkipping(arr: number[], skip: number): Promise<number> {
 	let total = 0;
 	for (const v of arr) {
-		if (v === skip) continue;
+		if (v == skip) continue;
 		total += v;
 	}
 	return total;
@@ -91,21 +91,21 @@ async function asyncPipeline(x: number): Promise<SqrtResult> {
 test "safeSqrt helper" {
 	const r1 = safeSqrt(9);
 	assert r1.ok;
-	assert r1.value === 3;
+	assert r1.value == 3;
 
 	const r2 = safeSqrt(0);
 	assert r2.ok;
-	assert r2.value === 0;
+	assert r2.value == 0;
 
 	const r3 = safeSqrt(-1);
 	assert !r3.ok;
-	assert r3.error === "negative";
+	assert r3.error == "negative";
 
 	const r4 = safeSqrt(16);
 	assert r4.ok;
-	assert r4.value === 4;
+	assert r4.value == 4;
 
 	const r5 = safeSqrt(25);
 	assert r5.ok;
-	assert r5.value === 5;
+	assert r5.value == 5;
 }

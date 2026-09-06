@@ -67,7 +67,7 @@ function fromNestedClosure(): int32 {
 let bad = 0;
 
 function expect(label: string, got: int32, want: int32): void {
-	if (got !== want) {
+	if (got != want) {
 		console.log("FAIL " + label + " got=" + got + " want=" + want);
 		bad = 1;
 	}
@@ -80,5 +80,5 @@ expect("methodBody", fromMethodBody(), 4);
 expect("fieldInitializer", fromFieldInitializer(), 5);
 expect("nestedClosure", fromNestedClosure(), 6);
 
-if (bad !== 0) { process.exit(1); }
+if (bad != 0) { process.exit(1); }
 console.log("GUARD-OK");

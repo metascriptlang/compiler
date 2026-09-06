@@ -28,27 +28,27 @@ function main(): int32 {
 	let pass = true;
 
 	// Prelude statics reach only through their receiver.
-	pass = check("mathAbs", Math.abs(-1.5) === 1.5) && pass;
-	pass = check("mathFloor", Math.floor(3.7) === 3.0) && pass;
+	pass = check("mathAbs", Math.abs(-1.5) == 1.5) && pass;
+	pass = check("mathFloor", Math.floor(3.7) == 3.0) && pass;
 	pass = check("numberIsInteger", Number.isInteger(5)) && pass;
-	pass = check("stringFromCharCode", String.fromCharCode(72) === "H") && pass;
-	pass = check("bigintAsUintN", BigInt.asUintN(8, 255n + 1n) === 0n) && pass;
+	pass = check("stringFromCharCode", String.fromCharCode(72) == "H") && pass;
+	pass = check("bigintAsUintN", BigInt.asUintN(8, 255n + 1n) == 0n) && pass;
 
 	// A user namespace behaves the same way.
-	pass = check("userStatic", Unit.scale(2.5) === 5.0) && pass;
+	pass = check("userStatic", Unit.scale(2.5) == 5.0) && pass;
 
 	// Same-named routines of one module coexist: the static keys on its
 	// receiver, the free function on the value, each with its own emitted name.
-	pass = check("sameNameStaticVsFree", Unit.scale(2.0) === 4.0 && scale(2.0) === 6.0) && pass;
-	pass = check("twoStaticsDistinct", Ax.f(10) === 11 && Bx.f(10) === 12) && pass;
+	pass = check("sameNameStaticVsFree", Unit.scale(2.0) == 4.0 && scale(2.0) == 6.0) && pass;
+	pass = check("twoStaticsDistinct", Ax.f(10) == 11 && Bx.f(10) == 12) && pass;
 
 	// An instance extension keeps both call forms.
-	pass = check("instanceReceiver", "abcd".widen() === 4) && pass;
-	pass = check("instanceFree", widen("abc") === 3) && pass;
+	pass = check("instanceReceiver", "abcd".widen() == 4) && pass;
+	pass = check("instanceFree", widen("abc") == 3) && pass;
 
 	// The prelude's own instance extensions keep the free-call form.
-	pass = check("preludeUfcsFree", parseFloat("1.5") === 1.5) && pass;
-	pass = check("preludeUfcsReceiver", "2.5".parseFloat() === 2.5) && pass;
+	pass = check("preludeUfcsFree", parseFloat("1.5") == 1.5) && pass;
+	pass = check("preludeUfcsReceiver", "2.5".parseFloat() == 2.5) && pass;
 
 	if (!pass) { return 1; }
 	console.log("static member namespace ok");
@@ -56,4 +56,4 @@ function main(): int32 {
 }
 
 const rc = main();
-if (rc !== 0) { process.exit(rc); }
+if (rc != 0) { process.exit(rc); }

@@ -40,7 +40,7 @@ export function stmtKind(input: string): NodeKind {
 	const pr = parseSource(input);
 	if (!pr.ok) return NodeKind.ExprStmt;
 	const stmts = pr.value.data as ProgramData;
-	if (stmts.programStmts.length === 0) return NodeKind.ExprStmt;
+	if (stmts.programStmts.length == 0) return NodeKind.ExprStmt;
 	return stmts.programStmts[0].kind;
 }
 

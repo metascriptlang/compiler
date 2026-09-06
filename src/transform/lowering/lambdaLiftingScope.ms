@@ -49,10 +49,10 @@ export function popLoopBoundary(ss: ScopeStack): void {
 // chain walks terminate there). Names bound before the mark keep one home for
 // the whole call and stay in the shared env.
 export function isLoopLocalVar(ss: ScopeStack, name: string): boolean {
-	if (ss.loopMarkers.length === 0) return false;
+	if (ss.loopMarkers.length == 0) return false;
 	let i = ss.loopMarkers[ss.loopMarkers.length - 1];
 	while (i < ss.names.length) {
-		if (ss.names[i] === name) return true;
+		if (ss.names[i] == name) return true;
 		i += 1;
 	}
 	return false;
@@ -72,19 +72,19 @@ export function cloneScopeStack(ss: ScopeStack): ScopeStack {
 }
 
 export function isLocalVar(ss: ScopeStack, name: string): boolean {
-	if (ss.funcMarkers.length === 0) return false;
+	if (ss.funcMarkers.length == 0) return false;
 	const funcStart = ss.funcMarkers[ss.funcMarkers.length - 1];
 	for (let i = funcStart; i < ss.names.length; i += 1) {
-		if (ss.names[i] === name) return true;
+		if (ss.names[i] == name) return true;
 	}
 	return false;
 }
 
 export function isOuterVar(ss: ScopeStack, name: string): boolean {
-	if (ss.funcMarkers.length === 0) return false;
+	if (ss.funcMarkers.length == 0) return false;
 	const funcStart = ss.funcMarkers[ss.funcMarkers.length - 1];
 	for (let i = 0; i < funcStart; i += 1) {
-		if (ss.names[i] === name) return true;
+		if (ss.names[i] == name) return true;
 	}
 	return false;
 }
@@ -94,11 +94,11 @@ export function isOuterVar(ss: ScopeStack, name: string): boolean {
 // capture analysis. A variable is module-level if defined before the first
 // function boundary marker.
 export function isModuleLevelVar(ss: ScopeStack, name: string): boolean {
-	if (ss.funcMarkers.length === 0) return true;
+	if (ss.funcMarkers.length == 0) return true;
 	const firstBoundary = ss.funcMarkers[0];
 	let i = 0;
 	while (i < firstBoundary) {
-		if (ss.names[i] === name) return true;
+		if (ss.names[i] == name) return true;
 		i += 1;
 	}
 	return false;
@@ -116,7 +116,7 @@ export function isDirectParentVar(ss: ScopeStack, name: string): boolean {
 	const myStart = ss.funcMarkers[ss.funcMarkers.length - 1];
 	let i = parentStart;
 	while (i < myStart) {
-		if (ss.names[i] === name) return true;
+		if (ss.names[i] == name) return true;
 		i += 1;
 	}
 	return false;

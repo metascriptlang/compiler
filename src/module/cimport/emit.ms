@@ -37,9 +37,9 @@ function mapRuntimeType(name: string): string {
 // to itself (chibicc parse.ms:192 mutates typedefName on lookup, so the type
 // behind a self-named typedef has typedefName === obj.name).
 function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
-	if (!skipTypedef && t.typedefName !== "") {
+	if (!skipTypedef && t.typedefName != "") {
 		const mapped = mapRuntimeType(t.typedefName);
-		if (mapped !== "") return mapped;
+		if (mapped != "") return mapped;
 		// Opaque types from heuristic (unknown C types without #include)
 		// map to unknown (void* in C) since we don't know if they're pointers or structs
 		if (!t.isComplete) return "unknown";
@@ -57,22 +57,22 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 		CTypeKind.Double => "number",
 		CTypeKind.LongDouble => "number",
 		CTypeKind.Enum => {
-			if (t.tagName !== "") return t.tagName;
+			if (t.tagName != "") return t.tagName;
 			return "int32";
 		},
 		CTypeKind.Ptr => {
-			if (t.base === null) return "Ptr<void>";
+			if (t.base == null) return "Ptr<void>";
 			// void* → Ptr<void>: raw ABI pointer. NOT `unknown` — unknown is the
 			// boxed dynamic type, so an FFI handle typed unknown gets boxed on
 			// module-boundary crossings and C receives a garbage pointer.
-			if (t.base.kind === CTypeKind.Void) return "Ptr<void>";
+			if (t.base.kind == CTypeKind.Void) return "Ptr<void>";
 			// char* → cstring
-			if (t.base.kind === CTypeKind.Char) return "cstring";
+			if (t.base.kind == CTypeKind.Char) return "cstring";
 			// const char* → cstring (base is Char regardless of const)
 			// Function pointer → closure type
-			if (t.base.kind === CTypeKind.Func) return emitFuncType(t.base);
+			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			// Struct pointer → Ptr<StructName>, opaque (incomplete) → Ptr<void>
-			if (t.base.kind === CTypeKind.Struct && t.base.tagName !== "") {
+			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") {
 				if (!t.base.isComplete) return "Ptr<void>";
 				return `Ptr<${t.base.tagName}>`;
 			}
@@ -82,18 +82,18 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
-			if (t.base === null) return "unknown";
+			if (t.base == null) return "unknown";
 			const elem = cTypeToMs(t.base);
 			if (t.arrayLen >= 0) return `SizedArray<${elem}, ${t.arrayLen}>`;
 			return `Span<${elem}>`;
 		},
 		CTypeKind.Func => emitFuncType(t),
 		CTypeKind.Struct => {
-			if (t.tagName !== "") return t.tagName;
+			if (t.tagName != "") return t.tagName;
 			return "unknown";
 		},
 		CTypeKind.Union => {
-			if (t.tagName !== "") return t.tagName;
+			if (t.tagName != "") return t.tagName;
 			return "unknown";
 		},
 		_ => "unknown",
@@ -104,7 +104,7 @@ function emitParams(t: CType): string {
 	let result = "";
 	for (let i = 0; i < t.params.length; i += 1) {
 		if (i > 0) result = result + ", ";
-		const pName = i < t.paramNames.length && t.paramNames[i] !== "" ? t.paramNames[i] : `p${i}`;
+		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
 		result = result + `${pName}: ${cTypeToMs(t.params[i])}`;
 	}
 	return result;
@@ -120,7 +120,7 @@ function emitFunction(obj: Obj, prefix: string): string {
 	const t = obj.type;
 	let params = emitParams(t);
 	if (t.isVariadic) {
-		if (params !== "") params = params + ", ";
+		if (params != "") params = params + ", ";
 		params = params + "...args: unknown[]";
 	}
 	return `${prefix}extern function ${obj.name}(${params}): ${cTypeToMs(t.returnType)};\n`;
@@ -133,7 +133,7 @@ function emitVariable(obj: Obj, prefix: string): string {
 function emitStructBody(name: string, t: CType, prefix: string): string {
 	let result = `${prefix}extern struct ${name} {\n`;
 	for (const m of t.members) {
-		if (m.name === "") continue;
+		if (m.name == "") continue;
 		result = result + `\t${m.name}: ${cTypeToMs(m.type)};\n`;
 	}
 	result = result + "}\n";
@@ -143,7 +143,7 @@ function emitStructBody(name: string, t: CType, prefix: string): string {
 function emitEnum(objs: Obj[], enumType: CType, enumName: string, prefix: string): string {
 	let result = `${prefix}extern enum ${enumName} {\n`;
 	for (const obj of objs) {
-		if (obj.kind === ObjKind.EnumConstant && obj.type === enumType) {
+		if (obj.kind == ObjKind.EnumConstant && obj.type == enumType) {
 			result = result + `\t${obj.name} = ${obj.enumValue},\n`;
 		}
 	}
@@ -154,17 +154,17 @@ function emitEnum(objs: Obj[], enumType: CType, enumName: string, prefix: string
 function emitTypedef(obj: Obj, prefix: string): string {
 	const t = obj.type;
 	// Struct/union typedef → emit as extern struct
-	if ((t.kind === CTypeKind.Struct || t.kind === CTypeKind.Union) && t.members.length > 0) {
+	if ((t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.members.length > 0) {
 		return emitStructBody(obj.name, t, prefix);
 	}
 	// Enum typedef → handled separately via emitEnum
-	if (t.kind === CTypeKind.Enum) return "";
+	if (t.kind == CTypeKind.Enum) return "";
 	// Skip cTypeToMs's typedefName short-circuit — it would return obj.name
 	// itself and emit `type X = X;`. Forward-declared struct whose tagName
 	// matches obj.name still produces self-reference via the kind branch;
 	// guard with "unknown" fallback.
 	let underlying = cTypeToMs(t, true);
-	if (underlying === obj.name) underlying = "unknown";
+	if (underlying == obj.name) underlying = "unknown";
 	return `${prefix}type ${obj.name} = ${underlying};\n`;
 }
 
@@ -173,11 +173,11 @@ function emitTypedef(obj: Obj, prefix: string): string {
 export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[], emittedNames: HashSet<string> = null as unknown as HashSet<string>, readLog: string[] = null as unknown as string[]): string {
 	const prefix = withExport ? "export " : "";
 	const parsed = parseHeader(source, headerPath, { target: defaultHostTarget(), includePaths, extraDefines: [], readLog });
-	if (outDiags !== null) {
+	if (outDiags != null) {
 		for (const d of parsed.diagnostics) outDiags.push(d);
 	}
 
-	const filterAll = importedNames.length === 0;
+	const filterAll = importedNames.length == 0;
 
 	// Build "wanted" set: object names whose declaration must reach the
 	// emit pass. When filterAll, every parsed name is wanted. When the
@@ -199,7 +199,7 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 			if (processed.has(name)) continue;
 			processed.add(name);
 			for (const obj of parsed.objs) {
-				if (obj.name !== name) continue;
+				if (obj.name != name) continue;
 				const refs = new HashSet<string>();
 				const seenTypes = new HashSet<string>();
 				collectTypeRefNames(obj.type, refs, seenTypes);
@@ -222,7 +222,7 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 		// Cross-import-site dedup: a name already emitted by an earlier import
 		// in the same module (shared typedefs between sibling headers) must not
 		// re-emit — the checker rejects program-wide duplicate extern decls.
-		if (emittedNames !== null && obj.name !== "" && emittedNames.has(obj.name)) continue;
+		if (emittedNames != null && obj.name != "" && emittedNames.has(obj.name)) continue;
 		const lenBefore = result.length;
 
 		match (obj.kind) {
@@ -234,7 +234,7 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 			},
 			ObjKind.TypedefName => {
 				// Enum typedefs: emit the enum with its constants
-				if (obj.type.kind === CTypeKind.Enum) {
+				if (obj.type.kind == CTypeKind.Enum) {
 					const enumKey = obj.name;
 					if (!arrayContains(emittedEnums, enumKey)) {
 						emittedEnums.push(enumKey);
@@ -249,7 +249,7 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 			},
 			_ => {},
 		};
-		if (emittedNames !== null && obj.name !== "" && result.length > lenBefore) {
+		if (emittedNames != null && obj.name != "" && result.length > lenBefore) {
 			emittedNames.add(obj.name);
 		}
 	}
@@ -266,34 +266,34 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 // via pointer-to-self are guarded by a string-keyed seen set so the walk
 // terminates.
 function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<string>): void {
-	if (t === null) return;
-	if (t.typedefName !== "") {
+	if (t == null) return;
+	if (t.typedefName != "") {
 		const mapped = mapRuntimeType(t.typedefName);
 		// Runtime-mapped typedef (msString → string, size_t → uint64, ...):
 		// user code uses the MS-native alias; do NOT walk into the C struct
 		// internals or we drag implementation details (msStrPayload etc.)
 		// into the emitted MS source and clash with other modules' externs.
-		if (mapped !== "") return;
+		if (mapped != "") return;
 		refs.add(t.typedefName);
 	}
-	const isAggregate = t.kind === CTypeKind.Struct
-		|| t.kind === CTypeKind.Union
-		|| t.kind === CTypeKind.Enum;
-	if (isAggregate && t.tagName !== "") {
+	const isAggregate = t.kind == CTypeKind.Struct
+		|| t.kind == CTypeKind.Union
+		|| t.kind == CTypeKind.Enum;
+	if (isAggregate && t.tagName != "") {
 		refs.add(t.tagName);
 		const key = "tag:" + t.tagName;
 		if (seen.has(key)) return;
 		seen.add(key);
 	}
-	if (t.base !== null) collectTypeRefNames(t.base, refs, seen);
-	if (t.returnType !== null) collectTypeRefNames(t.returnType, refs, seen);
+	if (t.base != null) collectTypeRefNames(t.base, refs, seen);
+	if (t.returnType != null) collectTypeRefNames(t.returnType, refs, seen);
 	for (const p of t.params) collectTypeRefNames(p, refs, seen);
 	for (const m of t.members) collectTypeRefNames(m.type, refs, seen);
 }
 
 function arrayContains(arr: string[], val: string): boolean {
 	for (const item of arr) {
-		if (item === val) return true;
+		if (item == val) return true;
 	}
 	return false;
 }
@@ -331,7 +331,7 @@ test "brace initializer does not derail declaration parse" {
 	const diags: Diagnostic[] = [];
 	const ms = translateCHeader("static const int arr[] = {32, 64, 96};\nint after(void);", ["after"], false, "init.h", [], diags);
 	assert ms.indexOf("extern function after") >= 0;
-	assert diags.length === 0;
+	assert diags.length == 0;
 }
 
 test "designated initializer and _Static_assert skip clean" {
@@ -339,7 +339,7 @@ test "designated initializer and _Static_assert skip clean" {
 	const src = "typedef struct T { int a; } T;\n_Static_assert(1 == 1, \"ok\");\nstatic const T t = { .a = 1 };\nint after2(void);";
 	const ms = translateCHeader(src, ["after2"], false, "init2.h", [], diags);
 	assert ms.indexOf("extern function after2") >= 0;
-	assert diags.length === 0;
+	assert diags.length == 0;
 }
 
 test "emit pointer types" {

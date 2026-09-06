@@ -52,18 +52,18 @@ function main(): void {
 	console.log("over=" + over("b0") + "," + over("b11") + "," + over("zz"));
 	console.log("grouped=" + grouped("c1") + "," + grouped("c5") + "," + grouped("c9") + "," + grouped("zz"));
 
-	if (under("a3") !== 3) { throw "GUARD RED: below the threshold, first arms"; }
-	if (under("a7") !== 7) { throw "GUARD RED: below the threshold, last arm"; }
-	if (under("zz") !== -1) { throw "GUARD RED: below the threshold, wildcard"; }
+	if (under("a3") != 3) { throw "GUARD RED: below the threshold, first arms"; }
+	if (under("a7") != 7) { throw "GUARD RED: below the threshold, last arm"; }
+	if (under("zz") != -1) { throw "GUARD RED: below the threshold, wildcard"; }
 
-	if (over("b0") !== 0) { throw "GUARD RED: above the threshold, first arm"; }
-	if (over("b11") !== 11) { throw "GUARD RED: above the threshold, last arm"; }
-	if (over("zz") !== -1) { throw "GUARD RED: above the threshold, wildcard"; }
+	if (over("b0") != 0) { throw "GUARD RED: above the threshold, first arm"; }
+	if (over("b11") != 11) { throw "GUARD RED: above the threshold, last arm"; }
+	if (over("zz") != -1) { throw "GUARD RED: above the threshold, wildcard"; }
 
-	if (grouped("c1") !== "low") { throw "GUARD RED: grouped patterns, first group"; }
-	if (grouped("c5") !== "high") { throw "GUARD RED: grouped patterns, last group"; }
-	if (grouped("c9") !== "nine") { throw "GUARD RED: grouped patterns, single arm"; }
-	if (grouped("zz") !== "none") { throw "GUARD RED: grouped patterns, wildcard"; }
+	if (grouped("c1") != "low") { throw "GUARD RED: grouped patterns, first group"; }
+	if (grouped("c5") != "high") { throw "GUARD RED: grouped patterns, last group"; }
+	if (grouped("c9") != "nine") { throw "GUARD RED: grouped patterns, single arm"; }
+	if (grouped("zz") != "none") { throw "GUARD RED: grouped patterns, wildcard"; }
 
 	console.log("GUARD-OK");
 }

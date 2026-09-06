@@ -31,7 +31,7 @@ import { handleCodeAction, handleFormatting } from "./formatting";
 
 export function publishPendingDiagnostics(db: TransAmDb): string {
 	const changed = drainChangedFiles();
-	if (changed.length === 0) return "";
+	if (changed.length == 0) return "";
 	let result = "";
 	for (const entry of changed) {
 		const path = entry[0];
@@ -198,52 +198,52 @@ function testCache(): CompletionCache {
 
 test "returns capabilities" {
 	const r = handleInitialize("1");
-	assert lspGetField(r, "jsonrpc") === "2.0";
-	assert lspGetNumberField(r, "id") === 1;
+	assert lspGetField(r, "jsonrpc") == "2.0";
+	assert lspGetNumberField(r, "id") == 1;
 	const result = lspGetObjectField(r, "result");
 	assert result.length > 0;
 }
 
 test "returns null result" {
 	const r = handleShutdown("2");
-	assert lspGetNumberField(r, "id") === 2;
+	assert lspGetNumberField(r, "id") == 2;
 }
 
 test "clean source has no diagnostics" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
-	assert lspGetField(diags, "uri") === "file:///test.ms";
+	assert lspGetField(diags, "uri") == "file:///test.ms";
 }
 
 test "initialize" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("initialize", "1", "{}", db, testCache());
-	assert lspGetNumberField(r, "id") === 1;
+	assert lspGetNumberField(r, "id") == 1;
 }
 
 test "shutdown" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("shutdown", "2", "{}", db, testCache());
-	assert lspGetNumberField(r, "id") === 2;
+	assert lspGetNumberField(r, "id") == 2;
 }
 
 test "unknown method with id" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	assert r === "";
+	assert r == "";
 }
 
 test "unknown notification" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("$/unknownNotification", "", "{}", db, testCache());
-	assert r === "";
+	assert r == "";
 }
 
 test "completion dispatch" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r = lspDispatch("textDocument/completion", "10", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 10;
+	assert lspGetNumberField(r, "id") == 10;
 	assert r.length > 0;
 }
 
@@ -251,7 +251,7 @@ test "definition dispatch" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/definition", "11", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 11;
+	assert lspGetNumberField(r, "id") == 11;
 	assert r.length > 0;
 }
 
@@ -259,7 +259,7 @@ test "returns completion items" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":0}}";
 	const r = handleCompletion("5", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 5;
+	assert lspGetNumberField(r, "id") == 5;
 	assert r.length > 50;
 }
 
@@ -267,7 +267,7 @@ test "unknown doc returns empty" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleCompletion("6", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 6;
+	assert lspGetNumberField(r, "id") == 6;
 }
 
 test "completion cache hit on prefix extend" {
@@ -276,7 +276,7 @@ test "completion cache hit on prefix extend" {
 	const params1 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":2}}";
 	const r1 = handleCompletion("10", params1, db, cache);
 	assert cache.items.length > 0;
-	assert cache.uri === "file:///test.ms";
+	assert cache.uri == "file:///test.ms";
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r2 = handleCompletion("11", params2, db, cache);
 	assert r2.length > 0;
@@ -290,7 +290,7 @@ test "completion cache miss on different line" {
 	const cachedLine = cache.line;
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":2,\"character\":2}}";
 	handleCompletion("11", params2, db, cache);
-	assert cache.line !== cachedLine;
+	assert cache.line != cachedLine;
 }
 
 test "member access completion returns struct fields" {
@@ -298,7 +298,7 @@ test "member access completion returns struct fields" {
 	const db = testDb("file:///test.ms", src);
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":5,\"character\":2}}";
 	const r = handleCompletion("20", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 20;
+	assert lspGetNumberField(r, "id") == 20;
 	assert r.indexOf("\"label\":\"x\"") >= 0;
 	assert r.indexOf("\"label\":\"y\"") >= 0;
 	assert r.indexOf("\"detail\":\"number\"") >= 0;
@@ -309,7 +309,7 @@ test "returns location for known symbol" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleDefinition("7", params, db);
-	assert lspGetNumberField(r, "id") === 7;
+	assert lspGetNumberField(r, "id") == 7;
 	assert r.length > 0;
 }
 
@@ -317,14 +317,14 @@ test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleDefinition("8", params, db);
-	assert lspGetNumberField(r, "id") === 8;
+	assert lspGetNumberField(r, "id") == 8;
 }
 
 test "unknown position returns null result" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
 	const r = handleDefinition("9", params, db);
-	assert lspGetNumberField(r, "id") === 9;
+	assert lspGetNumberField(r, "id") == 9;
 }
 
 test "definition inside template literal" {
@@ -385,7 +385,7 @@ test "definition on undefined JSX component does not crash" {
 	const db = testDb("file:///test.ms", src);
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":12}}";
 	const r = handleDefinition("64", params, db);
-	assert lspGetNumberField(r, "id") === 64;
+	assert lspGetNumberField(r, "id") == 64;
 }
 
 test "definition on JSX tag with attributes resolves" {
@@ -419,7 +419,7 @@ test "returns symbols for file" {
 	const db = testDb("file:///test.ms", "function foo() { return 1; }\nconst x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = handleDocumentSymbol("20", params, db);
-	assert lspGetNumberField(r, "id") === 20;
+	assert lspGetNumberField(r, "id") == 20;
 	assert r.length > 60;
 }
 
@@ -437,14 +437,14 @@ test "unknown doc returns empty array" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
 	const r = handleDocumentSymbol("21", params, db);
-	assert lspGetNumberField(r, "id") === 21;
+	assert lspGetNumberField(r, "id") == 21;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const a = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = lspDispatch("textDocument/documentSymbol", "22", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 22;
+	assert lspGetNumberField(r, "id") == 22;
 	assert r.length > 0;
 }
 
@@ -452,7 +452,7 @@ test "returns signature for function" {
 	const db = testDb("file:///test.ms", "function greet(name: string): void { }\ngreet(");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":6}}";
 	const r = handleSignatureHelp("30", params, db);
-	assert lspGetNumberField(r, "id") === 30;
+	assert lspGetNumberField(r, "id") == 30;
 	assert r.length > 0;
 }
 
@@ -460,14 +460,14 @@ test "unknown doc returns null sig" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleSignatureHelp("31", params, db);
-	assert lspGetNumberField(r, "id") === 31;
+	assert lspGetNumberField(r, "id") == 31;
 }
 
 test "dispatch routes sig help" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = lspDispatch("textDocument/signatureHelp", "32", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 32;
+	assert lspGetNumberField(r, "id") == 32;
 }
 
 test "signature help picks matching enum-literal overload" {
@@ -481,7 +481,7 @@ test "signature help picks matching enum-literal overload" {
 	const db = testDb("file:///ovlsig.ms", src);
 	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":16}}";
 	const r = handleSignatureHelp("40", params, db);
-	assert lspGetNumberField(r, "id") === 40;
+	assert lspGetNumberField(r, "id") == 40;
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
 }
 
@@ -500,7 +500,7 @@ test "phase 5: sig help narrows on object literal arg via Pass-2 commit" {
 	// Cursor inside the `{` object literal at line 4 (0-indexed), after "{ "
 	const params = "{\"textDocument\":{\"uri\":\"file:///phase5sig.ms\"},\"position\":{\"line\":4,\"character\":20}}";
 	const r = handleSignatureHelp("41", params, db);
-	assert lspGetNumberField(r, "id") === 41;
+	assert lspGetNumberField(r, "id") == 41;
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
 }
 
@@ -589,7 +589,7 @@ test "phase 5: sig help on src/test/fixtures/lsp/phase5Overloads.ms narrows to S
 	const db = testDb(uri, src);
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5ovlsig.ms\"},\"position\":{\"line\":30,\"character\":32}}";
 	const r = handleSignatureHelp("100", params, db);
-	assert lspGetNumberField(r, "id") === 100;
+	assert lspGetNumberField(r, "id") == 100;
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
 }
 
@@ -613,7 +613,7 @@ test "phase 5 hover: Kind.Circle call shows Circle overload" {
 	// Line 26 col 11: `\tconst c = area(Kind.Circle, { radius: 4 });`
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovC.ms\"},\"position\":{\"line\":26,\"character\":11}}";
 	const r = handleHover("200", params, db);
-	assert lspGetNumberField(r, "id") === 200;
+	assert lspGetNumberField(r, "id") == 200;
 	assert r.indexOf("Kind.Circle", 0) >= 0;
 	assert r.indexOf("radius", 0) >= 0;
 }
@@ -626,7 +626,7 @@ test "phase 5 hover: Kind.Square call shows Square overload" {
 	// Line 30 col 11: `\tconst s = area(Kind.Square, { side: 5 });`
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovS.ms\"},\"position\":{\"line\":30,\"character\":11}}";
 	const r = handleHover("201", params, db);
-	assert lspGetNumberField(r, "id") === 201;
+	assert lspGetNumberField(r, "id") == 201;
 	assert r.indexOf("Kind.Square", 0) >= 0;
 	assert r.indexOf("side", 0) >= 0;
 	// Negative assertion: must NOT surface the Circle variant any more.
@@ -641,7 +641,7 @@ test "phase 5 hover: Kind.Line call shows Line overload" {
 	// Line 34 col 11: `\tconst l = area(Kind.Line, { length: 10 });`
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovL.ms\"},\"position\":{\"line\":34,\"character\":11}}";
 	const r = handleHover("202", params, db);
-	assert lspGetNumberField(r, "id") === 202;
+	assert lspGetNumberField(r, "id") == 202;
 	assert r.indexOf("Kind.Line", 0) >= 0;
 	assert r.indexOf("length", 0) >= 0;
 }
@@ -657,7 +657,7 @@ test "phase 5 hover: runtime kind shows wide impl" {
 	// Line 40 col 11: `\tconst r = area(runtime, runtimeData);`
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-phase5hovR.ms\"},\"position\":{\"line\":40,\"character\":11}}";
 	const r = handleHover("203", params, db);
-	assert lspGetNumberField(r, "id") === 203;
+	assert lspGetNumberField(r, "id") == 203;
 	// Wide impl: `area(k: Kind, ...)` — Kind without a member-access dot.
 	// Must NOT show `Kind.Circle` / `Kind.Square` / `Kind.Line`.
 	assert r.indexOf("Kind.Circle", 0) < 0;
@@ -684,7 +684,7 @@ test "phase 5 hover: identifier-as-value falls back to primary" {
 	// `const f = g;` — c=0 o=1 n=2 s=3 t=4 space=5 f=6 space=7 ==8 space=9 g=10.
 	const params = "{\"textDocument\":{\"uri\":\"file:///ex-ovlvalue.ms\"},\"position\":{\"line\":4,\"character\":10}}";
 	const r = handleHover("204", params, db);
-	assert lspGetNumberField(r, "id") === 204;
+	assert lspGetNumberField(r, "id") == 204;
 	// Falls back to the primary sig (K.A, declared first).
 	assert r.indexOf("K.A", 0) >= 0;
 }
@@ -693,7 +693,7 @@ test "type hint for untyped var" {
 	const db = testDb("file:///test.ms", "const x = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("40", params, db);
-	assert lspGetNumberField(r, "id") === 40;
+	assert lspGetNumberField(r, "id") == 40;
 	assert r.length > 50;
 }
 
@@ -701,14 +701,14 @@ test "empty for unknown doc" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("41", params, db);
-	assert lspGetNumberField(r, "id") === 41;
+	assert lspGetNumberField(r, "id") == 41;
 }
 
 test "dispatch inlay hint" {
 	const db = testDb("file:///test.ms", "const y = true;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = lspDispatch("textDocument/inlayHint", "42", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 42;
+	assert lspGetNumberField(r, "id") == 42;
 }
 
 test "array size hint: inferred type shows string[4]" {
@@ -792,15 +792,15 @@ test "try-expr in var-decl produces no duplicate hints (real pipeline)" {
 		throwsHintCount = throwsHintCount + 1;
 		i = idx + 1;
 	}
-	assert stringHintCount === 1;
-	assert throwsHintCount === 1;
+	assert stringHintCount == 1;
+	assert throwsHintCount == 1;
 }
 
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleReferences("50", params, db);
-	assert lspGetNumberField(r, "id") === 50;
+	assert lspGetNumberField(r, "id") == 50;
 	assert r.length > 60;
 }
 
@@ -808,21 +808,21 @@ test "unknown doc returns empty refs" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleReferences("51", params, db);
-	assert lspGetNumberField(r, "id") === 51;
+	assert lspGetNumberField(r, "id") == 51;
 }
 
 test "dispatch routes refs" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/references", "52", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 52;
+	assert lspGetNumberField(r, "id") == 52;
 }
 
 test "renames variable occurrences" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
 	const r = handleRename("60", params, db);
-	assert lspGetNumberField(r, "id") === 60;
+	assert lspGetNumberField(r, "id") == 60;
 	assert r.length > 60;
 }
 
@@ -830,21 +830,21 @@ test "unknown doc returns null rename" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
 	const r = handleRename("61", params, db);
-	assert lspGetNumberField(r, "id") === 61;
+	assert lspGetNumberField(r, "id") == 61;
 }
 
 test "empty newName returns null" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleRename("62", params, db);
-	assert lspGetNumberField(r, "id") === 62;
+	assert lspGetNumberField(r, "id") == 62;
 }
 
 test "dispatch routes rename" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
 	const r = lspDispatch("textDocument/rename", "63", params, db, testCache());
-	assert lspGetNumberField(r, "id") === 63;
+	assert lspGetNumberField(r, "id") == 63;
 }
 
 test "Trans-Am cache hit on comment-only change" {
@@ -852,12 +852,12 @@ test "Trans-Am cache hit on comment-only change" {
 	const path = "/test.ms";
 	dbSetFileText(db, path, "const x = 1;");
 	const ctx1 = dbTypeCheck(db, path);
-	assert ctx1 !== null;
-	assert db.revision.value === 1;
+	assert ctx1 != null;
+	assert db.revision.value == 1;
 	dbSetFileText(db, path, "const x = 1; // comment");
-	assert db.revision.value === 2;
+	assert db.revision.value == 2;
 	const ctx2 = dbTypeCheck(db, path);
-	assert ctx2 !== null;
+	assert ctx2 != null;
 }
 
 // ===== Phase 5 Integration Tests =====
@@ -898,7 +898,7 @@ test "multi-file: edit B updates A diagnostics" {
 	const progA = dbParse(db, "/src/a.ms");
 	recordImportsForFile(db, "/src/a.ms", progA);
 	const ctx = dbTypeCheck(db, "/src/a.ms");
-	assert ctx !== null;
+	assert ctx != null;
 }
 
 test "cancelled type check returns without crash" {

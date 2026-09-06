@@ -51,14 +51,14 @@ export interface DiscKeyParts {
 }
 
 export function parseDiscKey(discKind: string, variantKey: string): DiscKeyParts {
-	if (discKind === "boolean") {
-		return { boolValue: variantKey === "true", enumName: "", memberName: "" };
+	if (discKind == "boolean") {
+		return { boolValue: variantKey == "true", enumName: "", memberName: "" };
 	}
-	if (discKind === "enum") {
+	if (discKind == "enum") {
 		// Inline dot-search ("K.A" → enumName="K", memberName="A")
 		let dotIdx: int32 = -1;
 		for (let ci: int32 = 0; ci < variantKey.length; ci = ci + 1) {
-			if (variantKey.slice(ci, ci + 1) === ".") { dotIdx = ci; break; }
+			if (variantKey.slice(ci, ci + 1) == ".") { dotIdx = ci; break; }
 		}
 		if (dotIdx > 0) {
 			return {
@@ -163,7 +163,7 @@ export function pickAtomicAccessor(tn: string): AtomicAccessor {
 // Peel Ref<Struct> → Struct for variant inspection. Variants come from
 // tt.typExprMembers; generic-instance variants land as TypeGeneric wrappers.
 function peelVariant(vRaw: Node): Node {
-	if (vRaw.kind === NodeKind.TypeGeneric) {
+	if (vRaw.kind == NodeKind.TypeGeneric) {
 		const gd: TypeGenericData = vRaw as unknown as TypeGenericData;
 		return gd.typExprArgs[0];
 	}
@@ -178,20 +178,20 @@ function peelVariant(vRaw: Node): Node {
 // Identifier(name=literal_value) — kept here as fallback for any caller
 // that bypasses the new bridge cases.
 function extractVariantKey(v: Node, discField: string): string {
-	if (v.kind !== NodeKind.TypeObject) return "";
+	if (v.kind != NodeKind.TypeObject) return "";
 	const od: TypeObjectData = v as unknown as TypeObjectData;
 	for (let fi = 0; fi < od.typExprFieldNames.length; fi = fi + 1) {
-		if (od.typExprFieldNames[fi] === discField) {
+		if (od.typExprFieldNames[fi] == discField) {
 			const ft: Node = od.typExprFieldTypes[fi];
-			if (ft.kind === NodeKind.StringLiteral) {
+			if (ft.kind == NodeKind.StringLiteral) {
 				const sd: StringLiteralData = ft as unknown as StringLiteralData;
 				return sd.value;
 			}
-			if (ft.kind === NodeKind.BooleanLiteral) {
+			if (ft.kind == NodeKind.BooleanLiteral) {
 				const bd: BooleanLiteralData = ft as unknown as BooleanLiteralData;
 				return bd.boolValue ? "true" : "false";
 			}
-			if (ft.kind === NodeKind.Identifier) {
+			if (ft.kind == NodeKind.Identifier) {
 				const id: IdentifierData = ft as unknown as IdentifierData;
 				return id.name;
 			}
@@ -205,9 +205,9 @@ function extractVariantKey(v: Node, discField: string): string {
 // Identifier alongside real variants. The null arm isn't a real DU variant —
 // drop it so auto-detect / variant building treats only the typed members.
 function isNullVariant(m: Node): boolean {
-	if (m.kind !== NodeKind.Identifier) return false;
+	if (m.kind != NodeKind.Identifier) return false;
 	const id: IdentifierData = m as unknown as IdentifierData;
-	return id.name === "null";
+	return id.name == "null";
 }
 
 export function detectUnionDisc(tt: Node): DiscInfo {
@@ -225,19 +225,19 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	// since the candidate came from it). Requires ≥2 variants — a DU by
 	// definition has multiple variants; with only 1 the inner-loop never
 	// iterates and we'd vacuously pick variant[0]'s first field as disc.
-	if (discField === "" && realMembers.length >= 2) {
+	if (discField == "" && realMembers.length >= 2) {
 		const v0: Node = peelVariant(realMembers[0]);
-		if (v0.kind === NodeKind.TypeObject) {
+		if (v0.kind == NodeKind.TypeObject) {
 			const v0d: TypeObjectData = v0 as unknown as TypeObjectData;
 			for (const candidate of v0d.typExprFieldNames) {
 				let foundInAll: boolean = true;
 				for (let vi = 1; vi < realMembers.length; vi = vi + 1) {
 					const v: Node = peelVariant(realMembers[vi]);
-					if (v.kind !== NodeKind.TypeObject) { foundInAll = false; break; }
+					if (v.kind != NodeKind.TypeObject) { foundInAll = false; break; }
 					const vd: TypeObjectData = v as unknown as TypeObjectData;
 					let inV: boolean = false;
 					for (const f of vd.typExprFieldNames) {
-						if (f === candidate) { inV = true; break; }
+						if (f == candidate) { inV = true; break; }
 					}
 					if (!inV) { foundInAll = false; break; }
 				}
@@ -259,11 +259,11 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 			const member: Node = peelVariant(ttd.typExprMembers[vi]);
 			variants.push({ key: ttd.variantKeys[vi], member });
 		}
-	} else if (discField !== "") {
+	} else if (discField != "") {
 		for (const vRaw of realMembers) {
 			const member: Node = peelVariant(vRaw);
 			const key: string = extractVariantKey(member, discField);
-			if (key !== "") {
+			if (key != "") {
 				variants.push({ key, member });
 			}
 		}
@@ -273,9 +273,9 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	// "true"/"false" → boolean. Enum-like ("EnumName.Member") comes from the
 	// bridge, which stamps discKind for every enum-discriminated union — the
 	// match-type form and (since the resolvePass auto-stamp) the TS-style form.
-	if (discKind === "" && variants.length > 0) {
+	if (discKind == "" && variants.length > 0) {
 		const k0: string = variants[0].key;
-		if (k0 === "true" || k0 === "false") discKind = "boolean";
+		if (k0 == "true" || k0 == "false") discKind = "boolean";
 	}
 
 	return { discField: discField, discKind: discKind, variants: variants };

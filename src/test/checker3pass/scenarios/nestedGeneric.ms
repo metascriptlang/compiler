@@ -28,19 +28,19 @@ function main6(): void {
 
 test "nested-generic: no checker errors" {
 	const result = checkOnly(SRC_NESTED);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "nested-generic: innermost arrow has no GenericParam leakage" {
 	const result = checkOnly(SRC_NESTED);
 	const main_fn = findFnDecl(result.program, "main6");
-	assert main_fn !== null;
+	assert main_fn != null;
 	const arrow = findFirstArrow(main_fn);
-	assert arrow !== null;
-	assert arrow.nodeType !== null;
+	assert arrow != null;
+	assert arrow.nodeType != null;
 	assert arrow.nodeType.typeChildren.length > 0;
 	const k = arrow.nodeType.typeChildren[0].kind;
-	assert k === TypeKind.Int32,
+	assert k == TypeKind.Int32,
 		"nested generic substitution failed: arrow.typeChildren[0].kind = " + k.toString();
 }
 

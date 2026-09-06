@@ -9,21 +9,21 @@ import { createStruct, numberType, stringType, getTypeSize, createTypeRef } from
 import { ccgIntroducedPtr } from "../../codegen/c/types";
 
 test "getTypeSize: number = 8" {
-	assert getTypeSize(numberType()) === 8;
+	assert getTypeSize(numberType()) == 8;
 }
 
 test "getTypeSize: string = 16" {
-	assert getTypeSize(stringType()) === 16;
+	assert getTypeSize(stringType()) == 16;
 }
 
 test "getTypeSize: struct = sum of fields" {
 	const t = createStruct("Pair", ["x", "y"], [numberType(), numberType()], true);
-	assert getTypeSize(t) === 16;
+	assert getTypeSize(t) == 16;
 }
 
 test "getTypeSize: struct with string = 24" {
 	const t = createStruct("Named", ["id", "name"], [numberType(), stringType()], true);
-	assert getTypeSize(t) === 24;
+	assert getTypeSize(t) == 24;
 }
 
 test "getTypeSize: 24 is NOT above threshold" {
@@ -42,7 +42,7 @@ test "getTypeSize: TypeReference falls through to 8" {
 	// Should resolve to actual size, but doesn't
 	const tref = createTypeRef("DocData");
 	// This returns 8 (pointer fallback) instead of the real union size
-	assert getTypeSize(tref) === 8;
+	assert getTypeSize(tref) == 8;
 }
 
 test "getTypeSize: struct with TypeReference field is underestimated" {

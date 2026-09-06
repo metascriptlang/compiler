@@ -36,15 +36,15 @@ export function stmtCountAfter(input: string, transform: (prog: Node, ctx: Trans
 
 export function firstStmtKindAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): NodeKind {
 	const stmts = transformStmts(input, transform);
-	if (stmts.length === 0) return NodeKind.Program;
+	if (stmts.length == 0) return NodeKind.Program;
 	return stmts[0].kind;
 }
 
 export function firstExprKindAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): NodeKind {
 	const stmts = transformStmts(input, transform);
-	if (stmts.length === 0) return NodeKind.Program;
+	if (stmts.length == 0) return NodeKind.Program;
 	const stmt = stmts[0];
-	if (stmt.kind === NodeKind.ExprStmt) {
+	if (stmt.kind == NodeKind.ExprStmt) {
 		const sd = stmt.data as ExprStmtData;
 		return sd.expr.kind;
 	}
@@ -53,10 +53,10 @@ export function firstExprKindAfter(input: string, transform: (prog: Node, ctx: T
 
 // Get the kind of the first ExprStmt's inner expression from a transformed program.
 export function firstExprKind(prog: Node): NodeKind {
-	if (prog === null) return NodeKind.ExprStmt;
+	if (prog == null) return NodeKind.ExprStmt;
 	const stmts = getStmts(prog);
 	for (let i = 0; i < stmts.length; i += 1) {
-		if (stmts[i].kind === NodeKind.ExprStmt) {
+		if (stmts[i].kind == NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
 			return d.expr.kind;
 		}
@@ -66,12 +66,12 @@ export function firstExprKind(prog: Node): NodeKind {
 
 // Get the callee kind of the first CallExpr in an ExprStmt.
 export function firstCalleeKind(prog: Node): NodeKind {
-	if (prog === null) return NodeKind.ExprStmt;
+	if (prog == null) return NodeKind.ExprStmt;
 	const stmts = getStmts(prog);
 	for (let i = 0; i < stmts.length; i += 1) {
-		if (stmts[i].kind === NodeKind.ExprStmt) {
+		if (stmts[i].kind == NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
-			if (d.expr.kind === NodeKind.CallExpr) {
+			if (d.expr.kind == NodeKind.CallExpr) {
 				const cd = d.expr.data as CallExprData;
 				return cd.callee.kind;
 			}
@@ -84,9 +84,9 @@ export function firstCalleeKind(prog: Node): NodeKind {
 export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
 	const stmts = transformStmts(input, transform);
 	for (let i = 0; i < stmts.length; i += 1) {
-		if (stmts[i].kind === NodeKind.FunctionDecl) {
+		if (stmts[i].kind == NodeKind.FunctionDecl) {
 			const fd = stmts[i].data as FunctionDeclData;
-			if (fd.fnBody !== null && fd.fnBody.kind === NodeKind.BlockStmt) {
+			if (fd.fnBody != null && fd.fnBody.kind == NodeKind.BlockStmt) {
 				const bd = fd.fnBody.data as BlockStmtData;
 				return bd.statements.length;
 			}
@@ -97,12 +97,12 @@ export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: Tran
 
 // Get the argument count of the first CallExpr in an ExprStmt.
 export function firstCallArgCount(prog: Node): number {
-	if (prog === null) return -1;
+	if (prog == null) return -1;
 	const stmts = getStmts(prog);
 	for (let i = 0; i < stmts.length; i += 1) {
-		if (stmts[i].kind === NodeKind.ExprStmt) {
+		if (stmts[i].kind == NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
-			if (d.expr.kind === NodeKind.CallExpr) {
+			if (d.expr.kind == NodeKind.CallExpr) {
 				const cd = d.expr.data as CallExprData;
 				return cd.arguments.length;
 			}

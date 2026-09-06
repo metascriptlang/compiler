@@ -12,12 +12,12 @@ interface Fake { tag: string; }
 function tn(s: string): Fake { return { tag: "#text:" + s }; }
 
 function insA(v: string | Fake): Fake {
-	if (typeof v === "string") { return tn(v); }
+	if (typeof v == "string") { return tn(v); }
 	return v;
 }
 
 function insB(v: string | Fake): Fake {
-	if (typeof v === "string") { return tn(v as string); }
+	if (typeof v == "string") { return tn(v as string); }
 	return v as Fake;
 }
 

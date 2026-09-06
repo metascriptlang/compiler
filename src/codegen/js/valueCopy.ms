@@ -17,7 +17,7 @@ let copyKeys: string[] = [];
 let copyNames: string[] = [];
 
 function registryFor(gen: JSGenerator): void {
-	if (ownerGen !== gen) {
+	if (ownerGen != gen) {
 		ownerGen = gen;
 		copyKeys = [];
 		copyNames = [];
@@ -32,25 +32,25 @@ export function needsValueCopy(t: Type | null): boolean {
 	// narrowed `return p.fb` emits a carrier deep-copy for what is a plain
 	// nullable string at runtime (corpus 015 "p1=[object Object]").
 	t = jsValueRepr(t);
-	if (t === null) return false;
-	if (t.kind === TypeKind.Struct) return (t.typeFlags & TypeFlag.IsStruct) !== 0;
-	if (t.kind === TypeKind.Tuple) return true;
-	if (t.kind === TypeKind.Array) return true;
-	if (t.kind === TypeKind.SizedArray) return true;
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct) return (t.typeFlags & TypeFlag.IsStruct) != 0;
+	if (t.kind == TypeKind.Tuple) return true;
+	if (t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.SizedArray) return true;
 	return false;
 }
 
 // The runtime representation a JS value of static type `t` actually has:
 // Maybe<T> carriers are erased to `T | null` (see needsValueCopy).
 function jsValueRepr(t: Type | null): Type | null {
-	if (t !== null && t.kind === TypeKind.Struct && (t.typeFlags & TypeFlag.IsMaybe) !== 0) {
+	if (t != null && t.kind == TypeKind.Struct && (t.typeFlags & TypeFlag.IsMaybe) != 0) {
 		return t.typeReturn;
 	}
 	return t;
 }
 
 function typeKey(t: Type): string {
-	if (t.kind === TypeKind.Struct) {
+	if (t.kind == TypeKind.Struct) {
 		let key = "S:" + t.typeName + "(";
 		let i = 0;
 		while (i < t.typeChildren.length) {
@@ -60,13 +60,13 @@ function typeKey(t: Type): string {
 		}
 		return key + ")";
 	}
-	if (t.kind === TypeKind.Tuple) {
+	if (t.kind == TypeKind.Tuple) {
 		let key = "T:(";
 		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
 		return key + ")";
 	}
-	if (t.kind === TypeKind.Array && t.typeReturn !== null) return "A:" + typeKey(t.typeReturn);
-	if (t.kind === TypeKind.SizedArray && t.typeReturn !== null) return "F:" + typeKey(t.typeReturn);
+	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + typeKey(t.typeReturn);
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + typeKey(t.typeReturn);
 	return "p" + (t.kind as int32).toString();
 }
 
@@ -99,7 +99,7 @@ function copyFnName(gen: JSGenerator, t: Type): string {
 	const key = typeKey(t);
 	let i = 0;
 	while (i < copyKeys.length) {
-		if (copyKeys[i] === key) return copyNames[i];
+		if (copyKeys[i] == key) return copyNames[i];
 		i += 1;
 	}
 	const name = "msValCopy_" + identFromKey(key);
@@ -111,7 +111,7 @@ function copyFnName(gen: JSGenerator, t: Type): string {
 
 function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 	let body = "";
-	if (t.kind === TypeKind.Struct) {
+	if (t.kind == TypeKind.Struct) {
 		body = "return { ";
 		let i = 0;
 		while (i < t.typeNames.length) {
@@ -122,7 +122,7 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 			i += 1;
 		}
 		body = body + " };";
-	} else if (t.kind === TypeKind.Tuple) {
+	} else if (t.kind == TypeKind.Tuple) {
 		body = "return [";
 		let i = 0;
 		while (i < t.typeChildren.length) {
@@ -133,11 +133,11 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 		body = body + "];";
 	} else {
 		const elem = t.typeReturn;
-		const typedName = t.kind === TypeKind.SizedArray && elem !== null
+		const typedName = t.kind == TypeKind.SizedArray && elem != null
 			? jsTypedArrayName(elem.kind) : "";
 		if (needsValueCopy(elem)) {
 			body = "return v.map(" + copyFnName(gen, elem as Type) + ");";
-		} else if (typedName !== "" ) {
+		} else if (typedName != "" ) {
 			body = "return v.slice();";
 		} else {
 			body = "return v.slice();";
@@ -160,7 +160,7 @@ function isFreshRvalue(n: Node): boolean {
 		NodeKind.FunctionExpr => { return true; },
 		NodeKind.BinaryExpr => {
 			const d = n.data as BinaryExprData;
-			return d.operator !== "=";
+			return d.operator != "=";
 		},
 		NodeKind.ConditionalExpr => {
 			const d = n.data as ConditionalExprData;

@@ -27,7 +27,7 @@ export function globalImports(): string[] {
 
 export function isGlobalImport(path: string): boolean {
 	for (const entry of globalImports()) {
-		if (path === entry) return true;
+		if (path == entry) return true;
 	}
 	return false;
 }
@@ -37,12 +37,12 @@ test "setExtraGlobalImports appends build.ms entries after the defaults" {
 	const base = defaultGlobalImports().length;
 	setExtraGlobalImports(["/abs/neon/src/converters"]);
 	const imports = globalImports();
-	assert imports.length === base + 1;
-	assert imports[0] === "std/core/system";
-	assert imports[base] === "/abs/neon/src/converters";
+	assert imports.length == base + 1;
+	assert imports[0] == "std/core/system";
+	assert imports[base] == "/abs/neon/src/converters";
 	assert isGlobalImport("/abs/neon/src/converters");
 	setExtraGlobalImports([]);
-	assert globalImports().length === base;
+	assert globalImports().length == base;
 	assert !isGlobalImport("/abs/neon/src/converters");
 }
 
@@ -50,8 +50,8 @@ test "setExtraGlobalImports replaces previous extras" {
 	setExtraGlobalImports(["/a"]);
 	setExtraGlobalImports(["/b"]);
 	const imports = globalImports();
-	assert imports.length === defaultGlobalImports().length + 1;
-	assert imports[imports.length - 1] === "/b";
+	assert imports.length == defaultGlobalImports().length + 1;
+	assert imports[imports.length - 1] == "/b";
 	setExtraGlobalImports([]);
 }
 
@@ -64,23 +64,23 @@ test "isGlobalImport sees extras" {
 
 test "globalImports has system, string, array, bigint, json, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object" {
 	const imports = defaultGlobalImports();
-	assert imports.length === 16;
-	assert imports[0] === "std/core/system";
-	assert imports[1] === "std/core/array";
-	assert imports[2] === "std/core/string";
-	assert imports[3] === "std/core/bigint";
-	assert imports[4] === "std/core/json";
-	assert imports[5] === "std/core/buffer";
-	assert imports[6] === "std/core/promise";
-	assert imports[7] === "std/core/struct";
-	assert imports[8] === "std/core/fetch";
-	assert imports[9] === "std/core/date";
-	assert imports[10] === "std/core/performance";
-	assert imports[11] === "std/core/websocket";
-	assert imports[12] === "std/core/math";
-	assert imports[13] === "std/core/number";
-	assert imports[14] === "std/core/boolean";
-	assert imports[15] === "std/core/object";
+	assert imports.length == 16;
+	assert imports[0] == "std/core/system";
+	assert imports[1] == "std/core/array";
+	assert imports[2] == "std/core/string";
+	assert imports[3] == "std/core/bigint";
+	assert imports[4] == "std/core/json";
+	assert imports[5] == "std/core/buffer";
+	assert imports[6] == "std/core/promise";
+	assert imports[7] == "std/core/struct";
+	assert imports[8] == "std/core/fetch";
+	assert imports[9] == "std/core/date";
+	assert imports[10] == "std/core/performance";
+	assert imports[11] == "std/core/websocket";
+	assert imports[12] == "std/core/math";
+	assert imports[13] == "std/core/number";
+	assert imports[14] == "std/core/boolean";
+	assert imports[15] == "std/core/object";
 }
 
 test "isGlobalImport matches" {

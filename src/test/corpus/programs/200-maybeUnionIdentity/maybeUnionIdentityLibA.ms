@@ -7,7 +7,7 @@ export interface BoxA {
 
 export function readA(b: BoxA): number {
 	const v = b.w;
-	if (v === null) return -1;
-	if (typeof v === "string") return -2;
+	if (v == null) return -1;
+	if (typeof v == "string") return -2;
 	return v as number;
 }

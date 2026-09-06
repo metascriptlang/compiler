@@ -14,13 +14,13 @@ export function extractJsonField(json: string, field: string): string {
 		let match = true;
 		let j = 0;
 		while (j < needle.length) {
-			if (json.charAt(idx + j) !== needle.charAt(j)) { match = false; j = needle.length; }
+			if (json.charAt(idx + j) != needle.charAt(j)) { match = false; j = needle.length; }
 			j = j + 1;
 		}
 		if (match) {
 			const start = idx + needle.length;
 			let end = start;
-			while (end < json.length && json.charAt(end) !== "\"") end = end + 1;
+			while (end < json.length && json.charAt(end) != "\"") end = end + 1;
 			return json.slice(start, end);
 		}
 		idx = idx + 1;
@@ -32,17 +32,17 @@ export function extractJsonField(json: string, field: string): string {
 
 test "extractJsonField basic" {
 	const json = "{\"version\":\"1.2.3\",\"url\":\"https://example.com\"}";
-	assert extractJsonField(json, "version") === "1.2.3";
-	assert extractJsonField(json, "url") === "https://example.com";
-	assert extractJsonField(json, "missing") === "";
+	assert extractJsonField(json, "version") == "1.2.3";
+	assert extractJsonField(json, "url") == "https://example.com";
+	assert extractJsonField(json, "missing") == "";
 }
 
 test "extractJsonField nested ignored" {
 	const json = "{\"outer\":{\"inner\":\"deep\"},\"top\":\"val\"}";
-	assert extractJsonField(json, "top") === "val";
+	assert extractJsonField(json, "top") == "val";
 }
 
 test "extractJsonField empty string value" {
 	const json = "{\"token\":\"\"}";
-	assert extractJsonField(json, "token") === "";
+	assert extractJsonField(json, "token") == "";
 }

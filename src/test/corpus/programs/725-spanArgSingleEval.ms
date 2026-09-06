@@ -11,7 +11,7 @@ let calls = 0;
 
 function vary(): uint8[] {
 	calls = calls + 1;
-	if (calls === 1) {
+	if (calls == 1) {
 		const one: uint8[] = [11];
 		return one;
 	}
@@ -45,11 +45,11 @@ function sum(s: Span<int32>): number {
 let ok = true;
 
 const shape = describe(vary());
-if (shape !== "1:11") {
+if (shape != "1:11") {
 	ok = false;
 	console.log("FAIL pair=" + shape + " (data and len came from different evaluations)");
 }
-if (calls !== 1) {
+if (calls != 1) {
 	ok = false;
 	console.log("FAIL evaluations=" + calls.toString());
 }
@@ -57,7 +57,7 @@ if (calls !== 1) {
 // An empty array has no payload allocation, so its data pointer is NULL. The
 // length guard has to hand out a null view rather than dereference it.
 const emptyLen = lengthOf(empty());
-if (emptyLen !== 0) {
+if (emptyLen != 0) {
 	ok = false;
 	console.log("FAIL emptyLen=" + emptyLen.toString());
 }
@@ -65,7 +65,7 @@ if (emptyLen !== 0) {
 // A literal at a Span argument: the reference binds it to a fixed-size array and
 // passes (buffer, STATIC length) — there is no `len` field to read off it.
 const literalSum = sum([4, 5, 6]);
-if (literalSum !== 15) {
+if (literalSum != 15) {
 	ok = false;
 	console.log("FAIL literalSum=" + literalSum.toString());
 }
@@ -74,30 +74,30 @@ if (literalSum !== 15) {
 // the two statement kinds the transform-level materializer (3dafdba) skipped.
 // Single-eval there is owned by the analyzer's shared-node capture memo.
 calls = 0;
-if (describe(vary()) !== "1:11") {
+if (describe(vary()) != "1:11") {
 	ok = false;
 	console.log("FAIL ifcond (data and len came from different evaluations)");
 }
-if (calls !== 1) {
+if (calls != 1) {
 	ok = false;
 	console.log("FAIL ifcond evaluations=" + calls.toString());
 }
 
 calls = 0;
-let flagM = calls === 0;
+let flagM = calls == 0;
 const mixed = describe(vary()) + (flagM ? "-t" : "-f");
-if (mixed !== "1:11-t") {
+if (mixed != "1:11-t") {
 	ok = false;
 	console.log("FAIL mixed=" + mixed);
 }
-if (calls !== 1) {
+if (calls != 1) {
 	ok = false;
 	console.log("FAIL mixed evaluations=" + calls.toString());
 }
 
 // An empty result in if-condition position: the data pointer must come from
 // the null guard, not a raw payload deref.
-if (lengthOf(empty()) !== 0) {
+if (lengthOf(empty()) != 0) {
 	ok = false;
 	console.log("FAIL emptyIfCond");
 }

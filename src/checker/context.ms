@@ -90,9 +90,9 @@ export function createExportRegistry(): ExportRegistry {
 
 function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
-		if (sym.name.length === 0) continue;
+		if (sym.name.length == 0) continue;
 		const old = registry.nameIndex.get(sym.name);
-		if (old !== null) {
+		if (old != null) {
 			const updated: ExportedSymInfo[] = [];
 			for (let ai = 0; ai < old.length; ai += 1) {
 				updated.push(old[ai]);
@@ -107,14 +107,14 @@ function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): v
 
 export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
-		if (sym.name.length === 0) continue;
+		if (sym.name.length == 0) continue;
 		const arr = registry.nameIndex.get(sym.name);
-		if (arr === null) continue;
+		if (arr == null) continue;
 		const kept: ExportedSymInfo[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
-			if (arr[ri] !== sym) kept.push(arr[ri]);
+			if (arr[ri] != sym) kept.push(arr[ri]);
 		}
-		if (kept.length === 0) {
+		if (kept.length == 0) {
 			registry.nameIndex.delete(sym.name);
 		} else {
 			registry.nameIndex.set(sym.name, kept);
@@ -132,7 +132,7 @@ export function registerModuleExports(registry: ExportRegistry, modulePath: stri
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
 export function updateModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	const i = registry.moduleIndex.get(modulePath);
-	if (i !== null) {
+	if (i != null) {
 		const e = registry.entries[i];
 		removeFromNameIndex(registry, e.symbols);
 		e.symbols = exports;
@@ -144,7 +144,7 @@ export function updateModuleExports(registry: ExportRegistry, modulePath: string
 
 export function findModuleExports(registry: ExportRegistry, modulePath: string): ModuleExports {
 	const i = registry.moduleIndex.get(modulePath);
-	if (i !== null) {
+	if (i != null) {
 		return registry.entries[i];
 	}
 	return null as unknown as ModuleExports;
@@ -153,15 +153,15 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 // O(1) cross-module lookup by name — returns all exports with that name across all modules.
 export function findExportsByName(registry: ExportRegistry, name: string): ExportedSymInfo[] {
 	const arr = registry.nameIndex.get(name);
-	if (arr !== null) return arr;
+	if (arr != null) return arr;
 	return [];
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
 	const modExports = findModuleExports(registry, modulePath);
-	if (modExports === null) return null as unknown as ExportedSymInfo;
+	if (modExports == null) return null as unknown as ExportedSymInfo;
 	for (const sym of modExports.symbols) {
-		if (sym.name === name) return sym;
+		if (sym.name == name) return sym;
 	}
 	return null as unknown as ExportedSymInfo;
 }
@@ -172,16 +172,16 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	// Extension receiver metadata for primary symbol
 	let extRecv = "";
 	let extStatic = false;
-	if (extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
+	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) {
 		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
-		if (ext !== null) {
+		if (ext != null) {
 			extRecv = ext.receiverTypeName;
 			extStatic = ext.isStatic;
 		} else {
 			// Class methods: mangled name (GPUInstance_release) doesn't match
 			// extension entry (release). Fall back to symbol identity match.
 			const extSym = findExtensionBySym(extensionRegistry, sym);
-			if (extSym !== null) {
+			if (extSym != null) {
 				extRecv = extSym.receiverTypeName;
 				extStatic = extSym.isStatic;
 			}
@@ -212,20 +212,20 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		// FunctionDecl / static generic MethodDecl (same rule as primary).
 		let ovDN: Node = null as unknown as Node;
 		const ovDecl = sym.overloads[ovi].declNode;
-		if (ovDecl !== null) {
-			if (ovDecl.kind === NodeKind.FunctionDecl) {
+		if (ovDecl != null) {
+			if (ovDecl.kind == NodeKind.FunctionDecl) {
 				const fd = ovDecl.data as FunctionDeclData;
 				if (isGenericFn(fd.fnFlags)) ovDN = ovDecl;
-			} else if (ovDecl.kind === NodeKind.MethodDecl) {
+			} else if (ovDecl.kind == NodeKind.MethodDecl) {
 				if (methodCarriesMonoBody(sym.overloads[ovi].symbolType)) ovDN = ovDecl;
 			}
 		}
 		ovDeclNodes.push(ovDN);
 
-		if (extensionRegistry !== null) {
+		if (extensionRegistry != null) {
 			let ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
-			if (ovExt === null && extRecv !== "") ovExt = findExtensionBySym(extensionRegistry, sym.overloads[ovi]);
-			if (ovExt !== null) {
+			if (ovExt == null && extRecv != "") ovExt = findExtensionBySym(extensionRegistry, sym.overloads[ovi]);
+			if (ovExt != null) {
 				ovExtRecvs.push(ovExt.receiverTypeName);
 				ovExtStatics.push(ovExt.isStatic);
 			} else {
@@ -238,7 +238,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		}
 
 		const dps = sym.overloads[ovi].defaultParams;
-		if (dps !== null) {
+		if (dps != null) {
 			ovDefParamsCounts.push(dps.length);
 			for (const dp of dps) {
 				ovDefParamsFlat.push(dp);
@@ -251,7 +251,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 
 	// Enum member locations
 	let memberLocs: SourceLocation[] = [];
-	if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {
+	if (sym.declNode != null && sym.declNode.kind == NodeKind.EnumDecl) {
 		memberLocs = (sym.declNode.data as EnumDeclData).memberLocations;
 	}
 
@@ -261,14 +261,14 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	let mParamTypes: string[] = [];
 	let mConverterTarget = "";
 	let mConverterTargetType: Type = null as unknown as Type;
-	if (sym.symbolKind === SymbolKind.Macro && ctx !== null) {
+	if (sym.symbolKind == SymbolKind.Macro && ctx != null) {
 		if (ctx.macroBodyRegistry.has(sym.name)) {
 			mBody = ctx.macroBodyRegistry.get(sym.name);
 		}
 		const ct = ctx.converterTargetByName.get(sym.name);
-		if (ct !== null) { mConverterTarget = ct; }
+		if (ct != null) { mConverterTarget = ct; }
 		const ctt = ctx.converterTargetTypes.get(sym.name);
-		if (ctt !== null) { mConverterTargetType = ctt; }
+		if (ctt != null) { mConverterTargetType = ctt; }
 		if (ctx.macroParamsRegistry.has(sym.name)) {
 			mParams = ctx.macroParamsRegistry.get(sym.name);
 		}
@@ -298,14 +298,14 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	// instead (Type.sym chain bridges across modules; verified empirically
 	// for InterfaceDecl).
 	let exportDeclNode: Node = null as unknown as Node;
-	if (sym.declNode !== null) {
-		if (sym.declNode.kind === NodeKind.FunctionDecl) {
+	if (sym.declNode != null) {
+		if (sym.declNode.kind == NodeKind.FunctionDecl) {
 			exportDeclNode = sym.declNode;
-		} else if (sym.declNode.kind === NodeKind.MethodDecl) {
+		} else if (sym.declNode.kind == NodeKind.MethodDecl) {
 			if (methodCarriesMonoBody(sym.symbolType)) exportDeclNode = sym.declNode;
-		} else if (sym.declNode.kind === NodeKind.EnumDecl) {
+		} else if (sym.declNode.kind == NodeKind.EnumDecl) {
 			exportDeclNode = sym.declNode;
-		} else if (sym.declNode.kind === NodeKind.VariableDecl) {
+		} else if (sym.declNode.kind == NodeKind.VariableDecl) {
 			// Exported consts: the defining AST reaches importers so backend
 			// passes can compile the initializer at the use site (Raiser
 			// const inlining). Consumers keyed on ImportDecl for imported
@@ -323,7 +323,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds,
 		defaultParams: sym.defaultParams,
 		overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts,
-		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
+		definingModule: sym.modulePath != "" ? sym.modulePath : modulePath,
 		originalName: sym.originalName,
 		headerPath: sym.headerPath,
 		primaryFlags: sym.symFlags,
@@ -332,7 +332,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		overloadDisambs: ovDisambs,
 		jsModulePath: sym.jsModulePath,
 		hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
-		location: sym.location !== null ? sym.location : makeLoc(0, 0),
+		location: sym.location != null ? sym.location : makeLoc(0, 0),
 		memberLocations: memberLocs,
 		macroBody: mBody,
 		converterTarget: mConverterTarget,
@@ -353,13 +353,13 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
 		}
 	}
-	if (ctx.extensionRegistry !== null) {
+	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const extSym = ext.sym;
-			if (extSym !== null && hasFlag(extSym, SymbolFlag.Exported)) {
+			if (extSym != null && hasFlag(extSym, SymbolFlag.Exported)) {
 				let alreadyExported = false;
 				for (const e of exports) {
-					if (e.name === extSym.name) { alreadyExported = true; break; }
+					if (e.name == extSym.name) { alreadyExported = true; break; }
 				}
 				if (!alreadyExported) {
 					exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx));
@@ -408,16 +408,16 @@ export function createExtensionRegistry(): ExtensionRegistry {
 export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
 	return {
 		methodName, receiverTypeName, sourcePath,
-		fnType: sym !== null ? noneType() : fnType,
+		fnType: sym != null ? noneType() : fnType,
 		isStatic, sym, scopeDepth,
 	};
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
 	// Dedup by sym identity first (cheap fast-path).
-	if (method.sym !== null) {
+	if (method.sym != null) {
 		for (const existing of registry.methods) {
-			if (existing.sym === method.sym) return;
+			if (existing.sym == method.sym) return;
 		}
 	}
 	// Stronger dedup: same logical extension may register through multiple
@@ -426,15 +426,15 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	// `obj.asNumber()` reports "Ambiguous overloaded extension method" even
 	// though only one definition exists. Fast path skips this loop when
 	// the sym lacks a stable identity (modulePath empty).
-	if (method.sym !== null && method.sym.modulePath !== "") {
+	if (method.sym != null && method.sym.modulePath != "") {
 		for (const other of registry.methods) {
-			if (other.sym !== null
-					&& other.sym.name === method.sym.name
-					&& other.sym.modulePath === method.sym.modulePath
-					&& other.receiverTypeName === method.receiverTypeName
-					&& other.isStatic === method.isStatic
-					&& other.sym.location.line === method.sym.location.line
-					&& other.sym.location.column === method.sym.location.column) {
+			if (other.sym != null
+					&& other.sym.name == method.sym.name
+					&& other.sym.modulePath == method.sym.modulePath
+					&& other.receiverTypeName == method.receiverTypeName
+					&& other.isStatic == method.isStatic
+					&& other.sym.location.line == method.sym.location.line
+					&& other.sym.location.column == method.sym.location.column) {
 				return;
 			}
 		}
@@ -442,7 +442,7 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	registry.methods.push(method);
 	if (method.isStatic) {
 		for (const known of registry.staticReceivers) {
-			if (known === method.receiverTypeName) return;
+			if (known == method.receiverTypeName) return;
 		}
 		registry.staticReceivers.push(method.receiverTypeName);
 	}
@@ -450,7 +450,7 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 
 export function findExtension(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod {
 	for (const m of registry.methods) {
-		if (m.receiverTypeName === receiverTypeName && m.methodName === methodName) return m;
+		if (m.receiverTypeName == receiverTypeName && m.methodName == methodName) return m;
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -458,7 +458,7 @@ export function findExtension(registry: ExtensionRegistry, receiverTypeName: str
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
 	for (const m of registry.methods) {
-		if (m.methodName === methodName) return true;
+		if (m.methodName == methodName) return true;
 	}
 	return false;
 }
@@ -466,7 +466,7 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 // findExtensionByName — find first extension with this method name (any receiver)
 export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
 	for (const m of registry.methods) {
-		if (m.methodName === methodName) return m;
+		if (m.methodName == methodName) return m;
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -474,7 +474,7 @@ export function findExtensionByName(registry: ExtensionRegistry, methodName: str
 // findExtensionByType — find extension matching method name + fnType identity (for overload export)
 export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
 	for (const m of registry.methods) {
-		if (m.methodName === methodName && m.fnType === fnType) return m;
+		if (m.methodName == methodName && m.fnType == fnType) return m;
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -484,7 +484,7 @@ export function findExtensionByType(registry: ExtensionRegistry, methodName: str
 // registry entries use original names (release). Symbol identity bridges the mismatch.
 export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol): ExtensionMethod {
 	for (const m of registry.methods) {
-		if (m.sym !== null && m.sym === sym) return m;
+		if (m.sym != null && m.sym == sym) return m;
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -507,7 +507,7 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 	let i = 0;
 	while (i < registry.methods.length) {
 		const m = registry.methods[i];
-		if (m.methodName === methodName) {
+		if (m.methodName == methodName) {
 			results.push(m);
 		}
 		i = i + 1;
@@ -516,18 +516,18 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 }
 
 export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverName: string): boolean {
-	if (receiverName === "") return false;
+	if (receiverName == "") return false;
 	for (const known of registry.staticReceivers) {
-		if (known === receiverName) return true;
+		if (known == receiverName) return true;
 	}
 	return false;
 }
 
 export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	if (receiverName === "") return results;
+	if (receiverName == "") return results;
 	for (const e of exts) {
-		if (e.isStatic && e.receiverTypeName === receiverName) results.push(e);
+		if (e.isStatic && e.receiverTypeName == receiverName) results.push(e);
 	}
 	return results;
 }
@@ -538,7 +538,7 @@ export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiver
 // Always use this helper instead of reading ext.fnType directly.
 
 export function getExtFnType(ext: ExtensionMethod): Type {
-	if (ext.sym !== null && ext.sym.symbolType !== null && ext.sym.symbolType.kind === TypeKind.Function) {
+	if (ext.sym != null && ext.sym.symbolType != null && ext.sym.symbolType.kind == TypeKind.Function) {
 		return ext.sym.symbolType;
 	}
 	return ext.fnType;
@@ -549,8 +549,8 @@ export function getExtFnType(ext: ExtensionMethod): Type {
 // symbol bearing that name. A receiver-form (`this`) declaration and a plain
 // `function \`op\`(a, b)` declaration are one candidate set, scored by one relation.
 function isSelectableAfterMonomorphization(sym: Symbol): boolean {
-	if (sym === null) return false;
-	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return false;
+	if (sym == null) return false;
+	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return false;
 	return !hasGenericParams(sym.symbolType);
 }
 
@@ -558,7 +558,7 @@ function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol): void 
 	if (!isSelectableAfterMonomorphization(sym)) return;
 	let i = 0;
 	while (i < cands.length) {
-		if (cands[i].sym === sym) return;
+		if (cands[i].sym == sym) return;
 		i = i + 1;
 	}
 	cands.push(createExtMethod(sym.name, "", "", noneType(), false, sym, 1));
@@ -573,12 +573,12 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 		const m = cands[i];
 		i = i + 1;
 		const ft = getExtFnType(m);
-		if (ft === null || ft.kind !== TypeKind.Function) continue;
-		if (ft.typeChildren.length !== argTypes.length) continue;
+		if (ft == null || ft.kind != TypeKind.Function) continue;
+		if (ft.typeChildren.length != argTypes.length) continue;
 		const score = scoreCandidatePriority(ft.typeChildren, argTypes, getMinArity(ft));
 		if (isNoMatch(score)) continue;
 		score.calleeScope = m.scopeDepth;
-		if (best === null || cmpCandidates(score, bestScore, ft, bestFt) > 0) {
+		if (best == null || cmpCandidates(score, bestScore, ft, bestFt) > 0) {
 			best = m; bestScore = score; bestFt = ft;
 		}
 	}
@@ -587,7 +587,7 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 
 export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
-	if (registry !== null) {
+	if (registry != null) {
 		const exts = findAllExtensionsByName(registry, methodName);
 		let i = 0;
 		while (i < exts.length) {
@@ -595,9 +595,9 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 			i = i + 1;
 		}
 	}
-	if (table !== null) {
+	if (table != null) {
 		const sym = lookupSymbol(table, methodName);
-		if (sym !== null) {
+		if (sym != null) {
 			addPlainOperatorCandidate(cands, sym);
 			let j = 0;
 			while (j < sym.overloads.length) {
@@ -612,7 +612,7 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 // Strip receiver (param[0]) from an extension's function type for overload scoring.
 // Preserves minArity so scoreCandidatePriority handles default params correctly.
 export function stripReceiverParam(fnType: Type): Type {
-	if (fnType.typeChildren.length === 0) return fnType;
+	if (fnType.typeChildren.length == 0) return fnType;
 	const params: Type[] = [];
 	const names: string[] = [];
 	let i = 1;
@@ -638,7 +638,7 @@ export function stripReceiverParam(fnType: Type): Type {
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
 	// Static extensions: string-based matching (receiver not in typeChildren)
 	if (ext.isStatic) {
-		if (ext.receiverTypeName === typeNameOf(objType)) return true;
+		if (ext.receiverTypeName == typeNameOf(objType)) return true;
 		// Type-alias fallback (mirrors the instance-branch fallback below): when
 		// the receiver expression is `Buffer` (a `type Buffer = string` alias),
 		// objType resolves to the underlying `string` and typeNameOf returns
@@ -646,31 +646,31 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// collectTypeAlias). Without this, static extensions like Buffer.alloc()
 		// fail to match, NodeFlag.ExtCall isn't set, extensionMethodLower skips
 		// the rewrite, and codegen emits buggy closure dispatch.
-		if (objType !== null && objType.sym !== null
-				&& objType.sym.symbolKind === SymbolKind.TypeAlias
-				&& ext.receiverTypeName === objType.sym.name) return true;
+		if (objType != null && objType.sym != null
+				&& objType.sym.symbolKind == SymbolKind.TypeAlias
+				&& ext.receiverTypeName == objType.sym.name) return true;
 		return false;
 	}
-	if (objType === null) return false;
+	if (objType == null) return false;
 	// Instance extensions: type-based matching on first param (sym.typ is authoritative).
 	const fnType = getExtFnType(ext);
-	if (fnType.kind !== TypeKind.Function) return false;
-	if (fnType.typeChildren.length === 0) return false;
+	if (fnType.kind != TypeKind.Function) return false;
+	if (fnType.typeChildren.length == 0) return false;
 	const receiverType = fnType.typeChildren[0];
 	// Erased object (unknown) binds only the unknown catch-all, never a concrete
 	// overload — Nim parity: an unresolved receiver isn't matchable by a concrete param.
-	if (isUnresolvedType(objType) || objType.kind === TypeKind.Unknown) {
-		return isUnresolvedType(receiverType) || receiverType.kind === TypeKind.Unknown;
+	if (isUnresolvedType(objType) || objType.kind == TypeKind.Unknown) {
+		return isUnresolvedType(receiverType) || receiverType.kind == TypeKind.Unknown;
 	}
 	// `unknown` receiver: the catch-all — matches any object
-	if (isUnresolvedType(receiverType) || receiverType.kind === TypeKind.Unknown) return true;
+	if (isUnresolvedType(receiverType) || receiverType.kind == TypeKind.Unknown) return true;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
 	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
 	// matching compares element types; codegen dispatches &value vs ptr on the receiver.
 	let recvT = receiverType;
-	if (recvT.kind === TypeKind.Ref && recvT.typeReturn !== null && recvT.typeReturn.kind === TypeKind.Array) recvT = recvT.typeReturn;
+	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
 	let objT = objType;
-	if (objT.kind === TypeKind.Ref && objT.typeReturn !== null && objT.typeReturn.kind === TypeKind.Array) objT = objT.typeReturn;
+	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
 	// Generic extensions: try unification on receiver param.
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
 	if (hasGenericParams(recvT)) {
@@ -685,37 +685,37 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
 	// Reference parity: sigmatch scores exact element match over generic, so concrete
 	// overloads with wrong element types are rejected, not accepted via name fallback.
-	if (recvT.kind === TypeKind.Array && objT.kind === TypeKind.Array) {
+	if (recvT.kind == TypeKind.Array && objT.kind == TypeKind.Array) {
 		const recvElem = recvT.typeReturn;
 		const objElem = objT.typeReturn;
-		if (recvElem === null || objElem === null) return false;
+		if (recvElem == null || objElem == null) return false;
 		if (isUnresolvedType(recvElem) || isUnresolvedType(objElem)
-			|| recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
+			|| recvElem.kind == TypeKind.Unknown || objElem.kind == TypeKind.Unknown) return false;
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
-	if (ext.receiverTypeName !== "") {
+	if (ext.receiverTypeName != "") {
 		const objName = typeNameOf(objType);
-		if (ext.receiverTypeName === objName) return true;
+		if (ext.receiverTypeName == objName) return true;
 		// Check base name for monomorphized generics: "Map__string,string" → "Map"
 		const sepPos = findChar(objName, "_");
-		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) === "_") {
+		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) == "_") {
 			const baseName = objName.slice(0, sepPos);
-			if (ext.receiverTypeName === baseName) return true;
+			if (ext.receiverTypeName == baseName) return true;
 		}
 		// Type-alias fallback: typeNameOf returns the canonical primitive name
 		// (e.g. "string" for `type Buffer = string`), losing the alias. The alias
 		// symbol is preserved on objType.sym (stamped by collectTypeAlias). Mirror
 		// the static fallback in checkExprPass.ms so instance method dispatch
 		// `s.method()` resolves extensions registered against the alias name.
-		if (objType.sym !== null
-				&& objType.sym.symbolKind === SymbolKind.TypeAlias
-				&& ext.receiverTypeName === objType.sym.name) return true;
+		if (objType.sym != null
+				&& objType.sym.symbolKind == SymbolKind.TypeAlias
+				&& ext.receiverTypeName == objType.sym.name) return true;
 		// Nominal mismatch: both have names but they differ → not a match.
 		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
-		if (objName !== "") return false;
+		if (objName != "") return false;
 	}
 	return isAssignable(objType, receiverType);
 }
@@ -732,9 +732,9 @@ export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type 
 			}
 			i = i + 1;
 		}
-		if (results.length > 0 || cur === null) return results;
+		if (results.length > 0 || cur == null) return results;
 		cur = classBaseStruct(cur);
-		if (cur === null) return results;
+		if (cur == null) return results;
 		depth += 1;
 	}
 	return results;
@@ -743,7 +743,7 @@ export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type 
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
 	let cur: Type | null = objType;
 	let depth = 0;
-	while (cur !== null && depth < 64) {
+	while (cur != null && depth < 64) {
 		let i = 0;
 		while (i < exts.length) {
 			if (isReceiverMatch(exts[i], cur)) return exts[i];
@@ -757,15 +757,15 @@ export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): Ex
 
 function classBaseStruct(t: Type): Type | null {
 	let s = t;
-	if (s.kind === TypeKind.Ref && s.typeReturn !== null) s = s.typeReturn;
-	if (s.kind !== TypeKind.Struct || s.typeExtra === null) return null;
+	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	if (s.kind != TypeKind.Struct || s.typeExtra == null) return null;
 	let inner = s.typeExtra;
-	if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
-	if (inner.kind === TypeKind.Struct) return inner;
-	if (inner.sym !== null && inner.sym.symbolType !== null) {
+	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
+	if (inner.kind == TypeKind.Struct) return inner;
+	if (inner.sym != null && inner.sym.symbolType != null) {
 		let bs = inner.sym.symbolType;
-		if (bs.kind === TypeKind.Ref && bs.typeReturn !== null) bs = bs.typeReturn;
-		if (bs.kind === TypeKind.Struct) return bs;
+		if (bs.kind == TypeKind.Ref && bs.typeReturn != null) bs = bs.typeReturn;
+		if (bs.kind == TypeKind.Struct) return bs;
 	}
 	return null;
 }
@@ -790,17 +790,17 @@ let _dispEntries: DispMethodEntry[] = [];
 let _dispByLifted: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
 export function dispatchRecordParent(className: string, baseName: string): void {
-	if (className === "" || baseName === "") return;
+	if (className == "" || baseName == "") return;
 	_dispParent.set(className, baseName);
 }
 
 export function dispatchRecordMethod(className: string, methodName: string, sym: Symbol): void {
 	const lifted = sym.name;
 	const prev = _dispByLifted.get(lifted);
-	if (prev !== null) {
-		const samePlace = prev.sym.modulePath === sym.modulePath
-			&& prev.sym.location.line === sym.location.line
-			&& prev.sym.location.column === sym.location.column;
+	if (prev != null) {
+		const samePlace = prev.sym.modulePath == sym.modulePath
+			&& prev.sym.location.line == sym.location.line
+			&& prev.sym.location.column == sym.location.column;
 		if (samePlace) {
 			prev.sym = sym;
 		} else {
@@ -828,9 +828,9 @@ function dispDepthBelow(className: string, root: string): int32 {
 	let cur = className;
 	let d = 0;
 	while (d < 64) {
-		if (cur === root) return d;
+		if (cur == root) return d;
 		const nxt = _dispParent.get(cur);
-		if (nxt === null) return -1;
+		if (nxt == null) return -1;
 		cur = nxt;
 		d += 1;
 	}
@@ -841,9 +841,9 @@ export function dispatchOverridesFor(className: string, methodName: string): Dis
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
 	for (const e of _dispEntries) {
-		if (e.methodName !== methodName) continue;
+		if (e.methodName != methodName) continue;
 		if (e.overloaded) return [];
-		if (e.className === className) continue;
+		if (e.className == className) continue;
 		const dd = dispDepthBelow(e.className, className);
 		if (dd <= 0) continue;
 		ents.push(e);
@@ -867,24 +867,24 @@ export function dispatchOverridesFor(className: string, methodName: string): Dis
 // Segment-aware: works for "async|ext:s:string", not just prefix-only.
 
 function findFlagSegment(flags: string, prefix: string): string {
-	if (flags === "") return "";
+	if (flags == "") return "";
 	const parts = splitTopLevel(flags, "|");
 	for (let i = 0; i < parts.length; i += 1) {
 		const p = parts[i].trim();
-		if (p.length >= prefix.length && p.slice(0, prefix.length) === prefix) return p;
+		if (p.length >= prefix.length && p.slice(0, prefix.length) == prefix) return p;
 	}
 	return "";
 }
 
 export function isExtensionFlag(flags: string): boolean {
-	return findFlagSegment(flags, "ext:") !== "";
+	return findFlagSegment(flags, "ext:") != "";
 }
 
 // True iff `flags` carries the `gen:T,U,...` segment. Single source of
 // truth for "is this a generic decl?" — used by checker (mono dispatch),
 // codegen (skip generic body emission), and extension resolution.
 export function isGenericFn(flags: string): boolean {
-	return findFlagSegment(flags, "gen:") !== "";
+	return findFlagSegment(flags, "gen:") != "";
 }
 
 // Cross-module generic monomorphization: a method must carry its body (declNode)
@@ -903,12 +903,12 @@ export function methodCarriesMonoBody(symType: Type): boolean {
 }
 
 export function isStaticExtensionFlag(flags: string): boolean {
-	return findFlagSegment(flags, "sext:") !== "";
+	return findFlagSegment(flags, "sext:") != "";
 }
 
 export function getExtReceiverName(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
-	if (seg === "") return "";
+	if (seg == "") return "";
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
@@ -917,7 +917,7 @@ export function getExtReceiverName(flags: string): string {
 
 export function getExtReceiverType(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
-	if (seg === "") return "";
+	if (seg == "") return "";
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
@@ -930,14 +930,14 @@ export function getExtReceiverType(flags: string): string {
 
 export function getStaticExtTypeName(flags: string): string {
 	const seg = findFlagSegment(flags, "sext:");
-	if (seg === "") return "";
+	if (seg == "") return "";
 	return seg.slice(5, seg.length);
 }
 
 // Unified: returns receiver type name for either instance or static extensions, "" if not an extension.
 export function getExtTypeName(flags: string): string {
 	const instType = getExtReceiverType(flags);
-	if (instType !== "") return instType;
+	if (instType != "") return instType;
 	return getStaticExtTypeName(flags);
 }
 
@@ -946,18 +946,18 @@ export function getExtTypeName(flags: string): string {
 
 export function extractGenericNames(flags: string): string[] {
 	const result: string[] = [];
-	if (flags === "") return result;
+	if (flags == "") return result;
 	const parts = splitTopLevel(flags, "|");
 	for (let pi = 0; pi < parts.length; pi += 1) {
 		const trimPart = parts[pi].trim();
 		if (trimPart.length > 4) {
 			const prefix = trimPart.slice(0, 4);
-			if (prefix === "gen:") {
+			if (prefix == "gen:") {
 				const nameStr = trimPart.slice(4, trimPart.length);
 				const names = splitTopLevel(nameStr, ",");
 				for (let ni = 0; ni < names.length; ni += 1) {
 					const trimName = names[ni].trim();
-					if (trimName !== "") result.push(trimName);
+					if (trimName != "") result.push(trimName);
 				}
 			}
 		}
@@ -966,19 +966,19 @@ export function extractGenericNames(flags: string): string[] {
 }
 
 export function stripGenFlag(flags: string): string {
-	if (flags === "") return "";
+	if (flags == "") return "";
 	const parts = splitTopLevel(flags, "|");
 	const kept: string[] = [];
 	for (let i = 0; i < parts.length; i += 1) {
 		const trimPart = parts[i].trim();
 		if (trimPart.length > 4) {
 			const prefix = trimPart.slice(0, 4);
-			if (prefix !== "gen:") kept.push(trimPart);
+			if (prefix != "gen:") kept.push(trimPart);
 		} else {
-			if (trimPart !== "") kept.push(trimPart);
+			if (trimPart != "") kept.push(trimPart);
 		}
 	}
-	if (kept.length === 0) return "";
+	if (kept.length == 0) return "";
 	let result = kept[0];
 	for (let j = 1; j < kept.length; j += 1) {
 		result = result + "|" + kept[j];
@@ -1004,17 +1004,17 @@ export function findAttachedOps(registry: ExtensionRegistry, typeName: string): 
 		onMove: null as unknown as ExtensionMethod,
 	};
 	for (const m of registry.methods) {
-		if (m.receiverTypeName === typeName) {
-			if (m.methodName === "onDestroy") { ops.onDestroy = m; }
-			if (m.methodName === "onCopy") { ops.onCopy = m; }
-			if (m.methodName === "onMove") { ops.onMove = m; }
+		if (m.receiverTypeName == typeName) {
+			if (m.methodName == "onDestroy") { ops.onDestroy = m; }
+			if (m.methodName == "onCopy") { ops.onCopy = m; }
+			if (m.methodName == "onMove") { ops.onMove = m; }
 		}
 	}
 	return ops;
 }
 
 export function hasAttachedOps(ops: AttachedOps): boolean {
-	return ops.onDestroy !== null || ops.onCopy !== null || ops.onMove !== null;
+	return ops.onDestroy != null || ops.onCopy != null || ops.onMove != null;
 }
 
 // ===== Cancel Context =====
@@ -1027,8 +1027,8 @@ export class CancelCtx {
 }
 
 export function isCancelled(cancel: CancelCtx, startVersion: int32): boolean {
-	if (cancel === null) return false;
-	return cancel.version !== startVersion || cancel.cancelled;
+	if (cancel == null) return false;
+	return cancel.version != startVersion || cancel.cancelled;
 }
 
 // ===== Checker Context =====
@@ -1055,7 +1055,7 @@ export function sgRecordSym(
 	sym: Symbol | null, symType: Type | null, kind: SymbolKind,
 	name: string, containerName: string, isDecl: boolean
 ): void {
-	if (ctx.symRecords === null) return;
+	if (ctx.symRecords == null) return;
 	const rec: SgSymRecord = { line, col, colEnd, sym, symType, kind, name, containerName, isDecl };
 	ctx.symRecords.push(rec);
 }
@@ -1069,7 +1069,7 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 		while (j >= 0) {
 			const other = records[j];
 			if (other.line < rec.line) break;
-			if (other.line === rec.line && other.col <= rec.col) break;
+			if (other.line == rec.line && other.col <= rec.col) break;
 			records[j + 1] = records[j];
 			j = j - 1;
 		}
@@ -1247,9 +1247,9 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 }
 
 export function requestEnumToString(cc: CheckerContext, t: Type): void {
-	if (cc === null || t === null || t.typeName === "") return;
+	if (cc == null || t == null || t.typeName == "") return;
 	for (const e of cc.pendingEnumToStrings) {
-		if (e.typeName === t.typeName) return;
+		if (e.typeName == t.typeName) return;
 	}
 	cc.pendingEnumToStrings.push(t);
 }
@@ -1331,7 +1331,7 @@ export function addHintRange(ctx: CheckerContext, msg: string, line: int32, col:
 
 export function hasErrors(ctx: CheckerContext): boolean {
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Error) return true;
+		if (err.severity == Severity.Error) return true;
 	}
 	return false;
 }
@@ -1346,7 +1346,7 @@ export function hasFatalErrors(ctx: CheckerContext): boolean {
 export function errorCount(ctx: CheckerContext): int32 {
 	let count = 0;
 	for (let i = 0; i < ctx.errors.length; i += 1) {
-		if (ctx.errors[i].severity === Severity.Error) count = count + 1;
+		if (ctx.errors[i].severity == Severity.Error) count = count + 1;
 	}
 	return count;
 }
@@ -1370,7 +1370,7 @@ let _ctxCache: CtxCache = { items: [] };
 
 export function ctxCacheStore(key: number, ctx: CheckerContext): void {
 	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
-		if (_ctxCache.items[i].key === key) {
+		if (_ctxCache.items[i].key == key) {
 			_ctxCache.items[i].ctx = ctx;
 			return;
 		}
@@ -1381,7 +1381,7 @@ export function ctxCacheStore(key: number, ctx: CheckerContext): void {
 
 export function ctxCacheGet(key: number): CheckerContext {
 	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
-		if (_ctxCache.items[i].key === key) return _ctxCache.items[i].ctx;
+		if (_ctxCache.items[i].key == key) return _ctxCache.items[i].ctx;
 	}
 	return null as unknown as CheckerContext;
 }
@@ -1395,12 +1395,12 @@ export function ctxCacheClear(): void {
 test "create context" {
 	const ctx = createContext();
 	assert !hasErrors(ctx);
-	assert ctx.table.current.scopeKind === ScopeKind.Global;
-	assert ctx.currentFunction === null;
+	assert ctx.table.current.scopeKind == ScopeKind.Global;
+	assert ctx.currentFunction == null;
 	assert !ctx.inLoop;
-	assert ctx.moduleGraph === null;
-	assert ctx.currentModule === null;
-	assert ctx.symRecords.length === 0;
+	assert ctx.moduleGraph == null;
+	assert ctx.currentModule == null;
+	assert ctx.symRecords.length == 0;
 }
 
 test "sgSortRecords sorts by line then col" {
@@ -1411,9 +1411,9 @@ test "sgSortRecords sorts by line then col" {
 	records.push({ line: 1, col: 10, colEnd: 13, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "a", containerName: "", isDecl: false });
 	records.push({ line: 1, col: 1, colEnd: 4, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "b", containerName: "", isDecl: false });
 	sgSortRecords(records);
-	assert records[0].name === "b";
-	assert records[1].name === "a";
-	assert records[2].name === "c";
+	assert records[0].name == "b";
+	assert records[1].name == "a";
+	assert records[2].name == "c";
 }
 
 test "create module context" {
@@ -1421,29 +1421,29 @@ test "create module context" {
 	const mod = createModule("/a/b.ms");
 	const ctx = createModuleContext(graph, mod);
 	assert !hasErrors(ctx);
-	assert ctx.moduleGraph !== null;
-	assert ctx.currentModule !== null;
-	assert ctx.currentModule.path === "/a/b.ms";
-	assert ctx.exportRegistry !== null;
+	assert ctx.moduleGraph != null;
+	assert ctx.currentModule != null;
+	assert ctx.currentModule.path == "/a/b.ms";
+	assert ctx.exportRegistry != null;
 }
 
 test "error collection" {
 	const ctx = createContext();
-	assert errorCount(ctx) === 0;
+	assert errorCount(ctx) == 0;
 	addError(ctx, "test error", 1, 0);
 	assert hasErrors(ctx);
-	assert errorCount(ctx) === 1;
+	assert errorCount(ctx) == 1;
 	addError(ctx, "another error", 2, 5);
-	assert errorCount(ctx) === 2;
-	assert ctx.errors[0].message === "test error";
-	assert ctx.errors[0].line === 1;
-	assert ctx.errors[1].message === "another error";
-	assert ctx.errors[1].line === 2;
+	assert errorCount(ctx) == 2;
+	assert ctx.errors[0].message == "test error";
+	assert ctx.errors[0].line == 1;
+	assert ctx.errors[1].message == "another error";
+	assert ctx.errors[1].line == 2;
 }
 
 test "create empty" {
 	const r = createExtensionRegistry();
-	assert r.methods.length === 0;
+	assert r.methods.length == 0;
 }
 
 test "register and find" {
@@ -1451,14 +1451,14 @@ test "register and find" {
 	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
-	assert found !== null;
-	assert found.methodName === "trim";
+	assert found != null;
+	assert found.methodName == "trim";
 }
 
 test "not found" {
 	const r = createExtensionRegistry();
 	const found = findExtension(r, "string", "nope");
-	assert found === null;
+	assert found == null;
 }
 
 test "namespace receiver is name-keyed, not kind-keyed" {
@@ -1478,10 +1478,10 @@ test "static ext filter keeps only statics of that receiver" {
 	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	const all: ExtensionMethod[] = [stat, otherRecv, inst];
 	const got = filterStaticExtsByReceiverName(all, "String");
-	assert got.length === 1;
-	assert got[0].receiverTypeName === "String";
+	assert got.length == 1;
+	assert got[0].receiverTypeName == "String";
 	assert got[0].isStatic;
-	assert filterStaticExtsByReceiverName(all, "").length === 0;
+	assert filterStaticExtsByReceiverName(all, "").length == 0;
 }
 
 test "no attached ops" {
@@ -1496,8 +1496,8 @@ test "detect onDestroy" {
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Foo");
 	assert hasAttachedOps(ops);
-	assert ops.onDestroy !== null;
-	assert ops.onCopy === null;
+	assert ops.onDestroy != null;
+	assert ops.onCopy == null;
 }
 
 test "detect all lifecycle hooks" {
@@ -1510,9 +1510,9 @@ test "detect all lifecycle hooks" {
 	registerExtension(r, mv);
 	const ops = findAttachedOps(r, "Bar");
 	assert hasAttachedOps(ops);
-	assert ops.onDestroy !== null;
-	assert ops.onCopy !== null;
-	assert ops.onMove !== null;
+	assert ops.onDestroy != null;
+	assert ops.onCopy != null;
+	assert ops.onMove != null;
 }
 
 test "wrong type no match" {
@@ -1525,7 +1525,7 @@ test "wrong type no match" {
 
 test "create empty registry" {
 	const r = createExportRegistry();
-	assert r.entries.length === 0;
+	assert r.entries.length == 0;
 }
 
 test "register and find exports" {
@@ -1535,15 +1535,15 @@ test "register and find exports" {
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
-	assert found !== null;
-	assert found.name === "foo";
-	assert found.kind === SymbolKind.Function;
+	assert found != null;
+	assert found.name == "foo";
+	assert found.kind == SymbolKind.Function;
 }
 
 test "missing module returns null" {
 	const r = createExportRegistry();
 	const found = findExportedSymbol(r, "/nope.ms", "x");
-	assert found === null;
+	assert found == null;
 }
 
 test "missing symbol returns null" {
@@ -1553,44 +1553,44 @@ test "missing symbol returns null" {
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
-	assert found === null;
+	assert found == null;
 }
 
 test "extractGenericNames single" {
 	const names = extractGenericNames("gen:T");
-	assert names.length === 1;
-	assert names[0] === "T";
+	assert names.length == 1;
+	assert names[0] == "T";
 }
 
 test "extractGenericNames multiple" {
 	const names = extractGenericNames("gen:T,U,V");
-	assert names.length === 3;
-	assert names[0] === "T";
-	assert names[1] === "U";
-	assert names[2] === "V";
+	assert names.length == 3;
+	assert names[0] == "T";
+	assert names[1] == "U";
+	assert names[2] == "V";
 }
 
 test "extractGenericNames with async" {
 	const names = extractGenericNames("async|gen:T");
-	assert names.length === 1;
-	assert names[0] === "T";
+	assert names.length == 1;
+	assert names[0] == "T";
 }
 
 test "extractGenericNames empty" {
 	const names = extractGenericNames("");
-	assert names.length === 0;
+	assert names.length == 0;
 }
 
 test "extractGenericNames no gen" {
 	const names = extractGenericNames("async");
-	assert names.length === 0;
+	assert names.length == 0;
 }
 
-test "stripGenFlag simple" { assert stripGenFlag("gen:T") === ""; }
+test "stripGenFlag simple" { assert stripGenFlag("gen:T") == ""; }
 
-test "stripGenFlag with async" { assert stripGenFlag("async|gen:T") === "async"; }
+test "stripGenFlag with async" { assert stripGenFlag("async|gen:T") == "async"; }
 
-test "stripGenFlag no gen" { assert stripGenFlag("async") === "async"; }
+test "stripGenFlag no gen" { assert stripGenFlag("async") == "async"; }
 
 test "isExtensionFlag prefix" {
 	assert isExtensionFlag("ext:s:string");
@@ -1604,15 +1604,15 @@ test "isExtensionFlag pipe-delimited" {
 }
 
 test "getExtReceiverName" {
-	assert getExtReceiverName("ext:s:string") === "s";
-	assert getExtReceiverName("async|ext:self:Array") === "self";
-	assert getExtReceiverName("") === "";
+	assert getExtReceiverName("ext:s:string") == "s";
+	assert getExtReceiverName("async|ext:self:Array") == "self";
+	assert getExtReceiverName("") == "";
 }
 
 test "getExtReceiverType" {
-	assert getExtReceiverType("ext:s:string") === "string";
-	assert getExtReceiverType("async|ext:self:Array") === "Array";
-	assert getExtReceiverType("") === "";
+	assert getExtReceiverType("ext:s:string") == "string";
+	assert getExtReceiverType("async|ext:self:Array") == "Array";
+	assert getExtReceiverType("") == "";
 }
 
 test "isStaticExtensionFlag" {
@@ -1623,9 +1623,9 @@ test "isStaticExtensionFlag" {
 }
 
 test "getStaticExtTypeName" {
-	assert getStaticExtTypeName("sext:Math") === "Math";
-	assert getStaticExtTypeName("async|sext:Promise") === "Promise";
-	assert getStaticExtTypeName("") === "";
+	assert getStaticExtTypeName("sext:Math") == "Math";
+	assert getStaticExtTypeName("async|sext:Promise") == "Promise";
+	assert getStaticExtTypeName("") == "";
 }
 
 test "static extension in registry" {
@@ -1633,7 +1633,7 @@ test "static extension in registry" {
 	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "Math", "floor");
-	assert found !== null;
+	assert found != null;
 	assert found.isStatic;
 }
 
@@ -1642,7 +1642,7 @@ test "instance extension isStatic false" {
 	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
-	assert found !== null;
+	assert found != null;
 	assert !found.isStatic;
 }
 
@@ -1657,20 +1657,20 @@ test "instance extension isStatic false" {
 const _globalTypeOwners: Map<string, string> = new Map<string, string>();
 
 export function recordGlobalTypeOwner(name: string, modulePath: string): void {
-	if (name === "" || modulePath === "") return;
+	if (name == "" || modulePath == "") return;
 	const prev = _globalTypeOwners.get(name);
-	if (prev === null) {
+	if (prev == null) {
 		_globalTypeOwners.set(name, modulePath);
 		return;
 	}
-	if (prev !== modulePath) {
+	if (prev != modulePath) {
 		_globalTypeOwners.set(name, "\u0001AMBIGUOUS");
 	}
 }
 
 export function getGlobalTypeOwner(name: string): string {
 	const v = _globalTypeOwners.get(name);
-	if (v === null || v === "AMBIGUOUS") return "";
+	if (v == null || v == "AMBIGUOUS") return "";
 	return v;
 }
 
@@ -1681,20 +1681,20 @@ export function getGlobalTypeOwner(name: string): string {
 const _globalTypeShapes: Map<string, string> = new Map<string, string>();
 
 export function recordGlobalTypeShape(name: string, shapeKey: string, modulePath: string): void {
-	if (name === "" || shapeKey === "" || modulePath === "") return;
+	if (name == "" || shapeKey == "" || modulePath == "") return;
 	const key = name + "|" + shapeKey;
 	const prev = _globalTypeShapes.get(key);
-	if (prev === null) {
+	if (prev == null) {
 		_globalTypeShapes.set(key, modulePath);
 		return;
 	}
-	if (prev !== modulePath) {
+	if (prev != modulePath) {
 		_globalTypeShapes.set(key, "AMBIGUOUS");
 	}
 }
 
 export function getGlobalTypeOwnerByShape(name: string, shapeKey: string): string {
 	const v = _globalTypeShapes.get(name + "|" + shapeKey);
-	if (v === null || v === "AMBIGUOUS") return "";
+	if (v == null || v == "AMBIGUOUS") return "";
 	return v;
 }

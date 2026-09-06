@@ -34,7 +34,7 @@ function concatStrs(arr: string[]): string {
 }
 
 function safeDivide(a: number, b: number): MathResult {
-	if (b === 0) return Result.err("div by zero");
+	if (b == 0) return Result.err("div by zero");
 	return Result.ok(a / b);
 }
 
@@ -47,7 +47,7 @@ function chainCalc(a: number, b: number, c: number): MathResult {
 function findInArray(arr: number[], target: number): FindResult {
 	let i = 0;
 	while (i < arr.length) {
-		if (arr[i] === target) return Result.ok(i);
+		if (arr[i] == target) return Result.ok(i);
 		i += 1;
 	}
 	return Result.err("not found");
@@ -103,7 +103,7 @@ interface Dict { entries: DictEntry[]; }
 function dictSet(d: Dict, key: string, value: string): void {
 	let i = 0;
 	while (i < d.entries.length) {
-		if (d.entries[i].key === key) { d.entries[i].value = value; return; }
+		if (d.entries[i].key == key) { d.entries[i].value = value; return; }
 		i += 1;
 	}
 	d.entries.push({ key: key, value: value });
@@ -112,7 +112,7 @@ function dictSet(d: Dict, key: string, value: string): void {
 function dictGet(d: Dict, key: string): string {
 	let i = 0;
 	while (i < d.entries.length) {
-		if (d.entries[i].key === key) return d.entries[i].value;
+		if (d.entries[i].key == key) return d.entries[i].value;
 		i += 1;
 	}
 	return "";
@@ -121,7 +121,7 @@ function dictGet(d: Dict, key: string): string {
 function dictHas(d: Dict, key: string): boolean {
 	let i = 0;
 	while (i < d.entries.length) {
-		if (d.entries[i].key === key) return true;
+		if (d.entries[i].key == key) return true;
 		i += 1;
 	}
 	return false;
@@ -130,30 +130,30 @@ function dictHas(d: Dict, key: string): boolean {
 test "closures" {
 	const add5 = makeAdder(5);
 	const add10 = makeAdder(10);
-	assert add5(3) === 8;
-	assert add10(3) === 13;
+	assert add5(3) == 8;
+	assert add10(3) == 13;
 }
 
 test "nested closures (compose)" {
 	const mul2add1 = compose(mul2, add1);
-	assert mul2add1(3) === 8;
-	assert mul2add1(0) === 2;
+	assert mul2add1(3) == 8;
+	assert mul2add1(0) == 2;
 }
 
 test "for..of" {
-	assert sumArr([1, 2, 3, 4, 5]) === 15;
-	assert sumArr([]) === 0;
-	assert concatStrs(["a", "b", "c"]) === "abc";
+	assert sumArr([1, 2, 3, 4, 5]) == 15;
+	assert sumArr([]) == 0;
+	assert concatStrs(["a", "b", "c"]) == "abc";
 }
 
 test "Result chain" {
 	const c1 = chainCalc(100, 2, 5);
 	assert c1.ok;
-	assert c1.value === 10;
+	assert c1.value == 10;
 
 	const c2 = chainCalc(100, 0, 5);
 	assert !c2.ok;
-	assert c2.error === "div by zero";
+	assert c2.error == "div by zero";
 
 	const c3 = chainCalc(100, 2, 0);
 	assert !c3.ok;
@@ -162,16 +162,16 @@ test "Result chain" {
 test "Result in loop" {
 	const f1 = findInArray([10, 20, 30, 40], 30);
 	assert f1.ok;
-	assert f1.value === 2;
+	assert f1.value == 2;
 
 	const f2 = findInArray([10, 20, 30], 99);
 	assert !f2.ok;
 }
 
 test "match block arms" {
-	assert tokenLabel(TokenKind.Num) === "number_literal";
-	assert tokenLabel(TokenKind.Str) === "string_literal";
-	assert tokenLabel(TokenKind.Bool) === "bool_literal";
+	assert tokenLabel(TokenKind.Num) == "number_literal";
+	assert tokenLabel(TokenKind.Str) == "string_literal";
+	assert tokenLabel(TokenKind.Bool) == "bool_literal";
 }
 
 test "interface pipeline (order)" {
@@ -179,14 +179,14 @@ test "interface pipeline (order)" {
 	order.items.push({ name: "apple", price: 2, qty: 3 });
 	order.items.push({ name: "bread", price: 4, qty: 1 });
 	order.items.push({ name: "milk", price: 3, qty: 2 });
-	assert orderTotal(order) === 11;
-	assert itemCount(order) === 6;
+	assert orderTotal(order) == 11;
+	assert itemCount(order) == 6;
 }
 
 function findFirstEven(arr: number[]): number {
 	let i = 0;
 	while (i < arr.length) {
-		if (arr[i] % 2 === 0) return arr[i];
+		if (arr[i] % 2 == 0) return arr[i];
 		i += 1;
 	}
 	return -1;
@@ -196,7 +196,7 @@ function sumOddsOnly(arr: number[]): number {
 	let total = 0;
 	let i = 0;
 	while (i < arr.length) {
-		if (arr[i] % 2 === 0) { i += 1; continue; }
+		if (arr[i] % 2 == 0) { i += 1; continue; }
 		total += arr[i];
 		i += 1;
 	}
@@ -204,15 +204,15 @@ function sumOddsOnly(arr: number[]): number {
 }
 
 test "break and continue" {
-	assert findFirstEven([1, 3, 5, 8, 9]) === 8;
-	assert findFirstEven([1, 3, 5]) === -1;
-	assert sumOddsOnly([1, 2, 3, 4, 5]) === 9;
+	assert findFirstEven([1, 3, 5, 8, 9]) == 8;
+	assert findFirstEven([1, 3, 5]) == -1;
+	assert sumOddsOnly([1, 2, 3, 4, 5]) == 9;
 }
 
 test "path utils" {
-	assert dirname("src/parser/core.ms") === "src/parser";
-	assert dirname("file.ms") === ".";
-	assert join("a", "b") === "a/b";
+	assert dirname("src/parser/core.ms") == "src/parser";
+	assert dirname("file.ms") == ".";
+	assert join("a", "b") == "a/b";
 }
 
 function buildLargeString(lines: number): string {
@@ -233,15 +233,15 @@ test "large file I/O" {
 	const rr = readFile(path);
 	assert rr.ok;
 	const back = rr.value;
-	assert back === content;
+	assert back == content;
 	assert back.length > 400;
 	remove(path);
 }
 
 test "enum dispatch" {
-	assert statusMsg(classifyScore(90)) === "good";
-	assert statusMsg(classifyScore(65)) === "warning";
-	assert statusMsg(classifyScore(30)) === "error";
+	assert statusMsg(classifyScore(90)) == "good";
+	assert statusMsg(classifyScore(65)) == "warning";
+	assert statusMsg(classifyScore(30)) == "error";
 }
 
 test "string key lookup (dict)" {
@@ -250,13 +250,13 @@ test "string key lookup (dict)" {
 	dictSet(dict, "version", "0.1");
 	dictSet(dict, "target", "c");
 
-	assert dictGet(dict, "name") === "MetaScript";
-	assert dictGet(dict, "version") === "0.1";
+	assert dictGet(dict, "name") == "MetaScript";
+	assert dictGet(dict, "version") == "0.1";
 	assert dictHas(dict, "target");
 	assert !dictHas(dict, "missing");
-	assert dictGet(dict, "missing") === "";
+	assert dictGet(dict, "missing") == "";
 
 	dictSet(dict, "version", "0.2");
-	assert dictGet(dict, "version") === "0.2";
-	assert dict.entries.length === 3;
+	assert dictGet(dict, "version") == "0.2";
+	assert dict.entries.length == 3;
 }

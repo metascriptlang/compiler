@@ -68,60 +68,60 @@ function main(): void {
 
 	// Two-part concat — the shape that reaches msStringConcat.
 	const twoPart = "m=" + m;
-	if (twoPart !== "m=$7") { throw "GUARD RED: 2-part concat of a class method receiver = " + twoPart; }
+	if (twoPart != "m=$7") { throw "GUARD RED: 2-part concat of a class method receiver = " + twoPart; }
 
 	// Three-plus parts — the shape that reaches msStringConcatArr.
 	const manyPart = "m=" + m + " p=" + p;
-	if (manyPart !== "m=$7 p=(1,2)") { throw "GUARD RED: N-part concat with an extension receiver = " + manyPart; }
+	if (manyPart != "m=$7 p=(1,2)") { throw "GUARD RED: N-part concat with an extension receiver = " + manyPart; }
 
 	// Extension on an interface type.
 	const ifacePart = "t=" + t;
-	if (ifacePart !== "t=#hot") { throw "GUARD RED: concat of an interface extension receiver = " + ifacePart; }
+	if (ifacePart != "t=#hot") { throw "GUARD RED: concat of an interface extension receiver = " + ifacePart; }
 
 	// Template literal desugars to the same concat path.
 	const tmpl = `m=${m} t=${t}`;
-	if (tmpl !== "m=$7 t=#hot") { throw "GUARD RED: template literal interpolation = " + tmpl; }
+	if (tmpl != "m=$7 t=#hot") { throw "GUARD RED: template literal interpolation = " + tmpl; }
 
 	// Compound assign: the RHS needs the same insertion before msStringAppend.
 	let acc = "p=";
 	acc += p;
-	if (acc !== "p=(1,2)") { throw "GUARD RED: '+=' of a user type = " + acc; }
+	if (acc != "p=(1,2)") { throw "GUARD RED: '+=' of a user type = " + acc; }
 
 	// A numeric subtree inside a concat must still evaluate numerically first.
 	const n = 21;
 	const atomic = "n=" + (n + 1) + "!";
-	if (atomic !== "n=22!") { throw "GUARD RED: numeric subtree split by the concat path = " + atomic; }
+	if (atomic != "n=22!") { throw "GUARD RED: numeric subtree split by the concat path = " + atomic; }
 
 	// The receiver is the operand node itself — planting the call must not
 	// duplicate it, or a side-effecting receiver runs twice.
 	const once = "once=" + nextMoney();
-	if (once !== "once=$9") { throw "GUARD RED: call-expression receiver = " + once; }
-	if (receiverEvals !== 1) { throw "GUARD RED: receiver evaluated " + receiverEvals.toString() + " times, expected 1"; }
+	if (once != "once=$9") { throw "GUARD RED: call-expression receiver = " + once; }
+	if (receiverEvals != 1) { throw "GUARD RED: receiver evaluated " + receiverEvals.toString() + " times, expected 1"; }
 
 	// Rvalue receiver: no named local exists to take the address of (the shape
 	// that broke the asBytes bridge, NIM-REF "zero-copy bridge ownership").
 	const rvalue = "rv=" + new Money(3);
-	if (rvalue !== "rv=$3") { throw "GUARD RED: rvalue receiver = " + rvalue; }
+	if (rvalue != "rv=$3") { throw "GUARD RED: rvalue receiver = " + rvalue; }
 
 	// User type on the LEFT of the concat.
 	const leftSide = m + " end";
-	if (leftSide !== "$7 end") { throw "GUARD RED: user type as left operand = " + leftSide; }
+	if (leftSide != "$7 end") { throw "GUARD RED: user type as left operand = " + leftSide; }
 
 	// A stringify body that concats user objects itself.
 	const nested = "n=" + new Pair(new Money(1), new Money(2));
-	if (nested !== "n=<$1|$2>") { throw "GUARD RED: nested synthesis inside toString = " + nested; }
+	if (nested != "n=<$1|$2>") { throw "GUARD RED: nested synthesis inside toString = " + nested; }
 
 	// Repeated receiver in one chain, and accumulation through '+=' in a loop.
 	const repeat = "" + m + m;
-	if (repeat !== "$7$7") { throw "GUARD RED: repeated receiver in one chain = " + repeat; }
+	if (repeat != "$7$7") { throw "GUARD RED: repeated receiver in one chain = " + repeat; }
 	let loop = "";
 	for (let i = 0; i < 3; i = i + 1) { loop += new Money(i); }
-	if (loop !== "$0$1$2") { throw "GUARD RED: '+=' accumulation in a loop = " + loop; }
+	if (loop != "$0$1$2") { throw "GUARD RED: '+=' accumulation in a loop = " + loop; }
 
 	// Through a generic parameter — the operand's type is only a struct after
 	// instantiation.
 	const generic = viaGeneric(m);
-	if (generic !== "g=$7") { throw "GUARD RED: concat through a generic parameter = " + generic; }
+	if (generic != "g=$7") { throw "GUARD RED: concat through a generic parameter = " + generic; }
 
 	console.log("stringifyProtocolResolved ok");
 }

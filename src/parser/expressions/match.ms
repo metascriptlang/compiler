@@ -26,35 +26,35 @@ export function parseMatchExpr(
 	advance(state); // consume 'match'
 
 	// Expect ( discriminant )
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'match' at line ${current(state).line}`);
 	}
 	advance(state);
 	let disc = try exprParser(state, 0);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after match discriminant at line ${current(state).line}`);
 	}
 	advance(state);
 
 	// Expect { cases }
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' to start match body at line ${current(state).line}`);
 	}
 	advance(state);
 
 	const cases: Node[] = [];
 
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const caseNode = try parseMatchCase(state, exprParser, blockParser);
 		cases.push(caseNode);
 
 		// Optional comma between cases
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		}
 	}
 
-	if (current(state).kind === TokenKind.RBrace) {
+	if (current(state).kind == TokenKind.RBrace) {
 		advance(state);
 	}
 
@@ -79,7 +79,7 @@ function parseMatchCase(
 	// Restricted production: bare `ident =>` arrows are suppressed inside the
 	// guard so its trailing `=>` stays with the match arm (see core.ms nud).
 	let guard: Node | null = null;
-	if (current(state).kind === TokenKind.When) {
+	if (current(state).kind == TokenKind.When) {
 		advance(state);
 		state.noBareArrow = state.noBareArrow + 1;
 		const guardResult = exprParser(state, 0);
@@ -88,7 +88,7 @@ function parseMatchCase(
 	}
 
 	// Expect =>
-	if (current(state).kind !== TokenKind.Arrow) {
+	if (current(state).kind != TokenKind.Arrow) {
 		return Result.err(`Expected '=>' after match pattern at line ${current(state).line}`);
 	}
 	const arrowToken = current(state);
@@ -111,7 +111,7 @@ function parseMatchBody(
 	exprParser: ExprParser,
 	blockParser: BlockParser
 ): ExprResult {
-	if (current(state).kind === TokenKind.LBrace) {
+	if (current(state).kind == TokenKind.LBrace) {
 		return blockParser(state);
 	}
 	return exprParser(state, 0);
@@ -130,7 +130,7 @@ function parseMatchPatterns(state: ParserState): PatternsResult {
 	patterns.push(first);
 
 	// Or-patterns: separated by |
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state); // consume |
 		const next = try parseSinglePattern(state);
 		patterns.push(next);
@@ -144,7 +144,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	const token = current(state);
 
 	// Number literal
-	if (token.kind === TokenKind.Number) {
+	if (token.kind == TokenKind.Number) {
 		advance(state);
 		const isFloat = numericLiteralIsFloat(token.value);
 		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
@@ -154,10 +154,10 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	}
 
 	// String literal — with optional .code suffix ("a".code → MemberExpr)
-	if (token.kind === TokenKind.String) {
+	if (token.kind == TokenKind.String) {
 		advance(state);
 		let node = createNode(NodeKind.StringLiteral, { value: token.value }, token);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 			advance(state);
 			if (!isAtEnd(state) && isIdentOrKeyword(current(state).kind)) {
 				const prop = current(state);
@@ -172,7 +172,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// so matchLower's isBindingPattern doesn't treat them as bindings (which
 	// causes both arms to unconditionally match). See bug025.
 	const literalNode = tryParseLiteralKeyword(state);
-	if (literalNode !== null) return Result.ok(literalNode);
+	if (literalNode != null) return Result.ok(literalNode);
 
 	// Identifier (including _ wildcard, enum members, binding patterns)
 	if (isIdentLike(token)) {
@@ -182,7 +182,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	}
 
 	// Prefix minus for negative numbers
-	if (token.kind === TokenKind.Minus) {
+	if (token.kind == TokenKind.Minus) {
 		advance(state);
 		const operand = try parseSinglePattern(state);
 		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token));

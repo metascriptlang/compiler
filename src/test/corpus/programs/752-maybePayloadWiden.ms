@@ -13,8 +13,8 @@
 function tail(): string { return "b"; }
 
 function show(v: number | string | null): string {
-	if (v === null) { return "null"; }
-	if (typeof v === "string") { return "s:" + (v as string); }
+	if (v == null) { return "null"; }
+	if (typeof v == "string") { return "s:" + (v as string); }
 	return "n:" + `${v as number}`;
 }
 

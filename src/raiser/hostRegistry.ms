@@ -30,7 +30,7 @@ export function registerHostFn(name: string, fn: RaiserHostFn): void {
 	// Allow re-registration (last write wins) — Phase 5 may re-populate
 	// across compiler reruns in long-running build processes.
 	for (const entry of _registry.entries) {
-		if (entry.name === name) {
+		if (entry.name == name) {
 			entry.fn = fn;
 			return;
 		}
@@ -41,7 +41,7 @@ export function registerHostFn(name: string, fn: RaiserHostFn): void {
 
 export function lookupHostFn(name: string): RaiserHostFn {
 	for (const entry of _registry.entries) {
-		if (entry.name === name) {
+		if (entry.name == name) {
 			return entry.fn;
 		}
 	}
@@ -103,26 +103,26 @@ test "register and lookup host fn" {
 	};
 	registerHostFn("echo", echoFn);
 	const fn = lookupHostFn("echo");
-	assert fn !== null;
+	assert fn != null;
 	const result = fn([raiserString("hello")]);
-	assert result.kind === RaiserValueKind.String;
-	assert result.strVal === "hello";
+	assert result.kind == RaiserValueKind.String;
+	assert result.strVal == "hello";
 }
 
 test "lookup missing returns null" {
 	_resetHostRegistryForTests();
 	const fn = lookupHostFn("nonexistent");
-	assert fn === null;
+	assert fn == null;
 }
 
 test "registry size tracks entries" {
 	_resetHostRegistryForTests();
-	assert hostRegistrySize() === 0;
+	assert hostRegistrySize() == 0;
 	const fn1: RaiserHostFn = (args: RaiserValue[]): RaiserValue => args[0];
 	const fn2: RaiserHostFn = (args: RaiserValue[]): RaiserValue => args[0];
 	registerHostFn("a", fn1);
 	registerHostFn("b", fn2);
-	assert hostRegistrySize() === 2;
+	assert hostRegistrySize() == 2;
 }
 
 test "re-registration overwrites" {
@@ -131,23 +131,23 @@ test "re-registration overwrites" {
 	const fnB: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(2);
 	registerHostFn("dup", fnA);
 	registerHostFn("dup", fnB);
-	assert hostRegistrySize() === 1;
+	assert hostRegistrySize() == 1;
 	const fn = lookupHostFn("dup");
 	const result = fn([]);
-	assert result.intVal === 2;
+	assert result.intVal == 2;
 }
 
 test "initialized flag" {
 	_resetHostRegistryForTests();
-	assert isHostRegistryInitialized() === false;
+	assert isHostRegistryInitialized() == false;
 	markHostRegistryInitialized();
-	assert isHostRegistryInitialized() === true;
+	assert isHostRegistryInitialized() == true;
 }
 
 test "active host heaps publish and read back" {
 	const oh = createStructHeap();
 	const ah = createArrayHeap();
 	setActiveHostHeaps(oh, ah);
-	assert activeHostObjectHeap() !== null;
-	assert activeHostArrayHeap() !== null;
+	assert activeHostObjectHeap() != null;
+	assert activeHostArrayHeap() != null;
 }

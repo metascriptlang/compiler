@@ -12,7 +12,7 @@ type Shape = { kind: "rect", rect: RectD } | { kind: "circ", circ: CircD };
 interface Box { s: Shape; }
 
 function pickIf(m: Shape): int32 {
-    if (m.kind === "circ") {
+    if (m.kind == "circ") {
         return m.circ.rad;
     }
     return m.rect.w;
@@ -26,14 +26,14 @@ function pickMatch(m: Shape): int32 {
 }
 
 function pickChained(b: Box): int32 {
-    if (b.s.kind === "circ") {
+    if (b.s.kind == "circ") {
         return b.s.circ.rad;
     }
     return b.s.rect.w;
 }
 
 function pickExcluded(m: Shape): int32 {
-    if (m.kind !== "circ") {
+    if (m.kind != "circ") {
         return m.rect.w;
     }
     return m.circ.rad;
@@ -54,14 +54,14 @@ function main(): int32 {
 
     let rc: int32 = 0;
     for (let i: int32 = 0; i < cases.length; i += 1) {
-        if (cases[i] !== want[i]) {
+        if (cases[i] != want[i]) {
             console.log(`BAD[${i}]=${cases[i]} want=${want[i]}`);
             rc = 1;
         }
     }
-    if (rc === 0) { console.log("GUARD-OK duVariantNarrowedReads"); }
+    if (rc == 0) { console.log("GUARD-OK duVariantNarrowedReads"); }
     return rc;
 }
 
 const rc = main();
-if (rc !== 0) { process.exit(rc); }
+if (rc != 0) { process.exit(rc); }

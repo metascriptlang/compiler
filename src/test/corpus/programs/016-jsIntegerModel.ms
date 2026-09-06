@@ -43,14 +43,14 @@ function check(label: string, ok: boolean): void {
 
 function main(): number {
 	// --- integer division truncates toward zero (NOT toward -infinity) ---
-	check("divPos", opaqueI32(7) / opaqueI32(2) === 3);
-	check("divNeg", opaqueI32(0 - 7) / opaqueI32(2) === -3);
-	check("divExact", opaqueI32(8) / opaqueI32(2) === 4);
-	check("divSmaller", opaqueI32(1) / opaqueI32(2) === 0);
+	check("divPos", opaqueI32(7) / opaqueI32(2) == 3);
+	check("divNeg", opaqueI32(0 - 7) / opaqueI32(2) == -3);
+	check("divExact", opaqueI32(8) / opaqueI32(2) == 4);
+	check("divSmaller", opaqueI32(1) / opaqueI32(2) == 0);
 
 	// --- remainder keeps the dividend's sign, as in C ---
-	check("modPos", opaqueI32(7) % opaqueI32(2) === 1);
-	check("modNeg", opaqueI32(0 - 7) % opaqueI32(2) === -1);
+	check("modPos", opaqueI32(7) % opaqueI32(2) == 1);
+	check("modNeg", opaqueI32(0 - 7) % opaqueI32(2) == -1);
 
 	// --- the digit loop: the shape that made this bug visible in the first
 	// place. With a fractional quotient the value decays through denormals
@@ -58,11 +58,11 @@ function main(): number {
 	// regression cannot hang the gate.
 	let n: int32 = opaqueI32(1000);
 	let iters: int32 = 0;
-	while (n !== 0 && iters < 100) {
+	while (n != 0 && iters < 100) {
 		n = n / 10;
 		iters = iters + 1;
 	}
-	check("divLoopIters", iters === 4);
+	check("divLoopIters", iters == 4);
 
 	// --- compound assignment, including through an array index. The indexed
 	// form is the one an inline test cannot reach: only the project pipeline
@@ -70,22 +70,22 @@ function main(): number {
 	// left side can be read back at all.
 	let cd: int32 = opaqueI32(7);
 	cd /= opaqueI32(2);
-	check("cdivIdent", cd === 3);
+	check("cdivIdent", cd == 3);
 
 	const cells: int32[] = [opaqueI32(7), opaqueI32(9)];
 	let ci: int32 = opaqueI32(0);
 	cells[ci] /= opaqueI32(2);
-	check("cdivIndexed", cells[ci] === 3);
+	check("cdivIndexed", cells[ci] == 3);
 
 	const ucells: uint32[] = [opaqueU32(1), opaqueU32(5)];
 	ucells[ci] -= opaqueU32(3);
-	check("cwrapIndexed", ucells[ci] === 4294967294);
+	check("cwrapIndexed", ucells[ci] == 4294967294);
 
 	// --- unsigned division and wrap ---
-	check("udiv", opaqueU32(7) / opaqueU32(2) === 3);
+	check("udiv", opaqueU32(7) / opaqueU32(2) == 3);
 	const uwrapExpect: uint32 = 4294967295;
-	check("uwrap", opaqueU32(0) - opaqueU32(1) === uwrapExpect);
-	check("uaddWrap", opaqueU32(4294967295) + opaqueU32(1) === 0);
+	check("uwrap", opaqueU32(0) - opaqueU32(1) == uwrapExpect);
+	check("uaddWrap", opaqueU32(4294967295) + opaqueU32(1) == 0);
 
 	// --- unsigned bitwise: every JS bitwise operator yields an int32, so any
 	// result with the high bit set reads back negative unless it goes through
@@ -94,36 +94,36 @@ function main(): number {
 	const uHighBit: uint32 = 2147483648;
 	const uorExpect: uint32 = 2147483649;
 	const uxorExpect: uint32 = 4294967294;
-	check("uand", (opaqueU32(4294967295) & opaqueU32(4294967295)) === uwrapExpect);
-	check("uor", (opaqueU32(2147483648) | opaqueU32(1)) === uorExpect);
-	check("uxor", (opaqueU32(4294967295) ^ opaqueU32(1)) === uxorExpect);
-	check("unot", (~opaqueU32(0)) === uwrapExpect);
-	check("ushl", (opaqueU32(1) << opaqueU32(31)) === uHighBit);
+	check("uand", (opaqueU32(4294967295) & opaqueU32(4294967295)) == uwrapExpect);
+	check("uor", (opaqueU32(2147483648) | opaqueU32(1)) == uorExpect);
+	check("uxor", (opaqueU32(4294967295) ^ opaqueU32(1)) == uxorExpect);
+	check("unot", (~opaqueU32(0)) == uwrapExpect);
+	check("ushl", (opaqueU32(1) << opaqueU32(31)) == uHighBit);
 
 	// The one case a trailing ToUint32 cannot repair: JS shifts the int32 view
 	// arithmetically, so 0x80000000 >> 1 keeps the sign and masking afterwards
 	// yields 0xC0000000. The operator itself has to become `>>>`.
-	check("ushr", (opaqueU32(2147483648) >> opaqueU32(1)) === 1073741824);
+	check("ushr", (opaqueU32(2147483648) >> opaqueU32(1)) == 1073741824);
 
 	// Both products exceed 2^53, where a double multiply has already lost the
 	// low bits before any mask can run — these are what force an exact 32-bit
 	// multiply rather than `(a * b) >>> 0`.
 	const umulOddExpect: uint32 = 3906153237;
-	check("umulMax", opaqueU32(4294967295) * opaqueU32(4294967295) === 1);
-	check("umulOdd", opaqueU32(3000000007) * opaqueU32(700000003) === umulOddExpect);
+	check("umulMax", opaqueU32(4294967295) * opaqueU32(4294967295) == 1);
+	check("umulOdd", opaqueU32(3000000007) * opaqueU32(700000003) == umulOddExpect);
 
 	// --- explicit conversion truncates toward zero at every width ---
-	check("convI32", (opaqueF64(3.9) as int32) === 3);
-	check("convI32Neg", (opaqueF64(0.0 - 3.9) as int32) === -3);
-	check("convI16", (opaqueF64(3.9) as int16) === 3);
-	check("convI8", (opaqueF64(3.9) as int8) === 3);
-	check("convU8", (opaqueF64(3.9) as uint8) === 3);
-	check("convU32", (opaqueF64(3.9) as uint32) === 3);
+	check("convI32", (opaqueF64(3.9) as int32) == 3);
+	check("convI32Neg", (opaqueF64(0.0 - 3.9) as int32) == -3);
+	check("convI16", (opaqueF64(3.9) as int16) == 3);
+	check("convI8", (opaqueF64(3.9) as int8) == 3);
+	check("convU8", (opaqueF64(3.9) as uint8) == 3);
+	check("convU32", (opaqueF64(3.9) as uint32) == 3);
 
 	// (the four implicit-path checks moved to guard/jsIntegerModelImplicitPaths.ms —
 	// the checker rejects those shapes before codegen now)
 
-	if (failures === 0) {
+	if (failures == 0) {
 		console.log("js-integer-model all-ok");
 		return 0;
 	}

@@ -48,8 +48,8 @@ export enum CommaContext {
 
 // Should a trailing comma appear in this context?
 export function wantsTrailingComma(opts: FormatOptions, context: CommaContext): boolean {
-	if (opts.trailingComma === TrailingComma.All) return true;
-	if (opts.trailingComma === TrailingComma.Es5 && context === CommaContext.Collection) return true;
+	if (opts.trailingComma == TrailingComma.All) return true;
+	if (opts.trailingComma == TrailingComma.Es5 && context == CommaContext.Collection) return true;
 	return false;
 }
 
@@ -58,7 +58,7 @@ export function wantsTrailingComma(opts: FormatOptions, context: CommaContext): 
 export function applyFmtSection(opts: FormatOptions, fmt: FmtSection): FormatOptions {
 	if (fmt.printWidth >= 0) { opts.printWidth = fmt.printWidth; }
 	if (fmt.tabWidth >= 0) { opts.tabWidth = fmt.tabWidth; }
-	if (fmt.useTabs >= 0) { opts.useTabs = fmt.useTabs === 1; }
-	if (fmt.singleQuote >= 0) { opts.singleQuote = fmt.singleQuote === 1; }
+	if (fmt.useTabs >= 0) { opts.useTabs = fmt.useTabs == 1; }
+	if (fmt.singleQuote >= 0) { opts.singleQuote = fmt.singleQuote == 1; }
 	return opts;
 }

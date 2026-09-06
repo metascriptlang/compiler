@@ -18,9 +18,9 @@ import { BreakState, addName, hasName, collectSince, mergeBranches } from "./bra
 // Two symbols at the same source position are the same symbol; two with
 // the same name at different positions (shadowing) get distinct keys.
 export function symbolConsumeKey(sym: Symbol): string {
-	if (sym === null) return "";
+	if (sym == null) return "";
 	const loc = sym.location;
-	if (loc === null) return sym.name;
+	if (loc == null) return sym.name;
 	return `${sym.name}:${loc.line}:${loc.column}`;
 }
 
@@ -82,8 +82,8 @@ export function removeConsumedName(t: AffineTracker, key: string): void {
 	let write = 0;
 	let read = 0;
 	while (read < t.consumed.length) {
-		if (t.consumed[read] !== key) {
-			if (write !== read) {
+		if (t.consumed[read] != key) {
+			if (write != read) {
 				t.consumed[write] = t.consumed[read];
 			}
 			write = write + 1;
@@ -118,7 +118,7 @@ test "no duplicate consume" {
 	const t = createAffineTracker();
 	markConsumedName(t, "h");
 	markConsumedName(t, "h");
-	assert t.consumed.length === 1;
+	assert t.consumed.length == 1;
 }
 
 test "merge exhaustive both consumed" {
@@ -177,5 +177,5 @@ test "collectNewConsumes" {
 	markConsumedName(t, "b");
 	markConsumedName(t, "c");
 	const newCons = collectNewConsumes(t, snap);
-	assert newCons.length === 2;
+	assert newCons.length == 2;
 }

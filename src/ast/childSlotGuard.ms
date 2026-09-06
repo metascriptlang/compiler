@@ -52,11 +52,11 @@ function countNullChildren(root: Node): int32 {
 	let nulls = 0;
 	let kinds = 0;
 	forEachChild(root, (child: Node): void => {
-		if (child === null) {
+		if (child == null) {
 			nulls = nulls + 1;
 			return;
 		}
-		if (child.kind === NodeKind.Program) kinds = kinds + 1;
+		if (child.kind == NodeKind.Program) kinds = kinds + 1;
 		nulls = nulls + countNullChildren(child);
 	});
 	return nulls;
@@ -67,12 +67,12 @@ function countNullChildren(root: Node): int32 {
 // "extractor still finds the AST field set".
 function countAbsentInitializers(root: Node): int32 {
 	let absent = 0;
-	if (root.kind === NodeKind.VariableDecl) {
+	if (root.kind == NodeKind.VariableDecl) {
 		const d = root.data as VariableDeclData;
-		if (d.initializer === null) absent = absent + 1;
+		if (d.initializer == null) absent = absent + 1;
 	}
 	forEachChild(root, (child: Node): void => {
-		if (child === null) return;
+		if (child == null) return;
 		absent = absent + countAbsentInitializers(child);
 	});
 	return absent;
@@ -80,7 +80,7 @@ function countAbsentInitializers(root: Node): int32 {
 
 test "child-slot guard: the corpus parses" {
 	const program = parseCorpus();
-	assert program !== null, "SLOT_CORPUS no longer parses — the guard would pass vacuously";
+	assert program != null, "SLOT_CORPUS no longer parses — the guard would pass vacuously";
 }
 
 test "child-slot guard: the corpus still holds an absent child slot" {
@@ -93,6 +93,6 @@ test "child-slot guard: the corpus still holds an absent child slot" {
 test "child-slot guard: no child table hands a null to its callback" {
 	const program = parseCorpus();
 	const nulls = countNullChildren(program);
-	assert nulls === 0,
+	assert nulls == 0,
 		"forEachChild handed a callback " + nulls.toString() + " null child(ren) — restore the null skip in visitor.ms, do not patch callers";
 }

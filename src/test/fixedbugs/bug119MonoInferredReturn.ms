@@ -19,14 +19,14 @@ function dup<T>(x: T) { return x; }
 
 test "bug119: mono instance adopts the inferred return type" {
 	const n = dup<int32>(42);
-	assert n === 42;
+	assert n == 42;
 	const s = dup<string>("hey");
-	assert s === "hey";
+	assert s == "hey";
 }
 
 function pickSecond<T>(a: T, b: T) { return b; }
 
 test "bug119: inferred return flows through multi-param generics" {
 	const v = pickSecond<float64>(1.5, 2.5);
-	assert v === 2.5;
+	assert v == 2.5;
 }

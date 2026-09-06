@@ -85,7 +85,7 @@ function specialCharName(ch: string): string {
 // Alphanumeric + underscore pass through. Special chars get word replacements.
 
 export function mangle(name: string): string {
-	if (name.length === 0) return "empty_";
+	if (name.length == 0) return "empty_";
 	let result = "";
 	let start = 0;
 	let requiresUnderscore = false;
@@ -101,7 +101,7 @@ export function mangle(name: string): string {
 		const ch = name.charAt(i);
 		if (isAlnumChar(ch)) {
 			result = result + ch;
-		} else if (ch === "_") {
+		} else if (ch == "_") {
 			result = result + "_";
 		} else {
 			result = result + specialCharName(ch);
@@ -151,9 +151,9 @@ export function mangleModuleName(modulePath: string): string {
 		const ch = modulePath.charAt(i);
 		if (isLowerOrDigit(ch)) {
 			result = result + ch;
-		} else if (ch === "/" || ch === "\\") {
+		} else if (ch == "/" || ch == "\\") {
 			result = result + "Z";
-		} else if (ch === ".") {
+		} else if (ch == ".") {
 			result = result + "O";
 		} else {
 			result = result + charOrd(ch);
@@ -201,22 +201,22 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 // encoding its content — so the sym it happens to carry is whichever module
 // created it first, not an owner. Same carve-out as "$" and mono "__" above.
 export function isSharedStructuralName(name: string): boolean {
-	if (name.length > 6 && name.slice(0, 6) === "Maybe_") return true;
-	if (name.length > 8 && name.slice(0, 8) === "msTuple_") return true;
-	if (name.length > 7 && name.slice(0, 7) === "msAnon_") return true;
-	if (name.length > 8 && name.slice(0, 8) === "msUnion_") return true;
+	if (name.length > 6 && name.slice(0, 6) == "Maybe_") return true;
+	if (name.length > 8 && name.slice(0, 8) == "msTuple_") return true;
+	if (name.length > 7 && name.slice(0, 7) == "msAnon_") return true;
+	if (name.length > 8 && name.slice(0, 8) == "msUnion_") return true;
 	return false;
 }
 
 export function mangledTypeName(sym: Symbol | null, name: string): string {
-	if (sym !== null) {
+	if (sym != null) {
 		const early = symExternOrImportName(sym, name);
-		if (early !== "") return early;
+		if (early != "") return early;
 	}
-	if (name.length > 0 && name.slice(0, 1) === "$") return mangle(name);
+	if (name.length > 0 && name.slice(0, 1) == "$") return mangle(name);
 	if (name.indexOf("__", 0) >= 0) return mangle(name);
 	if (isSharedStructuralName(name)) return mangle(name);
-	if (sym !== null && sym.modulePath !== "") {
+	if (sym != null && sym.modulePath != "") {
 		return mangleQualified(name, mangleModuleName(sym.modulePath));
 	}
 	return mangle(name);
@@ -238,8 +238,8 @@ export function staticFieldCName(qualifiedName: string): string {
 // raw C name directly. Returns "" to signal the caller should fall through
 // to its own rule (proc vs global vs type).
 function symExternOrImportName(sym: Symbol | null, name: string): string {
-	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
-	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
+	if (sym != null && sym.nativeName != "") return sym.nativeName;
+	if (sym != null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
 	return "";
 }
 
@@ -248,12 +248,12 @@ function symExternOrImportName(sym: Symbol | null, name: string): string {
 // extern functions use nativeName. main() stays main_. Others get module-qualified.
 
 export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
-	if (name === "main") return safeName(name);
+	if (name == "main") return safeName(name);
 	const early = symExternOrImportName(sym, name);
-	if (early !== "") return early;
+	if (early != "") return early;
 	// Use original declared name for mangling, not import alias
-	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
-	if (sym !== null && sym.modulePath !== "") {
+	const baseName = (sym != null && sym.originalName != "") ? sym.originalName : name;
+	if (sym != null && sym.modulePath != "") {
 		// The _u suffix is the symbol's per-(module, name) ordinal minted at
 		// declaration — NOT the overload-set slot. A routine that never joins
 		// an overload set (static member, routine nested in a body) still
@@ -284,14 +284,14 @@ export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinn
 	}
 	let emitIdx = rawIdx;
 	let emitSym = winnerSym;
-	if (winnerSym !== null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
+	if (winnerSym != null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
 		if (!hasFlag(sym, SymbolFlag.OverloadSig)) {
 			emitSym = sym;
 			emitIdx = 0;
 		} else {
 			for (let oi = 0; oi < sym.overloads.length; oi += 1) {
 				const cand = sym.overloads[oi];
-				if (cand !== null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
+				if (cand != null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
 					emitSym = cand;
 					emitIdx = oi + 1;
 					break;
@@ -313,14 +313,14 @@ export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinn
 // declarations), and has a known defining module.
 
 export function isModuleGlobalVar(sym: Symbol | null): boolean {
-	if (sym === null) return false;
-	if (sym.symbolKind !== SymbolKind.Variable) return false;
+	if (sym == null) return false;
+	if (sym.symbolKind != SymbolKind.Variable) return false;
 	// Flag set in two places: (1) collectPass for own-module top-level VariableDecl,
 	// (2) importSymFromRegistry for imported Variable syms (exports can only be
 	// module-level). Distinguishes module-level globals from locals — both have
 	// modulePath set (defineOrError stamps it), only globals carry this flag.
 	if (!hasFlag(sym, SymbolFlag.Global)) return false;
-	if (sym.modulePath === null || sym.modulePath === "") return false;
+	if (sym.modulePath == null || sym.modulePath == "") return false;
 	return true;
 }
 
@@ -333,16 +333,16 @@ export function isModuleGlobalVar(sym: Symbol | null): boolean {
 
 export function mangledGlobalName(sym: Symbol | null, name: string): string {
 	const early = symExternOrImportName(sym, name);
-	if (early !== "") return early;
-	const baseName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
+	if (early != "") return early;
+	const baseName = (sym != null && sym.originalName != "") ? sym.originalName : name;
 	// A `static` decl inside a body shares the module namespace with every other
 	// body in the module, so the module qualifier alone does not separate two
 	// sites spelling the same name. Both the declaration and every read recompute
 	// the name through here, so the site suffix must live here to stay one source.
-	const site = (sym !== null && hasFlag(sym, SymbolFlag.StaticLocal))
+	const site = (sym != null && hasFlag(sym, SymbolFlag.StaticLocal))
 		? `__static${sym.location.line.toString()}_${sym.location.column.toString()}`
 		: "";
-	if (sym !== null && sym.modulePath !== "") {
+	if (sym != null && sym.modulePath != "") {
 		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + site;
 	}
 	return safeName(baseName) + site;
@@ -390,23 +390,23 @@ export function safeName(name: string): string {
 
 // ===== Tests =====
 test "simple names pass through" {
-	assert mangle("foo") === "foo";
-	assert mangle("bar123") === "bar123";
-	assert mangle("_private") === "_private";
+	assert mangle("foo") == "foo";
+	assert mangle("bar123") == "bar123";
+	assert mangle("_private") == "_private";
 }
 
-test "leading digit" { assert mangle("3d") === "X3d"; }
+test "leading digit" { assert mangle("3d") == "X3d"; }
 
 test "special chars get word replacements" {
-	assert mangle("a+b") === "aplusb_";
-	assert mangle("x=y") === "xeqy_";
-	assert mangle("<") === "lt_";
-	assert mangle("a.b") === "adotb_";
+	assert mangle("a+b") == "aplusb_";
+	assert mangle("x=y") == "xeqy_";
+	assert mangle("<") == "lt_";
+	assert mangle("a.b") == "adotb_";
 }
 
-test "empty name" { assert mangle("") === "empty_"; }
+test "empty name" { assert mangle("") == "empty_"; }
 
-test "multiple special chars" { assert mangle("a+b*c") === "aplusbstarc_"; }
+test "multiple special chars" { assert mangle("a+b*c") == "aplusbstarc_"; }
 
 test "C keywords detected" {
 	assert isCKeyword("int");
@@ -420,62 +420,62 @@ test "non-keywords pass" {
 	assert !isCKeyword("myVar");
 }
 
-test "mangleQualified basic" { assert mangleQualified("foo", "mymod") === "foo__mymod"; }
+test "mangleQualified basic" { assert mangleQualified("foo", "mymod") == "foo__mymod"; }
 
-test "mangleQualified with special char" { assert mangleQualified("a+b", "mymod") === "aplusb___mymod"; }
+test "mangleQualified with special char" { assert mangleQualified("a+b", "mymod") == "aplusb___mymod"; }
 
-test "mangleProcName" { assert mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"; }
+test "mangleProcName" { assert mangleProcName("myFunc", "mymod", 42) == "myFunc__mymod_u42"; }
 
-test "mangleProcName with special" { assert mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"; }
+test "mangleProcName with special" { assert mangleProcName("a+b", "ops", 1) == "aplusb___ops_u1"; }
 
 test "mangledGlobalName no sym falls through to safeName" {
-	assert mangledGlobalName(null, "FOO") === "FOO";
+	assert mangledGlobalName(null, "FOO") == "FOO";
 }
 
 test "mangledGlobalName no modulePath falls through to safeName" {
 	const sym = makeSymbol("FOO", SymbolKind.Variable, noneType(), false);
-	assert mangledGlobalName(sym, "FOO") === "FOO";
+	assert mangledGlobalName(sym, "FOO") == "FOO";
 }
 
 test "mangledGlobalName extern nativeName bypass" {
 	const sym = makeSymbol("x", SymbolKind.Variable, noneType(), false);
 	sym.nativeName = "my_c_sym";
 	sym.modulePath = "src/foo.ms";
-	assert mangledGlobalName(sym, "FOO") === "my_c_sym";
+	assert mangledGlobalName(sym, "FOO") == "my_c_sym";
 }
 
 test "mangledGlobalName module-qualified" {
 	const sym = makeSymbol("MAX", SymbolKind.Variable, noneType(), false);
 	sym.modulePath = "src/foo.ms";
-	assert mangledGlobalName(sym, "MAX") === "MAX__srcZfooOms";
+	assert mangledGlobalName(sym, "MAX") == "MAX__srcZfooOms";
 }
 
 test "mangledGlobalName prefers originalName over import alias" {
 	const sym = makeSymbol("aliased", SymbolKind.Variable, noneType(), false);
 	sym.modulePath = "src/foo.ms";
 	sym.originalName = "ORIG";
-	assert mangledGlobalName(sym, "aliased") === "ORIG__srcZfooOms";
+	assert mangledGlobalName(sym, "aliased") == "ORIG__srcZfooOms";
 }
 
 test "mangledFunctionName main stays safe" {
-	assert mangledFunctionName(null, "main", 0) === "main_";
+	assert mangledFunctionName(null, "main", 0) == "main_";
 }
 
 test "mangledFunctionName plain name no sym" {
-	assert mangledFunctionName(null, "foo", 0) === "foo";
+	assert mangledFunctionName(null, "foo", 0) == "foo";
 }
 
 test "mangledFunctionName module-qualified" {
 	const sym = makeSymbol("bar", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/foo.ms";
-	assert mangledFunctionName(sym, "bar", 0) === "bar__srcZfooOms_u0";
+	assert mangledFunctionName(sym, "bar", 0) == "bar__srcZfooOms_u0";
 }
 
 test "mangledFunctionName nativeName bypass (extern)" {
 	const sym = makeSymbol("printf", SymbolKind.Function, noneType(), false);
 	sym.nativeName = "printf";
 	sym.modulePath = "std/io.ms";
-	assert mangledFunctionName(sym, "printf", 0) === "printf";
+	assert mangledFunctionName(sym, "printf", 0) == "printf";
 }
 
 test "mangledFunctionName ImportC bypass" {
@@ -483,61 +483,61 @@ test "mangledFunctionName ImportC bypass" {
 	sym.modulePath = "std/core.ms";
 	setFlag(sym, SymbolFlag.ImportC);
 	// malloc is in isCStdlibName → safeName adds trailing underscore
-	assert mangledFunctionName(sym, "malloc", 0) === "malloc_";
+	assert mangledFunctionName(sym, "malloc", 0) == "malloc_";
 }
 
 test "mangledFunctionName disamb disambiguates" {
 	const sym = makeSymbol("foo", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
 	sym.disamb = 2;
-	assert mangledFunctionName(sym, "foo", 0) === "foo__srcZbarOms_u2";
+	assert mangledFunctionName(sym, "foo", 0) == "foo__srcZbarOms_u2";
 }
 
 test "mangledFunctionName prefers originalName over import alias" {
 	const sym = makeSymbol("aliasedFn", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
 	sym.originalName = "realFn";
-	assert mangledFunctionName(sym, "aliasedFn", 0) === "realFn__srcZbarOms_u0";
+	assert mangledFunctionName(sym, "aliasedFn", 0) == "realFn__srcZbarOms_u0";
 }
 
 test "mangledFunctionName no modulePath with overloadIdx" {
-	assert mangledFunctionName(null, "foo", 3) === "foo__3";
+	assert mangledFunctionName(null, "foo", 3) == "foo__3";
 }
 
 test "normal field" {
-	assert mangleFieldName("x") === "x";
-	assert mangleFieldName("myField") === "myField";
+	assert mangleFieldName("x") == "x";
+	assert mangleFieldName("myField") == "myField";
 }
 
 test "keyword field" {
-	assert mangleFieldName("int") === "int_0";
-	assert mangleFieldName("return") === "return_0";
+	assert mangleFieldName("int") == "int_0";
+	assert mangleFieldName("return") == "return_0";
 }
 
-test "normal name" { assert safeName("foo") === "foo"; }
+test "normal name" { assert safeName("foo") == "foo"; }
 
 test "keyword gets suffix" {
-	assert safeName("int") === "int_";
-	assert safeName("void") === "void_";
+	assert safeName("int") == "int_";
+	assert safeName("void") == "void_";
 }
 
-test "simple lowercase path" { assert mangleModuleName("mymod") === "mymod"; }
+test "simple lowercase path" { assert mangleModuleName("mymod") == "mymod"; }
 
-test "path separators become Z" { assert mangleModuleName("src/codegen/c") === "srcZcodegenZc"; }
+test "path separators become Z" { assert mangleModuleName("src/codegen/c") == "srcZcodegenZc"; }
 
-test "dots become O" { assert mangleModuleName("foo.bar") === "fooObar"; }
+test "dots become O" { assert mangleModuleName("foo.bar") == "fooObar"; }
 
 test "uppercase becomes ordinal" {
-	assert mangleModuleName("MyClass") === "M77y67lass";
-	assert mangleModuleName("AB") === "M6566";
+	assert mangleModuleName("MyClass") == "M77y67lass";
+	assert mangleModuleName("AB") == "M6566";
 }
 
 test "windows drive letter does not produce digit-leading identifier" {
 	// `C:` → `67` + wildcard — without guard this yields `6763Z…`, invalid as C ident.
 	const out = mangleModuleName("C:/Users/foo/mod.cms");
-	assert out.charAt(0) === "M";
+	assert out.charAt(0) == "M";
 }
 
-test "underscore becomes ordinal" { assert mangleModuleName("my_mod") === "my95mod"; }
+test "underscore becomes ordinal" { assert mangleModuleName("my_mod") == "my95mod"; }
 
-test "full path with mixed case" { assert mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"; }
+test "full path with mixed case" { assert mangleModuleName("src/codegen/MyGen") == "srcZcodegenZ77y71en"; }

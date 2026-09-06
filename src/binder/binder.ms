@@ -66,7 +66,7 @@ function createLoopLabel(): FlowNode {
 
 function createFlowCondition(flags: int32, antecedent: FlowNode, expr: Node): FlowNode {
 	// flags must be TrueCondition or FalseCondition
-	if (antecedent === null || (antecedent.flags & FlowFlags.Unreachable) !== 0) {
+	if (antecedent == null || (antecedent.flags & FlowFlags.Unreachable) != 0) {
 		return antecedent;
 	}
 	const f = createFlowNode(flags);
@@ -78,9 +78,9 @@ function createFlowCondition(flags: int32, antecedent: FlowNode, expr: Node): Fl
 
 function createFlowMutation(flags: int32, antecedent: FlowNode, node: Node): FlowNode {
 	// flags = Assignment or ArrayMutation
-	if (antecedent === null) return antecedent;
+	if (antecedent == null) return antecedent;
 	// Short-circuit on unreachable — no point recording a mutation in dead code.
-	if ((antecedent.flags & FlowFlags.Unreachable) !== 0) return antecedent;
+	if ((antecedent.flags & FlowFlags.Unreachable) != 0) return antecedent;
 	const f = createFlowNode(flags);
 	f.antecedent = antecedent;
 	f.node = node;
@@ -89,7 +89,7 @@ function createFlowMutation(flags: int32, antecedent: FlowNode, node: Node): Flo
 }
 
 function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseStart: int32, clauseEnd: int32): FlowNode {
-	if (antecedent === null) return antecedent;
+	if (antecedent == null) return antecedent;
 	const f = createFlowNode(FlowFlags.SwitchClause);
 	f.antecedent = antecedent;
 	const data = new FlowSwitchClauseData();
@@ -102,13 +102,13 @@ function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseSt
 }
 
 function addAntecedent(label: FlowNode | null, ante: FlowNode | null): void {
-	if (label === null) return;
-	if (ante === null) return;
-	if ((ante.flags & FlowFlags.Unreachable) !== 0) return;
+	if (label == null) return;
+	if (ante == null) return;
+	if ((ante.flags & FlowFlags.Unreachable) != 0) return;
 	// Dedup by pointer equality
 	let cur = label.antecedents;
-	while (cur !== null) {
-		if (cur.flow === ante) return;
+	while (cur != null) {
+		if (cur.flow == ante) return;
 		cur = cur.next;
 	}
 	const link = new FlowList();
@@ -119,14 +119,14 @@ function addAntecedent(label: FlowNode | null, ante: FlowNode | null): void {
 }
 
 function finishFlowLabel(label: FlowNode): FlowNode {
-	if (label.antecedents === null) return createUnreachableFlow();
-	if (label.antecedents.next === null) return label.antecedents.flow;
+	if (label.antecedents == null) return createUnreachableFlow();
+	if (label.antecedents.next == null) return label.antecedents.flow;
 	return label;
 }
 
 function setFlowNodeReferenced(flow: FlowNode | null): void {
-	if (flow === null) return;
-	if ((flow.flags & FlowFlags.Referenced) === 0) {
+	if (flow == null) return;
+	if ((flow.flags & FlowFlags.Referenced) == 0) {
 		flow.flags = flow.flags | FlowFlags.Referenced;
 	} else {
 		flow.flags = flow.flags | FlowFlags.Shared;
@@ -134,8 +134,8 @@ function setFlowNodeReferenced(flow: FlowNode | null): void {
 }
 
 function isReachable(flow: FlowNode | null): boolean {
-	if (flow === null) return false;
-	return (flow.flags & FlowFlags.Unreachable) === 0;
+	if (flow == null) return false;
+	return (flow.flags & FlowFlags.Unreachable) == 0;
 }
 
 // ===== Binder State =====
@@ -168,8 +168,8 @@ function createBinderState(): BinderState {
 // ===== Entry Point =====
 
 export function bindFlowGraph(program: Node): void {
-	if (program === null) return;
-	if (program.kind !== NodeKind.Program) return;
+	if (program == null) return;
+	if (program.kind != NodeKind.Program) return;
 	const state = createBinderState();
 	state.currentFlow = createStartFlow(program);
 	const d = program.data as ProgramData;
@@ -193,7 +193,7 @@ export function bindFunctionFlow(container: Node, body: Node): void {
 // code even though the same code as source would narrow. bindStatement's
 // `_ =>` fallback dispatches expressions, so one entry covers both shapes.
 export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null): void {
-	if (subtree === null || seed === null) return;
+	if (subtree == null || seed == null) return;
 	const state = createBinderState();
 	state.currentFlow = seed;
 	bindStatement(state, subtree);
@@ -214,7 +214,7 @@ function bindContainer(state: BinderState, container: Node, body: Node): void {
 	state.currentReturnTarget = createBranchLabel();
 	state.currentExceptionTarget = null;
 
-	if (body !== null) bindStatement(state, body);
+	if (body != null) bindStatement(state, body);
 
 	state.currentFlow = savedFlow;
 	state.currentBreakTarget = savedBreak;
@@ -226,7 +226,7 @@ function bindContainer(state: BinderState, container: Node, body: Node): void {
 // ===== Statement Binder =====
 
 function bindStatement(state: BinderState, node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => bindProgram(state, node),
 		NodeKind.BlockStmt => bindBlockStmt(state, node),
@@ -294,7 +294,7 @@ function bindIfStmt(state: BinderState, node: Node): void {
 	bindStatement(state, d.consequent);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(elseLabel);
-	if (d.alternate !== null) bindStatement(state, d.alternate);
+	if (d.alternate != null) bindStatement(state, d.alternate);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(postLabel);
 }
@@ -341,14 +341,14 @@ function bindDoWhileStmt(state: BinderState, node: Node): void {
 
 function bindForStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForStmtData;
-	if (d.forInit !== null) bindStatement(state, d.forInit);
+	if (d.forInit != null) bindStatement(state, d.forInit);
 	const preLoop = createLoopLabel();
 	const preBody = createBranchLabel();
 	const preIncr = createBranchLabel();
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
 	state.currentFlow = preLoop;
-	if (d.forCondition !== null) {
+	if (d.forCondition != null) {
 		bindCondition(state, d.forCondition, preBody, postLoop);
 	} else {
 		addAntecedent(preBody, state.currentFlow);
@@ -358,12 +358,12 @@ function bindForStmt(state: BinderState, node: Node): void {
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
 	state.currentContinueTarget = preIncr;
-	if (d.forBody !== null) bindStatement(state, d.forBody);
+	if (d.forBody != null) bindStatement(state, d.forBody);
 	state.currentBreakTarget = savedBreak;
 	state.currentContinueTarget = savedContinue;
 	addAntecedent(preIncr, state.currentFlow);
 	state.currentFlow = finishFlowLabel(preIncr);
-	if (d.forUpdate !== null) bindExpression(state, d.forUpdate);
+	if (d.forUpdate != null) bindExpression(state, d.forUpdate);
 	addAntecedent(preLoop, state.currentFlow);  // back-edge
 	state.currentFlow = finishFlowLabel(postLoop);
 }
@@ -381,7 +381,7 @@ function bindForOfStmt(state: BinderState, node: Node): void {
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
 	state.currentContinueTarget = preLoop;
-	if (d.forOfBody !== null) bindStatement(state, d.forOfBody);
+	if (d.forOfBody != null) bindStatement(state, d.forOfBody);
 	state.currentBreakTarget = savedBreak;
 	state.currentContinueTarget = savedContinue;
 	addAntecedent(preLoop, state.currentFlow);
@@ -401,7 +401,7 @@ function bindForInStmt(state: BinderState, node: Node): void {
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
 	state.currentContinueTarget = preLoop;
-	if (d.forInBody !== null) bindStatement(state, d.forInBody);
+	if (d.forInBody != null) bindStatement(state, d.forInBody);
 	state.currentBreakTarget = savedBreak;
 	state.currentContinueTarget = savedContinue;
 	addAntecedent(preLoop, state.currentFlow);
@@ -475,7 +475,7 @@ function bindMatchCase(state: BinderState, caseNode: Node): void {
 	for (const pat of d.casePatterns) {
 		bindExpression(state, pat);
 	}
-	if (d.caseBody !== null) bindStatement(state, d.caseBody);
+	if (d.caseBody != null) bindStatement(state, d.caseBody);
 }
 
 // Synthesize a TrueCondition FlowNode representing `disc === pattern` for a
@@ -484,15 +484,15 @@ function bindMatchCase(state: BinderState, caseNode: Node): void {
 // narrowing. Returns `preMatch` unchanged for wildcard, guarded, or
 // multi-pattern arms (Phase 6 can refine those cases).
 function synthesizeMatchArmFlow(preMatch: FlowNode, disc: Node, cd: MatchCaseData): FlowNode {
-	if (disc === null) return preMatch;
-	if (cd.caseGuard !== null) return preMatch;  // guarded arms — Phase 6
-	if (cd.casePatterns.length !== 1) return preMatch;  // OR patterns — Phase 6
+	if (disc == null) return preMatch;
+	if (cd.caseGuard != null) return preMatch;  // guarded arms — Phase 6
+	if (cd.casePatterns.length != 1) return preMatch;  // OR patterns — Phase 6
 	const pat = cd.casePatterns[0];
-	if (pat === null) return preMatch;
+	if (pat == null) return preMatch;
 	// Wildcard `_` and bare identifiers are bindings, not comparisons.
-	if (pat.kind === NodeKind.Identifier) {
+	if (pat.kind == NodeKind.Identifier) {
 		const id = pat.data as IdentifierData;
-		if (id.name === "_") return preMatch;
+		if (id.name == "_") return preMatch;
 		// Bare identifier patterns can be either a binding (narrow lost)
 		// or an enum-member reference (`K.A`) — we only narrow on the
 		// enum-member form, which the parser represents as MemberExpr.
@@ -510,8 +510,8 @@ function synthesizeMatchArmFlow(preMatch: FlowNode, disc: Node, cd: MatchCaseDat
 
 function bindReturnStmt(state: BinderState, node: Node): void {
 	const d = node.data as ReturnStmtData;
-	if (d.argument !== null) bindExpression(state, d.argument);
-	if (state.currentReturnTarget !== null) {
+	if (d.argument != null) bindExpression(state, d.argument);
+	if (state.currentReturnTarget != null) {
 		addAntecedent(state.currentReturnTarget, state.currentFlow);
 	}
 	state.currentFlow = state.unreachableFlow;
@@ -519,22 +519,22 @@ function bindReturnStmt(state: BinderState, node: Node): void {
 
 function bindThrowStmt(state: BinderState, node: Node): void {
 	const d = node.data as ThrowStmtData;
-	if (d.throwArg !== null) bindExpression(state, d.throwArg);
-	if (state.currentExceptionTarget !== null) {
+	if (d.throwArg != null) bindExpression(state, d.throwArg);
+	if (state.currentExceptionTarget != null) {
 		addAntecedent(state.currentExceptionTarget, state.currentFlow);
 	}
 	state.currentFlow = state.unreachableFlow;
 }
 
 function bindBreakStmt(state: BinderState, node: Node): void {
-	if (state.currentBreakTarget !== null) {
+	if (state.currentBreakTarget != null) {
 		addAntecedent(state.currentBreakTarget, state.currentFlow);
 	}
 	state.currentFlow = state.unreachableFlow;
 }
 
 function bindContinueStmt(state: BinderState, node: Node): void {
-	if (state.currentContinueTarget !== null) {
+	if (state.currentContinueTarget != null) {
 		addAntecedent(state.currentContinueTarget, state.currentFlow);
 	}
 	state.currentFlow = state.unreachableFlow;
@@ -548,10 +548,10 @@ function bindTryStmt(state: BinderState, node: Node): void {
 	const catchLabel = createBranchLabel();
 	const savedException = state.currentExceptionTarget;
 	state.currentExceptionTarget = catchLabel;
-	if (d.tryBody !== null) bindStatement(state, d.tryBody);
+	if (d.tryBody != null) bindStatement(state, d.tryBody);
 	state.currentExceptionTarget = savedException;
 	addAntecedent(postLabel, state.currentFlow);
-	if (d.catchBody !== null) {
+	if (d.catchBody != null) {
 		state.currentFlow = finishFlowLabel(catchLabel);
 		bindStatement(state, d.catchBody);
 		addAntecedent(postLabel, state.currentFlow);
@@ -559,18 +559,18 @@ function bindTryStmt(state: BinderState, node: Node): void {
 		addAntecedent(postLabel, finishFlowLabel(catchLabel));
 	}
 	state.currentFlow = finishFlowLabel(postLabel);
-	if (d.finallyBody !== null) bindStatement(state, d.finallyBody);
+	if (d.finallyBody != null) bindStatement(state, d.finallyBody);
 }
 
 function bindVariableDecl(state: BinderState, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.initializer !== null) bindExpression(state, d.initializer);
+	if (d.initializer != null) bindExpression(state, d.initializer);
 	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
 }
 
 function bindDestructuringDecl(state: BinderState, node: Node): void {
 	const d = node.data as DestructuringDeclData;
-	if (d.destrInit !== null) bindExpression(state, d.destrInit);
+	if (d.destrInit != null) bindExpression(state, d.destrInit);
 	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
 }
 
@@ -587,7 +587,7 @@ function bindFunctionDecl(state: BinderState, node: Node): void {
 function bindClassDecl(state: BinderState, node: Node): void {
 	const d = node.data as ClassDeclData;
 	for (const member of d.classBody) {
-		if (member === null) continue;
+		if (member == null) continue;
 		match (member.kind) {
 			NodeKind.MethodDecl => {
 				const md = member.data as MethodDeclData;
@@ -606,7 +606,7 @@ function bindClassDecl(state: BinderState, node: Node): void {
 function bindActorDecl(state: BinderState, node: Node): void {
 	const d = node.data as ActorDeclData;
 	for (const member of d.actorBody) {
-		if (member === null) continue;
+		if (member == null) continue;
 		match (member.kind) {
 			NodeKind.MethodDecl => {
 				const md = member.data as MethodDeclData;
@@ -623,7 +623,7 @@ function bindActorDecl(state: BinderState, node: Node): void {
 
 function bindExportDecl(state: BinderState, node: Node): void {
 	const d = node.data as ExportDeclData;
-	if (d.exportedDecl !== null) bindStatement(state, d.exportedDecl);
+	if (d.exportedDecl != null) bindStatement(state, d.exportedDecl);
 }
 
 function bindDecoratedDecl(state: BinderState, node: Node): void {
@@ -631,17 +631,17 @@ function bindDecoratedDecl(state: BinderState, node: Node): void {
 	for (const dec of d.decorators) {
 		bindExpression(state, dec);
 	}
-	if (d.decoratedNode !== null) bindStatement(state, d.decoratedNode);
+	if (d.decoratedNode != null) bindStatement(state, d.decoratedNode);
 }
 
 function bindDeferStmt(state: BinderState, node: Node): void {
 	const d = node.data as DeferStmtData;
-	if (d.deferExpr !== null) bindExpression(state, d.deferExpr);
+	if (d.deferExpr != null) bindExpression(state, d.deferExpr);
 }
 
 function bindAssertStmt(state: BinderState, node: Node): void {
 	const d = node.data as AssertStmtData;
-	if (d.assertExpr !== null) {
+	if (d.assertExpr != null) {
 		// `assert e;` aborts on the false side, so flow continues only through
 		// the TrueCondition edge — subsequent statements narrow on e exactly
 		// like an `if (e) { ... }` body. The abort label gets the FalseCondition
@@ -650,7 +650,7 @@ function bindAssertStmt(state: BinderState, node: Node): void {
 		const abortLabel = createBranchLabel();
 		bindCondition(state, d.assertExpr, thenLabel, abortLabel);
 		state.currentFlow = finishFlowLabel(thenLabel);
-		if (d.assertMessageExpr !== null) {
+		if (d.assertMessageExpr != null) {
 			// The message only evaluates when the condition FAILED — bind it
 			// under the false edge so references inside narrow on !e
 			// (`assert r.ok, "..." + (r.ok ? "" : r.error)` reads a narrowed
@@ -675,17 +675,17 @@ function bindTestDecl(state: BinderState, node: Node): void {
 // checker can query narrowed types at use sites.
 
 function bindExpression(state: BinderState, node: Node): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Identifier => bindIdentifier(state, node),
 		NodeKind.BinaryExpr => bindBinaryExpr(state, node),
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			if (d.operand !== null) bindExpression(state, d.operand);
+			if (d.operand != null) bindExpression(state, d.operand);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			if (d.updateArg !== null) bindExpression(state, d.updateArg);
+			if (d.updateArg != null) bindExpression(state, d.updateArg);
 			// x++ and --x are assignments to x
 			state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
 		},
@@ -698,32 +698,32 @@ function bindExpression(state: BinderState, node: Node): void {
 		NodeKind.ConditionalExpr => bindConditionalExpr(state, node),
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
-			if (d.spreadArg !== null) bindExpression(state, d.spreadArg);
+			if (d.spreadArg != null) bindExpression(state, d.spreadArg);
 		},
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
-			if (d.awaitArg !== null) bindExpression(state, d.awaitArg);
+			if (d.awaitArg != null) bindExpression(state, d.awaitArg);
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
-			if (d.yieldArg !== null) bindExpression(state, d.yieldArg);
+			if (d.yieldArg != null) bindExpression(state, d.yieldArg);
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
-			if (d.moveArg !== null) bindExpression(state, d.moveArg);
+			if (d.moveArg != null) bindExpression(state, d.moveArg);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
-			if (d.outArg !== null) bindExpression(state, d.outArg);
+			if (d.outArg != null) bindExpression(state, d.outArg);
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			if (d.asExpr !== null) bindExpression(state, d.asExpr);
+			if (d.asExpr != null) bindExpression(state, d.asExpr);
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
-			if (d.tryArg !== null) bindExpression(state, d.tryArg);
-			if (d.hasCatch && d.catchVal !== null) bindExpression(state, d.catchVal);
+			if (d.tryArg != null) bindExpression(state, d.tryArg);
+			if (d.hasCatch && d.catchVal != null) bindExpression(state, d.catchVal);
 		},
 		NodeKind.MatchExpr => bindMatchExpr(state, node),
 		NodeKind.ArrowFunction => {
@@ -736,11 +736,11 @@ function bindExpression(state: BinderState, node: Node): void {
 		},
 		NodeKind.HiddenDeref => {
 			const d = node.data as HiddenDerefData;
-			if (d.expr !== null) bindExpression(state, d.expr);
+			if (d.expr != null) bindExpression(state, d.expr);
 		},
 		NodeKind.HiddenStdConv => {
 			const d = node.data as HiddenStdConvData;
-			if (d.convExpr !== null) bindExpression(state, d.convExpr);
+			if (d.convExpr != null) bindExpression(state, d.convExpr);
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
@@ -771,24 +771,24 @@ function bindIdentifier(state: BinderState, node: Node): void {
 function bindBinaryExpr(state: BinderState, node: Node): void {
 	const d = node.data as BinaryExprData;
 	// Logical operators create short-circuit flow
-	if (d.operator === "&&" || d.operator === "||") {
+	if (d.operator == "&&" || d.operator == "||") {
 		bindLogicalExpr(state, node);
 		return;
 	}
 	// Assignment operators mutate their LHS
-	if (d.operator === "=" || d.operator === "+=" || d.operator === "-="
-		|| d.operator === "*=" || d.operator === "/=" || d.operator === "%="
-		|| d.operator === "**=" || d.operator === "&=" || d.operator === "|="
-		|| d.operator === "^=" || d.operator === "<<=" || d.operator === ">>="
-		|| d.operator === "&&=" || d.operator === "||=" || d.operator === "??=") {
-		if (d.left !== null) bindExpression(state, d.left);
-		if (d.right !== null) bindExpression(state, d.right);
+	if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
+		|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+		|| d.operator == "**=" || d.operator == "&=" || d.operator == "|="
+		|| d.operator == "^=" || d.operator == "<<=" || d.operator == ">>="
+		|| d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") {
+		if (d.left != null) bindExpression(state, d.left);
+		if (d.right != null) bindExpression(state, d.right);
 		state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
 		return;
 	}
 	// Default: walk both sides
-	if (d.left !== null) bindExpression(state, d.left);
-	if (d.right !== null) bindExpression(state, d.right);
+	if (d.left != null) bindExpression(state, d.left);
+	if (d.right != null) bindExpression(state, d.right);
 }
 
 // Logical operators with short-circuit:
@@ -800,48 +800,48 @@ function bindLogicalExpr(state: BinderState, node: Node): void {
 	const d = node.data as BinaryExprData;
 	const postLabel = createBranchLabel();
 	const rightLabel = createBranchLabel();
-	if (d.operator === "&&") {
+	if (d.operator == "&&") {
 		bindCondition(state, d.left, rightLabel, postLabel);
 	} else {
 		// ||
 		bindCondition(state, d.left, postLabel, rightLabel);
 	}
 	state.currentFlow = finishFlowLabel(rightLabel);
-	if (d.right !== null) bindExpression(state, d.right);
+	if (d.right != null) bindExpression(state, d.right);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(postLabel);
 }
 
 function bindCallExpr(state: BinderState, node: Node): void {
 	const d = node.data as CallExprData;
-	if (d.callee !== null) bindExpression(state, d.callee);
+	if (d.callee != null) bindExpression(state, d.callee);
 	for (const arg of d.arguments) {
 		bindExpression(state, arg);
 	}
 	// `exit(...)` never returns (C: exit/msExit, [[noreturn]]). Flow after the
 	// call is dead, so an `if (!r.ok) { exit(1); } r.value` guard narrows the
 	// fall-through path to the ok variant.
-	if (d.callee !== null && isExitCallee(d.callee)) {
+	if (d.callee != null && isExitCallee(d.callee)) {
 		state.currentFlow = state.unreachableFlow;
 	}
 }
 
 function isExitCallee(callee: Node): boolean {
-	if (callee.kind === NodeKind.Identifier) {
-		return (callee.data as IdentifierData).name === "exit";
+	if (callee.kind == NodeKind.Identifier) {
+		return (callee.data as IdentifierData).name == "exit";
 	}
-	if (callee.kind === NodeKind.MemberExpr) {
+	if (callee.kind == NodeKind.MemberExpr) {
 		const md = callee.data as MemberExprData;
-		return md.property === "exit" && md.object !== null
-			&& md.object.kind === NodeKind.Identifier
-			&& (md.object.data as IdentifierData).name === "process";
+		return md.property == "exit" && md.object != null
+			&& md.object.kind == NodeKind.Identifier
+			&& (md.object.data as IdentifierData).name == "process";
 	}
 	return false;
 }
 
 function bindNewExpr(state: BinderState, node: Node): void {
 	const d = node.data as NewExprData;
-	if (d.newCallee !== null) bindExpression(state, d.newCallee);
+	if (d.newCallee != null) bindExpression(state, d.newCallee);
 	for (const arg of d.newArguments) {
 		bindExpression(state, arg);
 	}
@@ -849,15 +849,15 @@ function bindNewExpr(state: BinderState, node: Node): void {
 
 function bindMemberExpr(state: BinderState, node: Node): void {
 	const d = node.data as MemberExprData;
-	if (d.object !== null) bindExpression(state, d.object);
+	if (d.object != null) bindExpression(state, d.object);
 	// Attach flow to the member expression itself — it's a reference.
 	node.flowNode = state.currentFlow;
 }
 
 function bindArrayAccess(state: BinderState, node: Node): void {
 	const d = node.data as ArrayAccessData;
-	if (d.array !== null) bindExpression(state, d.array);
-	if (d.index !== null) bindExpression(state, d.index);
+	if (d.array != null) bindExpression(state, d.array);
+	if (d.index != null) bindExpression(state, d.index);
 	node.flowNode = state.currentFlow;
 }
 
@@ -882,10 +882,10 @@ function bindConditionalExpr(state: BinderState, node: Node): void {
 	const postLabel = createBranchLabel();
 	bindCondition(state, d.ternaryCondition, trueLabel, falseLabel);
 	state.currentFlow = finishFlowLabel(trueLabel);
-	if (d.ternaryConsequent !== null) bindExpression(state, d.ternaryConsequent);
+	if (d.ternaryConsequent != null) bindExpression(state, d.ternaryConsequent);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(falseLabel);
-	if (d.ternaryAlternate !== null) bindExpression(state, d.ternaryAlternate);
+	if (d.ternaryAlternate != null) bindExpression(state, d.ternaryAlternate);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(postLabel);
 }
@@ -905,7 +905,7 @@ function bindMatchExpr(state: BinderState, node: Node): void {
 			bindExpression(state, cd.casePatterns[pi]);
 			pi = pi + 1;
 		}
-		if (cd.caseBody !== null) bindStatement(state, cd.caseBody);
+		if (cd.caseBody != null) bindStatement(state, cd.caseBody);
 		addAntecedent(postLabel, state.currentFlow);
 		i = i + 1;
 	}
@@ -920,22 +920,22 @@ function bindMatchExpr(state: BinderState, node: Node): void {
 // types differently in each branch.
 
 function bindCondition(state: BinderState, expr: Node, trueTarget: FlowNode, falseTarget: FlowNode): void {
-	if (expr === null) {
+	if (expr == null) {
 		addAntecedent(trueTarget, state.currentFlow);
 		return;
 	}
 	// Recursive breakdown of && and || into individual conditions so each
 	// sub-expression gets its own TrueCondition/FalseCondition edges.
-	if (expr.kind === NodeKind.BinaryExpr) {
+	if (expr.kind == NodeKind.BinaryExpr) {
 		const d = expr.data as BinaryExprData;
-		if (d.operator === "&&") {
+		if (d.operator == "&&") {
 			const preRight = createBranchLabel();
 			bindCondition(state, d.left, preRight, falseTarget);
 			state.currentFlow = finishFlowLabel(preRight);
 			bindCondition(state, d.right, trueTarget, falseTarget);
 			return;
 		}
-		if (d.operator === "||") {
+		if (d.operator == "||") {
 			const preRight = createBranchLabel();
 			bindCondition(state, d.left, trueTarget, preRight);
 			state.currentFlow = finishFlowLabel(preRight);
@@ -944,9 +944,9 @@ function bindCondition(state: BinderState, expr: Node, trueTarget: FlowNode, fal
 		}
 	}
 	// !x: swap branches
-	if (expr.kind === NodeKind.UnaryExpr) {
+	if (expr.kind == NodeKind.UnaryExpr) {
 		const d = expr.data as UnaryExprData;
-		if (d.unaryOp === "!") {
+		if (d.unaryOp == "!") {
 			bindCondition(state, d.operand, falseTarget, trueTarget);
 			return;
 		}
@@ -969,67 +969,67 @@ function bindSource(input: string): Node {
 
 // Walk AST and return the first Identifier with the given name, or null.
 function findIdent(node: Node | null, name: string): Node | null {
-	if (node === null) return null;
-	if (node.kind === NodeKind.Identifier) {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		if (d.name === name) return node;
+		if (d.name == name) return node;
 	}
 	let found: Node | null = null;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			for (const s of d.programStmts) {
-				if (found === null) found = findIdent(s, name);
+				if (found == null) found = findIdent(s, name);
 			}
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			for (const s of d.statements) {
-				if (found === null) found = findIdent(s, name);
+				if (found == null) found = findIdent(s, name);
 			}
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			if (found === null) found = findIdent(d.condition, name);
-			if (found === null) found = findIdent(d.consequent, name);
-			if (found === null) found = findIdent(d.alternate, name);
+			if (found == null) found = findIdent(d.condition, name);
+			if (found == null) found = findIdent(d.consequent, name);
+			if (found == null) found = findIdent(d.alternate, name);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			if (found === null) found = findIdent(d.whileCondition, name);
-			if (found === null) found = findIdent(d.whileBody, name);
+			if (found == null) found = findIdent(d.whileCondition, name);
+			if (found == null) found = findIdent(d.whileBody, name);
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			if (found === null) found = findIdent(d.expr, name);
+			if (found == null) found = findIdent(d.expr, name);
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (found === null) found = findIdent(d.initializer, name);
+			if (found == null) found = findIdent(d.initializer, name);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (found === null) found = findIdent(d.argument, name);
+			if (found == null) found = findIdent(d.argument, name);
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			if (found === null) found = findIdent(d.left, name);
-			if (found === null) found = findIdent(d.right, name);
+			if (found == null) found = findIdent(d.left, name);
+			if (found == null) found = findIdent(d.right, name);
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			if (found === null) found = findIdent(d.callee, name);
+			if (found == null) found = findIdent(d.callee, name);
 			for (const a of d.arguments) {
-				if (found === null) found = findIdent(a, name);
+				if (found == null) found = findIdent(a, name);
 			}
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
-			if (found === null) found = findIdent(d.object, name);
+			if (found == null) found = findIdent(d.object, name);
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			if (found === null) found = findIdent(d.fnBody, name);
+			if (found == null) found = findIdent(d.fnBody, name);
 		},
 		_ => {},
 	};
@@ -1041,13 +1041,13 @@ test "binder attaches flowNode to identifier references" {
 	const program = bindSource("function f(x: number): number { return x; }");
 	// Dive into the function body and locate the `x` in `return x;`
 	const pd = program.data as ProgramData;
-	assert pd.programStmts.length === 1;
+	assert pd.programStmts.length == 1;
 	const fn = pd.programStmts[0];
-	assert fn.kind === NodeKind.FunctionDecl;
+	assert fn.kind == NodeKind.FunctionDecl;
 	const fnData = fn.data as FunctionDeclData;
 	const xRef = findIdent(fnData.fnBody, "x");
-	assert xRef !== null;
-	assert xRef.flowNode !== null;
+	assert xRef != null;
+	assert xRef.flowNode != null;
 }
 
 test "binder attaches flowNode inside if condition" {
@@ -1057,8 +1057,8 @@ test "binder attaches flowNode inside if condition" {
 	const fn = pd.programStmts[0];
 	const fnData = fn.data as FunctionDeclData;
 	const xRef = findIdent(fnData.fnBody, "x");
-	assert xRef !== null;
-	assert xRef.flowNode !== null;
+	assert xRef != null;
+	assert xRef.flowNode != null;
 }
 
 test "binder marks code after return as unreachable" {
@@ -1071,9 +1071,9 @@ test "binder marks code after return as unreachable" {
 	const yRef = findIdent(fnData.fnBody, "y");
 	// `y` is referenced in the unreachable `return y`; its flowNode should be
 	// the unreachable flow (non-null, Unreachable flag set).
-	assert yRef !== null;
-	assert yRef.flowNode !== null;
-	assert (yRef.flowNode.flags & FlowFlags.Unreachable) !== 0;
+	assert yRef != null;
+	assert yRef.flowNode != null;
+	assert (yRef.flowNode.flags & FlowFlags.Unreachable) != 0;
 }
 
 test "binder splits flow on if condition" {
@@ -1086,11 +1086,11 @@ test "binder splits flow on if condition" {
 	const fnData = fn.data as FunctionDeclData;
 	const aRef = findIdent(fnData.fnBody, "a");
 	const bRef = findIdent(fnData.fnBody, "b");
-	assert aRef !== null && aRef.flowNode !== null;
-	assert bRef !== null && bRef.flowNode !== null;
+	assert aRef != null && aRef.flowNode != null;
+	assert bRef != null && bRef.flowNode != null;
 	// The two references must have distinct flow nodes (one through TrueCondition,
 	// one through a BranchLabel joining the post-if paths).
-	assert aRef.flowNode !== bRef.flowNode;
+	assert aRef.flowNode != bRef.flowNode;
 }
 
 test "binder handles while loop back-edge" {
@@ -1106,6 +1106,6 @@ test "binder handles while loop back-edge" {
 	// `const y = x`. The ones inside the loop body must have flow nodes that
 	// differ from the pre-loop flow (they go through the LoopLabel + TrueCondition).
 	const xRef = findIdent(fnData.fnBody, "x");
-	assert xRef !== null;
-	assert xRef.flowNode !== null;
+	assert xRef != null;
+	assert xRef.flowNode != null;
 }

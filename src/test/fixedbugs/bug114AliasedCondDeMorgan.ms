@@ -19,23 +19,23 @@ enum B114Kind { Number, Uint64, Int64 }
 class B114Ty { kind: B114Kind; }
 
 function b112AndFalse(ty: B114Ty | null): string {
-	const b = ty !== null && ty.kind === B114Kind.Number;
+	const b = ty != null && ty.kind == B114Kind.Number;
 	if (b) return "num";
-	if (ty !== null && ty.kind === B114Kind.Uint64) return "u64";
+	if (ty != null && ty.kind == B114Kind.Uint64) return "u64";
 	return "plain";
 }
 
 function b112UnrelatedRight(ty: B114Ty | null, flag: boolean): string {
-	const b = ty !== null && flag;
+	const b = ty != null && flag;
 	if (b) return "flagged";
-	if (ty !== null && ty.kind === B114Kind.Uint64) return "u64";
+	if (ty != null && ty.kind == B114Kind.Uint64) return "u64";
 	return "plain";
 }
 
 function b112OrTrue(x: B114Ty | null): string {
-	const b = x === null || x.kind === B114Kind.Number;
+	const b = x == null || x.kind == B114Kind.Number;
 	if (b) {
-		if (x !== null && x.kind === B114Kind.Number) return "num";
+		if (x != null && x.kind == B114Kind.Number) return "num";
 		return "isnull";
 	}
 	return "other";
@@ -43,15 +43,15 @@ function b112OrTrue(x: B114Ty | null): string {
 
 test "bug114: fall-through of an aliased && exit keeps the union wide" {
 	const tu: B114Ty = { kind: B114Kind.Uint64 };
-	assert b112AndFalse(tu) === "u64";
+	assert b112AndFalse(tu) == "u64";
 }
 
 test "bug114: unrelated right conjunct does not collapse the reference" {
 	const tu: B114Ty = { kind: B114Kind.Uint64 };
-	assert b112UnrelatedRight(tu, false) === "u64";
+	assert b112UnrelatedRight(tu, false) == "u64";
 }
 
 test "bug114: aliased || in the true branch keeps both arms" {
 	const tn: B114Ty = { kind: B114Kind.Number };
-	assert b112OrTrue(tn) === "num";
+	assert b112OrTrue(tn) == "num";
 }

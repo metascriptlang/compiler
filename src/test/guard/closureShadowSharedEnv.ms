@@ -12,5 +12,5 @@ function host7(): int32 {
     return s * 100 + f(3);
 }
 const r = host7();
-if (r !== 606) { throw "GUARD RED: shadowed closure local aliased ancestor env r=" + r; }
+if (r != 606) { throw "GUARD RED: shadowed closure local aliased ancestor env r=" + r; }
 console.log("closureShadowSharedEnv ok");

@@ -38,22 +38,22 @@ export function main(): void {
 	const pr = pick(r);
 	const pc = pick(c);
 	console.log("pick row=" + pr.toString() + " column=" + pc.toString());
-	if (pr !== 1) { throw "GUARD RED: string-literal overload picked the wrong candidate"; }
-	if (pc !== 2) { throw "GUARD RED: string-literal overload picked the wrong candidate"; }
+	if (pr != 1) { throw "GUARD RED: string-literal overload picked the wrong candidate"; }
+	if (pc != 2) { throw "GUARD RED: string-literal overload picked the wrong candidate"; }
 
 	const ft = flag(t);
 	const ff = flag(f);
 	console.log("flag true=" + ft.toString() + " false=" + ff.toString());
-	if (ft !== 10) { throw "GUARD RED: boolean-literal overload picked the wrong candidate"; }
-	if (ff !== 20) { throw "GUARD RED: boolean-literal overload picked the wrong candidate"; }
+	if (ft != 10) { throw "GUARD RED: boolean-literal overload picked the wrong candidate"; }
+	if (ff != 20) { throw "GUARD RED: boolean-literal overload picked the wrong candidate"; }
 
 	const w = widened(r);
 	console.log("widened=" + w.toString());
-	if (w !== 30) { throw "GUARD RED: string literal no longer widens to string"; }
+	if (w != 30) { throw "GUARD RED: string literal no longer widens to string"; }
 
 	const wb = widenedBool(t);
 	console.log("widenedBool=" + wb.toString());
-	if (wb !== 40) { throw "GUARD RED: boolean literal no longer widens to boolean"; }
+	if (wb != 40) { throw "GUARD RED: boolean literal no longer widens to boolean"; }
 
 	console.log("literalTypeDispatch ok");
 }

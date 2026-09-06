@@ -36,10 +36,10 @@ function takeWitness<T>(x: T | null): int32 {
 test "bug008: T inferred from typed witness var (value T)" {
 	const w: Color | null = null;
 	const r = takeWitness(w);
-	assert r === 99;
+	assert r == 99;
 }
 
 test "bug008: T inferred from inline TypeAssertion (value T)" {
 	const r = takeWitness(null as Color | null);
-	assert r === 99;
+	assert r == 99;
 }

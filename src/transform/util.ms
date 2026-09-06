@@ -21,20 +21,20 @@ export function syntheticToken(loc: SourceLocation): Token {
 // Related but distinct: see `isValueLayoutType` below — narrower predicate
 // used by actor msg-kind dispatch.
 export function isStructLikeType(t: Type | null): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.Struct || t.kind === TypeKind.GenericInstance
-		|| t.kind === TypeKind.Tuple || t.kind === TypeKind.String;
+	if (t == null) return false;
+	return t.kind == TypeKind.Struct || t.kind == TypeKind.GenericInstance
+		|| t.kind == TypeKind.Tuple || t.kind == TypeKind.String;
 }
 
 // Single source of truth for "this discriminant may become a real C switch" —
 // C requires an integer controlling expression (Number is double, NOT valid).
 // Shared by matchLower and switchLower so the two dispatches never drift.
 export function isCSwitchableType(t: Type | null): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	const k = t.kind;
-	return k === TypeKind.Enum || k === TypeKind.Int8 || k === TypeKind.Int16
-		|| k === TypeKind.Int32 || k === TypeKind.Int64 || k === TypeKind.Uint8
-		|| k === TypeKind.Uint16 || k === TypeKind.Uint32 || k === TypeKind.Uint64;
+	return k == TypeKind.Enum || k == TypeKind.Int8 || k == TypeKind.Int16
+		|| k == TypeKind.Int32 || k == TypeKind.Int64 || k == TypeKind.Uint8
+		|| k == TypeKind.Uint16 || k == TypeKind.Uint32 || k == TypeKind.Uint64;
 }
 
 // Future storage contract (PARALOCK Amendment F) — single source of truth for
@@ -46,12 +46,12 @@ export function isCSwitchableType(t: Type | null): boolean {
 // A writer/reader pair disagreeing on this = silent garbage or UAF; do not
 // branch on layout anywhere else.
 export function inlineInFuture(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.String;
+	return t != null && t.kind == TypeKind.String;
 }
 
 export function boxedInFuture(t: Type | null): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.Array || (isStructLikeType(t) && t.kind !== TypeKind.String);
+	if (t == null) return false;
+	return t.kind == TypeKind.Array || (isStructLikeType(t) && t.kind != TypeKind.String);
 }
 
 // Value-layout types — passed by-value or via NRVO out-param, NOT as void*.
@@ -62,11 +62,11 @@ export function boxedInFuture(t: Type | null): boolean {
 // boxed at the actor boundary — merging the two predicates re-introduces
 // Bug B Item 2.
 export function isValueLayoutType(t: Type | null): boolean {
-	if (t === null) return false;
-	if (t.kind === TypeKind.Tuple || t.kind === TypeKind.Struct) return true;
-	if (t.kind === TypeKind.GenericInstance && t.typeReturn !== null) {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Tuple || t.kind == TypeKind.Struct) return true;
+	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null) {
 		const body = t.typeReturn;
-		if (body.kind === TypeKind.Union || body.kind === TypeKind.Tuple || body.kind === TypeKind.Struct) return true;
+		if (body.kind == TypeKind.Union || body.kind == TypeKind.Tuple || body.kind == TypeKind.Struct) return true;
 	}
 	return false;
 }
@@ -76,7 +76,7 @@ export function isValueLayoutType(t: Type | null): boolean {
 // the type isn't a boxed primitive — caller dispatches to msUnboxStruct or
 // passthrough based on storage shape.
 export function unboxFnNameForType(t: Type | null): string {
-	if (t === null) return "";
+	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
 		TypeKind.Boolean => "msUnboxBool",
@@ -100,15 +100,15 @@ export function unboxFnNameForType(t: Type | null): string {
 //   pointer-shape   → voidPtr unchanged           (Ref/Ptr/Function — already void*)
 //   void            → voidPtr unchanged           (no value to extract)
 export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
-	if (innerType === null || innerType.kind === TypeKind.Void) return voidPtrExpr;
+	if (innerType == null || innerType.kind == TypeKind.Void) return voidPtrExpr;
 	const fn = unboxFnNameForType(innerType);
-	if (fn !== "") {
+	if (fn != "") {
 		const c = makeCall(makeIdent(fn, loc), [voidPtrExpr], loc);
 		c.nodeType = innerType;
 		return c;
 	}
 	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
-	if (isStructLikeType(innerType) || innerType.kind === TypeKind.Array) {
+	if (isStructLikeType(innerType) || innerType.kind == TypeKind.Array) {
 		const call = makeCall(makeIdent("msUnboxStruct", loc), [voidPtrExpr], loc);
 		call.nodeType = innerType;
 		return call;
@@ -136,7 +136,7 @@ export function enumToStringName(enumName: string): string {
 // derive the name from the same Type, so they agree by construction; a type
 // without a declaring symbol (synthetic, test-only) keeps the bare name.
 export function typeHelperName(t: Type, bare: string): string {
-	if (t !== null && t.sym !== null && t.sym.modulePath !== "") {
+	if (t != null && t.sym != null && t.sym.modulePath != "") {
 		return mangleQualified(bare, mangleModuleName(t.sym.modulePath));
 	}
 	return bare;
@@ -155,7 +155,7 @@ export function makeIdent(identName: string, loc: SourceLocation): Node {
 // Typed variant: creates an identifier with a known Type (for synthetic temps)
 export function makeTypedIdent(identName: string, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: identName }, syntheticToken(loc));
-	if (t !== null) { n.nodeType = t; }
+	if (t != null) { n.nodeType = t; }
 	return n;
 }
 
@@ -174,7 +174,7 @@ export function makeNull(loc: SourceLocation): Node {
 }
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
-	const isFloat = val % 1 !== 0 || val > 9007199254740992 || val < -9007199254740992;
+	const isFloat = val % 1 != 0 || val > 9007199254740992 || val < -9007199254740992;
 	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat, intVal: isFloat ? 0 as int64 : val as int64 }, syntheticToken(loc));
 	if (!isFloat) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
 	return n;
@@ -193,22 +193,22 @@ export function makeIntNumber(val: int64, loc: SourceLocation): Node {
 // Primitives → 0, booleans → false, refs/closures → null, strings → "".
 // Used by async/generator transforms to initialize state vars correctly.
 export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
-	if (t === null) return makeNull(loc);
+	if (t == null) return makeNull(loc);
 	const k = t.kind;
 	// Numeric types → 0
-	if (k === TypeKind.Number || k === TypeKind.Float64 || k === TypeKind.Float32
-		|| k === TypeKind.Int8 || k === TypeKind.Int16 || k === TypeKind.Int32 || k === TypeKind.Int64
-		|| k === TypeKind.Uint8 || k === TypeKind.Uint16 || k === TypeKind.Uint32 || k === TypeKind.Uint64) {
+	if (k == TypeKind.Number || k == TypeKind.Float64 || k == TypeKind.Float32
+		|| k == TypeKind.Int8 || k == TypeKind.Int16 || k == TypeKind.Int32 || k == TypeKind.Int64
+		|| k == TypeKind.Uint8 || k == TypeKind.Uint16 || k == TypeKind.Uint32 || k == TypeKind.Uint64) {
 		const n = makeNumber(0, loc);
 		n.nodeType = t;
 		return n;
 	}
 	// Boolean → false
-	if (k === TypeKind.Boolean) {
+	if (k == TypeKind.Boolean) {
 		return makeBool(false, loc);
 	}
 	// String → ""
-	if (k === TypeKind.String) {
+	if (k == TypeKind.String) {
 		return makeString("", loc);
 	}
 	// Everything else (refs, closures, interfaces) → null
@@ -235,7 +235,7 @@ export function makeBlock(stmts: Node[], loc: SourceLocation): Node {
 
 export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind, nameLocation: loc }, syntheticToken(loc));
-	if (init !== null && init.nodeType !== null) {
+	if (init != null && init.nodeType != null) {
 		n.nodeType = init.nodeType;
 	}
 	return n;
@@ -278,9 +278,9 @@ export function makeBreak(loc: SourceLocation): Node {
 
 export function makeBinary(leftNode: Node, op: string, rightNode: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.BinaryExpr, { operator: op, left: leftNode, right: rightNode }, syntheticToken(loc));
-	if (op === "===" || op === "!==" || op === "==" || op === "!=" || op === "<" || op === ">" || op === "<=" || op === ">=" || op === "||" || op === "&&") {
+	if (op == "===" || op == "!==" || op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=" || op == "||" || op == "&&") {
 		n.nodeType = booleanType();
-	} else if (leftNode !== null && leftNode.nodeType !== null) {
+	} else if (leftNode != null && leftNode.nodeType != null) {
 		n.nodeType = leftNode.nodeType;
 	}
 	return n;
@@ -292,11 +292,11 @@ export function makeMoveExpr(inner: Node, loc: SourceLocation): Node {
 
 export function makeUnary(op: string, arg: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.UnaryExpr, { unaryOp: op, operand: arg }, syntheticToken(loc));
-	if (op === "!") {
+	if (op == "!") {
 		n.nodeType = booleanType();
-	} else if (op === "typeof") {
+	} else if (op == "typeof") {
 		n.nodeType = stringType();
-	} else if (arg !== null && arg.nodeType !== null) {
+	} else if (arg != null && arg.nodeType != null) {
 		n.nodeType = arg.nodeType;
 	}
 	return n;
@@ -304,12 +304,12 @@ export function makeUnary(op: string, arg: Node, loc: SourceLocation): Node {
 
 export function makeCall(calleeNode: Node, args: Node[], loc: SourceLocation): Node {
 	const n = createNode(NodeKind.CallExpr, { callee: calleeNode, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, syntheticToken(loc));
-	if (calleeNode !== null) {
-		if (calleeNode.resolvedSym !== null) {
+	if (calleeNode != null) {
+		if (calleeNode.resolvedSym != null) {
 			n.resolvedSym = calleeNode.resolvedSym;
 		}
-		if (calleeNode.nodeType !== null && calleeNode.nodeType.kind === TypeKind.Function) {
-			if (calleeNode.nodeType.typeReturn !== null) {
+		if (calleeNode.nodeType != null && calleeNode.nodeType.kind == TypeKind.Function) {
+			if (calleeNode.nodeType.typeReturn != null) {
 				n.nodeType = calleeNode.nodeType.typeReturn;
 			}
 		}
@@ -321,7 +321,7 @@ export function makeCall(calleeNode: Node, args: Node[], loc: SourceLocation): N
 export function makeCallResolved(calleeNode: Node, args: Node[], sym: Symbol, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.CallExpr, { callee: calleeNode, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, syntheticToken(loc));
 	n.resolvedSym = sym;
-	if (sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) {
+	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 		n.nodeType = sym.symbolType.typeReturn;
 	}
 	return n;
@@ -329,17 +329,17 @@ export function makeCallResolved(calleeNode: Node, args: Node[], sym: Symbol, lo
 
 export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, syntheticToken(loc));
-	if (obj !== null && obj.nodeType !== null) {
-		if ((obj.nodeType.kind === TypeKind.Array || obj.nodeType.kind === TypeKind.String) && prop === "length") {
+	if (obj != null && obj.nodeType != null) {
+		if ((obj.nodeType.kind == TypeKind.Array || obj.nodeType.kind == TypeKind.String) && prop == "length") {
 			n.nodeType = int32Type();
 		} else if (isResult(obj.nodeType)) {
-			if (prop === "ok") { n.nodeType = booleanType(); }
-			else if (prop === "value" && getResultOkType(obj.nodeType) !== null) { n.nodeType = getResultOkType(obj.nodeType); }
-			else if (prop === "error" && getResultErrType(obj.nodeType) !== null) { n.nodeType = getResultErrType(obj.nodeType); }
-		} else if (obj.nodeType.kind === TypeKind.Struct) {
+			if (prop == "ok") { n.nodeType = booleanType(); }
+			else if (prop == "value" && getResultOkType(obj.nodeType) != null) { n.nodeType = getResultOkType(obj.nodeType); }
+			else if (prop == "error" && getResultErrType(obj.nodeType) != null) { n.nodeType = getResultErrType(obj.nodeType); }
+		} else if (obj.nodeType.kind == TypeKind.Struct) {
 			let pi = 0;
 			while (pi < obj.nodeType.typeNames.length) {
-				if (obj.nodeType.typeNames[pi] === prop) {
+				if (obj.nodeType.typeNames[pi] == prop) {
 					n.nodeType = obj.nodeType.typeChildren[pi];
 					pi = obj.nodeType.typeNames.length;
 				}
@@ -352,9 +352,9 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 
 export function makeConditional(cond: Node, cons: Node, alt: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ConditionalExpr, { ternaryCondition: cond, ternaryConsequent: cons, ternaryAlternate: alt }, syntheticToken(loc));
-	if (cons !== null && cons.nodeType !== null) {
+	if (cons != null && cons.nodeType != null) {
 		n.nodeType = cons.nodeType;
-	} else if (alt !== null && alt.nodeType !== null) {
+	} else if (alt != null && alt.nodeType != null) {
 		n.nodeType = alt.nodeType;
 	}
 	return n;
@@ -362,7 +362,7 @@ export function makeConditional(cond: Node, cons: Node, alt: Node, loc: SourceLo
 
 export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.BinaryExpr, { operator: "=", left: leftNode, right: rightNode }, syntheticToken(loc));
-	if (rightNode !== null && rightNode.nodeType !== null) {
+	if (rightNode != null && rightNode.nodeType != null) {
 		n.nodeType = rightNode.nodeType;
 	}
 	return n;
@@ -370,8 +370,8 @@ export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation)
 
 export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
-	if (obj !== null && obj.nodeType !== null && obj.nodeType.kind === TypeKind.Array) {
-		if (obj.nodeType.typeReturn !== null) {
+	if (obj != null && obj.nodeType != null && obj.nodeType.kind == TypeKind.Array) {
+		if (obj.nodeType.typeReturn != null) {
 			n.nodeType = obj.nodeType.typeReturn;
 		}
 	}
@@ -439,12 +439,12 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 // Handles primitives and array annotations. Non-primitive types resolve to Unknown —
 // actual types come from the checker via node.nodeType (no TypeReference).
 export function resolveSimpleTypeStr(annotation: string): Type {
-	if (annotation === "") return noneType();
-	if (annotation === "void*") return createPtr(voidType());  // raw pointer — reference: getSysType(pointer)
+	if (annotation == "") return noneType();
+	if (annotation == "void*") return createPtr(voidType());  // raw pointer — reference: getSysType(pointer)
 	// Handle array annotations: "Foo[]", "Foo [ ]" (parser joins tokens with spaces)
 	// Strip trailing whitespace-surrounded brackets to get element type
 	const stripped = stripArraySuffix(annotation);
-	if (stripped !== "") {
+	if (stripped != "") {
 		return createArray(resolveSimpleTypeStr(stripped));
 	}
 	return match (annotation) {
@@ -472,12 +472,12 @@ function stripArraySuffix(annotation: string): string {
 	const len = annotation.length;
 	if (len < 2) return "";
 	// Check for "[]" at end (from typeToEnvStr: "string[]")
-	if (annotation.charAt(len - 1) === "]" && annotation.charAt(len - 2) === "[") {
+	if (annotation.charAt(len - 1) == "]" && annotation.charAt(len - 2) == "[") {
 		return annotation.slice(0, len - 2);
 	}
 	// Check for " [ ]" at end (from parser collectTokenText: "string [ ]")
-	if (len >= 5 && annotation.charAt(len - 1) === "]" && annotation.charAt(len - 2) === " "
-		&& annotation.charAt(len - 3) === "[" && annotation.charAt(len - 4) === " ") {
+	if (len >= 5 && annotation.charAt(len - 1) == "]" && annotation.charAt(len - 2) == " "
+		&& annotation.charAt(len - 3) == "[" && annotation.charAt(len - 4) == " ") {
 		return annotation.slice(0, len - 4);
 	}
 	return "";
@@ -490,22 +490,22 @@ export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLoc
 // Typed variant: creates an ObjectLiteral with a known Type (standard object construction parity)
 export function makeTypedObjectLiteral(keys: string[], values: Node[], t: Type, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, syntheticToken(loc));
-	if (t !== null) { n.nodeType = t; }
+	if (t != null) { n.nodeType = t; }
 	return n;
 }
 
 export function makeHiddenAddr(inner: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.HiddenAddr, { expr: inner }, syntheticToken(loc));
-	if (inner !== null) n.nodeType = inner.nodeType;
+	if (inner != null) n.nodeType = inner.nodeType;
 	return n;
 }
 
 export function makeHiddenDeref(inner: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.HiddenDeref, { expr: inner }, syntheticToken(loc));
-	if (inner !== null && inner.nodeType !== null) {
+	if (inner != null && inner.nodeType != null) {
 		// Deref of Ref<T>/Ptr<T>/Borrow<T> → type is T (Reference: strips through all pointer types)
 		const k = inner.nodeType.kind;
-		if ((k === TypeKind.Ptr || k === TypeKind.Ref || k === TypeKind.Borrow) && inner.nodeType.typeReturn !== null) {
+		if ((k == TypeKind.Ptr || k == TypeKind.Ref || k == TypeKind.Borrow) && inner.nodeType.typeReturn != null) {
 			n.nodeType = inner.nodeType.typeReturn;
 		} else {
 			n.nodeType = inner.nodeType;
@@ -532,12 +532,12 @@ export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLoca
 // Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
 
 export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (!varOnly || d.declKind === DeclKind.Var) {
+			if (!varOnly || d.declKind == DeclKind.Var) {
 				nameSetAdd(ns, d.declName);
 			}
 			collectDeclNames(d.initializer, ns, varOnly);
@@ -602,7 +602,7 @@ export function boolToDeclKind(isConst: boolean): DeclKind {
 // Returns { decl: const $tmp_N = expr, ref: $tmp_N identifier }.
 // Follows the reference evalOnce pattern.
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
-	const exprType = expr !== null && expr.nodeType !== null ? expr.nodeType : noneType();
+	const exprType = expr != null && expr.nodeType != null ? expr.nodeType : noneType();
 	const sym = freshTempSym(ctx, "tmp", exprType);
 	const decl = makeVarDecl(sym.name, expr, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
@@ -613,7 +613,7 @@ export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation)
 // Extract statements from a body node (block → its stmts, single stmt → [stmt])
 export function extractBodyStmts(body: Node): Node[] {
 	const result: Node[] = [];
-	if (body.kind === NodeKind.BlockStmt) {
+	if (body.kind == NodeKind.BlockStmt) {
 		const bd = body.data as BlockStmtData;
 		for (const stmt of bd.statements) {
 			result.push(stmt);

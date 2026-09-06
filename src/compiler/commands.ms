@@ -170,7 +170,7 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 	const doc = printFormattedNode(program, options);
 	const formatted = formatDoc(doc, options);
 
-	if (formatted !== source) {
+	if (formatted != source) {
 		if (opts.fmtCheck) {
 			console.log(red("Unformatted") + " " + path(filePath));
 			exit(1);
@@ -185,8 +185,8 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 // -- init --
 
 export function cmdInit(name: string): void {
-	if (name === "") name = ".";
-	ensureDir(name === "." ? "src" : name + "/src");
+	if (name == "") name = ".";
+	ensureDir(name == "." ? "src" : name + "/src");
 	const buildPath = name + "/build.ms";
 	const srcPath = name + "/src/index.ms";
 	const buildContent = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\troot: \"src/index.ms\",\n\tfmt: {\n\t\tuseTabs: true,\n\t},\n};\n\nexport default config;\n";

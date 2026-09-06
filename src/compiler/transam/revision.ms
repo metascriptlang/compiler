@@ -60,27 +60,27 @@ export function createQueryKey(kind: TaQueryKind, fileId: int32): TaQueryKey {
 }
 
 export function queryKeysEqual(a: TaQueryKey, b: TaQueryKey): boolean {
-	return a.queryKind === b.queryKind && a.fileId === b.fileId;
+	return a.queryKind == b.queryKind && a.fileId == b.fileId;
 }
 
 // ===== Tests =====
 test "init starts at zero" {
 	const rev = createRevision();
-	assert rev.value === 0;
+	assert rev.value == 0;
 }
 
 test "increment advances" {
 	const rev = createRevision();
 	incrementRevision(rev);
-	assert rev.value === 1;
+	assert rev.value == 1;
 	incrementRevision(rev);
-	assert rev.value === 2;
+	assert rev.value == 2;
 }
 
 test "create stores kind and fileId" {
 	const key = createQueryKey(TaQueryKind.Parse, 42);
-	assert key.queryKind === TaQueryKind.Parse;
-	assert key.fileId === 42;
+	assert key.queryKind == TaQueryKind.Parse;
+	assert key.fileId == 42;
 }
 
 test "equal keys match" {
@@ -102,18 +102,18 @@ test "different fileId does not match" {
 }
 
 test "query kinds are distinct" {
-	assert TaQueryKind.FileText !== TaQueryKind.Parse;
-	assert TaQueryKind.Parse !== TaQueryKind.TypeCheck;
-	assert TaQueryKind.TypeCheck !== TaQueryKind.Transform;
-	assert TaQueryKind.Transform !== TaQueryKind.Analyze;
+	assert TaQueryKind.FileText != TaQueryKind.Parse;
+	assert TaQueryKind.Parse != TaQueryKind.TypeCheck;
+	assert TaQueryKind.TypeCheck != TaQueryKind.Transform;
+	assert TaQueryKind.Transform != TaQueryKind.Analyze;
 }
 
 test "query states are distinct" {
-	assert TaQueryState.Green !== TaQueryState.Red;
-	assert TaQueryState.Red !== TaQueryState.Yellow;
+	assert TaQueryState.Green != TaQueryState.Red;
+	assert TaQueryState.Red != TaQueryState.Yellow;
 }
 
 test "durability levels are distinct" {
-	assert TaDurability.Low !== TaDurability.Medium;
-	assert TaDurability.Medium !== TaDurability.High;
+	assert TaDurability.Low != TaDurability.Medium;
+	assert TaDurability.Medium != TaDurability.High;
 }

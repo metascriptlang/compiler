@@ -34,7 +34,7 @@ import {
 } from "./declarations";
 
 export function printNode(node: Node, options: FormatOptions): Doc {
-	if (node === null) return docNil();
+	if (node == null) return docNil();
 
 	const innerDoc = match (node.kind) {
 		// ===== Literals =====
@@ -130,7 +130,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 			if (comment.line < node.location.line) {
 				leading.push(docText(comment.value));
 				leading.push(docHardLine());
-			} else if (comment.line === node.location.line) {
+			} else if (comment.line == node.location.line) {
 				trailing.push(docLineSuffix([docText(" " + comment.value)]));
 			} else {
 				below.push(docHardLine());

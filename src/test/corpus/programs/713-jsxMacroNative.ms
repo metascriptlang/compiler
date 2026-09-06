@@ -20,10 +20,10 @@ macro jsxTag(node: Node): Node {
 
 function main(): void {
 	let ok = true;
-	if (jsxTag(<View/>) !== "View") { ok = false; }
-	if (jsxTag(<Foo.Bar/>) !== "Foo.Bar") { ok = false; }
-	if (jsxTag(<svg:rect/>) !== "svg:rect") { ok = false; }
-	if (jsxTag(<Counter id="x">hi {1}<Item/></Counter>) !== "Counter") { ok = false; }
+	if (jsxTag(<View/>) != "View") { ok = false; }
+	if (jsxTag(<Foo.Bar/>) != "Foo.Bar") { ok = false; }
+	if (jsxTag(<svg:rect/>) != "svg:rect") { ok = false; }
+	if (jsxTag(<Counter id="x">hi {1}<Item/></Counter>) != "Counter") { ok = false; }
 	if (ok) { console.log("jsx-macro-native PASS"); }
 	else { console.log("jsx-macro-native FAIL"); }
 }

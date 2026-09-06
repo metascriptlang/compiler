@@ -12,7 +12,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
 
 function needsBoxing(t: Type): boolean {
-	if (t === null) return false;
+	if (t == null) return false;
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => true,
 		TypeKind.Boolean => true,
@@ -27,7 +27,7 @@ function needsBoxing(t: Type): boolean {
 
 // Build the boxing call for a given type (doesn't rely on retVal.nodeType)
 export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
-	if (retVal === null || retType === null) return retVal;
+	if (retVal == null || retType == null) return retVal;
 	return match (retType.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
 		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
@@ -58,12 +58,12 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 // Recursively wrap ReturnStmt values in boxing calls.
 // Stops at nested function boundaries. Covers all control flow.
 export function boxReturns(node: Node, retType: Type): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return;
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return;
 	match (node.kind) {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument !== null) {
+			if (d.argument != null) {
 				d.argument = boxForType(d.argument, retType, node.location);
 			}
 		},
@@ -97,13 +97,13 @@ export function boxReturns(node: Node, retType: Type): void {
 
 export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
-		if (node.kind !== NodeKind.CallExpr) return node;
+		if (node.kind != NodeKind.CallExpr) return node;
 		const cd = node.data as CallExprData;
 		// Check for spawn builtin (builtinKind or nativeName)
 		let isSpawn = false;
-		const sym = node.resolvedSym !== null ? node.resolvedSym : cd.callee.resolvedSym;
-		if (sym !== null) {
-			if (sym.builtinKind === "PromiseSpawn" || sym.nativeName === "msSpawn") {
+		const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
+		if (sym != null) {
+			if (sym.builtinKind == "PromiseSpawn" || sym.nativeName == "msSpawn") {
 				isSpawn = true;
 			}
 		}
@@ -113,7 +113,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 
 		// Bare function reference (Identifier): wrap as msClosure {fn, env=null}
 		// so codegen emits the struct literal expected by msSpawn/msSpawnTaskSubmit.
-		if (closureArg.kind === NodeKind.Identifier) {
+		if (closureArg.kind == NodeKind.Identifier) {
 			const loc = closureArg.location;
 			const pair = makeObjectLiteral(["fn", "env"], [closureArg, makeNull(loc)], loc);
 			pair.flags = pair.flags | NodeFlag.Closure;
@@ -123,16 +123,16 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
 		let closureRetType: Type | null = null;
-		if (node.nodeType !== null && isAwaitable(node.nodeType)) {
+		if (node.nodeType != null && isAwaitable(node.nodeType)) {
 			closureRetType = awaitedType(node.nodeType);
-		} else if (closureArg.nodeType !== null && closureArg.nodeType.kind === TypeKind.Function) {
+		} else if (closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function) {
 			closureRetType = closureArg.nodeType.typeReturn;
 		}
 
-		if (closureRetType !== null && needsBoxing(closureRetType)) {
+		if (closureRetType != null && needsBoxing(closureRetType)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):
 			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
-			if (closureArg.kind === NodeKind.ObjectLiteral && (closureArg.flags & NodeFlag.Closure) !== 0) {
+			if (closureArg.kind == NodeKind.ObjectLiteral && (closureArg.flags & NodeFlag.Closure) != 0) {
 				const loc = closureArg.location;
 				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
 				const innerCall = makeCall(fnIdent, [], loc);
@@ -146,30 +146,30 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 					arrowReturnType: "",
 				}, syntheticToken(loc));
 				wrapper.nodeType = closureArg.nodeType;
-				if (wrapper.nodeType !== null && wrapper.nodeType.kind === TypeKind.Function) {
+				if (wrapper.nodeType != null && wrapper.nodeType.kind == TypeKind.Function) {
 					wrapper.nodeType.typeReturn = createPtr(voidType());
 				}
 				cd.arguments[0] = wrapper;
 				return node;
 			}
 			// Box return values inside the closure body
-			if (closureArg.kind === NodeKind.ArrowFunction) {
+			if (closureArg.kind == NodeKind.ArrowFunction) {
 				const ad = closureArg.data as ArrowFunctionData;
-				if (ad.arrowBody !== null) {
-					if (ad.arrowBody.kind === NodeKind.BlockStmt) {
+				if (ad.arrowBody != null) {
+					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
 						boxReturns(ad.arrowBody, closureRetType);
 					} else {
 						ad.arrowBody = boxForType(ad.arrowBody, closureRetType, ad.arrowBody.location);
 					}
 				}
-			} else if (closureArg.kind === NodeKind.FunctionExpr) {
+			} else if (closureArg.kind == NodeKind.FunctionExpr) {
 				const fd = closureArg.data as FunctionExprData;
-				if (fd.funcExprBody !== null) {
+				if (fd.funcExprBody != null) {
 					boxReturns(fd.funcExprBody, closureRetType);
 				}
 			}
 			// Update closure return type to void* (boxed) so codegen emits correct signature
-			if (closureArg.nodeType !== null && closureArg.nodeType.kind === TypeKind.Function) {
+			if (closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function) {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}

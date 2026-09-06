@@ -15,21 +15,21 @@ export function Number(v: float64): float64 {
 }
 
 export function isNaN(this typeof Number, x: float64): boolean {
-	return x !== x;
+	return x != x;
 }
 
 // A finite double is the only kind for which x - x cancels: NaN stays NaN and
 // either infinity yields NaN too.
 export function isFinite(this typeof Number, x: float64): boolean {
-	return x - x === 0.0;
+	return x - x == 0.0;
 }
 
 export function isInteger(this typeof Number, x: float64): boolean {
-	return x - x === 0.0 && cTrunc(x) === x;
+	return x - x == 0.0 && cTrunc(x) == x;
 }
 
 export function isSafeInteger(this typeof Number, x: float64): boolean {
-	return x - x === 0.0 && cTrunc(x) === x && cFabs(x) <= 9007199254740991.0;
+	return x - x == 0.0 && cTrunc(x) == x && cFabs(x) <= 9007199254740991.0;
 }
 
 // Statics-only attachment onto the callable Number symbol: reads resolve

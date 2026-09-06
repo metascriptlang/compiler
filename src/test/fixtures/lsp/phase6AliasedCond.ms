@@ -11,7 +11,7 @@
 //   3. Compound `&&` narrowing
 
 function describe(val: string): string {
-	const empty = val.length === 0;
+	const empty = val.length == 0;
 	if (empty) {
 		return "empty";
 	}
@@ -19,7 +19,7 @@ function describe(val: string): string {
 }
 
 function greet(name: string): string {
-	const hasExclaim = name.length > 0 && name.charAt(name.length - 1) === "!";
+	const hasExclaim = name.length > 0 && name.charAt(name.length - 1) == "!";
 	if (hasExclaim) {
 		return "excited: " + name;
 	}

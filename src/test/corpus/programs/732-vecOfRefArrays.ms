@@ -15,28 +15,28 @@ function handleSharing(): boolean {
 	const a: Vec<uint8[]> = [[1, 2]];
 	const c: Vec<uint8[]> = a;
 	c[0][0] = 9 as uint8;
-	return a[0][0] === 9 && c[0][0] === 9;
+	return a[0][0] == 9 && c[0][0] == 9;
 }
 
 function slotDetach(): boolean {
 	const a: Vec<uint8[]> = [[1, 2]];
 	const c: Vec<uint8[]> = a;
 	c[0] = [7];
-	return a[0][0] === 1 && a[0].length === 2 && c[0][0] === 7 && c[0].length === 1;
+	return a[0][0] == 1 && a[0].length == 2 && c[0][0] == 7 && c[0].length == 1;
 }
 
 function pushDetach(): boolean {
 	const a: Vec<int32[]> = [[1]];
 	const c: Vec<int32[]> = a;
 	c.push([5]);
-	return a.length === 1 && c.length === 2 && c[1][0] === 5;
+	return a.length == 1 && c.length == 2 && c[1][0] == 5;
 }
 
 function reassignSink(): boolean {
 	let a: Vec<uint8[]> = [[1]];
 	const keep: Vec<uint8[]> = a;
 	a = [[3]];
-	return keep[0][0] === 1 && a[0][0] === 3;
+	return keep[0][0] == 1 && a[0][0] == 3;
 }
 
 function main(): void {

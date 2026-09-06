@@ -32,7 +32,7 @@ macro mBlue(a: Node): Node {
 function main(): void {
 	const m: number = mBlue(0);          // macro → 9
 	const rt: number = ordOf(Color.Red); // runtime → 3
-	if (CT === 5 && m === 9 && rt === 3) {
+	if (CT == 5 && m == 9 && rt == 3) {
 		console.log("comptime-enum PASS");
 	} else {
 		console.log("comptime-enum FAIL CT=" + CT.toString() + " m=" + m.toString() + " rt=" + rt.toString());

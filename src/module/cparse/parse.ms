@@ -45,22 +45,22 @@ interface ParseCtx {
 // ===== Token Consumption Helpers =====
 
 function eq(ctx: ParseCtx, s: string): boolean {
-	if (ctx.tok === null) return false;
-	return ctx.tok.stringVal === s;
+	if (ctx.tok == null) return false;
+	return ctx.tok.stringVal == s;
 }
 
 function advance(ctx: ParseCtx): void {
-	if (ctx.tok === null) return;
-	if (ctx.tok.kind !== CTokenKind.Eof) {
+	if (ctx.tok == null) return;
+	if (ctx.tok.kind != CTokenKind.Eof) {
 		const next = ctx.tok.next;
-		if (next === null) return; // guard: dangling end
+		if (next == null) return; // guard: dangling end
 		ctx.tok = next;
 	}
 }
 
 function expect(ctx: ParseCtx, s: string): void {
-	if (ctx.tok === null) return;
-	if (ctx.tok.stringVal !== s) {
+	if (ctx.tok == null) return;
+	if (ctx.tok.stringVal != s) {
 		ctx.diags.push(makeDiag(DiagSeverity.Error, ctx.tok.file, ctx.tok.line, ctx.tok.col,
 			`expected '${s}', got '${ctx.tok.stringVal}'`));
 		return;
@@ -69,8 +69,8 @@ function expect(ctx: ParseCtx, s: string): void {
 }
 
 function consume(ctx: ParseCtx, s: string): boolean {
-	if (ctx.tok === null) return false;
-	if (ctx.tok.stringVal === s) {
+	if (ctx.tok == null) return false;
+	if (ctx.tok.stringVal == s) {
 		advance(ctx);
 		return true;
 	}
@@ -78,24 +78,24 @@ function consume(ctx: ParseCtx, s: string): boolean {
 }
 
 function isEnd(ctx: ParseCtx): boolean {
-	if (ctx.tok === null) return true;
-	return ctx.tok.kind === CTokenKind.Eof;
+	if (ctx.tok == null) return true;
+	return ctx.tok.kind == CTokenKind.Eof;
 }
 
 // ===== Is Typename =====
 
 function isTypename(ctx: ParseCtx): boolean {
-	if (ctx.tok === null) return false;
+	if (ctx.tok == null) return false;
 	const s = ctx.tok.stringVal;
-	if (ctx.tok.kind !== CTokenKind.Keyword && ctx.tok.kind !== CTokenKind.Ident) return false;
-	return s === "void" || s === "char" || s === "short" || s === "int" || s === "long" ||
-		s === "float" || s === "double" || s === "signed" || s === "unsigned" ||
-		s === "_Bool" || s === "struct" || s === "union" || s === "enum" ||
-		s === "typedef" || s === "static" || s === "extern" || s === "inline" ||
-		s === "const" || s === "volatile" || s === "auto" || s === "register" ||
-		s === "restrict" || s === "__restrict" || s === "__restrict__" || s === "_Noreturn" ||
-		s === "_Atomic" || s === "_Alignas" || s === "_Thread_local" || s === "__thread" ||
-		s === "__attribute__" ||
+	if (ctx.tok.kind != CTokenKind.Keyword && ctx.tok.kind != CTokenKind.Ident) return false;
+	return s == "void" || s == "char" || s == "short" || s == "int" || s == "long" ||
+		s == "float" || s == "double" || s == "signed" || s == "unsigned" ||
+		s == "_Bool" || s == "struct" || s == "union" || s == "enum" ||
+		s == "typedef" || s == "static" || s == "extern" || s == "inline" ||
+		s == "const" || s == "volatile" || s == "auto" || s == "register" ||
+		s == "restrict" || s == "__restrict" || s == "__restrict__" || s == "_Noreturn" ||
+		s == "_Atomic" || s == "_Alignas" || s == "_Thread_local" || s == "__thread" ||
+		s == "__attribute__" ||
 		ctx.typedefs.has(s);
 }
 
@@ -128,33 +128,33 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		const s = ctx.tok.stringVal;
 
 		// Storage class specifiers
-		if (s === "typedef" || s === "static" || s === "extern" || s === "inline" ||
-			s === "_Thread_local" || s === "__thread") {
-			if (s === "typedef") attr.isTypedef = true;
-			else if (s === "static") attr.isStatic = true;
-			else if (s === "extern") attr.isExtern = true;
-			else if (s === "inline") attr.isInline = true;
+		if (s == "typedef" || s == "static" || s == "extern" || s == "inline" ||
+			s == "_Thread_local" || s == "__thread") {
+			if (s == "typedef") attr.isTypedef = true;
+			else if (s == "static") attr.isStatic = true;
+			else if (s == "extern") attr.isExtern = true;
+			else if (s == "inline") attr.isInline = true;
 			advance(ctx);
 			continue;
 		}
 
 		// Qualifiers — const is recorded (→ Borrow<T> at cimport), others ignored
-		if (s === "const" || s === "volatile" || s === "auto" || s === "register" ||
-			s === "restrict" || s === "__restrict" || s === "__restrict__" || s === "_Noreturn") {
-			if (s === "const") isConst = true;
+		if (s == "const" || s == "volatile" || s == "auto" || s == "register" ||
+			s == "restrict" || s == "__restrict" || s == "__restrict__" || s == "_Noreturn") {
+			if (s == "const") isConst = true;
 			advance(ctx);
 			continue;
 		}
 
 		// _Atomic
-		if (s === "_Atomic") {
+		if (s == "_Atomic") {
 			advance(ctx);
 			if (eq(ctx, "(")) {
 				advance(ctx);
 				const beforeTypename = ctx.tok;
 				ty = typename(ctx);
 				// If typename didn't advance (unknown type), skip to closing )
-				if (ctx.tok === beforeTypename) {
+				if (ctx.tok == beforeTypename) {
 					while (!isEnd(ctx) && !eq(ctx, ")")) advance(ctx);
 				}
 				expect(ctx, ")");
@@ -163,7 +163,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		}
 
 		// _Alignas — skip
-		if (s === "_Alignas") {
+		if (s == "_Alignas") {
 			advance(ctx);
 			expect(ctx, "(");
 			skipParens(ctx, 1);
@@ -171,57 +171,57 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		}
 
 		// __attribute__ — skip
-		if (s === "__attribute__") {
+		if (s == "__attribute__") {
 			skipAttribute(ctx);
 			continue;
 		}
 
 		// User-defined types: struct, union, enum, typedef name
-		if (s === "struct" || s === "union" || s === "enum" || ctx.typedefs.has(s)) {
-			if (counter !== 0) break;
+		if (s == "struct" || s == "union" || s == "enum" || ctx.typedefs.has(s)) {
+			if (counter != 0) break;
 
 			match (s) {
 				"struct" => { advance(ctx); ty = structDecl(ctx); },
 				"union" => { advance(ctx); ty = unionDecl(ctx); },
 				"enum" => { advance(ctx); ty = enumSpecifier(ctx); },
-				_ => { const td = ctx.typedefs.get(s); if (td !== null) { ty = td; ty.typedefName = s; } advance(ctx); },
+				_ => { const td = ctx.typedefs.get(s); if (td != null) { ty = td; ty.typedefName = s; } advance(ctx); },
 			};
 			counter = counter + SPEC_OTHER;
 			continue;
 		}
 
 		// Built-in type keywords
-		if (s === "void") counter = counter + SPEC_VOID;
-		else if (s === "_Bool") counter = counter + SPEC_BOOL;
-		else if (s === "char") counter = counter + SPEC_CHAR;
-		else if (s === "short") counter = counter + SPEC_SHORT;
-		else if (s === "int") counter = counter + SPEC_INT;
-		else if (s === "long") counter = counter + SPEC_LONG;
-		else if (s === "float") counter = counter + SPEC_FLOAT;
-		else if (s === "double") counter = counter + SPEC_DOUBLE;
-		else if (s === "signed") counter = counter | SPEC_SIGNED;
-		else if (s === "unsigned") counter = counter | SPEC_UNSIGNED;
+		if (s == "void") counter = counter + SPEC_VOID;
+		else if (s == "_Bool") counter = counter + SPEC_BOOL;
+		else if (s == "char") counter = counter + SPEC_CHAR;
+		else if (s == "short") counter = counter + SPEC_SHORT;
+		else if (s == "int") counter = counter + SPEC_INT;
+		else if (s == "long") counter = counter + SPEC_LONG;
+		else if (s == "float") counter = counter + SPEC_FLOAT;
+		else if (s == "double") counter = counter + SPEC_DOUBLE;
+		else if (s == "signed") counter = counter | SPEC_SIGNED;
+		else if (s == "unsigned") counter = counter | SPEC_UNSIGNED;
 		else break;
 
 		// Map counter to type
-		if (counter === SPEC_VOID) ty = makeVoid();
-		else if (counter === SPEC_BOOL) ty = makeBool();
-		else if (counter === SPEC_CHAR || counter === SPEC_SIGNED + SPEC_CHAR) ty = makeChar(ctx.target);
-		else if (counter === SPEC_UNSIGNED + SPEC_CHAR) ty = makeUChar();
-		else if (counter === SPEC_SHORT || counter === SPEC_SHORT + SPEC_INT ||
-				 counter === SPEC_SIGNED + SPEC_SHORT || counter === SPEC_SIGNED + SPEC_SHORT + SPEC_INT) ty = makeShort(ctx.target);
-		else if (counter === SPEC_UNSIGNED + SPEC_SHORT || counter === SPEC_UNSIGNED + SPEC_SHORT + SPEC_INT) ty = makeUShort(ctx.target);
-		else if (counter === SPEC_INT || counter === SPEC_SIGNED || counter === SPEC_SIGNED + SPEC_INT) ty = makeInt(ctx.target);
-		else if (counter === SPEC_UNSIGNED || counter === SPEC_UNSIGNED + SPEC_INT) ty = makeUInt(ctx.target);
-		else if (counter === SPEC_LONG || counter === SPEC_LONG + SPEC_INT ||
-				 counter === SPEC_SIGNED + SPEC_LONG || counter === SPEC_SIGNED + SPEC_LONG + SPEC_INT) ty = makeLong(ctx.target);
-		else if (counter === SPEC_UNSIGNED + SPEC_LONG || counter === SPEC_UNSIGNED + SPEC_LONG + SPEC_INT) ty = makeULong(ctx.target);
-		else if (counter === SPEC_LONG + SPEC_LONG || counter === SPEC_LONG + SPEC_LONG + SPEC_INT ||
-				 counter === SPEC_SIGNED + SPEC_LONG + SPEC_LONG || counter === SPEC_SIGNED + SPEC_LONG + SPEC_LONG + SPEC_INT) ty = makeLongLong(ctx.target);
-		else if (counter === SPEC_UNSIGNED + SPEC_LONG + SPEC_LONG || counter === SPEC_UNSIGNED + SPEC_LONG + SPEC_LONG + SPEC_INT) ty = makeULongLong(ctx.target);
-		else if (counter === SPEC_FLOAT) ty = makeFloat(ctx.target);
-		else if (counter === SPEC_DOUBLE) ty = makeDouble(ctx.target);
-		else if (counter === SPEC_LONG + SPEC_DOUBLE) ty = makeLongDouble(ctx.target);
+		if (counter == SPEC_VOID) ty = makeVoid();
+		else if (counter == SPEC_BOOL) ty = makeBool();
+		else if (counter == SPEC_CHAR || counter == SPEC_SIGNED + SPEC_CHAR) ty = makeChar(ctx.target);
+		else if (counter == SPEC_UNSIGNED + SPEC_CHAR) ty = makeUChar();
+		else if (counter == SPEC_SHORT || counter == SPEC_SHORT + SPEC_INT ||
+				 counter == SPEC_SIGNED + SPEC_SHORT || counter == SPEC_SIGNED + SPEC_SHORT + SPEC_INT) ty = makeShort(ctx.target);
+		else if (counter == SPEC_UNSIGNED + SPEC_SHORT || counter == SPEC_UNSIGNED + SPEC_SHORT + SPEC_INT) ty = makeUShort(ctx.target);
+		else if (counter == SPEC_INT || counter == SPEC_SIGNED || counter == SPEC_SIGNED + SPEC_INT) ty = makeInt(ctx.target);
+		else if (counter == SPEC_UNSIGNED || counter == SPEC_UNSIGNED + SPEC_INT) ty = makeUInt(ctx.target);
+		else if (counter == SPEC_LONG || counter == SPEC_LONG + SPEC_INT ||
+				 counter == SPEC_SIGNED + SPEC_LONG || counter == SPEC_SIGNED + SPEC_LONG + SPEC_INT) ty = makeLong(ctx.target);
+		else if (counter == SPEC_UNSIGNED + SPEC_LONG || counter == SPEC_UNSIGNED + SPEC_LONG + SPEC_INT) ty = makeULong(ctx.target);
+		else if (counter == SPEC_LONG + SPEC_LONG || counter == SPEC_LONG + SPEC_LONG + SPEC_INT ||
+				 counter == SPEC_SIGNED + SPEC_LONG + SPEC_LONG || counter == SPEC_SIGNED + SPEC_LONG + SPEC_LONG + SPEC_INT) ty = makeLongLong(ctx.target);
+		else if (counter == SPEC_UNSIGNED + SPEC_LONG + SPEC_LONG || counter == SPEC_UNSIGNED + SPEC_LONG + SPEC_LONG + SPEC_INT) ty = makeULongLong(ctx.target);
+		else if (counter == SPEC_FLOAT) ty = makeFloat(ctx.target);
+		else if (counter == SPEC_DOUBLE) ty = makeDouble(ctx.target);
+		else if (counter == SPEC_LONG + SPEC_DOUBLE) ty = makeLongDouble(ctx.target);
 		else {
 			ctx.diags.push(makeDiag(DiagSeverity.Error, ctx.tok.file, ctx.tok.line, ctx.tok.col,
 				"invalid type specifier combination"));
@@ -230,16 +230,16 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		advance(ctx);
 
 		// Safety: if no progress this iteration, break to prevent infinite loop
-		if (ctx.tok === beforeIter) break;
+		if (ctx.tok == beforeIter) break;
 	}
 
 	// Heuristic: unknown identifier followed by identifier, *, or ( in declaration context.
 	// Two consecutive identifiers always means "type name" in C — no other valid interpretation.
 	// Treat the first as an opaque type. Only triggers when #include didn't provide the typedef.
 	// When headers ARE available, typedefs resolve normally and this never runs.
-	if (counter === 0 && ctx.tok !== null && ctx.tok.kind === CTokenKind.Ident &&
-		ctx.tok.next !== null &&
-		(ctx.tok.next.kind === CTokenKind.Ident || ctx.tok.next.stringVal === "*" || ctx.tok.next.stringVal === "(")) {
+	if (counter == 0 && ctx.tok != null && ctx.tok.kind == CTokenKind.Ident &&
+		ctx.tok.next != null &&
+		(ctx.tok.next.kind == CTokenKind.Ident || ctx.tok.next.stringVal == "*" || ctx.tok.next.stringVal == "(")) {
 		const opaqueName = ctx.tok.stringVal;
 		const opaqueType = makeStruct();
 		opaqueType.tagName = opaqueName;
@@ -309,7 +309,7 @@ function typeSuffix(ctx: ParseCtx, ty: CType): CType {
 
 function funcParams(ctx: ParseCtx, returnTy: CType): CType {
 	// void parameter list
-	if (eq(ctx, "void") && ctx.tok.next !== null && ctx.tok.next.stringVal === ")") {
+	if (eq(ctx, "void") && ctx.tok.next != null && ctx.tok.next.stringVal == ")") {
 		advance(ctx); // skip void
 		advance(ctx); // skip )
 		return makeFunc(returnTy);
@@ -336,11 +336,11 @@ function funcParams(ctx: ParseCtx, returnTy: CType): CType {
 		const paramName = declResult.name;
 
 		// Array decay to pointer (C rule)
-		if (paramTy.kind === CTypeKind.Array) {
+		if (paramTy.kind == CTypeKind.Array) {
 			paramTy = makePointer(ctx.target, paramTy.base);
 		}
 		// Function decay to pointer
-		if (paramTy.kind === CTypeKind.Func) {
+		if (paramTy.kind == CTypeKind.Func) {
 			paramTy = makePointer(ctx.target, paramTy);
 		}
 
@@ -348,13 +348,13 @@ function funcParams(ctx: ParseCtx, returnTy: CType): CType {
 		paramNames.push(paramName);
 
 		// Error recovery: break if no progress
-		if (ctx.tok === paramStart) {
+		if (ctx.tok == paramStart) {
 			while (!isEnd(ctx) && !eq(ctx, ")") && !eq(ctx, ";")) advance(ctx);
 			break;
 		}
 	}
 
-	if (params.length === 0) isVariadic = true; // f() means variadic in C
+	if (params.length == 0) isVariadic = true; // f() means variadic in C
 	expect(ctx, ")");
 
 	const fn = makeFunc(returnTy);
@@ -399,11 +399,11 @@ function declarator(ctx: ParseCtx, ty: CType): DeclResult {
 	ty = pointers(ctx, ty);
 
 	// Grouped declarator: (declarator)
-	if (eq(ctx, "(") && !isTypename(ctx) && ctx.tok.next !== null && ctx.tok.next.stringVal !== ")") {
+	if (eq(ctx, "(") && !isTypename(ctx) && ctx.tok.next != null && ctx.tok.next.stringVal != ")") {
 		// Lookahead: is this a grouped declarator or a function parameter list?
 		// If next token after ( is * or an identifier followed by ) or [ or (, it's grouped.
 		const next = ctx.tok.next;
-		if (next !== null && (next.stringVal === "*" || (next.kind === CTokenKind.Ident && !isTypenameStr(ctx, next.stringVal)))) {
+		if (next != null && (next.stringVal == "*" || (next.kind == CTokenKind.Ident && !isTypenameStr(ctx, next.stringVal)))) {
 			const saved = ctx.tok;
 			advance(ctx); // skip (
 			// First pass: skip the declarator to find )
@@ -424,7 +424,7 @@ function declarator(ctx: ParseCtx, ty: CType): DeclResult {
 
 	// Identifier
 	let name = "";
-	if (ctx.tok.kind === CTokenKind.Ident && !ctx.typedefs.has(ctx.tok.stringVal)) {
+	if (ctx.tok.kind == CTokenKind.Ident && !ctx.typedefs.has(ctx.tok.stringVal)) {
 		name = ctx.tok.stringVal;
 		advance(ctx);
 	}
@@ -440,7 +440,7 @@ const TYPE_KEYWORDS: string[] = [
 
 function isTypenameStr(ctx: ParseCtx, s: string): boolean {
 	for (const kw of TYPE_KEYWORDS) {
-		if (s === kw) return true;
+		if (s == kw) return true;
 	}
 	return ctx.typedefs.has(s);
 }
@@ -455,7 +455,7 @@ function skipDeclarator(ctx: ParseCtx): void {
 		advance(ctx);
 		skipDeclarator(ctx);
 		expect(ctx, ")");
-	} else if (ctx.tok.kind === CTokenKind.Ident) {
+	} else if (ctx.tok.kind == CTokenKind.Ident) {
 		advance(ctx);
 	}
 	if (eq(ctx, "(")) {
@@ -484,29 +484,29 @@ function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
 
 	// Optional tag name
 	let tagName = "";
-	if (ctx.tok !== null && ctx.tok.kind === CTokenKind.Ident &&
-		ctx.tok.next !== null && ctx.tok.next.stringVal !== ";") {
+	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident &&
+		ctx.tok.next != null && ctx.tok.next.stringVal != ";") {
 		tagName = ctx.tok.stringVal;
 		advance(ctx);
 	}
 
 	// No body: forward declaration or reference
 	if (!eq(ctx, "{")) {
-		if (tagName !== "") {
+		if (tagName != "") {
 			const existingTag = ctx.tags.get(tagName);
-			if (existingTag !== null) return existingTag;
+			if (existingTag != null) return existingTag;
 		}
 		const ty = isUnion ? makeUnion() : makeStruct();
 		ty.tagName = tagName;
-		if (tagName !== "") ctx.tags.set(tagName, ty);
+		if (tagName != "") ctx.tags.set(tagName, ty);
 		return ty;
 	}
 
 	// Parse body
-	const existingTag = tagName !== "" ? ctx.tags.get(tagName) : null;
-	const ty = existingTag !== null ? existingTag : (isUnion ? makeUnion() : makeStruct());
+	const existingTag = tagName != "" ? ctx.tags.get(tagName) : null;
+	const ty = existingTag != null ? existingTag : (isUnion ? makeUnion() : makeStruct());
 	ty.tagName = tagName;
-	if (tagName !== "") ctx.tags.set(tagName, ty);
+	if (tagName != "") ctx.tags.set(tagName, ty);
 
 	advance(ctx); // skip {
 	ty.members = structMembers(ctx);
@@ -539,7 +539,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 
 		// If declspec didn't advance (unknown type like int32_t without typedef),
 		// skip to next semicolon to avoid infinite loop
-		if (ctx.tok === beforeDecl) {
+		if (ctx.tok == beforeDecl) {
 			while (!isEnd(ctx) && !eq(ctx, ";") && !eq(ctx, "}")) advance(ctx);
 			if (eq(ctx, ";")) advance(ctx);
 			continue;
@@ -559,7 +559,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			// Bitfield: int x : 3;
 			let bitWidth = -1;
 			if (consume(ctx, ":")) {
-				if (ctx.tok.kind === CTokenKind.Num) {
+				if (ctx.tok.kind == CTokenKind.Num) {
 					bitWidth = ctx.tok.intVal as int32;
 					advance(ctx);
 				}
@@ -571,7 +571,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			members.push(mem);
 
 			// Error recovery: break if no progress
-			if (ctx.tok === memberStart) {
+			if (ctx.tok == memberStart) {
 				while (!isEnd(ctx) && !eq(ctx, ";") && !eq(ctx, "}")) advance(ctx);
 				break;
 			}
@@ -588,26 +588,26 @@ function enumSpecifier(ctx: ParseCtx): CType {
 	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
 
 	let tagName = "";
-	if (ctx.tok !== null && ctx.tok.kind === CTokenKind.Ident &&
-		ctx.tok.next !== null && ctx.tok.next.stringVal !== ";") {
+	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident &&
+		ctx.tok.next != null && ctx.tok.next.stringVal != ";") {
 		tagName = ctx.tok.stringVal;
 		advance(ctx);
 	}
 
 	if (!eq(ctx, "{")) {
-		if (tagName !== "") {
+		if (tagName != "") {
 			const existingTag = ctx.tags.get(tagName);
-			if (existingTag !== null) return existingTag;
+			if (existingTag != null) return existingTag;
 		}
 		const ty = makeEnum(ctx.target);
 		ty.tagName = tagName;
-		if (tagName !== "") ctx.tags.set(tagName, ty);
+		if (tagName != "") ctx.tags.set(tagName, ty);
 		return ty;
 	}
 
 	const ty = makeEnum(ctx.target);
 	ty.tagName = tagName;
-	if (tagName !== "") ctx.tags.set(tagName, ty);
+	if (tagName != "") ctx.tags.set(tagName, ty);
 
 	advance(ctx); // skip {
 	let enumVal: int64 = 0 as int64;
@@ -695,11 +695,11 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		// Statement keywords (return, if, while, for, switch, do, goto, break,
 		// continue, case, default) mean we're inside a function body that wasn't
 		// caught by skipFunctionBody. Skip to next } at depth 0.
-		if (ctx.tok !== null && ctx.tok.kind === CTokenKind.Keyword) {
+		if (ctx.tok != null && ctx.tok.kind == CTokenKind.Keyword) {
 			const kw = ctx.tok.stringVal;
-			if (kw === "return" || kw === "if" || kw === "while" || kw === "for" ||
-				kw === "switch" || kw === "do" || kw === "goto" || kw === "break" ||
-				kw === "continue" || kw === "case" || kw === "default") {
+			if (kw == "return" || kw == "if" || kw == "while" || kw == "for" ||
+				kw == "switch" || kw == "do" || kw == "goto" || kw == "break" ||
+				kw == "continue" || kw == "case" || kw == "default") {
 				// Skip to next ; while brace-matching any { } blocks
 				while (!isEnd(ctx) && !eq(ctx, ";")) {
 					if (eq(ctx, "{")) { skipFunctionBody(ctx); }
@@ -730,11 +730,11 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		// regardless of whether the type resolved as Func (might misparse)
 		if (eq(ctx, "{")) {
 			skipFunctionBody(ctx);
-			if (name !== "") {
+			if (name != "") {
 				ctx.objs.push({
 					kind: ObjKind.Function,
 					name,
-					type: ty.kind === CTypeKind.Func ? ty : makeFunc(ty),
+					type: ty.kind == CTypeKind.Func ? ty : makeFunc(ty),
 					isStatic: attr.isStatic,
 					isExtern: attr.isExtern,
 					isDefinition: true,
@@ -747,7 +747,7 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		}
 
 		// Function declaration (no body)
-		if (ty.kind === CTypeKind.Func) {
+		if (ty.kind == CTypeKind.Func) {
 			if (eq(ctx, "{")) {
 				skipFunctionBody(ctx);
 			} else {
@@ -817,7 +817,7 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 
 		// Error recovery: if no progress this iteration, skip to next ; or }
 		// Also brace-match any { blocks encountered (function bodies, compound literals)
-		if (ctx.tok === iterStart) {
+		if (ctx.tok == iterStart) {
 			while (!isEnd(ctx) && !eq(ctx, ";")) {
 				if (eq(ctx, "{")) {
 					skipFunctionBody(ctx);
@@ -847,7 +847,7 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 		const ty = declResult.type;
 		const name = declResult.name;
 
-		if (name !== "") {
+		if (name != "") {
 			ctx.typedefs.set(name, ty);
 			ctx.objs.push({
 				kind: ObjKind.TypedefName,

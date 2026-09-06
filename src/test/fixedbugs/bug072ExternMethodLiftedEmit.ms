@@ -24,12 +24,12 @@ interface Rec {
 
 test "bug072: interface field named log compiles and reads" {
 	const r: Rec = { log: "field" };
-	assert r.log === "field";
+	assert r.log == "field";
 }
 
 test "bug072: closure capturing a local named log compiles and runs" {
 	let log = "a";
 	const w = (): string => log;
 	log = log + "b";
-	assert w() === "ab";
+	assert w() == "ab";
 }

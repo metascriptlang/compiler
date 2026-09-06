@@ -9,5 +9,5 @@ function boom(v: number): number {
 
 test "an uncaught throw must be reported as a failure" {
 	const r = boom(1);
-	assert r === 999, "unreachable — the throw escapes before this runs";
+	assert r == 999, "unreachable — the throw escapes before this runs";
 }

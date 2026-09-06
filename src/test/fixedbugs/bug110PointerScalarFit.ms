@@ -38,19 +38,19 @@ test "bug110: a ref returned as a scalar is rejected" {
 // Neighbours that bound the rule — each must stay legal.
 
 test "bug110: Ref<T> → Ptr<T> cursor init stays legal" {
-	assert strictErrorCount("class B110B { v: int32; next: Ptr<B110B>; } function f(): void { const t = new B110B(); const p: Ptr<B110B> = t; }") === 0;
+	assert strictErrorCount("class B110B { v: int32; next: Ptr<B110B>; } function f(): void { const t = new B110B(); const p: Ptr<B110B> = t; }") == 0;
 }
 
 test "bug110: Ptr<T> → Ref<T> read stays legal" {
-	assert strictErrorCount("class B110B { v: int32; next: Ptr<B110B>; } function g(t: B110B): void { } function f(): void { const t = new B110B(); const e = new B110B(); t.next = e; g(t.next); }") === 0;
+	assert strictErrorCount("class B110B { v: int32; next: Ptr<B110B>; } function g(t: B110B): void { } function f(): void { const t = new B110B(); const e = new B110B(); t.next = e; g(t.next); }") == 0;
 }
 
 test "bug110: scalar widening stays legal" {
-	assert strictErrorCount("function f(): void { const a: int32 = 1; const b: int64 = a; const c: float64 = a; const d: number = a; }") === 0;
+	assert strictErrorCount("function f(): void { const a: int32 = 1; const b: int64 = a; const c: float64 = a; const d: number = a; }") == 0;
 }
 
 test "bug110: enum and int share the scalar class" {
-	assert strictErrorCount("enum B110C { Red, Green } function f(): void { const e = B110C.Red; const n: int32 = e as int32; }") === 0;
+	assert strictErrorCount("enum B110C { Red, Green } function f(): void { const e = B110C.Red; const n: int32 = e as int32; }") == 0;
 }
 
 // The string family is deliberately outside this rule: msString is its own repr

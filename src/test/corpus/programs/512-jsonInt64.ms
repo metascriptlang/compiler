@@ -27,7 +27,7 @@ function check(label: string, ok: boolean): void {
 
 function deltaOk(r: Result<Holder, string>, base: int64): boolean {
 	if (r.ok) {
-		return r.value.id - base === 1;
+		return r.value.id - base == 1;
 	}
 	return false;
 }
@@ -40,7 +40,7 @@ function main(): void {
 
 	const mn = JSON.parse<Holder>("{\"id\":-9223372036854775808}");
 	if (mn.ok) {
-		check("typedMin", mn.value.id + 9223372036854775807 === -1);
+		check("typedMin", mn.value.id + 9223372036854775807 == -1);
 	} else {
 		check("typedMin", false);
 	}
@@ -48,21 +48,21 @@ function main(): void {
 	// Decoded value → string: the print path must not round-trip a double.
 	const a = JSON.parse<Holder>("{\"id\":9007199254740993}");
 	if (a.ok) {
-		check("decodedToString", a.value.id.toString() === "9007199254740993");
+		check("decodedToString", a.value.id.toString() == "9007199254740993");
 	} else {
 		check("decodedToString", false);
 	}
 
 	// Stringify emits the exact digits, and the full text round trip survives.
 	const h: Holder = { id: 9223372036854775807 };
-	check("stringifyMax", JSON.stringify(h) === "{\"id\":9223372036854775807}");
+	check("stringifyMax", JSON.stringify(h) == "{\"id\":9223372036854775807}");
 	check("roundTrip", deltaOk(JSON.parse<Holder>(JSON.stringify(h)), 9223372036854775806));
 
 	// Untyped tree — the Int carrier is exact through asInt64.
 	const u = JSON.parseValue("{\"id\":9007199254740993}");
 	if (u.ok) {
 		const v: JsonValue = u.value;
-		check("untypedAsInt64", v.getDynamicField("id").asInt64() - 9007199254740992 === 1);
+		check("untypedAsInt64", v.getDynamicField("id").asInt64() - 9007199254740992 == 1);
 	} else {
 		check("untypedAsInt64", false);
 	}
@@ -74,7 +74,7 @@ function main(): void {
 	const wide = JSON.parse<Holder>("{\"id\":98765432109876543210}");
 	check("wideIsErr", !wide.ok);
 
-	if (failures === 0) {
+	if (failures == 0) {
 		console.log("int64-json all-ok");
 	} else {
 		console.log("int64-json failures=" + failures.toString());

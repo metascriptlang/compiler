@@ -37,12 +37,12 @@ let _pendingNames: HashSet<string> = new HashSet<string>();
 let _moduleCtxMap: HashMap<string, CheckerContext> = new HashMap<string, CheckerContext>();
 
 export function registerModuleCtx(modulePath: string, ctx: CheckerContext): void {
-	if (modulePath === "") return;
+	if (modulePath == "") return;
 	_moduleCtxMap.set(modulePath, ctx);
 }
 
 export function lookupModuleCtx(modulePath: string): CheckerContext | null {
-	if (modulePath === "") return null;
+	if (modulePath == "") return null;
 	if (!_moduleCtxMap.has(modulePath)) return null;
 	return _moduleCtxMap.get(modulePath);
 }
@@ -61,12 +61,12 @@ export function lookupModuleCtx(modulePath: string): CheckerContext | null {
 let _moduleProgramMap: HashMap<string, Node> = new HashMap<string, Node>();
 
 export function registerModuleProgram(modulePath: string, program: Node): void {
-	if (modulePath === "") return;
+	if (modulePath == "") return;
 	_moduleProgramMap.set(modulePath, program);
 }
 
 export function lookupModuleProgram(modulePath: string): Node | null {
-	if (modulePath === "") return null;
+	if (modulePath == "") return null;
 	if (!_moduleProgramMap.has(modulePath)) return null;
 	return _moduleProgramMap.get(modulePath);
 }
@@ -82,10 +82,10 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 // Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
 // instantiation body re-check.
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
-	if (definingModulePath === "" || definingModulePath === ctx.modulePath) return ctx;
+	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
 	const defining = lookupModuleCtx(definingModulePath);
-	if (defining !== null) return defining;
-	if (ctx.preludeCtx !== null) return ctx.preludeCtx;
+	if (defining != null) return defining;
+	if (ctx.preludeCtx != null) return ctx.preludeCtx;
 	return ctx;
 }
 
@@ -103,31 +103,31 @@ let _ctorRegistry: CtorEntry[] = [];
 
 export function registerCtorDefaults(name: string, fnType: Type, defaults: Node[]): void {
 	for (const e of _ctorRegistry) {
-		if (e.name === name) return; // already registered
+		if (e.name == name) return; // already registered
 	}
 	_ctorRegistry.push({ name, fnType, defaults });
 }
 
 export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 	for (const e of _ctorRegistry) {
-		if (e.name === ctorFnName) return e;
+		if (e.name == ctorFnName) return e;
 	}
 	return null as unknown as CtorEntry;
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
-	const owner = node.resolvedSym !== null ? node.resolvedSym.modulePath : "";
+	const owner = node.resolvedSym != null ? node.resolvedSym.modulePath : "";
 	return owner + "::" + name;
 }
 
 export function addPendingInstance(node: Node): void {
 	let key = "";
-	if (node.kind === NodeKind.FunctionDecl) {
+	if (node.kind == NodeKind.FunctionDecl) {
 		key = pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
-	} else if (node.kind === NodeKind.ClassDecl) {
+	} else if (node.kind == NodeKind.ClassDecl) {
 		key = pendingInstanceKey(node, (node.data as ClassDeclData).className);
 	}
-	if (key !== "") {
+	if (key != "") {
 		if (_pendingNames.has(key)) return;
 		_pendingNames.add(key);
 	}
@@ -150,7 +150,7 @@ function deduplicateBindings(names: string[], types: Type[]): { names: string[],
 	for (let i = 0; i < names.length; i += 1) {
 		if (i >= types.length) break;
 		let dup = false;
-		for (const n of outNames) { if (n === names[i]) { dup = true; break; } }
+		for (const n of outNames) { if (n == names[i]) { dup = true; break; } }
 		if (!dup) {
 			outNames.push(names[i]);
 			outTypes.push(types[i]);
@@ -162,9 +162,9 @@ function deduplicateBindings(names: string[], types: Type[]): { names: string[],
 // Add a type symbol to scope if not already present. Returns true if injected.
 // Prefers caller's authoritative symbol type; falls back to provided type.
 function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
-	if (lookupSymbol(ctx.table, name) !== null) return;
+	if (lookupSymbol(ctx.table, name) != null) return;
 	const callerSym = lookupSymbol(callerCtx.table, name);
-	const symType = callerSym !== null ? callerSym.symbolType : fallbackType;
+	const symType = callerSym != null ? callerSym.symbolType : fallbackType;
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
 	sym.nameId = getIdentId(ctx.table.identCache, name);
 	addSymbolToScope(ctx.table.current, sym);
@@ -175,21 +175,21 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 // For Array<Ref<Item>>, extracts "Item" and adds Ref<Struct("Item")> to scope.
 // Reference parity (instantiateGenericParamList): concrete types added to scope.
 function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
-	if (t === null) return;
+	if (t == null) return;
 	const tr = t.typeReturn;
 	// Hand-rolled dispatch: match `when` guards don't propagate narrowing into
 	// the arm body in the current binder, so we can't safely access `tr.kind`
 	// inside `TypeKind.Ref when (tr !== null) => { ... tr.kind ... }`. The
 	// if-chain below makes the narrowing scope explicit and matches the binder's
 	// flow-based narrowing exactly.
-	if (t.kind === TypeKind.Ref && tr !== null) {
-		if (tr.kind === TypeKind.Struct && tr.typeName !== "") {
+	if (t.kind == TypeKind.Ref && tr != null) {
+		if (tr.kind == TypeKind.Struct && tr.typeName != "") {
 			tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected);
 		}
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
 	}
-	if (t.kind === TypeKind.Array && tr !== null) {
+	if (t.kind == TypeKind.Array && tr != null) {
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
 	}
@@ -201,24 +201,24 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	// T=Color emits the function signature mangled correctly but the body's
 	// `out` declared as untyped msRefArray, breaking the assignment site at
 	// C compile time.
-	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Enum || t.kind === TypeKind.Distinct)
-			&& t.typeName !== "") {
+	if ((t.kind == TypeKind.Struct || t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct)
+			&& t.typeName != "") {
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}
-	if (t.kind === TypeKind.Union) {
-		if (t.typeName !== "") {
+	if (t.kind == TypeKind.Union) {
+		if (t.typeName != "") {
 			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		}
 		injectConcreteTypeSyms(t.typeExtra, ctx, callerCtx, injected);
-		if (t.typeChildren !== null) {
+		if (t.typeChildren != null) {
 			for (const child of t.typeChildren) {
 				injectConcreteTypeSyms(child, ctx, callerCtx, injected);
 			}
 		}
 		return;
 	}
-	if (t.kind === TypeKind.GenericInstance && t.typeChildren !== null) {
+	if (t.kind == TypeKind.GenericInstance && t.typeChildren != null) {
 		for (const child of t.typeChildren) {
 			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
 		}
@@ -229,7 +229,7 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 	for (const sym of injected) {
 		// Each injected sym has a real nameId (set in injectConcreteTypeSyms before push);
 		// O(1) removal by key instead of linear-scan-swap-pop.
-		if (sym.nameId !== 0) {
+		if (sym.nameId != 0) {
 			ctx.table.current.symbols.delete(sym.nameId);
 		}
 	}
@@ -242,16 +242,16 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 // would resolve here but fail at link; skipping it surfaces a check-time
 // "no member" error with the instantiation note instead.
 function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): int32 {
-	if (bodyCtx === ctx) return -1;
-	if (bodyCtx.extensionRegistry === null || ctx.extensionRegistry === null) return -1;
+	if (bodyCtx == ctx) return -1;
+	if (bodyCtx.extensionRegistry == null || ctx.extensionRegistry == null) return -1;
 	const preCount = bodyCtx.extensionRegistry.methods.length;
 	for (const m of ctx.extensionRegistry.methods) {
 		// Drop only KNOWN-private extensions of the instantiating module itself.
 		// Import-derived entries are exported by construction but their local
 		// sym view does NOT carry the Exported flag — discriminate by the sym's
 		// defining modulePath instead of the flag alone.
-		if (m.sym !== null
-				&& (m.sym.modulePath === "" || m.sym.modulePath === ctx.modulePath)
+		if (m.sym != null
+				&& (m.sym.modulePath == "" || m.sym.modulePath == ctx.modulePath)
 				&& !hasFlag(m.sym, SymbolFlag.Exported)) {
 			continue;
 		}
@@ -266,7 +266,7 @@ function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: int32): voi
 }
 
 function displayTypeArgs(types: Type[]): string {
-	if (types.length === 0) return "";
+	if (types.length == 0) return "";
 	let s = "<";
 	for (let i = 0; i < types.length; i += 1) {
 		if (i > 0) s = s + ", ";
@@ -281,12 +281,12 @@ function displayTypeArgs(types: Type[]): string {
 // MethodDecl so the existing instantiation flow drives mono on it. Instance
 // methods already carry `this` as param 0 (prepended in collectClassMethod).
 function unwrapToFunctionDecl(node: Node): Node {
-	if (node === null) return null as unknown as Node;
+	if (node == null) return null as unknown as Node;
 	let n = node;
-	if (n.kind === NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
-	if (n !== null && n.kind === NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
-	if (n !== null && n.kind === NodeKind.FunctionDecl) return n;
-	if (n !== null && n.kind === NodeKind.MethodDecl) {
+	if (n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
+	if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
+	if (n != null && n.kind == NodeKind.FunctionDecl) return n;
+	if (n != null && n.kind == NodeKind.MethodDecl) {
 		const md = n.data as MethodDeclDataLocal;
 		// Synthesize a FunctionDecl-shaped Node mirroring this method. The class
 		// name is woven in through the symbol's name (set by collectMethodMember
@@ -328,12 +328,12 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 // the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
 // Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
 function clearCheckerState(node: Node): void {
-	if (node === null) return;
-	while (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr || node.kind === NodeKind.HiddenStdConv) {
-		const inner = node.kind === NodeKind.HiddenStdConv
+	if (node == null) return;
+	while (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv) {
+		const inner = node.kind == NodeKind.HiddenStdConv
 			? (node.data as HiddenStdConvData).convExpr
 			: (node.data as HiddenDerefData).expr;
-		if (inner === null) break;
+		if (inner == null) break;
 		node.kind = inner.kind;
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
@@ -343,8 +343,8 @@ function clearCheckerState(node: Node): void {
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
-	const keepBound = (node.flags & NodeFlag.BoundSym) !== 0 && node.resolvedSym !== null;
-	if (!keepBound && (node.resolvedSym === null || node.resolvedSym.symbolKind !== SymbolKind.EnumMember)) {
+	const keepBound = (node.flags & NodeFlag.BoundSym) != 0 && node.resolvedSym != null;
+	if (!keepBound && (node.resolvedSym == null || node.resolvedSym.symbolKind != SymbolKind.EnumMember)) {
 		node.resolvedSym = null;
 	}
 	node.flags = node.flags & NodeFlag.BoundSym;
@@ -362,7 +362,7 @@ function clearCheckerState(node: Node): void {
 
 // Substitute all generic param names → concrete types in a single annotation string.
 function substAnnotationAll(ann: string, paramNames: string[], concreteTypes: Type[]): string {
-	if (ann === "") return ann;
+	if (ann == "") return ann;
 	let out = ann;
 	for (let i = 0; i < paramNames.length; i += 1) {
 		if (i < concreteTypes.length) {
@@ -375,7 +375,7 @@ function substAnnotationAll(ann: string, paramNames: string[], concreteTypes: Ty
 // Apply substitutions to node-local state (nodeType + per-kind string annotations).
 // Does NOT descend into children — that's forEachChild's job.
 function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[]): void {
-	if (node.nodeType !== null) {
+	if (node.nodeType != null) {
 		for (let i = 0; i < paramNames.length; i += 1) {
 			if (i < concreteTypes.length) {
 				node.nodeType = substituteType(node.nodeType, paramNames[i], concreteTypes[i]);
@@ -386,35 +386,35 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
 	// to a location-keyed side channel that still holds the original (unsubstituted)
 	// strings, producing HashMap<Unknown, Unknown> during re-check of cloned bodies.
-	if (node.typeArg !== null && node.typeArg !== "") {
+	if (node.typeArg != null && node.typeArg != "") {
 		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
 	}
-	if (node.kind === NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		d.declType = substAnnotationAll(d.declType, paramNames, concreteTypes);
-	} else if (node.kind === NodeKind.TypeAssertion) {
+	} else if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		d.asType = substAnnotationAll(d.asType, paramNames, concreteTypes);
-	} else if (node.kind === NodeKind.FunctionDecl) {
+	} else if (node.kind == NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
 		d.fnReturnType = substAnnotationAll(d.fnReturnType, paramNames, concreteTypes);
 		for (let p = 0; p < d.fnParamTypes.length; p += 1) {
 			d.fnParamTypes[p] = substAnnotationAll(d.fnParamTypes[p], paramNames, concreteTypes);
 		}
-	} else if (node.kind === NodeKind.ArrowFunction) {
+	} else if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
 		d.arrowReturnType = substAnnotationAll(d.arrowReturnType, paramNames, concreteTypes);
 		for (let p = 0; p < d.arrowParamTypes.length; p += 1) {
 			d.arrowParamTypes[p] = substAnnotationAll(d.arrowParamTypes[p], paramNames, concreteTypes);
 		}
-	} else if (node.kind === NodeKind.SizeofExpr) {
+	} else if (node.kind == NodeKind.SizeofExpr) {
 		const d = node.data as SizeofExprData;
 		d.sizeofType = substAnnotationAll(d.sizeofType, paramNames, concreteTypes);
 	}
 }
 
 export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	substNodeLocal(node, paramNames, concreteTypes);
 	forEachChild(node, (child: Node): void => { replaceTypeVars(child, paramNames, concreteTypes); });
 }
@@ -444,7 +444,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
 	// Don't instantiate — the runtime provides the implementation.
 	if (hasFlag(sym, SymbolFlag.ImportC)) return null as unknown as Symbol;
-	if (sym.nativeName !== "") return null as unknown as Symbol;
+	if (sym.nativeName != "") return null as unknown as Symbol;
 
 	// Reference parity: refuse to instantiate if any type arg
 	// is still a GenericParam (inference didn't complete). Unknown is allowed
@@ -453,7 +453,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// in C. Blocking Unknown here forced callers to fall back to a wrong cached
 	// instance — see nullableFunction.ms regression coverage.
 	for (const ct of concreteTypes) {
-		if (ct === null || ct.kind === TypeKind.GenericParam) {
+		if (ct == null || ct.kind == TypeKind.GenericParam) {
 			return null as unknown as Symbol;
 		}
 	}
@@ -467,11 +467,11 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// across Map and HashMap, and the later instantiation overwrites the earlier one.
 	// Prefix with the receiver class name (e.g. `Map_set__string_int32`).
 	let mangleBase = sym.name;
-	if (sym.declNode !== null && sym.declNode.kind === NodeKind.FunctionDecl) {
+	if (sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl) {
 		const fd = sym.declNode.data as FunctionDeclData;
 		if (isExtensionFlag(fd.fnFlags)) {
 			const recv = getExtReceiverType(fd.fnFlags);
-			if (recv !== "") mangleBase = recv + "_" + sym.name;
+			if (recv != "") mangleBase = recv + "_" + sym.name;
 		}
 	}
 	const mangledName = mangleMonoName(mangleBase, dedup.types);
@@ -479,7 +479,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
 	const existing = lookupSymbol(ctx.table, mangledName);
-	if (existing !== null) {
+	if (existing != null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		_igfHits = _igfHits + 1;
 		return existing;
@@ -488,7 +488,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const _ig0 = performance.now();
 	_igfMisses = _igfMisses + 1;
 	const fnNode = unwrapToFunctionDecl(sym.declNode);
-	if (fnNode === null) {
+	if (fnNode == null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		return null as unknown as Symbol;
 	}
@@ -506,7 +506,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Strip gen: (type params) and ext: (extension metadata) but keep generator/async.
 	cd.fnFlags = stripGenFlag(cd.fnFlags);
 
-	const instType = sym.symbolType !== null ? instantiateGeneric(sym.symbolType, dedup.names, dedup.types) : sym.symbolType;
+	const instType = sym.symbolType != null ? instantiateGeneric(sym.symbolType, dedup.names, dedup.types) : sym.symbolType;
 	cloned.nodeType = instType;
 
 	// Create and register symbol in root scope.
@@ -520,11 +520,11 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";
-	instSym.modulePath = sym.modulePath !== "" ? sym.modulePath : ctx.modulePath;
+	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
 	instSym.originalName = mangledName;
 	let rootScope = ctx.table.current;
-	while (rootScope.parent !== null) rootScope = rootScope.parent;
+	while (rootScope.parent != null) rootScope = rootScope.parent;
 	instSym.nameId = getIdentId(ctx.table.identCache, mangledName);
 	addSymbolToScope(rootScope, instSym);
 	cloned.resolvedSym = instSym;
@@ -532,7 +532,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
 	// (for private helpers like mapRawGet), but with concrete type symbols injected so
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
-	if (cd.fnBody !== null) {
+	if (cd.fnBody != null) {
 		const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
 		// Register instance in body-check scope so recursive lookups find it
 		instSym.nameId = getIdentId(bodyCtx.table.identCache, mangledName);
@@ -566,14 +566,14 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
-		if (instType.kind === TypeKind.Function
-				&& instType.typeReturn !== null
+		if (instType.kind == TypeKind.Function
+				&& instType.typeReturn != null
 				&& isUnresolvedType(instType.typeReturn)) {
-			if (bodyCtx.inferredReturn.kind !== TypeKind.Inferred) {
+			if (bodyCtx.inferredReturn.kind != TypeKind.Inferred) {
 				instType.typeReturn = bodyCtx.inferredReturn;
 				for (const rs of bodyCtx.inferredReturnStmts) {
 					const rsd = rs.data as ReturnStmtData;
-					if (rsd.argument !== null) rsd.argument = fitJoinedBranch(bodyCtx, rsd.argument, bodyCtx.inferredReturn);
+					if (rsd.argument != null) rsd.argument = fitJoinedBranch(bodyCtx, rsd.argument, bodyCtx.inferredReturn);
 				}
 			} else {
 				instType.typeReturn = voidType();
@@ -581,7 +581,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		}
 		bodyCtx.inferredReturn = savedReturn;
 		bodyCtx.inferredReturnStmts = savedReturnStmts;
-		if (bodyCtx !== ctx && bodyCtx.errors.length > errBefore) {
+		if (bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
 		}
 		bodyCtx.modulePath = savedModulePath;
@@ -605,7 +605,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): void {
 	// Refuse unresolved types
 	for (const ct of concreteTypes) {
-		if (ct === null || ct.kind === TypeKind.GenericParam || isUnresolvedType(ct)) return;
+		if (ct == null || ct.kind == TypeKind.GenericParam || isUnresolvedType(ct)) return;
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
@@ -614,10 +614,10 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 	// Cache check — already instantiated?
 	const existingSym = lookupSymbol(ctx.table, ctorFnName);
-	if (existingSym !== null) return;
+	if (existingSym != null) return;
 	for (const existing of _pendingInstances) {
-		if (existing.kind === NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName === ctorFnName) return;
-		if (existing.kind === NodeKind.ClassDecl && (existing.data as ClassDeclData).className === mangledClass) return;
+		if (existing.kind == NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName == ctorFnName) return;
+		if (existing.kind == NodeKind.ClassDecl && (existing.data as ClassDeclData).className == mangledClass) return;
 	}
 
 	// An imported class symbol carries the ImportDecl, not the ClassDecl — export
@@ -626,23 +626,23 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Ask the DEFINING module for the real declaration through the same module-ctx
 	// registry this function already uses to re-check the constructor body below.
 	let classDeclNode: Node | null = classSym.declNode;
-	if (classDeclNode === null || classDeclNode.kind !== NodeKind.ClassDecl) {
+	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
 		const declCtx = pickBodyCtx(classSym.modulePath, ctx);
-		const declName = classSym.originalName !== "" ? classSym.originalName : classSym.name;
+		const declName = classSym.originalName != "" ? classSym.originalName : classSym.name;
 		const declSym = lookupSymbol(declCtx.table, declName);
-		classDeclNode = declSym !== null ? declSym.declNode : null;
+		classDeclNode = declSym != null ? declSym.declNode : null;
 	}
-	if (classDeclNode === null || classDeclNode.kind !== NodeKind.ClassDecl) return;
+	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) return;
 	const classData = classDeclNode.data as ClassDeclData;
 	let ctorNode: Node | null = null;
 	for (const member of classData.classBody) {
-		if (member.kind === NodeKind.ConstructorDecl) { ctorNode = member; }
+		if (member.kind == NodeKind.ConstructorDecl) { ctorNode = member; }
 	}
-	if (ctorNode === null) return;
+	if (ctorNode == null) return;
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
-	const clonedBody = ctorData.ctorBody !== null ? monoCloneNode(ctorData.ctorBody) : null as unknown as Node;
+	const clonedBody = ctorData.ctorBody != null ? monoCloneNode(ctorData.ctorBody) : null as unknown as Node;
 
 	// Build FunctionDecl params from constructor params with type substitution
 	const fnParams: string[] = [];
@@ -652,21 +652,21 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	substituteTypeStrings(fnParamTypes, dedup.names, dedup.types);
 
 	// Substitute type vars in body
-	if (clonedBody !== null) {
+	if (clonedBody != null) {
 		replaceTypeVars(clonedBody, dedup.names, dedup.types);
 	}
 
 	// Clone constructor defaults (for default-fill at call sites)
 	const fnDefaults: Node[] = [];
-	if (ctorData.ctorDefaults !== null) {
+	if (ctorData.ctorDefaults != null) {
 		for (const d of ctorData.ctorDefaults) {
-			fnDefaults.push(d !== null ? monoCloneNode(d) : null as unknown as Node);
+			fnDefaults.push(d != null ? monoCloneNode(d) : null as unknown as Node);
 		}
 	}
 
 	// We emit a ClassDecl with just the constructor; methodToFunction lifts it into a
 	// top-level `<Class>_init` FunctionDecl, and NewExpr inlines alloc + `_init` call.
-	const loc = ctorNode.location !== null ? ctorNode.location : makeLoc(0, 0);
+	const loc = ctorNode.location != null ? ctorNode.location : makeLoc(0, 0);
 	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
 
@@ -682,12 +682,12 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
 	// Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
 	let structBase: Type = classSym.symbolType;
-	if (structBase.kind === TypeKind.Ref && structBase.typeReturn !== null) structBase = structBase.typeReturn;
+	if (structBase.kind == TypeKind.Ref && structBase.typeReturn != null) structBase = structBase.typeReturn;
 	let substStruct: Type = structBase;
 	for (let si = 0; si < dedup.names.length; si += 1) {
 		if (si < dedup.types.length) substStruct = substituteType(substStruct, dedup.names[si].trim(), dedup.types[si]);
 	}
-	if (substStruct === structBase) {
+	if (substStruct == structBase) {
 		const newNames: string[] = [];
 		for (const n of substStruct.typeNames) newNames.push(n);
 		const newChildren: Type[] = [];
@@ -704,10 +704,10 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Fallback chain: registry → preludeCtx → caller's ctx. Reference parity: Nim's
 	// `graph.ifaces[module]` lookup. Inject concrete type symbols so user types in type
 	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
-	if (clonedBody !== null) {
+	if (clonedBody != null) {
 		const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 		const savedModulePath = bodyCtx.modulePath;
-		bodyCtx.modulePath = classSym.modulePath !== "" ? classSym.modulePath : ctx.modulePath;
+		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
 		bindFunctionFlow(clonedBody, clonedBody);
 		// Inject concrete type symbols (parity with instantiateGenericFunction).

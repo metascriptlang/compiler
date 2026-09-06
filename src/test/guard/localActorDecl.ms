@@ -20,13 +20,13 @@ function spawnLocal(): number {
 		get(): number { return this.v; }
 	}
 	const a = new Tiny();
-	const alive = a.pid !== 0 ? 5 : 0;
+	const alive = a.pid != 0 ? 5 : 0;
 	stop(a.pid, ExitReason.Normal);
 	return alive;
 }
 
 const total = spawnLocal();
 console.log(total);
-if (total === 5) {
+if (total == 5) {
 	console.log("GUARD-OK");
 }

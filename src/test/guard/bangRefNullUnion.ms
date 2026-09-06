@@ -30,13 +30,13 @@ function over(x: string): int32 { return 2; }
 function main(): void {
 	const t = try getTok(true) catch null;
 
-	if (t!.kind !== 7) { throw "GUARD RED: member access through `!` broke"; }
-	if (over(t!) !== 1) { throw "GUARD RED: `!` did not pick the Tok overload"; }
+	if (t!.kind != 7) { throw "GUARD RED: member access through `!` broke"; }
+	if (over(t!) != 1) { throw "GUARD RED: `!` did not pick the Tok overload"; }
 
-	const cond = t !== null;
+	const cond = t != null;
 	const joined = cond ? t! : "fallback";
 	const arrJoin = [t!, "s"];
-	if (arrJoin.length !== 2) { throw "GUARD RED: array join through `!` broke"; }
+	if (arrJoin.length != 2) { throw "GUARD RED: array join through `!` broke"; }
 
 	console.log("bangRefNullUnion ok");
 }

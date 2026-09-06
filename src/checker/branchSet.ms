@@ -27,7 +27,7 @@ class NameCount {
 // Idempotent append. Linear scan — sets stay small so O(n) is fine.
 export function addName(list: string[], name: string): void {
 	for (const existing of list) {
-		if (existing === name) return;
+		if (existing == name) return;
 	}
 	list.push(name);
 }
@@ -35,7 +35,7 @@ export function addName(list: string[], name: string): void {
 // Membership test.
 export function hasName(list: string[], name: string): boolean {
 	for (const existing of list) {
-		if (existing === name) return true;
+		if (existing == name) return true;
 	}
 	return false;
 }
@@ -55,14 +55,14 @@ export function collectSince(list: string[], oldState: int32): string[] {
 
 function addToIntersection(counts: NameCount[], name: string, breakState: BreakState): void {
 	for (const entry of counts) {
-		if (entry.name === name) {
-			if (breakState === BreakState.BsNone) {
+		if (entry.name == name) {
+			if (breakState == BreakState.BsNone) {
 				entry.count = entry.count + 1;
 			}
 			return;
 		}
 	}
-	if (breakState === BreakState.BsNone) {
+	if (breakState == BreakState.BsNone) {
 		counts.push({ name, count: 1 });
 	} else {
 		counts.push({ name, count: 0 });
@@ -92,7 +92,7 @@ export function mergeBranches(
 		const set = branchSets[b];
 		const breakState = branchBreaks[b];
 
-		if (breakState === BreakState.BsNone) {
+		if (breakState == BreakState.BsNone) {
 			toCover = toCover + 1;
 		}
 
@@ -120,7 +120,7 @@ test "addName idempotent" {
 	const s: string[] = [];
 	addName(s, "x");
 	addName(s, "x");
-	assert s.length === 1;
+	assert s.length == 1;
 }
 
 test "hasName basic" {
@@ -136,7 +136,7 @@ test "collectSince slice" {
 	addName(s, "b");
 	addName(s, "c");
 	const fresh = collectSince(s, snap);
-	assert fresh.length === 2;
+	assert fresh.length == 2;
 }
 
 test "mergeBranches exhaustive both" {

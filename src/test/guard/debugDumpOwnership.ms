@@ -59,7 +59,7 @@ function main(): void {
 
 	// The same builder feeds a struct's string form.
 	const s = `${new Leaf(5)}`;
-	if (s !== "{\"n\":5}") { throw "GUARD RED: struct string form = " + s; }
+	if (s != "{\"n\":5}") { throw "GUARD RED: struct string form = " + s; }
 
 	// Repeated dumps in one scope — each temp must be destroyed exactly once.
 	let i = 0;

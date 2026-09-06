@@ -42,7 +42,7 @@ export function createDeflate(format: CompressFormat = CompressFormat.Gzip, leve
 // Feed a chunk of uncompressed input. Returns any compressed bytes produced
 // so far (may be "" while the compressor buffers input internally).
 export function deflateFeed(s: DeflateStream, chunk: string): Result<string, CompressError> {
-	if (s.handle === 0) {
+	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "deflate context allocation failed"));
 	}
 	if (s.finished) {
@@ -58,7 +58,7 @@ export function deflateFeed(s: DeflateStream, chunk: string): Result<string, Com
 // Signal end of input, flush the compressor, drain the remaining output,
 // and release the context. For gzip, appends the CRC32 + ISIZE trailer.
 export function deflateFinish(s: DeflateStream): Result<string, CompressError> {
-	if (s.handle === 0) {
+	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "deflate context allocation failed"));
 	}
 	if (s.finished) return Result.ok("");
@@ -80,7 +80,7 @@ export function deflateFinish(s: DeflateStream): Result<string, CompressError> {
 // Compress to a complete gzip blob (RFC 1952).
 export function gzip(data: string, level: int32 = 6): Result<string, CompressError> {
 	const out = msDeflateOneShot(data, CompressFormat.Gzip as int32, level);
-	if (out.length === 0) {
+	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "gzip compression failed"));
 	}
 	return Result.ok(out);
@@ -89,7 +89,7 @@ export function gzip(data: string, level: int32 = 6): Result<string, CompressErr
 // Compress to a zlib-wrapped DEFLATE blob (RFC 1950).
 export function deflate(data: string, level: int32 = 6): Result<string, CompressError> {
 	const out = msDeflateOneShot(data, CompressFormat.Zlib as int32, level);
-	if (out.length === 0) {
+	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "zlib compression failed"));
 	}
 	return Result.ok(out);
@@ -99,7 +99,7 @@ export function deflate(data: string, level: int32 = 6): Result<string, Compress
 // produces a 2-byte end-of-stream marker.
 export function deflateRaw(data: string, level: int32 = 6): Result<string, CompressError> {
 	const out = msDeflateOneShot(data, CompressFormat.Deflate as int32, level);
-	if (out.length === 0) {
+	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "deflate compression failed"));
 	}
 	return Result.ok(out);

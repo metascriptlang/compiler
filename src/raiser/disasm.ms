@@ -82,11 +82,11 @@ export function opName(op: RaiserOpcode): string {
 // --- Format helpers ---
 
 function isABxOp(op: RaiserOpcode): boolean {
-	return op === RaiserOpcode.LoadConst || op === RaiserOpcode.Try || op === RaiserOpcode.Catch;
+	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch;
 }
 
 function isAxOp(op: RaiserOpcode): boolean {
-	return op === RaiserOpcode.Jump;
+	return op == RaiserOpcode.Jump;
 }
 
 export function disasmInst(inst: RaiserInstruction): string {
@@ -102,7 +102,7 @@ export function disasmFunc(func: RaiserFunction): string {
 	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
 		let line = `  ${i}: ${disasmInst(inst)}`;
-		if (inst.op === RaiserOpcode.LoadConst) {
+		if (inst.op == RaiserOpcode.LoadConst) {
 			const cIdx = getBx(inst);
 			if (cIdx < getFuncConstLen(func)) {
 				const cVal = getFuncConst(func, cIdx);
@@ -124,22 +124,22 @@ export function printModule(mod: RaiserModule): void {
 // --- Tests ---
 test "ABC instruction format" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-	assert disasmInst(inst) === "AddI64 R2 R0 R1";
+	assert disasmInst(inst) == "AddI64 R2 R0 R1";
 }
 
 test "ABx instruction format" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 3);
-	assert disasmInst(inst) === "LoadConst R0 K3";
+	assert disasmInst(inst) == "LoadConst R0 K3";
 }
 
 test "Ax instruction format" {
 	const inst = raiserAx(RaiserOpcode.Jump, -4);
-	assert disasmInst(inst) === "Jump -4";
+	assert disasmInst(inst) == "Jump -4";
 }
 
 test "Halt format" {
 	const inst = raiserABC(RaiserOpcode.Halt, 2, 0, 0);
-	assert disasmInst(inst) === "Halt R2 R0 R0";
+	assert disasmInst(inst) == "Halt R2 R0 R0";
 }
 
 test "disasmFunc includes constant annotations" {

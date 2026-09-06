@@ -56,30 +56,30 @@ function wrapTruthiness(cond: Node): Node {
 	// Type-aware: boolean-typed nodes need no wrapping.
 	// BooleanLiteral covers disc re-reads on narrowed bool-disc DU variants
 	// (`ok: BooleanLiteral` injected by resolvePass) — same C repr as boolean.
-	if (cond.nodeType !== null && (cond.nodeType.kind === TypeKind.Boolean
-		|| cond.nodeType.kind === TypeKind.BooleanLiteral)) return cond;
+	if (cond.nodeType != null && (cond.nodeType.kind == TypeKind.Boolean
+		|| cond.nodeType.kind == TypeKind.BooleanLiteral)) return cond;
 	// Maybe<T> in boolean context → .present
-	if (cond.nodeType !== null && isMaybeType(cond.nodeType)) {
+	if (cond.nodeType != null && isMaybeType(cond.nodeType)) {
 		return makeMember(cond, "present", cond.location);
 	}
 	// bigint → `!!b`. The inner `!` is what bigIntOpLower turns into msBigIntIsZero
 	// on C; on js the double negation is already the native truthiness of 0n.
-	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.BigInt) {
+	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.BigInt) {
 		return makeUnary("!", makeUnary("!", cond, cond.location), cond.location);
 	}
 	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
-	if (cond.nodeType !== null && isStructType(cond.nodeType)) return makeBool(true, cond.location);
+	if (cond.nodeType != null && isStructType(cond.nodeType)) return makeBool(true, cond.location);
 	// Arrays → len > 0
-	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Array) {
+	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Array) {
 		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);
 	}
 	// Ref types (class/interface values) → null-sentinel check; without this arm
 	// a ref-typed identifier fell into the string byteLength fallback below.
-	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Ref) {
+	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Ref) {
 		return makeBinary(cond, "!==", makeNull(cond.location), cond.location);
 	}
 	if (isAlreadyBoolean(cond)) return cond;
-	if (cond.kind === NodeKind.Identifier || cond.kind === NodeKind.MemberExpr) {
+	if (cond.kind == NodeKind.Identifier || cond.kind == NodeKind.MemberExpr) {
 		const loc = cond.location;
 		const lengthAccess = makeMember(cond, "byteLength", loc);
 		return makeBinary(lengthAccess, ">", makeNumber(0, loc), loc);
@@ -98,14 +98,14 @@ function isAlreadyBoolean(node: Node): boolean {
 }
 
 // ===== Tests =====
-test "if with comparison unchanged" { assert firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt; }
+test "if with comparison unchanged" { assert firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) == NodeKind.IfStmt; }
 
-test "while bool unchanged" { assert firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt; }
+test "while bool unchanged" { assert firstStmtKindAfter("while (true) {}", lowerStringTruthiness) == NodeKind.WhileStmt; }
 
-test "call condition unchanged" { assert firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt; }
+test "call condition unchanged" { assert firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) == NodeKind.IfStmt; }
 
-test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerStringTruthiness) === NodeKind.BinaryExpr; }
+test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerStringTruthiness) == NodeKind.BinaryExpr; }
 
-test "non-condition passthrough" { assert stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1; }
+test "non-condition passthrough" { assert stmtCountAfter("const x = 1;", lowerStringTruthiness) == 1; }
 
-test "already boolean passthrough" { assert firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt; }
+test "already boolean passthrough" { assert firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) == NodeKind.IfStmt; }

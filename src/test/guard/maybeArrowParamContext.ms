@@ -18,18 +18,18 @@
 // No RC balance directive — the signal is build-failure / wrong-value-throw.
 
 function pickNG(f: ((a: number, b: number) => boolean) | null): boolean {
-	if (f !== null) { return f(1.0, 2.0); }
+	if (f != null) { return f(1.0, 2.0); }
 	return false;
 }
 
 function pickG<T>(x: T, f: ((a: T, b: T) => boolean) | null): boolean {
-	if (f !== null) { return f(x, x); }
+	if (f != null) { return f(x, x); }
 	return false;
 }
 
 function main(): void {
-	const ng = pickNG((a, b) => (a !== 0.0) === (b !== 0.0));
-	const g = pickG(3.5, (a, b) => (a !== 0.0) === (b !== 0.0));
+	const ng = pickNG((a, b) => (a != 0.0) == (b != 0.0));
+	const g = pickG(3.5, (a, b) => (a != 0.0) == (b != 0.0));
 	if (!ng) { throw "GUARD RED: non-generic Maybe-fn arrow param not contextually typed"; }
 	if (!g) { throw "GUARD RED: generic Maybe-fn arrow param not contextually typed"; }
 	console.log("maybeArrowParamContext ok");

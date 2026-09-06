@@ -37,13 +37,13 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const path = lspUriToPath(pos.uri);
 
 	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "null");
+	if (program == null) return lspResponse(id, "null");
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "null");
+	if (ctx == null) return lspResponse(id, "null");
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) return lspResponse(id, "null");
+	if (suggest == null) return lspResponse(id, "null");
 
 	// Overload-aware hover: the symRecord stores the PRIMARY sym (so
 	// find-references, goto-def, rename see all call sites as references
@@ -56,20 +56,20 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// position. If found, substitute the winning overload's type into
 	// `suggest.symType` before formatting. Non-overloaded calls and
 	// Identifier-as-value references fall through unchanged.
-	if (suggest.kind === SymbolKind.Function && suggest.sym !== null
-			&& suggest.sym.overloads !== null && suggest.sym.overloads.length > 0) {
+	if (suggest.kind == SymbolKind.Function && suggest.sym != null
+			&& suggest.sym.overloads != null && suggest.sym.overloads.length > 0) {
 		// Use the checked program (AST with resolvedOverloadIdx populated).
 		// Fall back to the raw parse tree if the checked version is missing.
 		let checkedProgram = dbGetCheckedProgram(db, path);
-		if (checkedProgram === null) checkedProgram = program;
+		if (checkedProgram == null) checkedProgram = program;
 		const callExpr = sgFindCallExprByCalleeLocation(checkedProgram, pos.line, pos.col1);
-		if (callExpr !== null) {
+		if (callExpr != null) {
 			const cd = callExpr.data as CallExprData;
 			const idx = cd.resolvedOverloadIdx;
 			if (idx > 0 && idx - 1 < suggest.sym.overloads.length) {
 				const winnerSym = suggest.sym.overloads[idx - 1];
-				if (winnerSym !== null && winnerSym.symbolType !== null
-						&& winnerSym.symbolType.kind === TypeKind.Function) {
+				if (winnerSym != null && winnerSym.symbolType != null
+						&& winnerSym.symbolType.kind == TypeKind.Function) {
 					suggest.symType = winnerSym.symbolType;
 				}
 			}
@@ -80,7 +80,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// Extract doc comment from the symbol's source file (may differ for cross-file symbols)
 	let source = "";
 	const modPath = suggest.modulePath;
-	if (modPath !== null && modPath !== "" && modPath !== path) {
+	if (modPath != null && modPath != "" && modPath != path) {
 		lspEnsureFileLoaded(db, modPath);
 		source = dbGetSource(db, modPath);
 	} else {
@@ -88,7 +88,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	}
 	let docComment = sgExtractDocComment(source, suggest.location.line);
 	// Fallback to built-in docs for well-known symbols (MDN-style)
-	if (docComment === "") {
+	if (docComment == "") {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
 	}
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
@@ -103,7 +103,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 
 function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
 	// Const variables -> Constant (14), let/var -> Variable (13)
-	if (kind === SymbolKind.Variable) {
+	if (kind == SymbolKind.Variable) {
 		if (isMutable) return 13;
 		return 14;
 	}
@@ -147,10 +147,10 @@ export function handleDocumentSymbol(id: string, params: string, db: TransAmDb):
 	const path = lspUriToPath(uri);
 
 	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "[]");
+	if (program == null) return lspResponse(id, "[]");
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "[]");
+	if (ctx == null) return lspResponse(id, "[]");
 
 	const symbols = sgCollectSymbolsInFile(ctx, program);
 	return lspResponse(id, formatDocumentSymbolArray(symbols));
@@ -162,35 +162,35 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	const pos = lspExtractPosition(params);
 	const path = lspUriToPath(pos.uri);
 	const source = dbGetSource(db, path);
-	if (source === "") return lspResponse(id, "null");
+	if (source == "") return lspResponse(id, "null");
 
 	// Run type check first so nodeType is populated — sgPickActiveOverload
 	// reads arg.nodeType to score candidates. Using dbParse (raw tree) would
 	// give null nodeTypes and the scoring would always pick the primary.
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "null");
+	if (ctx == null) return lspResponse(id, "null");
 
 	// AST-based signature context (with text-based fallback for incomplete source)
 	// Prefer the CHECKED program (has nodeType set on arguments) over the raw
 	// parse tree — overload scoring needs the argument types.
 	let program = dbGetCheckedProgram(db, path);
-	if (program === null) program = dbParse(db, path);
+	if (program == null) program = dbParse(db, path);
 	const sigCtx = sgGetSignatureContext(program, source, pos.line, pos.col);
-	if (sigCtx.calleeName === "") return lspResponse(id, "null");
+	if (sigCtx.calleeName == "") return lspResponse(id, "null");
 
 	// For member calls (receiver.method()), try extension-based signatures first
 	let sigs: SgSignatureInfo[] = [];
 	let activeSignature = 0;
-	if (sigCtx.receiverName !== "") {
+	if (sigCtx.receiverName != "") {
 		const recSym = lookupSymbol(ctx.table, sigCtx.receiverName);
-		if (recSym !== null && recSym.symbolType !== null) {
+		if (recSym != null && recSym.symbolType != null) {
 			sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, recSym.symbolType);
 		}
 	}
 	// Fallback: standard symbol lookup (direct calls + non-extension methods)
-	if (sigs.length === 0) {
+	if (sigs.length == 0) {
 		const sym = lookupSymbol(ctx.table, sigCtx.calleeName);
-		if (sym === null) return lspResponse(id, "null");
+		if (sym == null) return lspResponse(id, "null");
 		sigs = sgFormatSignature(sym);
 		// Overload narrowing: pick the signature whose param types best match
 		// the already-typed arguments at the cursor position. Without this,
@@ -199,7 +199,7 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 		// signature hint — misleading for macro authors.
 		activeSignature = sgPickActiveOverload(sigCtx.callNode, sym);
 	}
-	if (sigs.length === 0) return lspResponse(id, "null");
+	if (sigs.length == 0) return lspResponse(id, "null");
 
 	let sigArray = "[";
 	for (let i = 0; i < sigs.length; i = i + 1) {
@@ -232,16 +232,16 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	const endLine = lspGetNumberField(rangeEnd, "line") + 1;
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "[]");
+	if (ctx == null) return lspResponse(id, "[]");
 
 	// Use checked program (has resolvedSym/nodeType on AST nodes).
 	// Raw dbParse tree lacks resolved info — scope lookups find wrong symbols.
 	const program = dbGetCheckedProgram(db, path);
-	if (program === null) return lspResponse(id, "[]");
+	if (program == null) return lspResponse(id, "[]");
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
 
-	if (hintsList.length === 0) return lspResponse(id, "[]");
+	if (hintsList.length == 0) return lspResponse(id, "[]");
 
 	let arr = "[";
 	for (let i = 0; i < hintsList.length; i = i + 1) {
@@ -250,7 +250,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		// Exception hints map to Type kind (1) with paddingLeft
 		let lspKind = 2;
-		if (h.hintKind === SgInlayHintKind.Type || h.hintKind === SgInlayHintKind.Exception) {
+		if (h.hintKind == SgInlayHintKind.Type || h.hintKind == SgInlayHintKind.Exception) {
 			lspKind = 1;
 		}
 		// Type hints (`: T`) sit right after an identifier whose source already
@@ -259,8 +259,8 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// the preceding identifier or `try` keyword.
 		// Parameter hints (`name:`) need a trailing space to separate from the
 		// following argument expression.
-		const padLeft = h.hintKind === SgInlayHintKind.Exception;
-		const padRight = h.hintKind === SgInlayHintKind.Parameter;
+		const padLeft = h.hintKind == SgInlayHintKind.Exception;
+		const padRight = h.hintKind == SgInlayHintKind.Parameter;
 		arr = arr + lspFmtInlayHint(h.line - 1, h.col - 1, h.label, lspKind, padLeft, padRight);
 	}
 	arr = arr + "]";
@@ -274,10 +274,10 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const path = lspUriToPath(pos.uri);
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "[]");
+	if (ctx == null) return lspResponse(id, "[]");
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) return lspResponse(id, "[]");
+	if (suggest == null) return lspResponse(id, "[]");
 
 	const items: string[] = [];
 	const seen: HashSet<string> = new HashSet<string>();
@@ -294,7 +294,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	}
 
 	// Search transitive dependents only (files that could import this symbol)
-	const defModule = suggest.modulePath !== null && suggest.modulePath !== "" ? suggest.modulePath : path;
+	const defModule = suggest.modulePath != null && suggest.modulePath != "" ? suggest.modulePath : path;
 	const targetFileId = getFileId(db.fileInput, path);
 	let depIds: int32[] = [];
 	if (targetFileId >= 0) {
@@ -305,9 +305,9 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 		const depId = depIds[fi];
 		fi = fi + 1;
 		const otherPath = getFilePath(db.fileInput, depId);
-		if (otherPath === "" || otherPath === path) continue;
+		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
-		if (otherCtx === null) continue;
+		if (otherCtx == null) continue;
 		const otherUri = lspPathToUri(otherPath);
 		const matched = sgQueryByDefiningModule(otherCtx, suggest.name, defModule);
 		let mi = 0;
@@ -332,10 +332,10 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 	const path = lspUriToPath(pos.uri);
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "[]");
+	if (ctx == null) return lspResponse(id, "[]");
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) return lspResponse(id, "[]");
+	if (suggest == null) return lspResponse(id, "[]");
 
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	let arr = "[";
@@ -354,7 +354,7 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 // Build TextEdit array for refs in a single file (sym identity for current file)
 function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string): string {
 	const refs = sgQueryBySym(ctx, sym);
-	if (refs.length === 0) return "";
+	if (refs.length == 0) return "";
 	const edits: string[] = [];
 	let i = 0;
 	while (i < refs.length) {
@@ -369,7 +369,7 @@ function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: s
 // Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
 function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string): string {
 	const refs = sgQueryByName(ctx, name, modulePath);
-	if (refs.length === 0) return "";
+	if (refs.length == 0) return "";
 	const edits: string[] = [];
 	let i = 0;
 	while (i < refs.length) {
@@ -386,13 +386,13 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	const path = lspUriToPath(pos.uri);
 
 	const newName = lspGetField(params, "newName");
-	if (newName === "") return lspResponse(id, "null");
+	if (newName == "") return lspResponse(id, "null");
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "null");
+	if (ctx == null) return lspResponse(id, "null");
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) return lspResponse(id, "null");
+	if (suggest == null) return lspResponse(id, "null");
 
 	// Collect edits across all files
 	let changes = "";
@@ -411,9 +411,9 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	while (fi < fileCount) {
 		const otherPath = dbGetFilePathByIndex(db, fi);
 		fi = fi + 1;
-		if (otherPath === path) continue;
+		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
-		if (otherCtx === null) continue;
+		if (otherCtx == null) continue;
 		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName);
 		if (otherEdits.byteLength > 0) {
 			const otherUri = lspPathToUri(otherPath);
@@ -423,7 +423,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		}
 	}
 
-	if (changeCount === 0) return lspResponse(id, "null");
+	if (changeCount == 0) return lspResponse(id, "null");
 
 	const result = "{\"changes\":{" + changes + "}}";
 	return lspResponse(id, result);

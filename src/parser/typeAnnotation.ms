@@ -22,7 +22,7 @@ type NodeResult = Result<Node, string>;
 // been consumed. Reused by the top-level skipper and by each union member.
 // Erasure-tier — accepted by parser, collapsed by resolver to first operand.
 function skipIntersectionTail(state: ParserState): void {
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		advance(state);
 		skipTypeAtom(state);
 	}
@@ -30,7 +30,7 @@ function skipIntersectionTail(state: ParserState): void {
 
 export function skipTypeAnnotation(state: ParserState): void {
 	// Leading pipe for discriminated union types: | { ... } | { ... }
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state);
 	}
 	skipTypeAtom(state);
@@ -40,14 +40,14 @@ export function skipTypeAnnotation(state: ParserState): void {
 
 	// Tier 3: Conditional type: T extends U ? A : B
 	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 		advance(state); // consume 'extends'
 		// Skip constraint type WITHOUT consuming '?' (which skipTypeAtom would eat as optional marker)
 		skipTypeAtomNoOptional(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 			advance(state); // consume '?'
 			skipTypeAnnotation(state); // skip true branch (recursive — handles nested conditionals)
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume ':'
 				skipTypeAnnotation(state); // skip false branch
 			}
@@ -56,7 +56,7 @@ export function skipTypeAnnotation(state: ParserState): void {
 	}
 
 	// Union types: T | U | V — each member may itself be an intersection (T & U).
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state);
 		skipTypeAtom(state);
 		skipIntersectionTail(state);
@@ -81,19 +81,19 @@ export function parseTypeAnnotation(state: ParserState): NodeResult {
 
 function isTypeIdent(token: Token): boolean {
 	const k = token.kind;
-	if (k === TokenKind.Ident) return true;
+	if (k == TokenKind.Ident) return true;
 	// Contextual keywords usable as type names (string, number, boolean, void, etc.)
-	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
+	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
 // Given an already-parsed leading atom, fold any trailing `& T & U` into a
 // TypeIntersection node. If no `&` follows, returns `first` unchanged.
 // Reused by parseTypeExpr at the top level and within each union member.
 function parseIntersectionTail(state: ParserState, first: Node): Node {
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		const members: Node[] = [];
 		members.push(first);
-		while (!isAtEnd(state) && current(state).kind === TokenKind.Amp) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 			advance(state);
 			members.push(parseTypeAtom(state));
 		}
@@ -104,16 +104,16 @@ function parseIntersectionTail(state: ParserState, first: Node): Node {
 
 export function parseTypeExpr(state: ParserState): Node {
 	// Leading pipe for discriminated union types: | { ... } | { ... }
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state);
 	}
 	const first = parseIntersectionTail(state, parseTypeAtom(state));
 
 	// Union types: T | U | V → TypeUnion. Each union member may itself be an intersection.
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		const members: Node[] = [];
 		members.push(first);
-		while (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 			advance(state);
 			members.push(parseIntersectionTail(state, parseTypeAtom(state)));
 		}
@@ -132,12 +132,12 @@ function parseTypeAtom(state: ParserState): Node {
 	const token = current(state);
 
 	// Function type: (a: T, b: U) => R
-	if (token.kind === TokenKind.LParen) {
+	if (token.kind == TokenKind.LParen) {
 		return parseTypeFunctionOrParen(state);
 	}
 
 	// Object type: { x: T; y: U } — with array suffix: { ... }[]
-	if (token.kind === TokenKind.LBrace) {
+	if (token.kind == TokenKind.LBrace) {
 		return applyArraySuffix(state, parseTypeObjectLiteral(state));
 	}
 
@@ -145,7 +145,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// The string form (resolveAnnotation) is the source of truth for the type;
 	// we balance-skip and emit a placeholder Identifier so parser state is preserved.
 	// (Positioned tuple AST as a dedicated NodeKind is a future enhancement.)
-	if (token.kind === TokenKind.LBracket) {
+	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		return createNode(NodeKind.Identifier, { name: "[tuple]" }, token);
 	}
@@ -163,7 +163,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// Enum literal type: K.A — consume "." Ident chain and produce a MemberExpr-shaped node
 	// in type position. The checker's resolveAnnotation handles the string path ("K.A") via
 	// splitting on ".", and resolveTypeExpr can walk the MemberExpr for LSP recording.
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
 		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
 		const memberToken = current(state);
@@ -172,7 +172,7 @@ function parseTypeAtom(state: ParserState): Node {
 	}
 
 	// Generic type args: Type<A, B>
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 		const args = parseGenericTypeArgs(state);
 		if (args.length > 0) {
 			result = createNode(NodeKind.TypeGeneric, { typExprBase: result, typExprArgs: args }, token);
@@ -183,7 +183,7 @@ function parseTypeAtom(state: ParserState): Node {
 	result = applyArraySuffix(state, result);
 
 	// Optional marker: T? — treat as union with null (skip but preserve base)
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 		advance(state);
 	}
 
@@ -193,15 +193,15 @@ function parseTypeAtom(state: ParserState): Node {
 // Apply the array type suffix `[]` / `[N]` (repeatable) to a parsed type atom. Shared by the
 // named-type path and inline object types so `{ ... }[]` parses like `Name[]`.
 function applyArraySuffix(state: ParserState, result: Node): Node {
-	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		const brackToken = current(state);
 		advance(state); // consume [
 		let size = -1;
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Number) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Number) {
 			size = parseFloat(current(state).value) as int32;
 			advance(state);
 		}
-		if (!isAtEnd(state) && current(state).kind === TokenKind.RBracket) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.RBracket) {
 			advance(state);
 		}
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
@@ -211,25 +211,25 @@ function applyArraySuffix(state: ParserState, result: Node): Node {
 
 function parseGenericTypeArgs(state: ParserState): Node[] {
 	const args: Node[] = [];
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return args;
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return args;
 	advance(state); // consume <
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
 		const arg = parseTypeExpr(state);
 		args.push(arg);
 		// Comma separator
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Comma && depth === 1) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Comma && depth == 1) {
 			advance(state);
 			continue;
 		}
 		// Closing >
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Gt) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Gt) {
 			depth -= 1;
 			advance(state);
-		} else if (!isAtEnd(state) && current(state).kind === TokenKind.GtGt) {
+		} else if (!isAtEnd(state) && current(state).kind == TokenKind.GtGt) {
 			depth -= 2;
 			advance(state);
-		} else if (!isAtEnd(state) && current(state).kind === TokenKind.GtGtGt) {
+		} else if (!isAtEnd(state) && current(state).kind == TokenKind.GtGtGt) {
 			depth -= 3;
 			advance(state);
 		} else {
@@ -247,13 +247,13 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	const paramNames: string[] = [];
 	const paramTypes: Node[] = [];
 
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		// Param name (optional — could be just types)
 		if (isTypeIdent(current(state))) {
 			const nameToken = current(state);
 			const nextKind = state.position + 1 < state.tokens.length ? state.tokens[state.position + 1].kind : TokenKind.Eof;
 			// If followed by ':', it's "name: Type"
-			if (nextKind === TokenKind.Colon) {
+			if (nextKind == TokenKind.Colon) {
 				paramNames.push(nameToken.value);
 				advance(state); // consume name
 				advance(state); // consume :
@@ -267,16 +267,16 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 			paramNames.push("");
 			paramTypes.push(parseTypeExpr(state));
 		}
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) {
 			advance(state);
 		}
 	}
-	if (!isAtEnd(state) && current(state).kind === TokenKind.RParen) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.RParen) {
 		advance(state);
 	}
 
 	// Arrow => return type
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Arrow) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
 		const returnType = parseTypeAtom(state);
 		return createNode(NodeKind.TypeFunction, {
@@ -287,7 +287,7 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	}
 
 	// Parenthesized type: (T) → unwrap to inner type
-	if (paramTypes.length === 1 && paramNames[0] === "") {
+	if (paramTypes.length == 1 && paramNames[0] == "") {
 		return paramTypes[0];
 	}
 
@@ -311,11 +311,11 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 
 	let hasIndexSig = false;
 
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		// Index signature: [name: K]: V
 		// This is syntactic sugar for HashMap<K, V> — the checker normalizes both to the
 		// same internal Type. See docs/PACKAGE.md (open design) and the impl plan.
-		if (current(state).kind === TokenKind.LBracket) {
+		if (current(state).kind == TokenKind.LBracket) {
 			if (hasIndexSig) {
 				// Second index signature in the same object type — skip silently.
 				// Only the first is kept. This is invalid TypeScript but we don't
@@ -334,14 +334,14 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			if (!isAtEnd(state) && isTypeIdent(current(state))) {
 				advance(state); // consume key binding name
 			}
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume :
 			}
 			const keyType = parseTypeExpr(state);
-			if (!isAtEnd(state) && current(state).kind === TokenKind.RBracket) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.RBracket) {
 				advance(state); // consume ]
 			}
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume :
 			}
 			const valueType = parseTypeExpr(state);
@@ -349,7 +349,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			indexValue = valueType;
 			hasIndexSig = true;
 			// Consume optional separator
-			if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
+			if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.Comma)) {
 				advance(state);
 			}
 			continue;
@@ -359,10 +359,10 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			fieldNames.push(current(state).value);
 			advance(state); // consume field name
 			// Optional ? marker
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 				advance(state);
 			}
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state);
 				fieldTypes.push(parseTypeExpr(state));
 			} else {
@@ -371,11 +371,11 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		} else {
 			advance(state);
 		}
-		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
+		if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.Comma)) {
 			advance(state);
 		}
 	}
-	if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) {
 		advance(state);
 	}
 
@@ -399,42 +399,42 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 function skipTypeAtomNoOptional(state: ParserState): void {
 	const token = current(state);
 	// Tier 3: infer X — consume keyword + identifier name
-	if (token.kind === TokenKind.Infer) {
+	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
 		if (!isAtEnd(state) && isTypeIdent(current(state))) {
 			advance(state); // consume the inferred type name
 		}
 		return;
 	}
-	if (token.kind === TokenKind.LParen) {
+	if (token.kind == TokenKind.LParen) {
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Arrow) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
 			skipTypeAtomNoOptional(state);
 		}
 		// Array type suffix: ((T) => U)[] or (T)[]
-		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		}
 		return;
 	}
-	if (token.kind === TokenKind.LBrace) {
+	if (token.kind == TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
 		return;
 	}
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
-	if (token.kind === TokenKind.LBracket) {
+	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		return;
 	}
 	advance(state);
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
 		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
 		advance(state);
 	}
 	skipGenericParams(state);
-	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 	}
 	// No '?' consumption — that's the whole point
@@ -444,7 +444,7 @@ function skipTypeAtom(state: ParserState): void {
 	const token = current(state);
 
 	// Tier 3: infer X — consume keyword + identifier name
-	if (token.kind === TokenKind.Infer) {
+	if (token.kind == TokenKind.Infer) {
 		advance(state);
 		if (!isAtEnd(state) && isTypeIdent(current(state))) {
 			advance(state);
@@ -453,34 +453,34 @@ function skipTypeAtom(state: ParserState): void {
 	}
 
 	// Parenthesized type or function type: (a: T) => R
-	if (token.kind === TokenKind.LParen) {
+	if (token.kind == TokenKind.LParen) {
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 		// Arrow function type: (...) => R
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Arrow) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
 			skipTypeAtom(state);
 		}
 		// Array type suffix on parenthesized/function type: ((n) => T)[] or (T)[]
-		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		}
 		return;
 	}
 
 	// Object type: { x: T; y: U } — with array suffix: { ... }[]
-	if (token.kind === TokenKind.LBrace) {
+	if (token.kind == TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
-		while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 			skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		}
 		return;
 	}
 
 	// Tuple type: [T, U, ...] — bracket at start of type position (not array suffix)
-	if (token.kind === TokenKind.LBracket) {
+	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		// Optional marker: [T, U]?
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 			advance(state);
 		}
 		return;
@@ -489,7 +489,7 @@ function skipTypeAtom(state: ParserState): void {
 	// Named type (identifier or keyword type)
 	advance(state);
 	// Qualified/enum-literal type: K.A — consume .Ident chain greedily
-	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
 		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
 		advance(state); // consume member name
@@ -498,12 +498,12 @@ function skipTypeAtom(state: ParserState): void {
 	skipGenericParams(state);
 
 	// Array type suffix: T[] or T[N] or T[][]
-	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
+	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 	}
 
 	// Optional marker: T?
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 		advance(state);
 	}
 }
@@ -516,7 +516,7 @@ function skipsTo(input: string, expectedKind: TokenKind): boolean {
 	if (!lr.ok) return false;
 	const state = createState(lr.value);
 	skipTypeAnnotation(state);
-	return current(state).kind === expectedKind;
+	return current(state).kind == expectedKind;
 }
 
 function skipsType(typeStr: string): boolean {
@@ -618,13 +618,13 @@ function annotationText(typeStr: string): string {
 	return data.annotationType;
 }
 
-test "kind is TypeAnnotation" { assert annotationKind("number") === NodeKind.TypeAnnotation; }
+test "kind is TypeAnnotation" { assert annotationKind("number") == NodeKind.TypeAnnotation; }
 
-test "simple type text" { assert annotationText("number") === "number"; }
+test "simple type text" { assert annotationText("number") == "number"; }
 
-test "generic type text" { assert annotationText("Result<Node, string>") !== ""; }
+test "generic type text" { assert annotationText("Result<Node, string>") != ""; }
 
-test "union type text" { assert annotationText("string | number") !== ""; }
+test "union type text" { assert annotationText("string | number") != ""; }
 
 // ===== TypeExpr AST Tests =====
 
@@ -641,48 +641,48 @@ function typeExprName(typeStr: string): string {
 	if (!lr.ok) return "";
 	const state = createState(lr.value);
 	const node = parseTypeExpr(state);
-	if (node.kind !== NodeKind.Identifier) return "";
+	if (node.kind != NodeKind.Identifier) return "";
 	return (node.data as IdentifierData).name;
 }
 
 test "typeExpr simple ident" {
-	assert typeExprKind("number") === NodeKind.Identifier;
-	assert typeExprName("number") === "number";
+	assert typeExprKind("number") == NodeKind.Identifier;
+	assert typeExprName("number") == "number";
 }
 
 test "typeExpr custom type" {
-	assert typeExprKind("Person") === NodeKind.Identifier;
-	assert typeExprName("Person") === "Person";
+	assert typeExprKind("Person") == NodeKind.Identifier;
+	assert typeExprName("Person") == "Person";
 }
 
 test "typeExpr generic" {
-	assert typeExprKind("Result<Node, string>") === NodeKind.TypeGeneric;
+	assert typeExprKind("Result<Node, string>") == NodeKind.TypeGeneric;
 }
 
 test "typeExpr array" {
-	assert typeExprKind("number[]") === NodeKind.TypeArray;
+	assert typeExprKind("number[]") == NodeKind.TypeArray;
 }
 
 test "typeExpr union" {
-	assert typeExprKind("string | number") === NodeKind.TypeUnion;
+	assert typeExprKind("string | number") == NodeKind.TypeUnion;
 }
 
 test "typeExpr intersection" {
-	assert typeExprKind("A & B") === NodeKind.TypeIntersection;
+	assert typeExprKind("A & B") == NodeKind.TypeIntersection;
 }
 
 test "typeExpr branded primitive" {
 	// Branded type pattern: `string & { __brand: "X" }` parses as TypeIntersection.
 	// Resolver collapses to `string` at type-check time (erasure tier).
-	assert typeExprKind("string & { __brand: \"X\" }") === NodeKind.TypeIntersection;
+	assert typeExprKind("string & { __brand: \"X\" }") == NodeKind.TypeIntersection;
 }
 
 test "typeExpr function type" {
-	assert typeExprKind("(a: string) => number") === NodeKind.TypeFunction;
+	assert typeExprKind("(a: string) => number") == NodeKind.TypeFunction;
 }
 
 test "typeExpr object type" {
-	assert typeExprKind("{ x: number }") === NodeKind.TypeObject;
+	assert typeExprKind("{ x: number }") == NodeKind.TypeObject;
 }
 
 test "typeExpr generic has positioned base" {
@@ -690,15 +690,15 @@ test "typeExpr generic has positioned base" {
 	if (!lr.ok) { assert false; return; }
 	const state = createState(lr.value);
 	const node = parseTypeExpr(state);
-	assert node.kind === NodeKind.TypeGeneric;
+	assert node.kind == NodeKind.TypeGeneric;
 	const d = node.data as TypeGenericData;
-	assert d.typExprBase.kind === NodeKind.Identifier;
-	assert (d.typExprBase.data as IdentifierData).name === "Result";
-	assert d.typExprBase.location.line === 1;
-	assert d.typExprBase.location.column === 1;
-	assert d.typExprArgs.length === 2;
-	assert (d.typExprArgs[0].data as IdentifierData).name === "Node";
-	assert (d.typExprArgs[1].data as IdentifierData).name === "string";
+	assert d.typExprBase.kind == NodeKind.Identifier;
+	assert (d.typExprBase.data as IdentifierData).name == "Result";
+	assert d.typExprBase.location.line == 1;
+	assert d.typExprBase.location.column == 1;
+	assert d.typExprArgs.length == 2;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "Node";
+	assert (d.typExprArgs[1].data as IdentifierData).name == "string";
 }
 
 // ===== Index Signature Tests =====
@@ -739,24 +739,24 @@ function parseIndexSig(typeStr: string): Node {
 
 test "index signature produces TypeObject" {
 	const node = parseIndexSig("{ [key: string]: number }");
-	assert node !== null;
-	assert node.kind === NodeKind.TypeObject;
+	assert node != null;
+	assert node.kind == NodeKind.TypeObject;
 }
 
 test "index signature has index fields" {
 	const node = parseIndexSig("{ [key: string]: number }");
 	const d = node.data as TypeObjectData;
-	assert d.typExprFieldNames.length === 0;
-	assert d.typExprIndexKey !== null;
-	assert d.typExprIndexValue !== null;
-	assert (d.typExprIndexKey.data as IdentifierData).name === "string";
-	assert (d.typExprIndexValue.data as IdentifierData).name === "number";
+	assert d.typExprFieldNames.length == 0;
+	assert d.typExprIndexKey != null;
+	assert d.typExprIndexValue != null;
+	assert (d.typExprIndexKey.data as IdentifierData).name == "string";
+	assert (d.typExprIndexValue.data as IdentifierData).name == "number";
 }
 
 test "non-index-sig object type has null index fields" {
 	const node = parseIndexSig("{ x: number, y: string }");
 	const d = node.data as TypeObjectData;
-	assert d.typExprFieldNames.length === 2;
-	assert d.typExprIndexKey === null;
-	assert d.typExprIndexValue === null;
+	assert d.typExprFieldNames.length == 2;
+	assert d.typExprIndexKey == null;
+	assert d.typExprIndexValue == null;
 }

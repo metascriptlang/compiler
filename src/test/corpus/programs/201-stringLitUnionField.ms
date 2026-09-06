@@ -27,7 +27,7 @@ interface FlexStyle {
 }
 
 function pick(i: int32): FlexDirection {
-	if (i % 2 === 0) return "row";
+	if (i % 2 == 0) return "row";
 	return "column";
 }
 
@@ -36,17 +36,17 @@ function main(): void {
 	let i = 0;
 	while (i < 200000) {
 		const s: FlexStyle = { flexDirection: pick(i), justify: "center", width: 10.5 };
-		if (s.flexDirection === "row") { acc += 1; }
-		if (s.justify !== null) {
-			if (s.justify === "center") { acc += 1; }
+		if (s.flexDirection == "row") { acc += 1; }
+		if (s.justify != null) {
+			if (s.justify == "center") { acc += 1; }
 		}
-		if (s.altDirection === null) { acc += 1; }
-		if (s.width !== null) { acc += 1; }
+		if (s.altDirection == null) { acc += 1; }
+		if (s.width != null) { acc += 1; }
 		i += 1;
 	}
 	let d: FlexDirection = "column";
 	d = "row-reverse";
-	if (d === "row-reverse") { acc += 1; }
+	if (d == "row-reverse") { acc += 1; }
 	console.log("strlit-union-field acc=" + acc.toString());
 }
 

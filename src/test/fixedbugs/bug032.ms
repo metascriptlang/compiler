@@ -52,10 +52,10 @@ function bug032_applyN<T>(n: int32, init: T, f: (acc: T) => T): T {
 test "bug032: generic call with explicit type args + capturing closure compiles and runs" {
 	const factor: int32 = 3 as int32;
 	const r = bug032_applyN<int32>(4 as int32, 1 as int32, (x) => (x * factor) as int32);
-	assert r === 81;
+	assert r == 81;
 }
 
 test "bug032: generic call with non-capturing closure also works" {
 	const r = bug032_applyN<int32>(3 as int32, 2 as int32, (x) => (x + (10 as int32)) as int32);
-	assert r === 32;
+	assert r == 32;
 }

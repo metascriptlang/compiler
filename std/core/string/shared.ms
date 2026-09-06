@@ -10,11 +10,11 @@
 export function startsWith(this s: string, prefix: string): boolean {
 	const sb = s.asBytes();
 	const pb = prefix.asBytes();
-	if (pb.length === 0) return true;
+	if (pb.length == 0) return true;
 	if (sb.length < pb.length) return false;
 	let i = 0;
 	while (i < pb.length) {
-		if (sb[i] !== pb[i]) return false;
+		if (sb[i] != pb[i]) return false;
 		i = i + 1;
 	}
 	return true;
@@ -23,12 +23,12 @@ export function startsWith(this s: string, prefix: string): boolean {
 export function endsWith(this s: string, suffix: string): boolean {
 	const sb = s.asBytes();
 	const xb = suffix.asBytes();
-	if (xb.length === 0) return true;
+	if (xb.length == 0) return true;
 	if (sb.length < xb.length) return false;
 	const off = sb.length - xb.length;
 	let i = 0;
 	while (i < xb.length) {
-		if (sb[off + i] !== xb[i]) return false;
+		if (sb[off + i] != xb[i]) return false;
 		i = i + 1;
 	}
 	return true;
@@ -45,7 +45,7 @@ export function contains(this s: string, sub: string): boolean {
 export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return start;
+	if (xb.length == 0) return start;
 	if (start > sb.length) return -1;
 	let i = start;
 	if (i < 0) i = 0;
@@ -53,7 +53,7 @@ export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int3
 		let found = true;
 		let j = 0;
 		while (j < xb.length) {
-			if (sb[i + j] !== xb[j]) { found = false; break; }
+			if (sb[i + j] != xb[j]) { found = false; break; }
 			j = j + 1;
 		}
 		if (found) return i;
@@ -65,7 +65,7 @@ export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int3
 export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return sb.length;
+	if (xb.length == 0) return sb.length;
 	if (xb.length > sb.length) return -1;
 	let i = sb.length - xb.length;
 	if (startIdx >= 0 && startIdx < i) i = startIdx;
@@ -73,7 +73,7 @@ export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -
 		let found = true;
 		let j = 0;
 		while (j < xb.length) {
-			if (sb[i + j] !== xb[j]) { found = false; break; }
+			if (sb[i + j] != xb[j]) { found = false; break; }
 			j = j + 1;
 		}
 		if (found) return i;
@@ -86,7 +86,7 @@ export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -
 export function count(this s: string, sub: string): int32 {
 	const sb = s.asBytes();
 	const xb = sub.asBytes();
-	if (xb.length === 0) return sb.length + 1;
+	if (xb.length == 0) return sb.length + 1;
 	let n: int32 = 0;
 	let pos = 0;
 	while (pos <= sb.length - xb.length) {
@@ -100,7 +100,7 @@ export function count(this s: string, sub: string): int32 {
 
 export function trim(this s: string): string {
 	const sb = s.asBytes();
-	if (sb.length === 0) return "";
+	if (sb.length == 0) return "";
 	let a = 0;
 	let b = sb.length - 1;
 	while (a <= b && isSpaceByte(sb[a])) { a = a + 1; }
@@ -110,7 +110,7 @@ export function trim(this s: string): string {
 
 export function trimStart(this s: string): string {
 	const sb = s.asBytes();
-	if (sb.length === 0) return "";
+	if (sb.length == 0) return "";
 	let a = 0;
 	while (a < sb.length && isSpaceByte(sb[a])) { a = a + 1; }
 	return s.byteSlice(a, sb.length);
@@ -118,7 +118,7 @@ export function trimStart(this s: string): string {
 
 export function trimEnd(this s: string): string {
 	const sb = s.asBytes();
-	if (sb.length === 0) return "";
+	if (sb.length == 0) return "";
 	let b = sb.length;
 	while (b > 0 && isSpaceByte(sb[b - 1])) { b = b - 1; }
 	return s.byteSlice(0, b);
@@ -128,8 +128,8 @@ export function split(this s: string, delimiter: string): string[] {
 	const sb = s.asBytes();
 	const db = delimiter.asBytes();
 	const parts: string[] = [];
-	if (sb.length === 0) { parts.push(""); return parts; }
-	if (db.length === 0) {
+	if (sb.length == 0) { parts.push(""); return parts; }
+	if (db.length == 0) {
 		let c = 0;
 		while (c < sb.length) { parts.push(s.byteSlice(c, c + 1)); c = c + 1; }
 		return parts;
@@ -163,7 +163,7 @@ export function toUpperCase(this s: string): string {
 export function replace(this s: string, search: string, replacement: string): string {
 	const sb = s.asBytes();
 	const xb = search.asBytes();
-	if (sb.length === 0 || xb.length === 0) return s.byteSlice(0, sb.length);
+	if (sb.length == 0 || xb.length == 0) return s.byteSlice(0, sb.length);
 	const pos = s.byteIndexOf(search, 0);
 	if (pos < 0) return s.byteSlice(0, sb.length);
 	const rb = replacement.asBytes();
@@ -180,7 +180,7 @@ export function replace(this s: string, search: string, replacement: string): st
 export function replaceAll(this s: string, search: string, replacement: string): string {
 	const sb = s.asBytes();
 	const xb = search.asBytes();
-	if (sb.length === 0 || xb.length === 0) return s.byteSlice(0, sb.length);
+	if (sb.length == 0 || xb.length == 0) return s.byteSlice(0, sb.length);
 	const rb = replacement.asBytes();
 	const result: uint8[] = [];
 	let pos = 0;
@@ -199,7 +199,7 @@ export function replaceAll(this s: string, search: string, replacement: string):
 
 export function repeat(this s: string, count: int32): string {
 	const sb = s.asBytes();
-	if (count <= 0 || sb.length === 0) return "";
+	if (count <= 0 || sb.length == 0) return "";
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < count) {
@@ -222,10 +222,10 @@ export function reverse(this s: string): string {
 export function equalsIgnoreCase(this s: string, other: string): boolean {
 	const ab = s.asBytes();
 	const bb = other.asBytes();
-	if (ab.length !== bb.length) return false;
+	if (ab.length != bb.length) return false;
 	let i = 0;
 	while (i < ab.length) {
-		if (asciiLower(ab[i]) !== asciiLower(bb[i])) return false;
+		if (asciiLower(ab[i]) != asciiLower(bb[i])) return false;
 		i = i + 1;
 	}
 	return true;
@@ -245,5 +245,5 @@ export function asciiUpper(b: int32): int32 {
 }
 
 export function isSpaceByte(b: int32): boolean {
-	return b === " ".code || (b >= "\t".code && b <= "\r".code);
+	return b == " ".code || (b >= "\t".code && b <= "\r".code);
 }

@@ -24,12 +24,12 @@ test "bug090: distinct anon-struct type args get distinct instantiations" {
 	const b = wrapOne<Tagged>({ tag: "t2" });
 	assert a.ok;
 	assert b.ok;
-	if (a.ok) assert a.value.name === "n1";
-	if (b.ok) assert b.value.tag === "t2";
+	if (a.ok) assert a.value.name == "n1";
+	if (b.ok) assert b.value.tag == "t2";
 }
 
 test "bug090: same anon-struct shape still shares one instantiation" {
 	const a = wrapOne<Named>({ name: "x" });
 	const b = wrapOne<Named>({ name: "y" });
-	if (a.ok && b.ok) assert a.value.name !== b.value.name;
+	if (a.ok && b.ok) assert a.value.name != b.value.name;
 }

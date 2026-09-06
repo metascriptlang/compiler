@@ -37,18 +37,18 @@ function main2(): void {
 
 test "inferred-from-args: no checker errors" {
 	const result = checkOnly(SRC_INFERRED);
-	assert result.errors.length === 0;
+	assert result.errors.length == 0;
 }
 
 test "inferred-from-args: arrow's first param should be Int32 (forward-inferred)" {
 	const result = checkOnly(SRC_INFERRED);
 	const main_fn = findFnDecl(result.program, "main2");
-	assert main_fn !== null;
+	assert main_fn != null;
 	const arrow = findFirstArrow(main_fn);
-	assert arrow !== null;
-	assert arrow.nodeType !== null;
+	assert arrow != null;
+	assert arrow.nodeType != null;
 	assert arrow.nodeType.typeChildren.length > 0;
-	assert arrow.nodeType.typeChildren[0].kind === TypeKind.Int32,
+	assert arrow.nodeType.typeChildren[0].kind == TypeKind.Int32,
 		"forward-from-args inference failed: arrow.typeChildren[0].kind = " + arrow.nodeType.typeChildren[0].kind.toString();
 }
 

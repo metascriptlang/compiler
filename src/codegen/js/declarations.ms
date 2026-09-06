@@ -19,11 +19,11 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
 	const fnEmitted = jsSymbolName(gen, node.resolvedSym, d.fnName);
-	if (fnEmitted !== d.fnName) markNamed(gen, node, d.fnName);
+	if (fnEmitted != d.fnName) markNamed(gen, node, d.fnName);
 	emit(gen, fnEmitted);
 	emit(gen, "(");
 	const savedThisName = gen.thisName;
-	if (d.params.length > 0 && d.params[0] === "this") { gen.thisName = "$this"; }
+	if (d.params.length > 0 && d.params[0] == "this") { gen.thisName = "$this"; }
 	emitJoinedSafeParams(gen, node, d.params, ", ", receiverSafeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.fnBody);
@@ -32,12 +32,12 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 }
 
 function receiverSafeJsName(name: string): string {
-	return name === "this" ? "$this" : safeJsName(name);
+	return name == "this" ? "$this" : safeJsName(name);
 }
 
 // Check if fnFlags contains "extern" (may also have gen:/ext: segments)
 function isExternFlag(flags: string): boolean {
-	if (flags === "extern") return true;
+	if (flags == "extern") return true;
 	if (flags.length < 6) return false;
 	// Check for "extern|..." or "...|extern|..." or "...|extern"
 	if (flags.startsWith("extern|")) return true;
@@ -69,7 +69,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// linePrefix carries `export ` to members past the first — the caller
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
+		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
 		emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${val};\n`);
 	}
@@ -84,10 +84,10 @@ export function emitEnumDecl(gen: JSGenerator, node: Node): void {
 
 function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): string {
 	const sym = node.resolvedSym;
-	if (sym === null || sym.symbolType === null) return safeJsName(declaredName);
+	if (sym == null || sym.symbolType == null) return safeJsName(declaredName);
 	let inner = sym.symbolType;
-	if (inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
-	if (inner.typeExtra === null || inner.typeExtra.sym === null) return safeJsName(declaredName);
+	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
+	if (inner.typeExtra == null || inner.typeExtra.sym == null) return safeJsName(declaredName);
 	const parent = inner.typeExtra.sym;
 	return jsSymbolName(gen, parent, parent.name);
 }
@@ -96,7 +96,7 @@ function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): st
 // an initializer that nothing else would ever run.
 function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 	const d = member.data as PropertyDeclData;
-	if (!d.propIsStatic || d.propInitializer === null) return;
+	if (!d.propIsStatic || d.propInitializer == null) return;
 	emitIndent(gen);
 	emit(gen, "static ");
 	emit(gen, safeJsName(d.propName));
@@ -111,12 +111,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	// name resolves to a prelude Function bound to the native global —
 	// emitting a class here would shadow it. Reads of its statics emit as
 	// raw native member accesses.
-	if (node.resolvedSym !== null && node.resolvedSym.symbolKind === SymbolKind.Function) {
+	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
 		return;
 	}
 	emit(gen, "class ");
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
-	if (d.classExtends !== "") {
+	if (d.classExtends != "") {
 		emit(gen, " extends ");
 		emit(gen, jsBaseClassName(gen, node, d.classExtends));
 	}
@@ -139,7 +139,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 					// declaration order, running before any constructor body —
 					// the same defaults-then-ctor order as the C runtime.
 					emitIndent(gen);
-					if (pd.propName === "pid" && pd.propInitializer === null) {
+					if (pd.propName == "pid" && pd.propInitializer == null) {
 						// Synthetic registration field (see emitActorDecl).
 						// Self-bootstrapping: a program may use actors WITHOUT
 						// importing std/actor, so the registrar installs itself
@@ -154,7 +154,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 						emit(gen, "\treturn g.next++;\n");
 						emitIndent(gen);
 						emit(gen, "}))(this);\n");
-					} else if (pd.propInitializer !== null) {
+					} else if (pd.propInitializer != null) {
 						emit(gen, `${safeJsName(pd.propName)} = `);
 						emitNode(gen, pd.propInitializer);
 						emit(gen, ";\n");
@@ -194,7 +194,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 
 export function emitClassDecl(gen: JSGenerator, node: Node): void {
 	// Extern class: native JS type — skip emission entirely
-	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+	if ((node.flags & NodeFlag.ExternC) != 0) return;
 	emitIndent(gen);
 	emitClassDeclInner(gen, node);
 }
@@ -207,7 +207,7 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 // points (documented divergence, the same class as "js spawn = scheduling").
 // Same adapter shape the C backend's actorLower uses to build its state class.
 export function emitActorDecl(gen: JSGenerator, node: Node): void {
-	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+	if ((node.flags & NodeFlag.ExternC) != 0) return;
 	const d = node.data as ActorDeclData;
 	// Tier-1 actor surface: the synthesized class carries a synthetic `pid`
 	// field FIRST (before user field defaults — a default may read state, so
@@ -241,7 +241,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 
 // Strip leading "this" from param list — JS class methods have implicit this.
 function skipThisParams(params: string[]): string[] {
-	if (params.length > 0 && params[0] === "this") {
+	if (params.length > 0 && params[0] == "this") {
 		const result: string[] = [];
 		for (let i = 1; i < params.length; i += 1) { result.push(params[i]); }
 		return result;
@@ -289,9 +289,9 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	// .h imports have no JavaScript counterpart — their extern decls are
 	// inlined alongside the ImportDecl by inlineHeaderImports, and the JS
 	// backend doesn't consume C headers. Skip emission entirely.
-	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) === ".h") return;
+	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) == ".h") return;
 	// std/meta is the compile-time AST/macro API — no runtime JS counterpart.
-	if (d.importSource === "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) === "std/meta/")) return;
+	if (d.importSource == "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) == "std/meta/")) return;
 	// Bundle: every module shares one flat scope and names carry module
 	// identity, so cross-module references need no binding statement.
 	if (gen.bundleMode) return;
@@ -300,21 +300,21 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	// evaluation order — a bare side-effect import.
 	if (gen.multiFile) {
 		const spec = lookupImportSpec(gen, d.importSource);
-		if (spec === "") return;
+		if (spec == "") return;
 		emitIndent(gen);
 		emit(gen, `import "${spec}";\n`);
 		return;
 	}
 	// Non-bundle mode: ES module import
 	emitIndent(gen);
-	if (d.importNames.length === 0) {
+	if (d.importNames.length == 0) {
 		emit(gen, "import \"");
 		emit(gen, convertImportPath(d.importSource));
 		emit(gen, "\";\n");
 		return;
 	}
 	// Namespace import: import * as ns from "path"
-	if (d.importNames.length === 1 && d.importNames[0] === "*") {
+	if (d.importNames.length == 1 && d.importNames[0] == "*") {
 		emit(gen, "import * as ");
 		emit(gen, d.importAliases[0]);
 		emit(gen, " from \"");
@@ -326,7 +326,7 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	for (let i = 0; i < d.importNames.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
 		emit(gen, d.importNames[i]);
-		if (i < d.importAliases.length && d.importAliases[i] !== "" && d.importAliases[i] !== d.importNames[i]) {
+		if (i < d.importAliases.length && d.importAliases[i] != "" && d.importAliases[i] != d.importNames[i]) {
 			emit(gen, " as ");
 			emit(gen, d.importAliases[i]);
 		}
@@ -342,7 +342,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
 	// Star re-export: export * from "path"
-	if (inner.kind === NodeKind.ImportDecl) {
+	if (inner.kind == NodeKind.ImportDecl) {
 		const imp = inner.data as ImportDeclData;
 		// Multi-file: every re-export form emits as `export * from` — a named
 		// list can mix runtime values with types, and naming a type binding
@@ -352,12 +352,12 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		// module anyway; the hub's surface only matters to hand-written JS.
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
-			if (spec === "") return;
+			if (spec == "") return;
 			emitIndent(gen);
 			emit(gen, `export * from "${spec}";\n`);
 			return;
 		}
-		if (imp.importNames.length === 1 && imp.importNames[0] === "*") {
+		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
 			if (!gen.bundleMode) {
 				emitIndent(gen);
 				emit(gen, "export * from \"");
@@ -368,23 +368,23 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		}
 	}
 	// Skip type-only exports (no JS output)
-	if (inner.kind === NodeKind.InterfaceDecl) return;
-	if (inner.kind === NodeKind.StructDecl) return;
-	if (inner.kind === NodeKind.TypeAliasDecl) return;
-	if (inner.kind === NodeKind.ExternDecl) return;
+	if (inner.kind == NodeKind.InterfaceDecl) return;
+	if (inner.kind == NodeKind.StructDecl) return;
+	if (inner.kind == NodeKind.TypeAliasDecl) return;
+	if (inner.kind == NodeKind.ExternDecl) return;
 	// Compile-time-only — no runtime JS (mirrors the bare-decl skip in jsgen.ms)
-	if (inner.kind === NodeKind.MacroDecl) return;
-	if (inner.kind === NodeKind.ComptimeBlock) return;
+	if (inner.kind == NodeKind.MacroDecl) return;
+	if (inner.kind == NodeKind.ComptimeBlock) return;
 	// Skip extern functions — imported via @import, not compiled
-	if (inner.kind === NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
 	if (gen.bundleMode) {
 		// Bundle mode: emit declaration without `export`, track exported name
 		let exportName = "";
-		if (inner.kind === NodeKind.FunctionDecl) { exportName = safeJsName((inner.data as FunctionDeclData).fnName); }
-		else if (inner.kind === NodeKind.VariableDecl) { exportName = safeJsName((inner.data as VariableDeclData).declName); }
-		else if (inner.kind === NodeKind.EnumDecl) { /* flat constants — no single variable to export */ }
-		else if (inner.kind === NodeKind.ClassDecl) { exportName = safeJsName((inner.data as ClassDeclData).className); }
-		if (exportName !== "") { gen.exportedNames.push(exportName); }
+		if (inner.kind == NodeKind.FunctionDecl) { exportName = safeJsName((inner.data as FunctionDeclData).fnName); }
+		else if (inner.kind == NodeKind.VariableDecl) { exportName = safeJsName((inner.data as VariableDeclData).declName); }
+		else if (inner.kind == NodeKind.EnumDecl) { /* flat constants — no single variable to export */ }
+		else if (inner.kind == NodeKind.ClassDecl) { exportName = safeJsName((inner.data as ClassDeclData).className); }
+		if (exportName != "") { gen.exportedNames.push(exportName); }
 		// Emit the declaration itself (no export keyword)
 		emitNode(gen, inner);
 		return;
@@ -406,7 +406,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			};
 			if (gen.multiFile) { gen.exportedNames.push(safeJsName(vd.declName)); }
 			emit(gen, safeJsName(vd.declName));
-			if (vd.initializer !== null) {
+			if (vd.initializer != null) {
 				emit(gen, " = ");
 				emitNode(gen, vd.initializer);
 			}

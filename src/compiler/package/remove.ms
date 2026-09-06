@@ -7,7 +7,7 @@ import { readLockfile, writeLockfile, entryName } from "./lockfile";
 import { LockEntry } from "./lockfile";
 
 export function cmdRemove(projectRoot: string, args: string[]): boolean {
-	if (args.length === 0) {
+	if (args.length == 0) {
 		console.log("error: msc remove requires a package name");
 		console.log("usage: msc remove <name>");
 		return false;
@@ -34,7 +34,7 @@ export function cmdRemove(projectRoot: string, args: string[]): boolean {
 	if (lock.valid) {
 		const kept: LockEntry[] = [];
 		for (const entry of lock.entries) {
-			if (entryName(entry.key) !== name) {
+			if (entryName(entry.key) != name) {
 				kept.push(entry);
 			}
 		}

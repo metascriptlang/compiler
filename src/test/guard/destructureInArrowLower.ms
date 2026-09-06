@@ -39,17 +39,17 @@ function withCb(cb: () => number): number { return cb(); }
 function main(): void {
 	// (1) non-lifted arrow bound in a var initializer
 	const g = (): number => { const [a, b] = pair(); return a + b; };
-	if (g() !== 7) { throw "GUARD RED: destructure in non-lifted var-init arrow dropped"; }
+	if (g() != 7) { throw "GUARD RED: destructure in non-lifted var-init arrow dropped"; }
 
 	// (2) capturing (lifted) arrow — writes a destructured value to an outer local
 	let sum = 0;
 	const compute = (): void => { const [a, b] = pair(); sum = (a + b) as int32; };
 	compute();
-	if (sum !== 7) { throw "GUARD RED: destructure in lifted (capturing) arrow dropped"; }
+	if (sum != 7) { throw "GUARD RED: destructure in lifted (capturing) arrow dropped"; }
 
 	// (3) arrow passed as a CALL ARGUMENT (the mapArray(list, (v,i)=>{…}) shape)
 	const viaArg = withCb(() => { const [a, b] = pair(); return a * b; });
-	if (viaArg !== 12) { throw "GUARD RED: destructure in call-arg arrow dropped"; }
+	if (viaArg != 12) { throw "GUARD RED: destructure in call-arg arrow dropped"; }
 
 	console.log("destructureInArrowLower ok");
 }

@@ -44,8 +44,8 @@ function _jsonParseTyped<T>(input: string): Result<T, string> {
 	const pr = parseJson(input);
 	if (!pr.ok) return Result.err(pr.error);
 	const root: JsonValue = pr.value;
-	if (root === null || root.kind !== JsonKind.Object) {
-		const got = root === null ? "null" : kindName(root.kind);
+	if (root == null || root.kind != JsonKind.Object) {
+		const got = root == null ? "null" : kindName(root.kind);
 		return Result.err("expected object at top level, got " + got);
 	}
 	const errs: string[] = [];
@@ -90,7 +90,7 @@ export function _jsonArrayOfStructs<T>(arr: T[]): JsonValue {
 
 export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
 	const out: T[] = [];
-	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
 		out.push(asInt64(jv.items[i]) as T);
@@ -103,7 +103,7 @@ export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
 // carry the Int variant, exactly as a declared int64 field must.
 export function _jsonToIntArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
 	const out: T[] = [];
-	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
 		out.push(reqInt64(jv.items[i], arrPath + "[" + i.toString() + "]", "", errs) as T);
@@ -118,7 +118,7 @@ export function _jsonToIntArrayE<T>(jv: JsonValue, witness: T | null, errs: stri
 // the element type.
 export function _jsonToIntArrayWitness<T>(jv: JsonValue, witness: T[]): T[] {
 	const out: T[] = [];
-	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
 		out.push(asInt64(jv.items[i]) as T);
@@ -129,7 +129,7 @@ export function _jsonToIntArrayWitness<T>(jv: JsonValue, witness: T[]): T[] {
 
 export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
 	const out: T[] = [];
-	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
 		out.push(jsonValueToStruct(jv.items[i], witness));
@@ -143,7 +143,7 @@ export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
 // reads `field 'items[0]': expected object, got int`.
 export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
 	const out: T[] = [];
-	if (jv === null || jv.kind !== JsonKind.Array) return out;
+	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
 		const elemPath: string = arrPath + "[" + i.toString() + "]";

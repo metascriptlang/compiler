@@ -46,17 +46,17 @@ test "bug132: closure over a string-variant union compiles and runs" {
 		};
 	};
 	const v = b132mk();
-	if (v.kind === "c") {
-		assert area(v) === 4.0;
-		assert v.label === "x";
+	if (v.kind == "c") {
+		assert area(v) == 4.0;
+		assert v.label == "x";
 	}
 }
 
 test "bug132: function declared before the interface declarations" {
 	const v = b132mk();
-	if (v.kind === "c") {
-		assert v.r === 2.0;
+	if (v.kind == "c") {
+		assert v.r == 2.0;
 	} else {
-		assert v.w === 0.0;
+		assert v.w == 0.0;
 	}
 }

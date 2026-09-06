@@ -81,11 +81,11 @@ export function ioErrorFromErrno(errnum: number, path: string): IoError {
 // ===== Classification =====
 
 export function isNotFound(e: IoError): boolean {
-	return e.kind === IoErrorKind.NotFound;
+	return e.kind == IoErrorKind.NotFound;
 }
 
 export function isPermissionError(e: IoError): boolean {
-	return e.kind === IoErrorKind.PermissionDenied;
+	return e.kind == IoErrorKind.PermissionDenied;
 }
 
 export function isRetryable(e: IoError): boolean {
@@ -96,33 +96,33 @@ export function isRetryable(e: IoError): boolean {
 
 test "notFound constructor" {
 	const e = notFound("/tmp/missing.txt");
-	assert e.kind === IoErrorKind.NotFound;
-	assert e.path === "/tmp/missing.txt";
+	assert e.kind == IoErrorKind.NotFound;
+	assert e.path == "/tmp/missing.txt";
 }
 
 test "permissionDenied constructor" {
 	const e = permissionDenied("/etc/shadow");
-	assert e.kind === IoErrorKind.PermissionDenied;
+	assert e.kind == IoErrorKind.PermissionDenied;
 }
 
 test "ioErrorFromErrno ENOENT" {
 	const e = ioErrorFromErrno(2, "/tmp/x");
-	assert e.kind === IoErrorKind.NotFound;
+	assert e.kind == IoErrorKind.NotFound;
 }
 
 test "ioErrorFromErrno EACCES" {
 	const e = ioErrorFromErrno(13, "/etc/shadow");
-	assert e.kind === IoErrorKind.PermissionDenied;
+	assert e.kind == IoErrorKind.PermissionDenied;
 }
 
 test "ioErrorFromErrno EEXIST" {
 	const e = ioErrorFromErrno(17, "/tmp/dir");
-	assert e.kind === IoErrorKind.AlreadyExists;
+	assert e.kind == IoErrorKind.AlreadyExists;
 }
 
 test "ioErrorFromErrno unknown" {
 	const e = ioErrorFromErrno(999, "/tmp/x");
-	assert e.kind === IoErrorKind.Unknown;
+	assert e.kind == IoErrorKind.Unknown;
 }
 
 test "isNotFound classification" {
@@ -132,6 +132,6 @@ test "isNotFound classification" {
 
 test "endOfInput constructor" {
 	const e = endOfInput();
-	assert e.kind === IoErrorKind.EndOfInput;
-	assert e.path === "";
+	assert e.kind == IoErrorKind.EndOfInput;
+	assert e.path == "";
 }

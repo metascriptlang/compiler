@@ -45,18 +45,18 @@ test "bug017: const = function(): T { ... } can be called" {
 		return "fn-expr";
 	};
 	const got = myFn();
-	assert got === "fn-expr";
+	assert got == "fn-expr";
 }
 
 test "bug017: const = () => T can be called (no annotation)" {
 	const myFn = () => "arrow";
 	const got = myFn();
-	assert got === "arrow";
+	assert got == "arrow";
 }
 
 test "bug017: const arrow with multiple params" {
 	const add = (a: int32, b: int32): int32 => (a + b) as int32;
-	assert add(3, 4) === 7;
+	assert add(3, 4) == 7;
 }
 
 test "bug017: const arrow capturing outer let" {
@@ -65,14 +65,14 @@ test "bug017: const arrow capturing outer let" {
 	bump();
 	bump();
 	bump();
-	assert counter === 3;
+	assert counter == 3;
 }
 
 // Regression guards — pre-existing forms that already worked must stay working.
 
 test "bug017: LHS-annotated const arrow still works" {
 	const myFn: () => string = () => "lhs";
-	assert myFn() === "lhs";
+	assert myFn() == "lhs";
 }
 
 function takeCb(cb: () => string): string {
@@ -80,5 +80,5 @@ function takeCb(cb: () => string): string {
 }
 
 test "bug017: arrow as callback arg still works" {
-	assert takeCb(() => "callback") === "callback";
+	assert takeCb(() => "callback") == "callback";
 }

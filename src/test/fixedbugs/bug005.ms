@@ -37,7 +37,7 @@ test "bug005: method with string[] param accepts named lvalue" {
 	const b = new Bug005Box();
 	const items: string[] = ["a", "b", "c"];
 	const n = b.count(items);
-	assert n === 3;
+	assert n == 3;
 }
 
 class Forward {
@@ -56,7 +56,7 @@ test "bug005: method body forwards array to standalone fn" {
 	const f = new Forward();
 	const items: string[] = ["x", "y"];
 	const n = f.process(items);
-	assert n === 2;
+	assert n == 2;
 }
 
 class Reader {
@@ -64,7 +64,7 @@ class Reader {
 	// auto-deref is wired so promoted params behave like value-typed params
 	// inside the body.
 	first(items: string[]): string {
-		if (items.length === 0) return "";
+		if (items.length == 0) return "";
 		return items[0];
 	}
 }
@@ -73,7 +73,7 @@ test "bug005: method body indexes promoted array param" {
 	const r = new Reader();
 	const items: string[] = ["one", "two"];
 	const got = r.first(items);
-	assert got === "one";
+	assert got == "one";
 }
 
 class NumOp {
@@ -91,7 +91,7 @@ test "bug005: method with number[] param sums correctly" {
 	const op = new NumOp();
 	const values: number[] = [1, 2, 3, 4];
 	const total = op.sum(values);
-	assert total === 10;
+	assert total == 10;
 }
 
 class CtorBox {
@@ -103,7 +103,7 @@ class CtorBox {
 
 test "bug005: ctor with array param accepts array literal" {
 	const c = new CtorBox([1, 2, 3]);
-	assert c.count === 3;
+	assert c.count == 3;
 }
 
 // ===== Inheritance with ctor chain (super) =====
@@ -134,9 +134,9 @@ class C1 extends B1 {
 
 test "bug005: 3-level inheritance with super() chain" {
 	const c = new C1(10, 20, 30);
-	assert c.x === 10;
-	assert c.y === 20;
-	assert c.z === 30;
+	assert c.x == 10;
+	assert c.y == 20;
+	assert c.z == 30;
 }
 
 // ===== Generic class ctor (paired fix in instantiate.ms) =====
@@ -174,7 +174,7 @@ class StaticOps {
 test "bug005: static method with array param" {
 	const items: int32[] = [1, 2, 3, 4];
 	const total = StaticOps.sumAll(items);
-	assert total === 10;
+	assert total == 10;
 }
 
 // ===== Cross-module class + inheritance =====
@@ -186,10 +186,10 @@ import { CrossA, CrossB } from "./bug005helper";
 
 test "bug005: cross-module class instantiation + method call" {
 	const a = new CrossA(7);
-	assert a.getX() === 7;
+	assert a.getX() == 7;
 }
 
 test "bug005: cross-module inheritance with super() across modules" {
 	const b = new CrossB(3, 4);
-	assert b.sum() === 7;
+	assert b.sum() == 7;
 }

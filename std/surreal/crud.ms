@@ -162,12 +162,12 @@ export function run(this c: SurrealClient, fn: string, args: CborValue, version:
 export function exists(this c: SurrealClient, thing: string): Result<boolean, SurrealError> {
 	const r = selectRaw(c, thing);
 	if (!r.ok) {
-		if (r.error.kind === SurrealErrorKind.Rpc && r.error.message.contains("does not exist")) {
+		if (r.error.kind == SurrealErrorKind.Rpc && r.error.message.contains("does not exist")) {
 			return Result.ok(false);
 		}
 		return Result.err(r.error);
 	}
-	if (r.value.kind === CborKind.Map) return Result.ok(true);   // direct single-record return (RecordId Tag form)
-	if (r.value.kind !== CborKind.Array) return Result.ok(false);
+	if (r.value.kind == CborKind.Map) return Result.ok(true);   // direct single-record return (RecordId Tag form)
+	if (r.value.kind != CborKind.Array) return Result.ok(false);
 	return Result.ok(length(r.value) > 0);
 }

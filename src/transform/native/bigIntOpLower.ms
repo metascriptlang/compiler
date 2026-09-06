@@ -28,11 +28,11 @@ export function lowerBigIntOps(program: Node, ctx: TransformContext): Node {
 }
 
 function isBigType(t: Type | null): boolean {
-	return t !== null && t.kind === TypeKind.BigInt;
+	return t != null && t.kind == TypeKind.BigInt;
 }
 
 function isBigNode(n: Node | null): boolean {
-	return n !== null && isBigType(n.nodeType);
+	return n != null && isBigType(n.nodeType);
 }
 
 function bigType(): Type {
@@ -55,12 +55,12 @@ function toBig(n: Node, ctx: TransformContext): Node {
 	const loc = n.location;
 	const t = n.nodeType;
 	if (isBigType(t)) return n;
-	if (t !== null && (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral)) {
+	if (t != null && (t.kind == TypeKind.String || t.kind == TypeKind.StringLiteral)) {
 		return bigCall("msBigIntFromLit", [n], loc, bigType());
 	}
-	if (t !== null && t.kind === TypeKind.Uint64) return bigCall("msBigIntFromUint64", [n], loc, bigType());
-	if (t !== null && t.kind === TypeKind.Int64) return bigCall("msBigIntFromInt64", [n], loc, bigType());
-	if (t !== null && isNumeric(t)) return bigCall("msBigIntFromFloat64", [n], loc, bigType());
+	if (t != null && t.kind == TypeKind.Uint64) return bigCall("msBigIntFromUint64", [n], loc, bigType());
+	if (t != null && t.kind == TypeKind.Int64) return bigCall("msBigIntFromInt64", [n], loc, bigType());
+	if (t != null && isNumeric(t)) return bigCall("msBigIntFromFloat64", [n], loc, bigType());
 	addError(ctx.checkerCtx, "cannot convert " + typeDisplayName(t) + " to bigint", loc.line, loc.column);
 	return n;
 }
@@ -71,11 +71,11 @@ function fromBig(node: Node, ctx: TransformContext): Node {
 	const d = node.data as TypeAssertionData;
 	const dst = node.nodeType;
 	const loc = node.location;
-	if (dst !== null && (dst.kind === TypeKind.Float64 || dst.kind === TypeKind.Float32 || dst.kind === TypeKind.Number)) {
+	if (dst != null && (dst.kind == TypeKind.Float64 || dst.kind == TypeKind.Float32 || dst.kind == TypeKind.Number)) {
 		d.asExpr = bigCall("msBigIntToFloat64", [d.asExpr], loc, dst);
 		return node;
 	}
-	if (dst !== null && isNumeric(dst)) {
+	if (dst != null && isNumeric(dst)) {
 		d.asExpr = bigCall("msBigIntToInt64", [d.asExpr], loc, createPrimitive(TypeKind.Int64));
 		return node;
 	}
@@ -114,8 +114,8 @@ function comparisonOp(op: string): string {
 
 // A target read twice by `a += b` / `a++` must be free of side effects.
 function isRereadableTarget(n: Node): boolean {
-	if (n.kind === NodeKind.Identifier) return true;
-	if (n.kind === NodeKind.MemberExpr) {
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.MemberExpr) {
 		const d = n.data as MemberExprData;
 		return isRereadableTarget(d.object);
 	}
@@ -123,44 +123,44 @@ function isRereadableTarget(n: Node): boolean {
 }
 
 function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
-	if (node.kind === NodeKind.BigIntLiteral) {
+	if (node.kind == NodeKind.BigIntLiteral) {
 		const d = node.data as BigIntLiteralData;
 		return fromLit(d.bigintValue, node.location);
 	}
 
-	if (node.kind === NodeKind.UnaryExpr) {
+	if (node.kind == NodeKind.UnaryExpr) {
 		const d = node.data as UnaryExprData;
 		if (!isBigNode(d.operand)) return node;
-		if (d.unaryOp === "-") return bigCall("msBigIntNeg", [d.operand], node.location, bigType());
-		if (d.unaryOp === "~") return bigCall("msBigIntNot", [d.operand], node.location, bigType());
-		if (d.unaryOp === "!") {
+		if (d.unaryOp == "-") return bigCall("msBigIntNeg", [d.operand], node.location, bigType());
+		if (d.unaryOp == "~") return bigCall("msBigIntNot", [d.operand], node.location, bigType());
+		if (d.unaryOp == "!") {
 			const zero = bigCall("msBigIntIsZero", [d.operand], node.location, booleanType());
 			return zero;
 		}
 		return node;
 	}
 
-	if (node.kind === NodeKind.TypeAssertion) {
+	if (node.kind == NodeKind.TypeAssertion) {
 		const td = node.data as TypeAssertionData;
-		if (td.asExpr === null) return node;
-		const dstBig = node.nodeType !== null && node.nodeType.kind === TypeKind.BigInt;
+		if (td.asExpr == null) return node;
+		const dstBig = node.nodeType != null && node.nodeType.kind == TypeKind.BigInt;
 		const srcBig = isBigNode(td.asExpr);
 		if (dstBig && !srcBig) return toBig(td.asExpr, ctx);
 		if (srcBig && !dstBig) return fromBig(node, ctx);
 		return node;
 	}
 
-	if (node.kind === NodeKind.ExprStmt) {
+	if (node.kind == NodeKind.ExprStmt) {
 		const sd = node.data as ExprStmtData;
 		const inner = sd.expr;
-		if (inner !== null && inner.kind === NodeKind.UpdateExpr) {
+		if (inner != null && inner.kind == NodeKind.UpdateExpr) {
 			const ud = inner.data as UpdateExprData;
 			if (isBigNode(ud.updateArg)) {
 				if (!isRereadableTarget(ud.updateArg)) {
 					addError(ctx.checkerCtx, "increment/decrement on bigint needs a plain variable or field target", inner.location.line, inner.location.column);
 					return node;
 				}
-				const fnName = ud.updateOp === "++" ? "msBigIntAdd" : "msBigIntSub";
+				const fnName = ud.updateOp == "++" ? "msBigIntAdd" : "msBigIntSub";
 				const step = fromLit("1n", inner.location);
 				const call = bigCall(fnName, [ud.updateArg, step], inner.location, bigType());
 				sd.expr = makeAssign(ud.updateArg, call, inner.location);
@@ -170,13 +170,13 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 		return node;
 	}
 
-	if (node.kind !== NodeKind.BinaryExpr) return node;
+	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (!isBigNode(d.left) && !isBigNode(d.right)) return node;
 
 	const loc = node.location;
 	const cmp = comparisonOp(d.operator);
-	if (cmp !== "") {
+	if (cmp != "") {
 		const cmpCall = bigCall("msBigIntCmp", [toBig(d.left, ctx), toBig(d.right, ctx)], loc, int32Type());
 		const result = makeBinary(cmpCall, cmp, makeNumber(0, loc), loc);
 		result.nodeType = booleanType();
@@ -184,7 +184,7 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 	}
 
 	const fnName = arithFn(d.operator);
-	if (fnName === "") return node;
+	if (fnName == "") return node;
 
 	const isCompound = d.operator.byteLength > 1 && d.operator.endsWith("=");
 	if (isCompound) {
@@ -200,7 +200,7 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 }
 
 function reportUnloweredUpdate(node: Node, ctx: TransformContext): Node {
-	if (node.kind !== NodeKind.UpdateExpr) return node;
+	if (node.kind != NodeKind.UpdateExpr) return node;
 	const d = node.data as UpdateExprData;
 	if (!isBigNode(d.updateArg)) return node;
 	addError(ctx.checkerCtx, "increment/decrement on bigint is only supported as a statement", node.location.line, node.location.column);

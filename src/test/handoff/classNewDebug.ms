@@ -5,7 +5,7 @@ import { fullPipeline } from "./helpers";
 
 test "Post-pipeline: new Item { value: 42 }" {
 	const ast = fullPipeline("class Item { value: number }\nconst x = new Item { value: 42 };");
-	if (ast === null) {
+	if (ast == null) {
 		console.log("fullPipeline returned null");
 		return;
 	}
@@ -14,10 +14,10 @@ test "Post-pipeline: new Item { value: 42 }" {
 	while (i < pd.programStmts.length) {
 		const stmt = pd.programStmts[i];
 		console.log("post stmt[" + i + "] kind: " + stmt.kind);
-		if (stmt.kind === NodeKind.VariableDecl) {
+		if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
 			console.log("  init kind: " + vd.initializer.kind + " NewExpr=" + NodeKind.NewExpr);
-			if (vd.initializer.kind === NodeKind.NewExpr) {
+			if (vd.initializer.kind == NodeKind.NewExpr) {
 				const ne = vd.initializer.data as NewExprData;
 				console.log("  args: " + ne.newArguments.length);
 				if (ne.newArguments.length > 0) {

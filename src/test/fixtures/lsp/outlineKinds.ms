@@ -29,6 +29,6 @@ export function scale(v: Vec2, f: float64): Vec2 {
 
 test "scale doubles both axes" {
 	const v = scale(origin, 2.0);
-	assert v.x === 0.0;
-	assert v.y === 0.0;
+	assert v.x == 0.0;
+	assert v.y == 0.0;
 }

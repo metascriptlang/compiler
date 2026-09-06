@@ -20,8 +20,8 @@ function escapeString(s: string, quote: number): string {
 	let i = 0;
 	while (i < s.byteLength) {
 		const ch = s.byteAt(i);
-		const isEsc = ch === "\\".code || ch === "\n".code || ch === "\t".code || ch === "\r".code
-			|| (ch === "\"".code && quote === "\"".code) || (ch === "'".code && quote === "'".code);
+		const isEsc = ch == "\\".code || ch == "\n".code || ch == "\t".code || ch == "\r".code
+			|| (ch == "\"".code && quote == "\"".code) || (ch == "'".code && quote == "'".code);
 		if (isEsc) {
 			if (runStart < i) out = out + s.byteSlice(runStart, i);
 			out = out + match (ch) {
@@ -52,12 +52,12 @@ function escapeString(s: string, quote: number): string {
 // If the preceding character is `}` (close of `${...}` interpolation) or
 // `\`` itself, we're inside a template — fall through to re-escape.
 function extractRawStringToken(source: string, line: int32, col: int32): string {
-	if (source === "") return "";
+	if (source == "") return "";
 	// Find the byte offset of the target line:col in source
 	let currentLine = 1;
 	let pos = 0;
 	while (pos < source.byteLength && currentLine < line) {
-		if (source.byteAt(pos) === "\n".code) currentLine = currentLine + 1;
+		if (source.byteAt(pos) == "\n".code) currentLine = currentLine + 1;
 		pos = pos + 1;
 	}
 	// pos is now at the start of the target line; advance by column (0-based)
@@ -65,19 +65,19 @@ function extractRawStringToken(source: string, line: int32, col: int32): string 
 	if (pos >= source.byteLength) return "";
 	// Expect a quote character at this position
 	const quote = source.byteAt(pos);
-	if (quote !== "\"".code && quote !== "'".code) return "";
+	if (quote != "\"".code && quote != "'".code) return "";
 	// Reject if the preceding char would mean we're inside a template
 	// literal (between text/interpolation pieces in `\`...${x}'...\``).
 	if (pos > 0) {
 		const prev = source.byteAt(pos - 1);
-		if (prev === "}".code || prev === "`".code) return "";
+		if (prev == "}".code || prev == "`".code) return "";
 	}
 	// Scan forward to find the matching closing quote (respecting escapes)
 	let end = pos + 1;
 	while (end < source.byteLength) {
 		const ch = source.byteAt(end);
-		if (ch === "\\".code) { end = end + 2; continue; } // skip escaped char
-		if (ch === quote) { end = end + 1; break; }
+		if (ch == "\\".code) { end = end + 2; continue; } // skip escaped char
+		if (ch == quote) { end = end + 1; break; }
 		end = end + 1;
 	}
 	return source.byteSlice(pos, end);
@@ -89,9 +89,9 @@ export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	if (options.singleQuote) { q = "'"; }
 	// Prettier pattern: extract raw token from source (preserves original escapes exactly).
 	// Only works for real parsed nodes with valid source positions, not synthetic nodes.
-	if (options.source !== "" && node.location.line > 0) {
+	if (options.source != "" && node.location.line > 0) {
 		const raw = extractRawStringToken(options.source, node.location.line, node.location.column - 1);
-		if (raw !== "") return docText(raw);
+		if (raw != "") return docText(raw);
 	}
 	// Fall back to re-escaping (synthetic nodes from transforms, template desugaring)
 	return docText(q + escapeString(d.value, q.byteAt(0)) + q);

@@ -36,8 +36,8 @@ function bug037MakeErr(n: number): Bug037Ref<string, number> {
 
 test "bug037: Ref<Union> with string payload — field access + destroy path" {
 	const ok = bug037MakeOk("hello-payload");
-	if (ok.kind === Bug037Kind.Ok) assert ok.value === "hello-payload";
+	if (ok.kind == Bug037Kind.Ok) assert ok.value == "hello-payload";
 
 	const err = bug037MakeErr(42);
-	if (err.kind === Bug037Kind.Err) assert err.error === 42;
+	if (err.kind == Bug037Kind.Err) assert err.error == 42;
 }

@@ -30,7 +30,7 @@ extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: strin
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
-	if (key.byteLength !== 16 && key.byteLength !== 32) {
+	if (key.byteLength != 16 && key.byteLength != 32) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "key must be 16 or 32 bytes"));
 	}
 	return Result.ok(true);
@@ -46,7 +46,7 @@ function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
 export function seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
 	const _v1 = try validateAesKey(key, "seal");
 	const result = msCryptoAesSeal(key, plainText, aad);
-	if (result.byteLength === 0) {
+	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "AES-GCM encryption failed"));
 	}
 	return Result.ok(result);
@@ -63,7 +63,7 @@ export function open(key: string, sealed: string, aad: string = ""): Result<stri
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
 	const result = msCryptoAesOpen(key, sealed, aad);
-	if (result.byteLength === 0 && sealed.byteLength > 28) {
+	if (result.byteLength == 0 && sealed.byteLength > 28) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(result);
@@ -78,11 +78,11 @@ export function open(key: string, sealed: string, aad: string = ""): Result<stri
  */
 export function cbcEncrypt(key: string, plainText: string, iv: string): Result<string, CryptoError> {
 	const _v3 = try validateAesKey(key, "cbcEncrypt");
-	if (iv.byteLength !== 16) {
+	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
 	const result = msCryptoAesCbcEncrypt(key, plainText, iv);
-	if (result.byteLength === 0) {
+	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", "AES-CBC encryption failed"));
 	}
 	return Result.ok(result);
@@ -94,11 +94,11 @@ export function cbcEncrypt(key: string, plainText: string, iv: string): Result<s
  */
 export function cbcDecrypt(key: string, cipherText: string, iv: string): Result<string, CryptoError> {
 	const _v4 = try validateAesKey(key, "cbcDecrypt");
-	if (iv.byteLength !== 16) {
+	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
 	const result = msCryptoAesCbcDecrypt(key, cipherText, iv);
-	if (result.byteLength === 0) {
+	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
 	return Result.ok(result);

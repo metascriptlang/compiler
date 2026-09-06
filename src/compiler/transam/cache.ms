@@ -69,12 +69,12 @@ function evictAt(cache: TaCacheStore, idx: int32): void {
 	const evicted = cache.entries[idx];
 	const fid = evicted.key.fileId;
 	const arr = cache.fileIndex.get(fid);
-	if (arr !== null) {
+	if (arr != null) {
 		const kept: TaCacheEntry[] = [];
 		for (let ri = 0; ri < arr.length; ri += 1) {
-			if (arr[ri] !== evicted) kept.push(arr[ri]);
+			if (arr[ri] != evicted) kept.push(arr[ri]);
 		}
-		if (kept.length === 0) {
+		if (kept.length == 0) {
 			cache.fileIndex.delete(fid);
 		} else {
 			cache.fileIndex.set(fid, kept);
@@ -100,10 +100,10 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 		// Replace old entry in fileIndex
 		const fid = entry.key.fileId;
 		const arr = cache.fileIndex.get(fid);
-		if (arr !== null) {
+		if (arr != null) {
 			const replaced: TaCacheEntry[] = [];
 			for (let fi = 0; fi < arr.length; fi += 1) {
-				if (arr[fi] === old) { replaced.push(entry); } else { replaced.push(arr[fi]); }
+				if (arr[fi] == old) { replaced.push(entry); } else { replaced.push(arr[fi]); }
 			}
 			cache.fileIndex.set(fid, replaced);
 		}
@@ -121,7 +121,7 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	// Update file index
 	const fid = entry.key.fileId;
 	const old = cache.fileIndex.get(fid);
-	if (old !== null) {
+	if (old != null) {
 		const updated: TaCacheEntry[] = [];
 		for (let ui = 0; ui < old.length; ui += 1) { updated.push(old[ui]); }
 		updated.push(entry);
@@ -144,7 +144,7 @@ export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 
 export function markAllRed(cache: TaCacheStore): void {
 	for (const entry of cache.entries) {
-		if (entry.state === TaQueryState.Green) {
+		if (entry.state == TaQueryState.Green) {
 			entry.state = TaQueryState.Red;
 		}
 	}
@@ -152,7 +152,7 @@ export function markAllRed(cache: TaCacheStore): void {
 
 export function markQueriesRedForFile(cache: TaCacheStore, fileId: int32): void {
 	const indexed = cache.fileIndex.get(fileId);
-	if (indexed === null) return;
+	if (indexed == null) return;
 	for (const entry of indexed) {
 		entry.state = TaQueryState.Red;
 	}
@@ -161,8 +161,8 @@ export function markQueriesRedForFile(cache: TaCacheStore, fileId: int32): void 
 // ===== Tests =====
 test "create empty" {
 	const cache = createCacheStore(10);
-	assert cache.entries.length === 0;
-	assert cache.capacity === 10;
+	assert cache.entries.length == 0;
+	assert cache.capacity == 10;
 }
 
 test "put and get" {
@@ -172,15 +172,15 @@ test "put and get" {
 	entry.state = TaQueryState.Green;
 	cachePut(cache, entry);
 	const got = cacheGet(cache, key);
-	assert got !== null;
-	assert got.state === TaQueryState.Green;
+	assert got != null;
+	assert got.state == TaQueryState.Green;
 }
 
 test "get miss returns null" {
 	const cache = createCacheStore(10);
 	const key = createQueryKey(TaQueryKind.Parse, 99);
 	const got = cacheGet(cache, key);
-	assert got === null;
+	assert got == null;
 }
 
 test "contains true/false" {
@@ -202,9 +202,9 @@ test "evicts at capacity" {
 	const e3 = createCacheEntry(k3);
 	cachePut(cache, e1);
 	cachePut(cache, e2);
-	assert cache.entries.length === 2;
+	assert cache.entries.length == 2;
 	cachePut(cache, e3);
-	assert cache.entries.length === 2;
+	assert cache.entries.length == 2;
 	// k1 was least recently used, should be evicted
 	assert !cacheContains(cache, k1);
 	assert cacheContains(cache, k2);
@@ -238,9 +238,9 @@ test "put existing key updates in place" {
 	const e2 = createCacheEntry(key);
 	e2.outputHash = 200;
 	cachePut(cache, e2);
-	assert cache.entries.length === 1;
+	assert cache.entries.length == 1;
 	const got = cacheGet(cache, key);
-	assert got.outputHash === 200;
+	assert got.outputHash == 200;
 }
 
 test "remove existing" {
@@ -269,8 +269,8 @@ test "markAllRed turns green to red" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	markAllRed(cache);
-	assert cacheGet(cache, k1).state === TaQueryState.Red;
-	assert cacheGet(cache, k2).state === TaQueryState.Red;
+	assert cacheGet(cache, k1).state == TaQueryState.Red;
+	assert cacheGet(cache, k2).state == TaQueryState.Red;
 }
 
 test "markQueriesRedForFile targets specific file" {
@@ -284,6 +284,6 @@ test "markQueriesRedForFile targets specific file" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	markQueriesRedForFile(cache, 1);
-	assert cacheGet(cache, k1).state === TaQueryState.Red;
-	assert cacheGet(cache, k2).state === TaQueryState.Green;
+	assert cacheGet(cache, k1).state == TaQueryState.Red;
+	assert cacheGet(cache, k2).state == TaQueryState.Green;
 }

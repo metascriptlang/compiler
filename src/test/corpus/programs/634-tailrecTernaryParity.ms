@@ -9,7 +9,7 @@ function loop(n: int64, acc: int64): int64 {
 }
 
 function nest(n: int64, acc: int64): int64 {
-	return n <= 0 ? acc : (n % 2 === 0 ? nest(n - 1, acc + 2) : nest(n - 1, acc + 1));
+	return n <= 0 ? acc : (n % 2 == 0 ? nest(n - 1, acc + 2) : nest(n - 1, acc + 1));
 }
 
 function grow(n: int64, s: string): string {

@@ -56,21 +56,21 @@ const answer = () => { return 42; };
 
 function main(): void {
 	bump();
-	if (counter !== 1.0) {
+	if (counter != 1.0) {
 		console.log("FAIL: bump did not run, counter=" + counter.toString());
 		exit(1);
 	}
 	const after = runTwice();
-	if (after !== 3.0) {
+	if (after != 3.0) {
 		console.log("FAIL: nested void arrow path, counter=" + after.toString());
 		exit(1);
 	}
 	explicitVoid();
-	if (flag !== 7.0) {
+	if (flag != 7.0) {
 		console.log("FAIL: explicit void arrow, flag=" + flag.toString());
 		exit(1);
 	}
-	if (answer() !== 42) {
+	if (answer() != 42) {
 		console.log("FAIL: value-returning arrow collapsed");
 		exit(1);
 	}

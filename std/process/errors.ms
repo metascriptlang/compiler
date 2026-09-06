@@ -110,55 +110,55 @@ export function pipeError(command: string, reason: string): ProcessError {
 // ===== Classification =====
 
 export function isNotFound(e: ProcessError): boolean {
-	return e.kind === ProcessErrorKind.NotFound;
+	return e.kind == ProcessErrorKind.NotFound;
 }
 
 export function isNonZeroExit(e: ProcessError): boolean {
-	return e.kind === ProcessErrorKind.NonZeroExit;
+	return e.kind == ProcessErrorKind.NonZeroExit;
 }
 
 export function isRetryable(e: ProcessError): boolean {
 	// Spawn failures may be transient (out of PIDs, etc.); non-zero exits are
 	// deterministic (the command itself failed) and not worth retrying.
-	return e.kind === ProcessErrorKind.SpawnFailed;
+	return e.kind == ProcessErrorKind.SpawnFailed;
 }
 
 // ===== Tests =====
 
 test "spawnFailed constructor" {
 	const e = spawnFailed("ls", "fork() returned -1");
-	assert e.kind === ProcessErrorKind.SpawnFailed;
-	assert e.command === "ls";
-	assert e.exitCode === 0;
-	assert e.signal === 0;
+	assert e.kind == ProcessErrorKind.SpawnFailed;
+	assert e.command == "ls";
+	assert e.exitCode == 0;
+	assert e.signal == 0;
 }
 
 test "notFound constructor" {
 	const e = notFound("nonexistent-cmd");
-	assert e.kind === ProcessErrorKind.NotFound;
-	assert e.command === "nonexistent-cmd";
+	assert e.kind == ProcessErrorKind.NotFound;
+	assert e.command == "nonexistent-cmd";
 }
 
 test "nonZeroExit captures output" {
 	const e = nonZeroExit("ls /nope", 2, "", "ls: /nope: No such file or directory\n");
-	assert e.kind === ProcessErrorKind.NonZeroExit;
-	assert e.exitCode === 2;
+	assert e.kind == ProcessErrorKind.NonZeroExit;
+	assert e.exitCode == 2;
 	assert e.errorOutput.indexOf("No such file") >= 0;
-	assert e.signal === 0;
+	assert e.signal == 0;
 }
 
 test "signalTerminated has signal number" {
 	const e = signalTerminated("sleep 5", 9, "", "");
-	assert e.kind === ProcessErrorKind.SignalTerminated;
-	assert e.signal === 9;
-	assert e.exitCode === 0;
+	assert e.kind == ProcessErrorKind.SignalTerminated;
+	assert e.signal == 9;
+	assert e.exitCode == 0;
 }
 
 test "pipeError has empty captures" {
 	const e = pipeError("ls", "read() failed");
-	assert e.kind === ProcessErrorKind.PipeError;
-	assert e.output === "";
-	assert e.errorOutput === "";
+	assert e.kind == ProcessErrorKind.PipeError;
+	assert e.output == "";
+	assert e.errorOutput == "";
 }
 
 test "isNotFound classification" {

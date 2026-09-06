@@ -78,8 +78,8 @@ export function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32
 	let timeout = defaultTimeout;
 	let maxRedirects = defaultMaxRedirects;
 
-	if (options !== null) {
-		if (options.method !== "") method = parseMethod(options.method);
+	if (options != null) {
+		if (options.method != "") method = parseMethod(options.method);
 		body = options.body;
 		if (options.headers._names.length > 0) headers = options.headers;
 		if (options.timeout > 0) timeout = options.timeout;
@@ -91,7 +91,7 @@ export function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32
 
 // Build path + query string from parsed URL.
 export function urlPath(u: ParsedUrl): string {
-	if (u.query.length === 0) return u.path;
+	if (u.query.length == 0) return u.path;
 	return u.path + "?" + u.query;
 }
 
@@ -129,11 +129,11 @@ export function doRequestOver(
 	let data = "";
 	while (!data.contains("\r\n\r\n")) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.byteLength === 0) break;
+		if (chunk.byteLength == 0) break;
 		data = data + chunk;
 		if (data.byteLength > MAX_HEADER_BYTES) break;
 	}
-	if (data.byteLength === 0) {
+	if (data.byteLength == 0) {
 		closeFn();
 		return Result.err(invalidResponse("empty response"));
 	}
@@ -154,7 +154,7 @@ export function doRequestOver(
 		let chunkedData = data.byteSlice(parsed.value.bodyStart, data.byteLength);
 		while (!chunkedData.startsWith("0\r\n") && !chunkedData.contains("\r\n0\r\n")) {
 			const more = recvFn(RECV_CHUNK_SIZE);
-			if (more.byteLength === 0) break;
+			if (more.byteLength == 0) break;
 			chunkedData = chunkedData + more;
 		}
 		closeFn();
@@ -193,7 +193,7 @@ function readFullBodyOver(recvFn: (maxBytes: int32) => string, initialData: stri
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
 		const chunkBytes = chunk.byteLength as int32;
-		if (chunkBytes === 0) break;
+		if (chunkBytes == 0) break;
 		body = body + chunk;
 		remaining = remaining - chunkBytes;
 	}
@@ -204,7 +204,7 @@ function readUntilCloseOver(recvFn: (maxBytes: int32) => string, initialData: st
 	let body = initialData.byteSlice(bodyStart, initialData.byteLength as int32);
 	while (true) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
-		if (chunk.byteLength === 0) break;
+		if (chunk.byteLength == 0) break;
 		body = body + chunk;
 	}
 	return body;
@@ -246,7 +246,7 @@ export function requestWithRedirectsOver(
 		}
 
 		const location = getHeader(resp.value.headers, "location");
-		if (location.length === 0) return resp;
+		if (location.length == 0) return resp;
 
 		if (location.startsWith("http://") || location.startsWith("https://")) {
 			const parsed = parseUrl(location);
@@ -254,7 +254,7 @@ export function requestWithRedirectsOver(
 			currentHostname = parsed.value.hostname;
 			currentPort = parsed.value.port;
 			currentPath = parsed.value.path;
-			currentTls = parsed.value.protocol === "https";
+			currentTls = parsed.value.protocol == "https";
 			if (parsed.value.query.length > 0) {
 				currentPath = currentPath + "?" + parsed.value.query;
 			}
@@ -263,7 +263,7 @@ export function requestWithRedirectsOver(
 		}
 
 		// 301/302/303: force GET and strip body (per RFC 7231)
-		if (resp.value.status === 301 || resp.value.status === 302 || resp.value.status === 303) {
+		if (resp.value.status == 301 || resp.value.status == 302 || resp.value.status == 303) {
 			currentMethod = HttpMethod.GET;
 			currentBody = "";
 		}

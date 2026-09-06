@@ -21,28 +21,28 @@ function bug095Call<T>(fn: () => T): T { return fn(); }
 test "bug095: expr-bodied arrow, inner captures enclosing const" {
 	const x = 5;
 	const producer = () => bug095Call(() => x + 1);
-	assert producer() === 6, "const capture";
+	assert producer() == 6, "const capture";
 }
 
 test "bug095: expr-bodied arrow, inner captures the outer arrow's param" {
 	const apply = (v: number): number => bug095Call(() => v + 1);
-	assert apply(5) === 6, "param capture";
+	assert apply(5) == 6, "param capture";
 }
 
 test "bug095: inner arrow mutates the captured binding across calls" {
 	let bug095n = 0;
 	const bump = () => bug095Call(() => { bug095n = bug095n + 1; return bug095n; });
-	assert bump() === 1, "first bump";
-	assert bump() === 2, "second bump";
+	assert bump() == 1, "first bump";
+	assert bump() == 2, "second bump";
 }
 
 test "bug095: two nested expr-bodied arrows, innermost captures outermost const" {
 	const x = 10;
 	const outer = () => bug095Call(() => bug095Call(() => x + 1));
-	assert outer() === 11, "double nesting";
+	assert outer() == 11, "double nesting";
 }
 
 test "bug095: no-capture control" {
 	const producer = () => bug095Call(() => 6);
-	assert producer() === 6, "control";
+	assert producer() == 6, "control";
 }

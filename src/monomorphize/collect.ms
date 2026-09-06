@@ -43,9 +43,9 @@ function monoEmitTypeInstNodes(program: Node): void {
 // ===== Public Entry Point =====
 
 export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): Node {
-	if (checkerCtx === null) return program;
-	if (program === null) return program;
-	if (program.kind !== NodeKind.Program) return program;
+	if (checkerCtx == null) return program;
+	if (program == null) return program;
+	if (program.kind != NodeKind.Program) return program;
 
 	// Create InterfaceDecl nodes for generic type instantiations
 	// (independent of function monomorphization — Box<number> may exist without generic functions)

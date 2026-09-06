@@ -22,7 +22,7 @@ export function lowerSwitch(program: Node, ctx: TransformContext): Node {
 // SwitchStmt nodes (C-switch optimization), which the walker re-feeds here —
 // passing ordinals through ends the recursion.
 function expandSwitchStmt(stmt: Node, ctx: TransformContext): Node[] {
-	if (stmt.kind !== NodeKind.SwitchStmt) return [stmt];
+	if (stmt.kind != NodeKind.SwitchStmt) return [stmt];
 	const d = stmt.data as SwitchStmtData;
 	if (d.switchLowered) return [stmt];
 	d.switchLowered = true;
@@ -40,7 +40,7 @@ function expandSwitchStmt(stmt: Node, ctx: TransformContext): Node[] {
 	} else {
 		lowered = eraseToMatch(d, loc, ctx);
 	}
-	if (ownedBreaks.length === 0) return lowered;
+	if (ownedBreaks.length == 0) return lowered;
 	ctx.tempCounter += 1;
 	const swLabel = `__sw${ctx.tempCounter}`;
 	for (const b of ownedBreaks) {
@@ -54,8 +54,8 @@ function expandSwitchStmt(stmt: Node, ctx: TransformContext): Node[] {
 function dropTerminalBreak(stmts: Node[]): void {
 	while (stmts.length > 0) {
 		const last = stmts[stmts.length - 1];
-		if (last.kind !== NodeKind.BreakStmt) return;
-		if ((last.data as BreakStmtData).breakLabel !== "") return;
+		if (last.kind != NodeKind.BreakStmt) return;
+		if ((last.data as BreakStmtData).breakLabel != "") return;
 		stmts.pop();
 	}
 }
@@ -70,31 +70,31 @@ function collectOwnedBreaks(stmts: Node[], out: Node[]): void {
 }
 
 function collectOwnedInStmt(s: Node, out: Node[]): void {
-	if (s.kind === NodeKind.BreakStmt) {
+	if (s.kind == NodeKind.BreakStmt) {
 		const bd = s.data as BreakStmtData;
-		if (bd.breakLabel === "") {
+		if (bd.breakLabel == "") {
 			out.push(s);
 		}
 		return;
 	}
-	if (s.kind === NodeKind.IfStmt) {
+	if (s.kind == NodeKind.IfStmt) {
 		const id = s.data as IfStmtData;
 		collectOwnedInStmt(id.consequent, out);
-		if (id.alternate !== null) { collectOwnedInStmt(id.alternate, out); }
+		if (id.alternate != null) { collectOwnedInStmt(id.alternate, out); }
 		return;
 	}
-	if (s.kind === NodeKind.BlockStmt) {
+	if (s.kind == NodeKind.BlockStmt) {
 		collectOwnedBreaks((s.data as BlockStmtData).statements, out);
 		return;
 	}
-	if (s.kind === NodeKind.TryCatchStmt) {
+	if (s.kind == NodeKind.TryCatchStmt) {
 		const td = s.data as TryCatchStmtData;
 		collectOwnedInStmt(td.tryBody, out);
-		if (td.catchBody !== null) { collectOwnedInStmt(td.catchBody, out); }
-		if (td.finallyBody !== null) { collectOwnedInStmt(td.finallyBody, out); }
+		if (td.catchBody != null) { collectOwnedInStmt(td.catchBody, out); }
+		if (td.finallyBody != null) { collectOwnedInStmt(td.finallyBody, out); }
 		return;
 	}
-	if (s.kind === NodeKind.MatchStmt) {
+	if (s.kind == NodeKind.MatchStmt) {
 		const md = s.data as MatchStmtData;
 		for (const c of md.matchStmtCases) {
 			const cd = c.data as MatchCaseData;
@@ -113,38 +113,38 @@ function eraseToMatch(d: SwitchStmtData, loc: SourceLocation, ctx: TransformCont
 		const cd = caseNode.data as SwitchCaseData;
 		const body = makeBlock(cd.caseStmts, loc);
 		if (cd.isDefault) {
-			if (defaultCase === null) {
+			if (defaultCase == null) {
 				defaultCase = makeMatchCase([makeIdent("_", loc)], nullGuard, body, loc);
 			}
 			continue;
 		}
-		if (cd.caseTests.length === 0) continue;
+		if (cd.caseTests.length == 0) continue;
 		cases.push(makeMatchCase(cd.caseTests, nullGuard, body, loc));
 	}
-	if (defaultCase !== null) cases.push(defaultCase);
-	if (cases.length === 0) return [makeExprStmt(d.switchDisc, loc)];
+	if (defaultCase != null) cases.push(defaultCase);
+	if (cases.length == 0) return [makeExprStmt(d.switchDisc, loc)];
 
 	return lowerMatchStmt(makeMatchStmt(d.switchDisc, cases, loc), ctx);
 }
 
 test "non-integer switch becomes temp + if chain" {
-	assert stmtCountAfter("switch (s) { case \"a\": foo(); default: bar(); }", lowerSwitch) === 2;
-	assert firstStmtKindAfter("switch (s) { case \"a\": foo(); default: bar(); }", lowerSwitch) === NodeKind.VariableDecl;
+	assert stmtCountAfter("switch (s) { case \"a\": foo(); default: bar(); }", lowerSwitch) == 2;
+	assert firstStmtKindAfter("switch (s) { case \"a\": foo(); default: bar(); }", lowerSwitch) == NodeKind.VariableDecl;
 }
 
 test "switch without default still lowers" {
-	assert stmtCountAfter("switch (n) { case 1: a(); case 2: b(); }", lowerSwitch) === 2;
+	assert stmtCountAfter("switch (n) { case 1: a(); case 2: b(); }", lowerSwitch) == 2;
 }
 
 test "empty switch keeps only the discriminant eval" {
-	assert stmtCountAfter("switch (n) { }", lowerSwitch) === 1;
+	assert stmtCountAfter("switch (n) { }", lowerSwitch) == 1;
 }
 
 test "nested switch in a case body lowers too" {
 	const src = "switch (a) { case 1: switch (b) { case 2: f(); } default: g(); }";
-	assert stmtCountAfter(src, lowerSwitch) === 2;
+	assert stmtCountAfter(src, lowerSwitch) == 2;
 }
 
 test "non-switch passthrough" {
-	assert stmtCountAfter("const x = 1;", lowerSwitch) === 1;
+	assert stmtCountAfter("const x = 1;", lowerSwitch) == 1;
 }

@@ -9,7 +9,7 @@ type Predicate = (n: number) => boolean;
 
 const double = (x: number): number => x * 2;
 const greet = (name: string): string => "hi " + name;
-const isEven = (n: number): boolean => n % 2 === 0;
+const isEven = (n: number): boolean => n % 2 == 0;
 
 function add1(x: number): number { return x + 1; }
 
@@ -64,11 +64,11 @@ function countMatching(arr: number[], pred: Predicate): number {
 // --- Tests: arrow functions ---
 
 test "arrow function double" {
-	assert double(5) === 10;
+	assert double(5) == 10;
 }
 
 test "arrow function greet" {
-	assert greet("alice") === "hi alice";
+	assert greet("alice") == "hi alice";
 }
 
 test "arrow function isEven" {
@@ -81,60 +81,60 @@ test "arrow function isEven" {
 test "basic closures" {
 	const add5 = makeAdder(5);
 	const add10 = makeAdder(10);
-	assert add5(3) === 8;
-	assert add10(3) === 13;
-	assert add5(0) === 5;
-	assert add10(-10) === 0;
+	assert add5(3) == 8;
+	assert add10(3) == 13;
+	assert add5(0) == 5;
+	assert add10(-10) == 0;
 }
 
 test "closure multiplier" {
 	const triple = makeMultiplier(3);
-	assert triple(7) === 21;
+	assert triple(7) == 21;
 }
 
 // --- Tests: multi-capture ---
 
 test "multi-capture" {
 	const inRange = makeRange(10, 20);
-	assert inRange(15) === true;
-	assert inRange(5) === false;
-	assert inRange(25) === false;
+	assert inRange(15) == true;
+	assert inRange(5) == false;
+	assert inRange(25) == false;
 }
 
 // --- Tests: mutable capture ---
 
 test "closure counter" {
 	const counter = makeCounter();
-	assert counter(1) === 1;
-	assert counter(5) === 6;
-	assert counter(0) === 6;
+	assert counter(1) == 1;
+	assert counter(5) == 6;
+	assert counter(0) == 6;
 }
 
 // --- Tests: nested closures ---
 
 test "nested closures (compose)" {
 	const doubleAdd1 = compose(double, add1);
-	assert doubleAdd1(3) === 8;
-	assert doubleAdd1(0) === 2;
+	assert doubleAdd1(3) == 8;
+	assert doubleAdd1(0) == 2;
 }
 
 // --- Tests: higher-order / callback patterns ---
 
 test "applyTwice" {
-	assert applyTwice(double, 3) === 12;
-	assert applyTwice(add1, 5) === 7;
+	assert applyTwice(double, 3) == 12;
+	assert applyTwice(add1, 5) == 7;
 }
 
 test "applyToEach" {
 	const doubled = applyToEach([1, 2, 3], double);
-	assert doubled.length === 3;
-	assert doubled[0] === 2;
-	assert doubled[1] === 4;
-	assert doubled[2] === 6;
+	assert doubled.length == 3;
+	assert doubled[0] == 2;
+	assert doubled[1] == 4;
+	assert doubled[2] == 6;
 }
 
 test "callback countMatching" {
 	const nums: number[] = [1, 2, 3, 4, 5, 6, 7, 8];
-	assert countMatching(nums, isEven) === 4;
-	assert countMatching(nums, (n: number): boolean => n > 5) === 3;
+	assert countMatching(nums, isEven) == 4;
+	assert countMatching(nums, (n: number): boolean => n > 5) == 3;
 }

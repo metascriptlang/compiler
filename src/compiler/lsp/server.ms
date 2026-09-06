@@ -32,12 +32,12 @@ function setupPackageAliases(db: TransAmDb, filePath: string): void {
 	for (const entry of lock.entries) {
 		const name = entryName(entry.key);
 		let srcPath = "";
-		if (entry.source === "git" && entry.url !== "" && entry.commit !== "") {
+		if (entry.source == "git" && entry.url != "" && entry.commit != "") {
 			srcPath = gitSrcPath(entry.url, entry.commit);
-		} else if (entry.version !== "") {
+		} else if (entry.version != "") {
 			srcPath = registrySrcPath(name, entry.version);
 		}
-		if (srcPath !== "") {
+		if (srcPath != "") {
 			db.resolverConfig.aliasKeys.push(name);
 			db.resolverConfig.aliasValues.push(srcPath);
 		}
@@ -82,9 +82,9 @@ interface QueuedMessage {
 }
 
 function extractFileUri(params: string): string {
-	if (params.length === 0) return "";
+	if (params.length == 0) return "";
 	const textDoc = lspGetObjectField(params, "textDocument");
-	if (textDoc.length === 0) return "";
+	if (textDoc.length == 0) return "";
 	return lspGetField(textDoc, "uri");
 }
 
@@ -97,9 +97,9 @@ function parseQueuedMessage(body: string): QueuedMessage {
 // Auto-fired methods that can be safely deduplicated per-file.
 // For each (method, fileUri) pair, keep only the last occurrence.
 function isAutoFired(method: string): boolean {
-	return method === "textDocument/inlayHint"
-		|| method === "textDocument/semanticTokens/full"
-		|| method === "textDocument/documentHighlight";
+	return method == "textDocument/inlayHint"
+		|| method == "textDocument/semanticTokens/full"
+		|| method == "textDocument/documentHighlight";
 }
 
 // Coalesce queue: dedup auto-fired requests per (method, fileUri).
@@ -121,7 +121,7 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 			// Check if a later entry has same method + fileUri
 			let j = i + 1;
 			while (j < queue.length) {
-				if (queue[j].method === qm.method && queue[j].fileUri === qm.fileUri) {
+				if (queue[j].method == qm.method && queue[j].fileUri == qm.fileUri) {
 					keep[i] = false;
 					break;
 				}
@@ -134,10 +134,10 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 	i = 0;
 	while (i < queue.length) {
 		const qm = queue[i];
-		if (qm.method === "textDocument/didChange" && qm.fileUri.length > 0) {
+		if (qm.method == "textDocument/didChange" && qm.fileUri.length > 0) {
 			let j = i + 1;
 			while (j < queue.length) {
-				if (queue[j].method === "textDocument/didChange" && queue[j].fileUri === qm.fileUri) {
+				if (queue[j].method == "textDocument/didChange" && queue[j].fileUri == qm.fileUri) {
 					keep[i] = false;
 					break;
 				}
@@ -157,10 +157,10 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 
 // Check if a request is superseded by a later didChange for the same file.
 function isSuperseded(qm: QueuedMessage, queue: QueuedMessage[], fromIdx: number): boolean {
-	if (qm.fileUri.length === 0) return false;
+	if (qm.fileUri.length == 0) return false;
 	let j = fromIdx;
 	while (j < queue.length) {
-		if (queue[j].method === "textDocument/didChange" && queue[j].fileUri === qm.fileUri) {
+		if (queue[j].method == "textDocument/didChange" && queue[j].fileUri == qm.fileUri) {
 			return true;
 		}
 		j = j + 1;
@@ -175,7 +175,7 @@ function readOneMessage(): string {
 	let contentLength = -1;
 	while (contentLength < 0) {
 		const line = readLine();
-		if (line.length === 0) return "";  // EOF or end-of-headers without Content-Length
+		if (line.length == 0) return "";  // EOF or end-of-headers without Content-Length
 		contentLength = lspParseContentLength(line);
 	}
 	// Skip remaining headers until empty line
@@ -194,14 +194,14 @@ export function lspRunServer(): void {
 	while (!state.shutdownRequested) {
 		// 1. Read first message (blocking wait)
 		const first = readOneMessage();
-		if (first.length === 0) break;
+		if (first.length == 0) break;
 
 		// 2. Drain all buffered messages (non-blocking)
 		const queue: QueuedMessage[] = [];
 		queue.push(parseQueuedMessage(first));
 		while (stdinHasData()) {
 			const next = readOneMessage();
-			if (next.length === 0) break;
+			if (next.length == 0) break;
 			queue.push(parseQueuedMessage(next));
 		}
 
@@ -257,11 +257,11 @@ export function processMessage(msg: string, state: LspServerState): string {
 	// LSP spec allows `id` to be int OR string — VSCode/Neovim/Zed send int,
 	// IntelliJ (LSP4IJ) sends string. Fall back to string lookup when no int.
 	const idAsStr = idNum >= 0 ? "" : lspGetField(msg, "id");
-	const idStr = idNum >= 0 ? lspJsonNumber(idNum) : (idAsStr !== "" ? lspJsonString(idAsStr) : "");
+	const idStr = idNum >= 0 ? lspJsonNumber(idNum) : (idAsStr != "" ? lspJsonString(idAsStr) : "");
 	const params = lspGetObjectField(msg, "params");
 
 	// Track lifecycle
-	if (method === "initialize") {
+	if (method == "initialize") {
 		state.initialized = true;
 		const root = resolveRuntimeDir();
 		if (root.length > 0) {
@@ -269,18 +269,18 @@ export function processMessage(msg: string, state: LspServerState): string {
 		}
 		dbEnsurePrelude(state.db);
 	}
-	if (method === "shutdown") {
+	if (method == "shutdown") {
 		state.shutdownRequested = true;
 	}
 
 	// Invalidate completion cache when new content arrives
-	if (method === "textDocument/didChange" || method === "textDocument/didOpen") {
+	if (method == "textDocument/didChange" || method == "textDocument/didOpen") {
 		state.completionCache.uri = "";
 		state.completionCache.line = -1;
 	}
 
 	// Set up package aliases BEFORE dispatch (so imports resolve during parse/check)
-	if (method === "textDocument/didOpen") {
+	if (method == "textDocument/didOpen") {
 		const textDoc = lspGetObjectField(params, "textDocument");
 		const openUri = lspGetField(textDoc, "uri");
 		const openPath = lspUriToPath(openUri);
@@ -288,19 +288,19 @@ export function processMessage(msg: string, state: LspServerState): string {
 	}
 
 	// Log all requests for debugging
-	if (method === "textDocument/completion") {
+	if (method == "textDocument/completion") {
 		writeStderr("[LSP] >>> " + method + " id=" + idStr + "\n");
 	}
-	const _isCompletion = method === "textDocument/completion";
+	const _isCompletion = method == "textDocument/completion";
 	// Dispatch with error recovery
 	let json = "";
 	const t0 = performance.now();
 	try {
 		json = lspDispatch(method, idStr, params, state.db, state.completionCache);
 	} catch (e) {
-		const errMsg = e !== null ? "" + e : "unknown error";
+		const errMsg = e != null ? "" + e : "unknown error";
 		writeStderr("LSP handler crash: " + method + " — " + errMsg + "\n");
-		if (idStr !== "") {
+		if (idStr != "") {
 			json = lspErrorResponse(idStr, -32603, "internal error: " + errMsg);
 		}
 	}
@@ -308,7 +308,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 
 	resetCancel(state.db.cancelCtx);
 
-	if (json === "") {
+	if (json == "") {
 		const notifMs = t1 - t0;
 		if (notifMs > 50) {
 			writeStderr("[LSP] " + method + " (notif) " + notifMs + "ms\n");
@@ -323,7 +323,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 	let result = lspFormatMessage(json);
 
 	// Append transitive diagnostics on didOpen (didChange handled in post-drain).
-	if (method === "textDocument/didOpen") {
+	if (method == "textDocument/didOpen") {
 		const textDoc = lspGetObjectField(params, "textDocument");
 		const uri = lspGetField(textDoc, "uri");
 		const path = lspUriToPath(uri);
@@ -372,26 +372,26 @@ test "unknown notification returns empty" {
 	const state = createServerState();
 	const notif = "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"off\"}}";
 	const response = processMessage(notif, state);
-	assert response === "";
+	assert response == "";
 }
 
 test "content length parsing" {
-	assert lspParseContentLength("Content-Length: 52") === 52;
-	assert lspParseContentLength("Content-Length: 0") === 0;
-	assert lspParseContentLength("Content-Type: text") === -1;
+	assert lspParseContentLength("Content-Length: 52") == 52;
+	assert lspParseContentLength("Content-Length: 0") == 0;
+	assert lspParseContentLength("Content-Type: text") == -1;
 }
 
 test "coalesce empty queue" {
 	const q: QueuedMessage[] = [];
 	const r = coalesceQueue(q);
-	assert r.length === 0;
+	assert r.length == 0;
 }
 
 test "coalesce single message" {
 	const q: QueuedMessage[] = [];
 	q.push({ body: "", method: "textDocument/hover", fileUri: "file:///a.ms" });
 	const r = coalesceQueue(q);
-	assert r.length === 1;
+	assert r.length == 1;
 }
 
 test "coalesce deduplicates auto-fired same file" {
@@ -401,9 +401,9 @@ test "coalesce deduplicates auto-fired same file" {
 	q.push({ body: "3", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
 	const r = coalesceQueue(q);
 	// First inlayHint deduped, hover kept, second inlayHint kept
-	assert r.length === 2;
-	assert r[0].body === "2";
-	assert r[1].body === "3";
+	assert r.length == 2;
+	assert r[0].body == "2";
+	assert r[1].body == "3";
 }
 
 test "coalesce keeps different files" {
@@ -411,7 +411,7 @@ test "coalesce keeps different files" {
 	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
 	q.push({ body: "2", method: "textDocument/inlayHint", fileUri: "file:///b.ms" });
 	const r = coalesceQueue(q);
-	assert r.length === 2;
+	assert r.length == 2;
 }
 
 test "coalesce deduplicates didChange same file" {
@@ -419,8 +419,8 @@ test "coalesce deduplicates didChange same file" {
 	q.push({ body: "1", method: "textDocument/didChange", fileUri: "file:///a.ms" });
 	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms" });
 	const r = coalesceQueue(q);
-	assert r.length === 1;
-	assert r[0].body === "2";
+	assert r.length == 1;
+	assert r[0].body == "2";
 }
 
 test "isSuperseded by later didChange" {
@@ -473,7 +473,7 @@ test "wire completion: annotation position offers type keywords only" {
 
 test "wire completion: response is a framed message carrying its id" {
 	const response = kwWireCompletion(kwWireState(), "7", 0, 4);
-	assert response.indexOf("Content-Length:", 0) === 0;
+	assert response.indexOf("Content-Length:", 0) == 0;
 	assert response.indexOf("\"id\":7", 0) > 0;
 }
 

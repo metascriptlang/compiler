@@ -24,7 +24,7 @@ export function getCancelVersion(ctx: CancelCtx): int32 {
 
 // Check if query should abort (version changed since start)
 export function checkCancel(ctx: CancelCtx, startingVersion: int32): boolean {
-	return ctx.version !== startingVersion || ctx.cancelled;
+	return ctx.version != startingVersion || ctx.cancelled;
 }
 
 // Request cancellation (called by LSP on keystroke)
@@ -41,7 +41,7 @@ export function resetCancel(ctx: CancelCtx): void {
 // ===== Tests =====
 test "initial state is not cancelled" {
 	const ctx = createCancelContext();
-	assert ctx.version === 0;
+	assert ctx.version == 0;
 	assert !ctx.cancelled;
 }
 
@@ -54,7 +54,7 @@ test "checkCancel false when version matches" {
 test "requestCancel increments version" {
 	const ctx = createCancelContext();
 	requestCancel(ctx);
-	assert ctx.version === 1;
+	assert ctx.version == 1;
 	assert ctx.cancelled;
 }
 
@@ -68,10 +68,10 @@ test "checkCancel true after requestCancel" {
 test "resetCancel clears flag but keeps version" {
 	const ctx = createCancelContext();
 	requestCancel(ctx);
-	assert ctx.version === 1;
+	assert ctx.version == 1;
 	resetCancel(ctx);
 	assert !ctx.cancelled;
-	assert ctx.version === 1;
+	assert ctx.version == 1;
 }
 
 test "multiple cancels increment version" {
@@ -79,5 +79,5 @@ test "multiple cancels increment version" {
 	requestCancel(ctx);
 	resetCancel(ctx);
 	requestCancel(ctx);
-	assert ctx.version === 2;
+	assert ctx.version == 2;
 }

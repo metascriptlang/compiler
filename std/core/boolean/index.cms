@@ -4,7 +4,7 @@ export function Boolean(v: string): boolean {
 
 // NaN is the one double that is falsy despite being non-zero.
 export function Boolean(v: float64): boolean {
-	return v !== 0.0 && v === v;
+	return v != 0.0 && v == v;
 }
 
 export function Boolean(v: boolean): boolean {

@@ -38,18 +38,18 @@ function main(): void {
 	let g: "row" | "column" | null = "column";
 	let absent: number | null = null;
 
-	console.log("c=" + (c === 200));
-	console.log("d=" + (d === "x"));
-	console.log("g=" + (g === "column"));
-	console.log("presence=" + (c === null));
-	console.log("absent=" + (absent === 200));
+	console.log("c=" + (c == 200));
+	console.log("d=" + (d == "x"));
+	console.log("g=" + (g == "column"));
+	console.log("presence=" + (c == null));
+	console.log("absent=" + (absent == 200));
 
-	if (!(c === 200)) { throw "GUARD RED: Maybe<number> vs number literal"; }
-	if (!(d === "x")) { throw "GUARD RED: Maybe<string> vs string literal"; }
-	if (!(g === "column")) { throw "GUARD RED: Maybe<string-literal union> vs literal"; }
-	if (c === null) { throw "GUARD RED: presence test flipped"; }
-	if (absent === 200) { throw "GUARD RED: an absent carrier compared equal to a member"; }
-	if (c === 201) { throw "GUARD RED: unequal member compared equal"; }
+	if (!(c == 200)) { throw "GUARD RED: Maybe<number> vs number literal"; }
+	if (!(d == "x")) { throw "GUARD RED: Maybe<string> vs string literal"; }
+	if (!(g == "column")) { throw "GUARD RED: Maybe<string-literal union> vs literal"; }
+	if (c == null) { throw "GUARD RED: presence test flipped"; }
+	if (absent == 200) { throw "GUARD RED: an absent carrier compared equal to a member"; }
+	if (c == 201) { throw "GUARD RED: unequal member compared equal"; }
 
 	let w: number | string | null = 200;
 	let sameW: number | string | null = 200;
@@ -59,20 +59,20 @@ function main(): void {
 	let unset: number | string | null = null;
 	let alsoUnset: number | string | null = null;
 
-	console.log("w=" + (w === 200));
-	console.log("pct=" + (pct === "50%"));
-	console.log("crossTag=" + (w === pct));
-	console.log("bothUnset=" + (unset === alsoUnset));
+	console.log("w=" + (w == 200));
+	console.log("pct=" + (pct == "50%"));
+	console.log("crossTag=" + (w == pct));
+	console.log("bothUnset=" + (unset == alsoUnset));
 
-	if (!(w === 200)) { throw "GUARD RED: number slot of a union payload"; }
-	if (!(w === sameW)) { throw "GUARD RED: two carriers holding the same number"; }
-	if (!(pct === "50%")) { throw "GUARD RED: string slot of a union payload"; }
-	if (!(pct === samePct)) { throw "GUARD RED: two carriers holding the same string"; }
-	if (pct === otherPct) { throw "GUARD RED: different strings compared equal"; }
-	if (w === pct) { throw "GUARD RED: different tags compared equal"; }
-	if (w === "50%") { throw "GUARD RED: number slot matched a string literal"; }
-	if (!(unset === alsoUnset)) { throw "GUARD RED: two absent payloads compared unequal"; }
-	if (unset === w) { throw "GUARD RED: an absent payload matched a live one"; }
+	if (!(w == 200)) { throw "GUARD RED: number slot of a union payload"; }
+	if (!(w == sameW)) { throw "GUARD RED: two carriers holding the same number"; }
+	if (!(pct == "50%")) { throw "GUARD RED: string slot of a union payload"; }
+	if (!(pct == samePct)) { throw "GUARD RED: two carriers holding the same string"; }
+	if (pct == otherPct) { throw "GUARD RED: different strings compared equal"; }
+	if (w == pct) { throw "GUARD RED: different tags compared equal"; }
+	if (w == "50%") { throw "GUARD RED: number slot matched a string literal"; }
+	if (!(unset == alsoUnset)) { throw "GUARD RED: two absent payloads compared unequal"; }
+	if (unset == w) { throw "GUARD RED: an absent payload matched a live one"; }
 
 	console.log("GUARD-OK");
 }

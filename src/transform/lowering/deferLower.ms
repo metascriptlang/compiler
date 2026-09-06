@@ -36,7 +36,7 @@ export function lowerDefer(program: Node, ctx: TransformContext): Node {
 
 function hasDefer(stmts: Node[]): boolean {
 	for (const stmt of stmts) {
-		if (stmt.kind === NodeKind.DeferStmt) return true;
+		if (stmt.kind == NodeKind.DeferStmt) return true;
 	}
 	return false;
 }
@@ -172,7 +172,7 @@ function walkStmtList(stmts: Node[]): void {
 function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 	let deferIdx = 0;
 	for (deferIdx = 0; deferIdx < stmts.length; deferIdx += 1) {
-		if (stmts[deferIdx].kind === NodeKind.DeferStmt) break;
+		if (stmts[deferIdx].kind == NodeKind.DeferStmt) break;
 	}
 
 	// Extract defer info
@@ -195,7 +195,7 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 	// If deferBody is already a BlockStmt, use it directly as finallyBody.
 	// Otherwise wrap the expression in an ExprStmt inside a BlockStmt.
 	let finallyBody: Node = emptyBlock;
-	if (deferBody.kind === NodeKind.BlockStmt) {
+	if (deferBody.kind == NodeKind.BlockStmt) {
 		finallyBody = deferBody;
 	} else {
 		finallyBody = makeBlock([makeExprStmt(deferBody, deferLoc)], deferLoc);
@@ -212,18 +212,18 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 }
 
 // ===== Tests =====
-test "no defer passthrough" { assert firstStmtKindAfter("const x = 1;", lowerDefer) === NodeKind.VariableDecl; }
+test "no defer passthrough" { assert firstStmtKindAfter("const x = 1;", lowerDefer) == NodeKind.VariableDecl; }
 
-test "single defer becomes try-catch" { assert firstStmtKindAfter("defer cleanup(); work();", lowerDefer) === NodeKind.TryCatchStmt; }
+test "single defer becomes try-catch" { assert firstStmtKindAfter("defer cleanup(); work();", lowerDefer) == NodeKind.TryCatchStmt; }
 
 test "defer at start" {
-	assert stmtCountAfter("defer cleanup();", lowerDefer) === 1;
-	assert firstStmtKindAfter("defer cleanup();", lowerDefer) === NodeKind.TryCatchStmt;
+	assert stmtCountAfter("defer cleanup();", lowerDefer) == 1;
+	assert firstStmtKindAfter("defer cleanup();", lowerDefer) == NodeKind.TryCatchStmt;
 }
 
-test "defer preserves before stmts" { assert stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) === 2; }
+test "defer preserves before stmts" { assert stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) == 2; }
 
 test "multiple defers nest" {
-	assert stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1;
-	assert firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt;
+	assert stmtCountAfter("defer a(); defer b(); work();", lowerDefer) == 1;
+	assert firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) == NodeKind.TryCatchStmt;
 }

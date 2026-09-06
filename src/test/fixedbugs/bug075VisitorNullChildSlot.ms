@@ -28,7 +28,7 @@ test "bug075: completion context detection survives a decl with no initializer" 
 	const pr = parseSourceLenient(BUG075_SRC);
 	assert pr.ok;
 	const kind = sgDetectCompletionContext(pr.value, 1, 5);
-	assert kind === SgCompletionKind.Identifier;
+	assert kind == SgCompletionKind.Identifier;
 }
 
 test "bug075: detection is stable across every column of the broken file" {
@@ -37,7 +37,7 @@ test "bug075: detection is stable across every column of the broken file" {
 	let seen = 0;
 	for (let col = 1; col <= 10; col = col + 1) {
 		const k = sgDetectCompletionContext(pr.value, 1, col);
-		if (k === SgCompletionKind.Identifier || k === SgCompletionKind.TypeAnnotation) seen = seen + 1;
+		if (k == SgCompletionKind.Identifier || k == SgCompletionKind.TypeAnnotation) seen = seen + 1;
 	}
-	assert seen === 10;
+	assert seen == 10;
 }

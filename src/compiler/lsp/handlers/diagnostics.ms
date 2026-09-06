@@ -34,10 +34,10 @@ let _fmtOptionsCacheValues: FormatOptions[] = [];
 export function getFormatOptions(db: TransAmDb, path: string): FormatOptions {
 	const projectRoot = findProjectRoot(path);
 	for (let i = 0; i < _fmtOptionsCacheKeys.length; i = i + 1) {
-		if (_fmtOptionsCacheKeys[i] === projectRoot) return _fmtOptionsCacheValues[i];
+		if (_fmtOptionsCacheKeys[i] == projectRoot) return _fmtOptionsCacheValues[i];
 	}
 	let opts = defaultFormatOptions();
-	if (projectRoot !== "") {
+	if (projectRoot != "") {
 		const fmtCfg = loadFmtSection(projectRoot);
 		opts = applyFmtSection(opts, fmtCfg);
 	}
@@ -96,7 +96,7 @@ export function splitLines(s: string): string[] {
 	const lines: string[] = [];
 	let start = 0;
 	for (let i = 0; i < s.byteLength; i = i + 1) {
-		if (s[i] === "\n") {
+		if (s[i] == "\n") {
 			lines.push(s.slice(start, i));
 			start = i + 1;
 		}
@@ -110,27 +110,27 @@ export function splitLines(s: string): string[] {
 // Describe the formatting difference between an original and formatted line.
 export function describeFmtDiff(orig: string, fmt: string): string {
 	// Both empty — no difference worth reporting
-	if (orig.byteLength === 0 && fmt.byteLength === 0) return "";
+	if (orig.byteLength == 0 && fmt.byteLength == 0) return "";
 	// Blank original, non-blank formatted — missing content
-	if (orig.byteLength === 0) return "Unexpected blank line";
+	if (orig.byteLength == 0) return "Unexpected blank line";
 	// Deleted line (formatted version removed it entirely)
-	if (fmt.byteLength === 0) return "Delete this line";
+	if (fmt.byteLength == 0) return "Delete this line";
 	// Check indentation difference
 	let origIndent = 0;
-	while (origIndent < orig.byteLength && (orig[origIndent] === " " || orig[origIndent] === "\t")) {
+	while (origIndent < orig.byteLength && (orig[origIndent] == " " || orig[origIndent] == "\t")) {
 		origIndent = origIndent + 1;
 	}
 	let fmtIndent = 0;
-	while (fmtIndent < fmt.byteLength && (fmt[fmtIndent] === " " || fmt[fmtIndent] === "\t")) {
+	while (fmtIndent < fmt.byteLength && (fmt[fmtIndent] == " " || fmt[fmtIndent] == "\t")) {
 		fmtIndent = fmtIndent + 1;
 	}
-	if (origIndent !== fmtIndent) {
+	if (origIndent != fmtIndent) {
 		if (fmtIndent > origIndent) return "Indent this line";
 		return "Unindent this line";
 	}
 	// Check trailing whitespace
 	let origEnd = orig.byteLength;
-	while (origEnd > 0 && (orig[origEnd - 1] === " " || orig[origEnd - 1] === "\t")) {
+	while (origEnd > 0 && (orig[origEnd - 1] == " " || orig[origEnd - 1] == "\t")) {
 		origEnd = origEnd - 1;
 	}
 	if (origEnd < orig.byteLength) return "Remove trailing whitespace";
@@ -158,8 +158,8 @@ export function detectLineIndent(line: string): LineIndent {
 	let isMixed = false;
 	let seenSpace = false;
 	while (indentEnd < line.length) {
-		if (line[indentEnd] === " ") { hasSpace = true; seenSpace = true; }
-		else if (line[indentEnd] === "\t") {
+		if (line[indentEnd] == " ") { hasSpace = true; seenSpace = true; }
+		else if (line[indentEnd] == "\t") {
 			hasTab = true;
 			if (seenSpace) { isMixed = true; }
 		}
@@ -167,7 +167,7 @@ export function detectLineIndent(line: string): LineIndent {
 		indentEnd = indentEnd + 1;
 	}
 	let trailStart = line.length;
-	while (trailStart > 0 && (line[trailStart - 1] === " " || line[trailStart - 1] === "\t")) {
+	while (trailStart > 0 && (line[trailStart - 1] == " " || line[trailStart - 1] == "\t")) {
 		trailStart = trailStart - 1;
 	}
 	return { indentEnd, hasSpace, hasTab, isMixed, trailStart };
@@ -178,7 +178,7 @@ export function detectLineIndent(line: string): LineIndent {
 function checkFormatViolations(db: TransAmDb, path: string): string[] {
 	const result: string[] = [];
 	const source = dbGetSource(db, path);
-	if (source === "") return result;
+	if (source == "") return result;
 
 	const options = getFormatOptions(db, path);
 	const useTabs = options.useTabs;
@@ -186,19 +186,19 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 
 	// Strip trailing empty line from split (artifact of trailing newline)
 	let lineCount = lines.length;
-	while (lineCount > 0 && lines[lineCount - 1] === "") {
+	while (lineCount > 0 && lines[lineCount - 1] == "") {
 		lineCount = lineCount - 1;
 	}
 
 	for (let i = 0; i < lineCount; i = i + 1) {
 		const line = lines[i];
-		if (line.length === 0) continue;
+		if (line.length == 0) continue;
 
 		const info = detectLineIndent(line);
 		if (info.indentEnd > 0 && info.indentEnd < line.length) {
 			// Skip block comment continuation lines ( * text) — spaces before * are alignment
 			const afterIndent = line.byteAt(info.indentEnd);
-			if (afterIndent === "*".code) continue;
+			if (afterIndent == "*".code) continue;
 			if (info.isMixed) {
 				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0, 0));
 				continue;
@@ -222,10 +222,10 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 
 // Extract filename from absolute path (for diagnostic messages)
 function lspBasename(path: string): string {
-	if (path === "") return "";
+	if (path == "") return "";
 	let lastSlash = -1;
 	for (let i = path.byteLength - 1; i >= 0; i = i - 1) {
-		if (path[i] === "/") { lastSlash = i; break; }
+		if (path[i] == "/") { lastSlash = i; break; }
 	}
 	if (lastSlash >= 0) return path.slice(lastSlash + 1, path.byteLength);
 	return path;
@@ -239,7 +239,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	let diagArray = "[";
 	let diagCount = 0;
 
-	if (ctx !== null) {
+	if (ctx != null) {
 		const diags = sgCollectDiagnostics(ctx);
 		for (let i = 0; i < diags.length; i = i + 1) {
 			if (diagCount > 0) diagArray = diagArray + ",";
@@ -281,19 +281,19 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 
 	// Circular dependency warnings — at the import declaration line
 	const circProgram = dbParse(db, path);
-	if (circProgram !== null && circProgram.kind === NodeKind.Program) {
+	if (circProgram != null && circProgram.kind == NodeKind.Program) {
 		const circPd = circProgram.data as ProgramData;
 		const circFileId = getFileId(db.fileInput, path);
 		for (let ci = 0; ci < circPd.programStmts.length; ci = ci + 1) {
 			let circStmt = circPd.programStmts[ci];
-			if (circStmt.kind === NodeKind.ExportDecl) {
+			if (circStmt.kind == NodeKind.ExportDecl) {
 				const ced = circStmt.data as ExportDeclData;
 				circStmt = ced.exportedDecl;
 			}
-			if (circStmt.kind === NodeKind.ImportDecl) {
+			if (circStmt.kind == NodeKind.ImportDecl) {
 				const circImp = circStmt.data as ImportDeclData;
 				const circTarget = dbResolveImport(db, path,circImp.importSource);
-				if (circTarget !== "") {
+				if (circTarget != "") {
 					const circTargetId = getFileId(db.fileInput, circTarget);
 					if (circTargetId >= 0 && circFileId >= 0) {
 						const cycle = detectCycle(db.moduleDeps, circFileId, circTargetId);
@@ -306,7 +306,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 								cyclePath = cyclePath + lspBasename(cp);
 							}
 							cyclePath = cyclePath + " -> " + lspBasename(path);
-							const circLine = circStmt.location !== null ? circStmt.location.line - 1 : 0;
+							const circLine = circStmt.location != null ? circStmt.location.line - 1 : 0;
 							if (diagCount > 0) diagArray = diagArray + ",";
 							diagArray = diagArray + lspFmtDiagnostic(
 								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0, 0
@@ -329,7 +329,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	}
 
 	// build.ms validation warnings (entry path not found, etc.)
-	if (path.length > 9 && path.slice(path.length - 9, path.length) === "/build.ms") {
+	if (path.length > 9 && path.slice(path.length - 9, path.length) == "/build.ms") {
 		const buildSource = dbGetSource(db, path);
 		const buildWarnings = validateBuildConfig(dirname(path), buildSource);
 		for (let bw = 0; bw < buildWarnings.length; bw = bw + 1) {
@@ -354,21 +354,21 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 	if (fileId < 0) return;
 	// Clear stale edges for this file
 	clearImportsFor(db.moduleDeps, fileId);
-	if (program === null) return;
-	if (program.kind !== NodeKind.Program) return;
+	if (program == null) return;
+	if (program.kind != NodeKind.Program) return;
 	const data = program.data as ProgramData;
 	let loadCount = 0;
 	for (let i = 0; i < data.programStmts.length; i = i + 1) {
 		let stmt = data.programStmts[i];
 		// Unwrap ExportDecl (re-exports)
-		if (stmt.kind === NodeKind.ExportDecl) {
+		if (stmt.kind == NodeKind.ExportDecl) {
 			const ed = stmt.data as ExportDeclData;
 			stmt = ed.exportedDecl;
 		}
-		if (stmt.kind === NodeKind.ImportDecl) {
+		if (stmt.kind == NodeKind.ImportDecl) {
 			const imp = stmt.data as ImportDeclData;
 			const targetPath = dbResolveImport(db, path, imp.importSource);
-			if (targetPath === "") continue;
+			if (targetPath == "") continue;
 			const alreadyLoaded = getFileId(db.fileInput, targetPath) >= 0;
 			lspEnsureFileLoaded(db, targetPath);
 			if (!alreadyLoaded) loadCount = loadCount + 1;
@@ -395,17 +395,17 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 	const fileId = getFileId(db.fileInput, path);
 	if (fileId < 0) return "";
 	const deps = getTransitiveDependents(db.moduleDeps, fileId);
-	if (deps.length === 0) return "";
+	if (deps.length == 0) return "";
 
 	let result = "";
 	for (let i = 0; i < deps.length; i = i + 1) {
 		const depPath = getFilePath(db.fileInput, deps[i]);
-		if (depPath === "") continue;
+		if (depPath == "") continue;
 		const depUri = lspPathToUri(depPath);
 		const diagJson = buildDiagnosticsJson(depUri, db, depPath);
 		// Skip publish if diagnostics unchanged since last time
 		const cached = _lastDiagCache.get(depPath) ?? "";
-		if (diagJson === cached) continue;
+		if (diagJson == cached) continue;
 		_lastDiagCache.set(depPath, diagJson);
 		const notif = lspNotification("textDocument/publishDiagnostics", diagJson);
 		result = result + lspFormatMessage(notif);

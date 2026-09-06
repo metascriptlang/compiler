@@ -28,14 +28,14 @@ function bug060Describe(): string {
 }
 
 test "bug060: module const referenced only from an assert message survives" {
-	assert 1 === 1, "const was stripped: " + BUG060_ONLY_IN_MESSAGE;
+	assert 1 == 1, "const was stripped: " + BUG060_ONLY_IN_MESSAGE;
 }
 
 test "bug060: function called only from an assert message survives" {
-	assert 1 === 1, "helper was stripped: " + bug060Describe();
+	assert 1 == 1, "helper was stripped: " + bug060Describe();
 }
 
 test "bug060: enum toString called only from an assert message survives" {
 	const k = Bug060Kind.Second;
-	assert k === Bug060Kind.Second, "enum toString was stripped: " + k.toString();
+	assert k == Bug060Kind.Second, "enum toString was stripped: " + k.toString();
 }

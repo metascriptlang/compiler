@@ -25,19 +25,19 @@ function main(): number {
 	let s = id("ab");
 	s = s + id("c");
 	s = s + id("d");
-	if (s.length !== 4) {
+	if (s.length != 4) {
 		console.log("GUARD RED: ascii length=" + s.length + " expected 4");
 		failures = failures + 1;
 	}
 	s = s + id("é");
-	if (s.length !== 5) {
+	if (s.length != 5) {
 		console.log("GUARD RED: stale ascii cache, length=" + s.length + " expected 5");
 		failures = failures + 1;
 	}
 
 	// Control: the same content built without ever caching an ASCII answer.
 	const fresh = id("abcdé");
-	if (fresh.length !== 5) {
+	if (fresh.length != 5) {
 		console.log("GUARD RED: fresh non-ascii length=" + fresh.length + " expected 5");
 		failures = failures + 1;
 	}
@@ -46,7 +46,7 @@ function main(): number {
 	let u = id("abcd");
 	u = u + id("ef");
 	u = u + id("ü");
-	if (u.length !== 7) {
+	if (u.length != 7) {
 		console.log("GUARD RED: realloc-path length=" + u.length + " expected 7");
 		failures = failures + 1;
 	}
@@ -55,21 +55,21 @@ function main(): number {
 	// reports code units, and charAt still indexes them.
 	let v = id("abc");
 	v = v + id("d");
-	if (v.length !== 4 || v.charAt(2) !== "c") {
+	if (v.length != 4 || v.charAt(2) != "c") {
 		console.log("GUARD RED: ascii fast path broken, length=" + v.length + " charAt(2)=" + v.charAt(2));
 		failures = failures + 1;
 	}
 
 	// Indexing past a multi-byte character stays in UTF-16 space.
 	const w = id("aé");
-	if (w.length !== 2 || w.charAt(1) !== "é") {
+	if (w.length != 2 || w.charAt(1) != "é") {
 		console.log("GUARD RED: non-ascii charAt, length=" + w.length + " charAt(1)=" + w.charAt(1));
 		failures = failures + 1;
 	}
 
-	if (failures === 0) console.log("GUARD-OK stringAsciiCacheStale");
+	if (failures == 0) console.log("GUARD-OK stringAsciiCacheStale");
 	return failures;
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

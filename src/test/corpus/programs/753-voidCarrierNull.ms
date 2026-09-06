@@ -11,16 +11,16 @@ async function h(): Promise<void> {}
 async function main(): Promise<void> {
 	const n = f();
 	console.log("n=" + n);
-	console.log(n === null);
+	console.log(n == null);
 	const m = n;
 	console.log("m=" + m);
 	let x: void = f();
 	x = f();
-	console.log(x === null);
+	console.log(x == null);
 	const aw = await h();
 	console.log("aw=" + aw);
 	const t = true ? f() : f();
-	console.log(t === null);
+	console.log(t == null);
 }
 
 await main();

@@ -22,8 +22,8 @@ import { transformProgram } from "../transform/index";
 // ===== Public Entry Point =====
 
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
-	if (checkerCtx === null) return program;  // test mode — skip analysis
-	if (checkerCtx.gcMode === GcMode.None || checkerCtx.gcMode === GcMode.Manual) return program;
+	if (checkerCtx == null) return program;  // test mode — skip analysis
+	if (checkerCtx.gcMode == GcMode.None || checkerCtx.gcMode == GcMode.Manual) return program;
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
 	const injected = injectProgram(program, dctx);
@@ -54,17 +54,17 @@ function analyzePipeline(input: string): Node {
 }
 
 function getStmtCount(program: Node): number {
-	if (program === null) return 0;
-	if (program.kind !== NodeKind.Program) return 0;
+	if (program == null) return 0;
+	if (program.kind != NodeKind.Program) return 0;
 	const d = program.data as ProgramData;
 	return d.programStmts.length;
 }
 
 test "primitives pass through unchanged" {
 	const result = analyzePipeline("const x = 1; const y = 2;");
-	assert result !== null;
+	assert result != null;
 	// Primitive-only code: no RC calls inserted
-	assert getStmtCount(result) === 2;
+	assert getStmtCount(result) == 2;
 }
 
 test "null checker skips analysis" {
@@ -75,20 +75,20 @@ test "null checker skips analysis" {
 	}
 	const program = parseResult.value;
 	const result = analyzeProgram(program, null as unknown as CheckerContext);
-	assert result !== null;
+	assert result != null;
 	// Should return program unchanged
-	assert getStmtCount(result) === 1;
+	assert getStmtCount(result) == 1;
 }
 
 test "function with primitives" {
 	const result = analyzePipeline("function add(a: number, b: number): number { return a + b; }");
-	assert result !== null;
+	assert result != null;
 }
 
 test "empty program" {
 	const result = analyzePipeline("");
-	assert result !== null;
-	assert getStmtCount(result) === 0;
+	assert result != null;
+	assert getStmtCount(result) == 0;
 }
 
 // Phase E field-level move patterns are covered by the full integration test suite (2186+ tests).

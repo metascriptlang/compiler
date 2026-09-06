@@ -16,7 +16,7 @@ import { detectUnionDisc, parseDiscKey } from "../discDetect";
 export macro jsonValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
 	let tt = t.nodeType;
-	if (tt.kind === NodeKind.TypeGeneric) {
+	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
 
@@ -26,26 +26,26 @@ export macro jsonValueOf(t: Node): Node {
 	// Non-builtin Identifier (enum / type alias) → `_jsonArrayOfInts<T>` generic.
 	// TypeObject element (struct/interface) → `_jsonArrayOfStructs<T>` generic.
 	// IIFE-closure / function / union element types remain rejected.
-	if (tt.kind === NodeKind.TypeArray) {
+	if (tt.kind == NodeKind.TypeArray) {
 		const elemType: Node = tt.typExprElement;
 		// Identifier element name — empty if elem is TypeObject (struct).
 		let en: string = "";
 		let elemIsStruct: boolean = false;
-		if (elemType.kind === NodeKind.Identifier) {
+		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
-		} else if (elemType.kind === NodeKind.TypeObject) {
+		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
-			if (en === "") {
+			if (en == "") {
 				error("jsonValueOf: anonymous struct element arrays unsupported (must name struct via interface/class)", t);
 			}
-		} else if (elemType.kind === NodeKind.TypeGeneric) {
+		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element
 			const peeled: Node = elemType.typExprArgs[0];
-			if (peeled.kind === NodeKind.TypeObject) {
+			if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
-				if (en === "") {
+				if (en == "") {
 					error("jsonValueOf: anonymous struct element arrays unsupported", t);
 				}
 			} else {
@@ -54,11 +54,11 @@ export macro jsonValueOf(t: Node): Node {
 		} else {
 			error("jsonValueOf: unsupported array element kind=" + elemType.kind + " (only Identifier or TypeObject supported)", t);
 		}
-		const isBuiltin: boolean = en === "string" || en === "boolean"
-			|| en === "number" || en === "float32" || en === "float64"
-			|| en === "int8" || en === "int16" || en === "int32" || en === "int64"
-			|| en === "uint8" || en === "uint16" || en === "uint32";
-		if (en === "bigint") {
+		const isBuiltin: boolean = en == "string" || en == "boolean"
+			|| en == "number" || en == "float32" || en == "float64"
+			|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
+			|| en == "uint8" || en == "uint16" || en == "uint32";
+		if (en == "bigint") {
 			error("jsonValueOf: bigint arrays are not JSON-serializable — convert elements with .toString() first", t);
 		}
 
@@ -95,18 +95,18 @@ export macro jsonValueOf(t: Node): Node {
 		// Builtin atomic element → per-element-type fast helper.
 		// IF-ELSE not match: macro VM string-match dispatch always picks `_`.
 		let helperName: string = "jsonArrayOfInt64";
-		if (en === "string") helperName = "jsonArrayOfStrings";
-		else if (en === "boolean") helperName = "jsonArrayOfBooleans";
-		else if (en === "number") helperName = "jsonArrayOfNumbers";
-		else if (en === "float64") helperName = "jsonArrayOfNumbers";
-		else if (en === "float32") helperName = "jsonArrayOfFloat32";
-		else if (en === "int8") helperName = "jsonArrayOfInt8";
-		else if (en === "int16") helperName = "jsonArrayOfInt16";
-		else if (en === "int32") helperName = "jsonArrayOfInt32";
-		else if (en === "int64") helperName = "jsonArrayOfInt64";
-		else if (en === "uint8") helperName = "jsonArrayOfUint8";
-		else if (en === "uint16") helperName = "jsonArrayOfUint16";
-		else if (en === "uint32") helperName = "jsonArrayOfUint32";
+		if (en == "string") helperName = "jsonArrayOfStrings";
+		else if (en == "boolean") helperName = "jsonArrayOfBooleans";
+		else if (en == "number") helperName = "jsonArrayOfNumbers";
+		else if (en == "float64") helperName = "jsonArrayOfNumbers";
+		else if (en == "float32") helperName = "jsonArrayOfFloat32";
+		else if (en == "int8") helperName = "jsonArrayOfInt8";
+		else if (en == "int16") helperName = "jsonArrayOfInt16";
+		else if (en == "int32") helperName = "jsonArrayOfInt32";
+		else if (en == "int64") helperName = "jsonArrayOfInt64";
+		else if (en == "uint8") helperName = "jsonArrayOfUint8";
+		else if (en == "uint16") helperName = "jsonArrayOfUint16";
+		else if (en == "uint32") helperName = "jsonArrayOfUint32";
 		return {
 			kind: NodeKind.CallExpr,
 			line: t.line,
@@ -133,7 +133,7 @@ export macro jsonValueOf(t: Node): Node {
 	//   "boolean" → BooleanLiteral pattern, jsonBool disc value
 	//   "enum"    → MemberExpr(EnumName, MemberName) pattern, jsonString member name
 	//   default   → StringLiteral pattern, jsonString variantKey value
-	if (tt.kind === NodeKind.TypeUnion) {
+	if (tt.kind == NodeKind.TypeUnion) {
 		// V3 — Tagged union (DU) encoding. Auto-detect disc info via shared
 		// helper (combines bridge-populated fields + TS-style fallback).
 		// info.variants pairs each disc key with its peeled variant struct
@@ -143,7 +143,7 @@ export macro jsonValueOf(t: Node): Node {
 		const discKind: string = info.discKind;
 		const variants = info.variants;
 
-		if (discField === "" || variants.length === 0) {
+		if (discField == "" || variants.length == 0) {
 			error("jsonValueOf: cannot determine discriminator for union type — variants must share a literal-typed disc field", t);
 		}
 
@@ -151,7 +151,7 @@ export macro jsonValueOf(t: Node): Node {
 		for (const variant of variants) {
 			const variantKey: string = variant.key;
 			const v: Node = variant.member;
-			if (v.kind !== NodeKind.TypeObject) {
+			if (v.kind != NodeKind.TypeObject) {
 				error("jsonValueOf: union variants must be struct types (got kind=" + v.kind + ")", t);
 			}
 
@@ -160,14 +160,14 @@ export macro jsonValueOf(t: Node): Node {
 			const dp = parseDiscKey(discKind, variantKey);
 			let pattern: Node;
 			let discValueNode: Node;
-			if (discKind === "boolean") {
+			if (discKind == "boolean") {
 				pattern = { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue };
 				discValueNode = {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
 					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonBool" },
 					arguments: [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: dp.boolValue }],
 				};
-			} else if (discKind === "enum") {
+			} else if (discKind == "enum") {
 				pattern = {
 					kind: NodeKind.MemberExpr, line: t.line, column: t.column,
 					object: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: dp.enumName },
@@ -196,7 +196,7 @@ export macro jsonValueOf(t: Node): Node {
 			while (fi < v.typExprFieldNames.length) {
 				const fname: string = v.typExprFieldNames[fi];
 				const ft: Node = v.typExprFieldTypes[fi];
-				if (fname !== discField) {
+				if (fname != discField) {
 					vKeyNodes.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fname });
 					const memberExpr: Node = {
 						kind: NodeKind.MemberExpr, line: t.line, column: t.column,
@@ -240,7 +240,7 @@ export macro jsonValueOf(t: Node): Node {
 	}
 
 	// Non-struct (atomic) types — emit a direct builder call on `t`.
-	if (tt.kind !== NodeKind.TypeObject) {
+	if (tt.kind != NodeKind.TypeObject) {
 		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
 		// Bridge emits StringLiteral/BooleanLiteral nodes for these — the
 		// runtime field value is just a regular string/bool, so route to
@@ -252,7 +252,7 @@ export macro jsonValueOf(t: Node): Node {
 			NodeKind.BooleanLiteral => "jsonBool",
 			_ => "",
 		};
-		if (literalBuilder !== "") {
+		if (literalBuilder != "") {
 			return {
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
 				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: literalBuilder },
@@ -261,7 +261,7 @@ export macro jsonValueOf(t: Node): Node {
 		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions
 		// land as TypeUnion / TypeFunction kinds (not Identifier) → reject.
-		if (tt.kind !== NodeKind.Identifier) {
+		if (tt.kind != NodeKind.Identifier) {
 			error("jsonValueOf: unsupported field type — only atomic types, atomic arrays, and structs are supported in V1", t);
 		}
 		const tn: string = tt.name;
@@ -269,7 +269,7 @@ export macro jsonValueOf(t: Node): Node {
 		// jsonInt int64 carrier corrupts values >= 2^63. JSON.stringify(1n)
 		// throws in Node; the macro knows the static type, so refuse here at
 		// compile time. Escape hatch: .toString().
-		if (tn === "bigint") {
+		if (tn == "bigint") {
 			error("jsonValueOf: bigint is not JSON-serializable — convert with .toString() first (JSON.stringify throws on BigInt in Node too)", t);
 		}
 		// Unknown Identifier names fall through to jsonInt — mirrors @builtin's
@@ -284,7 +284,7 @@ export macro jsonValueOf(t: Node): Node {
 		// jsonInt takes int64 — sized-int / enum / primitive-alias fields
 		// need a widening cast so the call type-checks. jsonString/jsonBool/
 		// jsonNumber accept their input directly.
-		const argNode: Node = builderName === "jsonInt"
+		const argNode: Node = builderName == "jsonInt"
 			? {
 				kind: NodeKind.TypeAssertion,
 				line: t.line,

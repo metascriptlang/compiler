@@ -36,11 +36,11 @@ function main(): int32 {
 	const y = "zzz";
 	const eq = x == y;
 	console.log("observed eq=" + (eq ? "true" : "false") + " userEqCalls=" + userEqCalls.toString());
-	if (userEqCalls === 0) { console.log("GUARD-FAIL local `==` never called — prelude won the tie"); return 1; }
+	if (userEqCalls == 0) { console.log("GUARD-FAIL local `==` never called — prelude won the tie"); return 1; }
 	if (!eq) { console.log("GUARD-FAIL prelude `==` decided the comparison"); return 1; }
 	console.log("GUARD-OK operatorScopeTieBreak");
 	return 0;
 }
 
 const guardRc = main();
-if (guardRc !== 0) process.exit(guardRc);
+if (guardRc != 0) process.exit(guardRc);

@@ -117,44 +117,44 @@ function isWeekend(day: string): boolean {
 // --- Tests ---
 
 test "enum match returns correct variant name" {
-	assert colorName(Color.Red) === "red";
-	assert colorName(Color.Green) === "green";
-	assert colorName(Color.Blue) === "blue";
+	assert colorName(Color.Red) == "red";
+	assert colorName(Color.Green) == "green";
+	assert colorName(Color.Blue) == "blue";
 }
 
 test "enum alternatives with pipe" {
-	assert suitColor(Suit.Hearts) === "red";
-	assert suitColor(Suit.Diamonds) === "red";
-	assert suitColor(Suit.Clubs) === "black";
-	assert suitColor(Suit.Spades) === "black";
+	assert suitColor(Suit.Hearts) == "red";
+	assert suitColor(Suit.Diamonds) == "red";
+	assert suitColor(Suit.Clubs) == "black";
+	assert suitColor(Suit.Spades) == "black";
 }
 
 test "enum match with arithmetic" {
-	assert calc(Op.Add, 10, 3) === 13;
-	assert calc(Op.Sub, 10, 3) === 7;
-	assert calc(Op.Mul, 10, 3) === 30;
+	assert calc(Op.Add, 10, 3) == 13;
+	assert calc(Op.Sub, 10, 3) == 7;
+	assert calc(Op.Mul, 10, 3) == 30;
 }
 
 test "number match with alternatives and wildcard" {
-	assert classify(0) === "zero";
-	assert classify(1) === "one";
-	assert classify(3) === "small prime";
-	assert classify(7) === "small prime";
-	assert classify(4) === "other";
+	assert classify(0) == "zero";
+	assert classify(1) == "one";
+	assert classify(3) == "small prime";
+	assert classify(7) == "small prime";
+	assert classify(4) == "other";
 }
 
 test "number match for HTTP status codes" {
-	assert httpStatus(200) === "OK";
-	assert httpStatus(404) === "Not Found";
-	assert httpStatus(500) === "Server Error";
-	assert httpStatus(999) === "Unknown";
+	assert httpStatus(200) == "OK";
+	assert httpStatus(404) == "Not Found";
+	assert httpStatus(500) == "Server Error";
+	assert httpStatus(999) == "Unknown";
 }
 
 test "string match" {
-	assert greet("en") === "hello";
-	assert greet("es") === "hola";
-	assert greet("fr") === "bonjour";
-	assert greet("de") === "hi";
+	assert greet("en") == "hello";
+	assert greet("es") == "hola";
+	assert greet("fr") == "bonjour";
+	assert greet("de") == "hi";
 }
 
 test "string match with alternatives" {
@@ -165,16 +165,16 @@ test "string match with alternatives" {
 }
 
 test "string alternatives for weekend check" {
-	assert isWeekend("sat") === true;
-	assert isWeekend("sun") === true;
-	assert isWeekend("mon") === false;
+	assert isWeekend("sat") == true;
+	assert isWeekend("sun") == true;
+	assert isWeekend("mon") == false;
 }
 
 test "block arms returning values" {
-	assert describe(0) === "nothing";
-	assert describe(1) === "single item";
-	assert describe(2) === "two items";
-	assert describe(99) === "many";
+	assert describe(0) == "nothing";
+	assert describe(1) == "single item";
+	assert describe(2) == "two items";
+	assert describe(99) == "many";
 }
 
 test "statement-form match with side effects" {
@@ -185,11 +185,11 @@ test "statement-form match with side effects" {
 		Color.Blue => { result = "b"; },
 		_ => { result = "?"; },
 	};
-	assert result === "g";
+	assert result == "g";
 }
 
 test "nested match via function composition" {
-	assert seasonActivity(Season.Summer) === "swim (hot)";
-	assert seasonActivity(Season.Winter) === "ski (cold)";
-	assert seasonActivity(Season.Spring) === "garden (mild)";
+	assert seasonActivity(Season.Summer) == "swim (hot)";
+	assert seasonActivity(Season.Winter) == "ski (cold)";
+	assert seasonActivity(Season.Spring) == "garden (mild)";
 }

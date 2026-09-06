@@ -157,39 +157,39 @@ export function cborArrayOfUint32(arr: uint32[]): CborValue {
 
 test "cborInt zero" {
 	const v = cborInt(0 as int64);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (0 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (0 as int64);
 }
 
 test "cborInt positive" {
 	const v = cborInt(42 as int64);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (42 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (42 as int64);
 }
 
 test "cborInt negative" {
 	const v = cborInt(-7 as int64);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (-7 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (-7 as int64);
 }
 
 test "cborInt max int64" {
 	// 2^63 - 1 = 9223372036854775807
 	const v = cborInt(9223372036854775807 as int64);
-	assert v.kind === CborKind.Int;
-	assert v.intVal === (9223372036854775807 as int64);
+	assert v.kind == CborKind.Int;
+	assert v.intVal == (9223372036854775807 as int64);
 }
 
 test "cborText empty" {
 	const v = cborText("");
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "";
 }
 
 test "cborText utf8" {
 	const v = cborText("héllo 🌍");
-	assert v.kind === CborKind.Text;
-	assert v.textVal === "héllo 🌍";
+	assert v.kind == CborKind.Text;
+	assert v.textVal == "héllo 🌍";
 }
 
 // cborBytes shape verified in encoder/decoder round-trip tests where actual
@@ -198,89 +198,89 @@ test "cborText utf8" {
 test "cborArray empty" {
 	const items: CborValue[] = [];
 	const v = cborArray(items);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 0;
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 0;
 }
 
 test "cborArray nested" {
 	const items: CborValue[] = [cborInt(1 as int64), cborInt(2 as int64), cborInt(3 as int64)];
 	const v = cborArray(items);
-	assert v.kind === CborKind.Array;
-	assert v.items.length === 3;
-	assert v.items[0].kind === CborKind.Int;
-	assert v.items[2].kind === CborKind.Int;
-	assert v.items[2].intVal === (3 as int64);
+	assert v.kind == CborKind.Array;
+	assert v.items.length == 3;
+	assert v.items[0].kind == CborKind.Int;
+	assert v.items[2].kind == CborKind.Int;
+	assert v.items[2].intVal == (3 as int64);
 }
 
 test "cborMap any-keyed" {
 	const keys: CborValue[] = [cborInt(1 as int64), cborInt(2 as int64)];
 	const vals: CborValue[] = [cborText("one"), cborText("two")];
 	const v = cborMap(keys, vals);
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 2;
-	assert v.values.length === 2;
-	assert v.keys[0].kind === CborKind.Int;
-	assert v.keys[0].intVal === (1 as int64);
-	assert v.values[1].kind === CborKind.Text;
-	assert v.values[1].textVal === "two";
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 2;
+	assert v.values.length == 2;
+	assert v.keys[0].kind == CborKind.Int;
+	assert v.keys[0].intVal == (1 as int64);
+	assert v.values[1].kind == CborKind.Text;
+	assert v.values[1].textVal == "two";
 }
 
 test "cborTextMap convenience wrapper" {
 	const keys: string[] = ["name", "age"];
 	const vals: CborValue[] = [cborText("Alice"), cborInt(30 as int64)];
 	const v = cborTextMap(keys, vals);
-	assert v.kind === CborKind.Map;
-	assert v.keys.length === 2;
-	assert v.keys[0].kind === CborKind.Text;
-	assert v.keys[0].textVal === "name";
-	assert v.values[1].kind === CborKind.Int;
+	assert v.kind == CborKind.Map;
+	assert v.keys.length == 2;
+	assert v.keys[0].kind == CborKind.Text;
+	assert v.keys[0].textVal == "name";
+	assert v.values[1].kind == CborKind.Int;
 }
 
 test "cborTag" {
 	const tagged = cborText("2026-05-09");
 	const v = cborTag(0 as int64, tagged); // tag 0 = standard datetime string
-	assert v.kind === CborKind.Tag;
-	assert v.tagNum === (0 as int64);
-	assert v.tagged.kind === CborKind.Text;
+	assert v.kind == CborKind.Tag;
+	assert v.tagNum == (0 as int64);
+	assert v.tagged.kind == CborKind.Text;
 }
 
 test "cborBool true" {
 	const v = cborBool(true);
-	assert v.kind === CborKind.Bool;
-	assert v.boolVal === true;
+	assert v.kind == CborKind.Bool;
+	assert v.boolVal == true;
 }
 
 test "cborBool false" {
 	const v = cborBool(false);
-	assert v.kind === CborKind.Bool;
-	assert v.boolVal === false;
+	assert v.kind == CborKind.Bool;
+	assert v.boolVal == false;
 }
 
 test "cborNull" {
 	const v = cborNull();
-	assert v.kind === CborKind.Null;
+	assert v.kind == CborKind.Null;
 }
 
 test "cborUndefined" {
 	const v = cborUndefined();
-	assert v.kind === CborKind.Undefined;
+	assert v.kind == CborKind.Undefined;
 }
 
 test "cborFloat" {
 	const v = cborFloat(3.14);
-	assert v.kind === CborKind.Float;
+	assert v.kind == CborKind.Float;
 	// allow tiny precision drift
 	assert v.floatVal > 3.13 && v.floatVal < 3.15;
 }
 
 test "cborFloat zero" {
 	const v = cborFloat(0.0);
-	assert v.kind === CborKind.Float;
-	assert v.floatVal === 0.0;
+	assert v.kind == CborKind.Float;
+	assert v.floatVal == 0.0;
 }
 
 test "cborSimple" {
 	const v = cborSimple(42);
-	assert v.kind === CborKind.Simple;
-	assert v.simpleVal === 42;
+	assert v.kind == CborKind.Simple;
+	assert v.simpleVal == 42;
 }

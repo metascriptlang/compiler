@@ -112,7 +112,7 @@ export function cleanup(): void {
 
 export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
 	const result = msCryptoHashString(algorithm, data, encoding);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(result);
@@ -126,7 +126,7 @@ export function md5(data: string, encoding: string = "hex"): Result<string, Cryp
 
 export function hashBuffer(algorithm: string, data: string): Result<string, CryptoError> {
 	const result = msCryptoHashBuffer(algorithm, data);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(result);
@@ -141,7 +141,7 @@ export function hmac(
 	encoding: string = "hex"
 ): Result<string, CryptoError> {
 	const result = msCryptoHmacString(algorithm, key, data, encoding);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
 	}
 	return Result.ok(result);
@@ -149,7 +149,7 @@ export function hmac(
 
 export function hmacBuffer(algorithm: string, key: string, data: string): Result<string, CryptoError> {
 	const result = msCryptoHmacBuffer(algorithm, key, data);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
 	}
 	return Result.ok(result);
@@ -159,7 +159,7 @@ export function hmacBuffer(algorithm: string, key: string, data: string): Result
 
 export function randomBytes(size: number): Result<string, CryptoError> {
 	const result = msCryptoRandomBytes(size);
-	if (result === "") {
+	if (result == "") {
 		return Result.err(randomFailed("Random byte generation failed"));
 	}
 	return Result.ok(result);
@@ -167,7 +167,7 @@ export function randomBytes(size: number): Result<string, CryptoError> {
 
 export function randomInt(min: number, max: number): Result<number, CryptoError> {
 	const result = msCryptoRandomInt(min, max);
-	if (result === -1) {
+	if (result == -1) {
 		return Result.err(randomFailed("Random integer generation failed"));
 	}
 	return Result.ok(result);
@@ -175,7 +175,7 @@ export function randomInt(min: number, max: number): Result<number, CryptoError>
 
 export function randomUUID(): Result<string, CryptoError> {
 	const result = msCryptoRandomUuid();
-	if (result === "") {
+	if (result == "") {
 		return Result.err(randomFailed("UUID generation failed"));
 	}
 	return Result.ok(result);
@@ -198,14 +198,14 @@ export class Hasher {
 	}
 
 	update(data: string): Hasher {
-		if (this._ctx !== 0) {
+		if (this._ctx != 0) {
 			msCryptoHashUpdateHandle(this._ctx, data);
 		}
 		return this;
 	}
 
 	digest(encoding: string = "hex"): string {
-		if (this._ctx === 0) {
+		if (this._ctx == 0) {
 			return "";
 		}
 		const result = msCryptoHashFinalHandle(this._ctx, encoding);
@@ -214,7 +214,7 @@ export class Hasher {
 	}
 
 	digestBuffer(): string {
-		if (this._ctx === 0) {
+		if (this._ctx == 0) {
 			return "";
 		}
 		const result = msCryptoHashFinalBufferHandle(this._ctx);
@@ -223,7 +223,7 @@ export class Hasher {
 	}
 
 	onDestroy(): void {
-		if (this._ctx !== 0) {
+		if (this._ctx != 0) {
 			msCryptoHashFreeHandle(this._ctx);
 			this._ctx = 0;
 		}
@@ -241,14 +241,14 @@ export class Hmac {
 	}
 
 	update(data: string): Hmac {
-		if (this._ctx !== 0) {
+		if (this._ctx != 0) {
 			msCryptoHmacUpdateHandle(this._ctx, data);
 		}
 		return this;
 	}
 
 	digest(encoding: string = "hex"): string {
-		if (this._ctx === 0) {
+		if (this._ctx == 0) {
 			return "";
 		}
 		const result = msCryptoHmacFinalHandle(this._ctx, encoding);
@@ -257,7 +257,7 @@ export class Hmac {
 	}
 
 	digestBuffer(): string {
-		if (this._ctx === 0) {
+		if (this._ctx == 0) {
 			return "";
 		}
 		const result = msCryptoHmacFinalBufferHandle(this._ctx);
@@ -266,7 +266,7 @@ export class Hmac {
 	}
 
 	onDestroy(): void {
-		if (this._ctx !== 0) {
+		if (this._ctx != 0) {
 			msCryptoHmacFreeHandle(this._ctx);
 			this._ctx = 0;
 		}
@@ -304,16 +304,16 @@ export function fromBase64(b64: string): string { return msCryptoFromBase64(b64)
 // ===== Key Derivation =====
 
 export function pbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): Result<string, CryptoError> {
-	if (digest === "") digest = "sha256";
+	if (digest == "") digest = "sha256";
 	const result = msCryptoPbkdf2(password, salt, iterations, keyLength, digest);
-	if (result.length === 0) return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
+	if (result.length == 0) return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
 	return Result.ok(result);
 }
 
 export function hkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): Result<string, CryptoError> {
-	if (algorithm === "") algorithm = "sha256";
+	if (algorithm == "") algorithm = "sha256";
 	const result = msCryptoHkdf(algorithm, ikm, salt, info, length);
-	if (result.length === 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
+	if (result.length == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(result);
 }
 

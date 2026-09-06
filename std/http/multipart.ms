@@ -40,7 +40,7 @@ export function buildMultipart(parts: MultipartPart[], boundary: string): Multip
 	for (const p of parts) {
 		out = out + dashBoundary + CRLF;
 		out = out + `Content-Disposition: form-data; name="${p.name}"`;
-		if (p.filename !== "") {
+		if (p.filename != "") {
 			// File part: filename + Content-Type (RFC 7578 §4.2)
 			out = out + `; filename="${p.filename}"`;
 			out = out + CRLF;
@@ -76,8 +76,8 @@ test "empty parts list" {
 	const parts: MultipartPart[] = [];
 	const r = buildMultipart(parts, "BOUNDARY123");
 	// Just the closing boundary.
-	assert r.body === "--BOUNDARY123--\r\n";
-	assert r.contentType === "multipart/form-data; boundary=BOUNDARY123";
+	assert r.body == "--BOUNDARY123--\r\n";
+	assert r.contentType == "multipart/form-data; boundary=BOUNDARY123";
 }
 
 test "single text part" {
@@ -91,7 +91,7 @@ test "single text part" {
 		"\r\n" +
 		"{\"a\":1}\r\n" +
 		"--B--\r\n";
-	assert r.body === expected;
+	assert r.body == expected;
 }
 
 test "file part with filename" {
@@ -106,7 +106,7 @@ test "file part with filename" {
 		"\r\n" +
 		"GZBYTES\r\n" +
 		"--B--\r\n";
-	assert r.body === expected;
+	assert r.body == expected;
 }
 
 test "two parts (metadata + archive)" {
@@ -126,13 +126,13 @@ test "two parts (metadata + archive)" {
 		"\r\n" +
 		"XYZ\r\n" +
 		"--BB--\r\n";
-	assert r.body === expected;
+	assert r.body == expected;
 }
 
 test "content type includes boundary" {
 	const parts: MultipartPart[] = [];
 	const r = buildMultipart(parts, "abc123");
-	assert r.contentType === "multipart/form-data; boundary=abc123";
+	assert r.contentType == "multipart/form-data; boundary=abc123";
 }
 
 test "binary-like body survives intact" {

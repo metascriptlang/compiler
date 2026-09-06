@@ -18,13 +18,13 @@ export function probeGet(this h: Holder): Ptr<void> | null { return h.p; }
 
 function grab<T>(h: T): int32 {
 	const cur = h.probeGet();
-	if (cur === null) return 0;
+	if (cur == null) return 0;
 	return takePtr(cur);
 }
 
 function main(): void {
 	const a: Holder = { p: null };
-	if (grab(a) === 0) {
+	if (grab(a) == 0) {
 		console.log("generic-narrowing PASS");
 	} else {
 		console.log("generic-narrowing FAIL");

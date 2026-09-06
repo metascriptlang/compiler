@@ -69,20 +69,20 @@ function bug092ReadOnlyInner(): number[] {
 }
 
 test "bug092: module-level loop closure with nested writer keeps one persistent cell per iteration" {
-	assert bug092Arr[0]() === 1;
-	assert bug092Arr[0]() === 2;
-	assert bug092Arr[1]() === 1;
+	assert bug092Arr[0]() == 1;
+	assert bug092Arr[0]() == 2;
+	assert bug092Arr[1]() == 1;
 }
 
 test "bug092: in-function loop + nested closure increments its own cell across calls" {
 	const r = bug092InFunction();
-	assert r[0] === 1;
-	assert r[1] === 2;
+	assert r[0] == 1;
+	assert r[1] == 2;
 }
 
 test "bug092: escaping loop closures see per-iteration cells through a read-only inner" {
 	const a = bug092ReadOnlyInner();
-	assert a[0] === 1;
-	assert a[1] === 1;
-	assert a[2] === 2;
+	assert a[0] == 1;
+	assert a[1] == 1;
+	assert a[2] == 2;
 }

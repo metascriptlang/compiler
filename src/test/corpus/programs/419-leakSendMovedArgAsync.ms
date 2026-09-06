@@ -48,7 +48,7 @@ function main(): void {
 	for (let i = 0; i < 1200000; i = i + 1) {
 		const b: Box = { v: 1 };
 		s.take(move b);
-		if ((i % 10000) === 9999) { await s.get(); }
+		if ((i % 10000) == 9999) { await s.get(); }
 	}
 	console.log("leak-send-moved-arg-async done");
 }

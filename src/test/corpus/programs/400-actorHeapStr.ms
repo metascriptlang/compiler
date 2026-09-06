@@ -32,7 +32,7 @@ function main(): void {
 	const b = new Box();
 	b.setTag(makeHeapStr());
 	const t = await b.getTag();
-	if (t !== "topic-room-payload") { console.log(`FAIL tag=[${t}]`); return; }
+	if (t != "topic-room-payload") { console.log(`FAIL tag=[${t}]`); return; }
 	console.log("PASS:actor-heapstr");
 }
 

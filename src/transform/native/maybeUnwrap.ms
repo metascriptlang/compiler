@@ -32,29 +32,29 @@ export function unwrapMaybe(program: Node, ctx: TransformContext): Node {
 }
 
 function unwrapMaybeNode(node: Node): Node {
-	if (node === null) return node;
+	if (node == null) return node;
 	const loc = node.location;
 
 	// 1. Maybe wrapper object literal `{ value: x, present: true }` → inner value x
-	if (node.kind === NodeKind.ObjectLiteral && node.nodeType !== null && isMaybeType(node.nodeType)) {
+	if (node.kind == NodeKind.ObjectLiteral && node.nodeType != null && isMaybeType(node.nodeType)) {
 		const d = node.data as ObjectLiteralData;
-		if (d.keys.length === 2 && d.keys[0] === "value" && d.keys[1] === "present") {
+		if (d.keys.length == 2 && d.keys[0] == "value" && d.keys[1] == "present") {
 			return d.properties[0];
 		}
 	}
 
 	// 2/3. Reads on a Maybe-typed object collapse to native null semantics.
-	if (node.kind === NodeKind.MemberExpr) {
+	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		if (d.object !== null && d.object.nodeType !== null && isMaybeType(d.object.nodeType)) {
+		if (d.object != null && d.object.nodeType != null && isMaybeType(d.object.nodeType)) {
 			// x.present → x !== null
-			if (d.property === "present") {
+			if (d.property == "present") {
 				const cmp = makeBinary(d.object, "!==", makeNull(loc), loc);
 				cmp.nodeType = node.nodeType;
 				return cmp;
 			}
 			// x.value → x  (native value IS the payload once null-collapsed)
-			if (d.property === "value") {
+			if (d.property == "value") {
 				return d.object;
 			}
 		}

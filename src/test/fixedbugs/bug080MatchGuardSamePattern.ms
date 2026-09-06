@@ -39,15 +39,15 @@ function b80run(k: B80K, f: boolean): int32 {
 }
 
 test "bug080: guard-true takes the guarded arm, not the sibling" {
-	assert b80pick(B80K.A, true) === "A-guarded";
+	assert b80pick(B80K.A, true) == "A-guarded";
 }
 
 test "bug080: guard-false falls to the unguarded sibling" {
-	assert b80pick(B80K.A, false) === "A-plain";
-	assert b80pick(B80K.B, true) === "B";
+	assert b80pick(B80K.A, false) == "A-plain";
+	assert b80pick(B80K.B, true) == "B";
 }
 
 test "bug080: stmt mode runs exactly one arm body" {
-	assert b80run(B80K.A, true) === 1;
-	assert b80run(B80K.A, false) === 1;
+	assert b80run(B80K.A, true) == 1;
+	assert b80run(B80K.A, false) == 1;
 }

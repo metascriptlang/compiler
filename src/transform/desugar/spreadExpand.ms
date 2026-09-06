@@ -22,13 +22,13 @@ export function lowerSpread(program: Node, ctx: TransformContext): Node {
 }
 
 function expandSpread(node: Node): Node {
-	if (node.kind !== NodeKind.CallExpr) return node;
+	if (node.kind != NodeKind.CallExpr) return node;
 	const d = node.data as CallExprData;
 
 	// Check if any argument is a SpreadExpr
 	let hasSpread = false;
 	for (const a of d.arguments) {
-		if (a.kind === NodeKind.SpreadExpr) {
+		if (a.kind == NodeKind.SpreadExpr) {
 			hasSpread = true;
 		}
 	}
@@ -37,13 +37,13 @@ function expandSpread(node: Node): Node {
 	// Expand: replace each SpreadExpr with its contents if array literal
 	const newArgs: Node[] = [];
 	for (const arg of d.arguments) {
-		if (arg.kind !== NodeKind.SpreadExpr) {
+		if (arg.kind != NodeKind.SpreadExpr) {
 			newArgs.push(arg);
 			continue;
 		}
 		const sd = arg.data as SpreadExprData;
 		// Only expand array literals inline: ...[a, b, c] → a, b, c
-		if (sd.spreadArg.kind === NodeKind.ArrayLiteral) {
+		if (sd.spreadArg.kind == NodeKind.ArrayLiteral) {
 			const arr = sd.spreadArg.data as ArrayLiteralData;
 			for (const elem of arr.elements) {
 				newArgs.push(elem);
@@ -58,14 +58,14 @@ function expandSpread(node: Node): Node {
 }
 
 // ===== Tests =====
-test "no spread passthrough" { assert firstExprKindAfter("f(a, b);", lowerSpread) === NodeKind.CallExpr; }
+test "no spread passthrough" { assert firstExprKindAfter("f(a, b);", lowerSpread) == NodeKind.CallExpr; }
 
-test "spread array literal inlined" { assert firstExprKindAfter("f(...[1, 2]);", lowerSpread) === NodeKind.CallExpr; }
+test "spread array literal inlined" { assert firstExprKindAfter("f(...[1, 2]);", lowerSpread) == NodeKind.CallExpr; }
 
-test "non-call unchanged" { assert firstExprKindAfter("x + y;", lowerSpread) === NodeKind.BinaryExpr; }
+test "non-call unchanged" { assert firstExprKindAfter("x + y;", lowerSpread) == NodeKind.BinaryExpr; }
 
-test "standalone expr unchanged" { assert firstExprKindAfter("x;", lowerSpread) === NodeKind.Identifier; }
+test "standalone expr unchanged" { assert firstExprKindAfter("x;", lowerSpread) == NodeKind.Identifier; }
 
-test "nested call unchanged" { assert firstExprKindAfter("f(g());", lowerSpread) === NodeKind.CallExpr; }
+test "nested call unchanged" { assert firstExprKindAfter("f(g());", lowerSpread) == NodeKind.CallExpr; }
 
-test "non-expr passthrough" { assert stmtCountAfter("const x = 1;", lowerSpread) === 1; }
+test "non-expr passthrough" { assert stmtCountAfter("const x = 1;", lowerSpread) == 1; }

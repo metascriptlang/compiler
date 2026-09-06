@@ -125,7 +125,7 @@ extern function msTlsPeerCertSubject(ctx: int64): string;
 
 export function tlsConnect(hostname: string, port: int32, caPath: string = ""): Result<int64, CryptoError> {
 	const ctx = msTlsConnect(hostname, port, caPath);
-	if (ctx === 0) {
+	if (ctx == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.ConnectionFailed, "tlsConnect", "TLS handshake failed"));
 	}
 	return Result.ok(ctx);

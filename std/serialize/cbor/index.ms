@@ -77,7 +77,7 @@ export function _cborArrayOfStructs<T>(arr: T[]): CborValue {
 
 export function _cborToIntArray<T>(cv: CborValue, witness: T | null): T[] {
 	const out: T[] = [];
-	if (cv === null || cv.kind !== CborKind.Array) return out;
+	if (cv == null || cv.kind != CborKind.Array) return out;
 	let i = 0;
 	while (i < cv.items.length) {
 		out.push(asInt64(cv.items[i]) as T);
@@ -88,7 +88,7 @@ export function _cborToIntArray<T>(cv: CborValue, witness: T | null): T[] {
 
 export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
 	const out: T[] = [];
-	if (cv === null || cv.kind !== CborKind.Array) return out;
+	if (cv == null || cv.kind != CborKind.Array) return out;
 	let i = 0;
 	while (i < cv.items.length) {
 		out.push(cborValueToStruct(cv.items[i], witness));

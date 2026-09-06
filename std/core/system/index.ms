@@ -92,12 +92,10 @@ export class AbortController {
 }
 
 // ===== Derived comparison operators (standard library parity) =====
-// Given == and < for any type, derive !=, >, <=, >= at zero cost.
-// TODO: Template version causes DRC double-free on large compilations.
-// Template expansion inlines code → DRC may double-manage expanded params.
-// Using regular functions until template+DRC interaction is fixed.
-export function `!=`<T>(a: T, b: T): boolean { return !(a == b); }
-export function `>`<T>(a: T, b: T): boolean { return b < a; }
-export function `<=`<T>(a: T, b: T): boolean { return !(b < a); }
-export function `>=`<T>(a: T, b: T): boolean { return !(a < b); }
+// Given ==, < and <= for a type, derive !=, > and >= at zero cost.
+// `<=` stays a per-type base operator: deriving it as !(b < a) only holds for a
+// total order, and silently inverts the answer for partial ones (NaN, subset).
+export template `!=`<T>(a: T, b: T): boolean { return !(a == b); }
+export template `>`<T>(a: T, b: T): boolean { return b < a; }
+export template `>=`<T>(a: T, b: T): boolean { return b <= a; }
 

@@ -25,7 +25,7 @@
 import { hasError, strictErrorCount } from "../handoff/helpers";
 
 function accepts(src: string): boolean {
-	return strictErrorCount(src) === 0;
+	return strictErrorCount(src) == 0;
 }
 
 test "bug110: decimal int64 min is accepted" {

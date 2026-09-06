@@ -21,10 +21,10 @@ const na: BoxA = { w: null };
 const av = readA(a);
 const bv = readB(b);
 let ok = true;
-if (av !== 2.5) ok = false;
-if (bv !== (1.5 as float32)) ok = false;
-if (readA(sa) !== -2) ok = false;
-if (readB(sb) !== (-2.0 as float32)) ok = false;
-if (readA(na) !== -1) ok = false;
+if (av != 2.5) ok = false;
+if (bv != (1.5 as float32)) ok = false;
+if (readA(sa) != -2) ok = false;
+if (readB(sb) != (-2.0 as float32)) ok = false;
+if (readA(na) != -1) ok = false;
 
 console.log("maybe-union-identity ok=" + (ok ? "1" : "0") + " a=" + av.toString() + " b=" + bv.toString());

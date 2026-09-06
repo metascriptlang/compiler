@@ -41,7 +41,7 @@ export function createInflate(format: CompressFormat = CompressFormat.Gzip): Inf
 // Feed a chunk of compressed input. Returns any bytes decoded so far
 // (may be "" if more input is needed before any output is produced).
 export function inflateFeed(s: InflateStream, chunk: string): Result<string, CompressError> {
-	if (s.handle === 0) {
+	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
 	if (s.finished) {
@@ -57,7 +57,7 @@ export function inflateFeed(s: InflateStream, chunk: string): Result<string, Com
 // Signal end of input, drain remaining output, and release the context.
 // The InflateStream must not be used after this call.
 export function inflateFinish(s: InflateStream): Result<string, CompressError> {
-	if (s.handle === 0) {
+	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
 	if (s.finished) return Result.ok("");
@@ -79,7 +79,7 @@ export function inflateFinish(s: InflateStream): Result<string, CompressError> {
 // Decompress a complete gzip blob (RFC 1952).
 export function gunzip(data: string): Result<string, CompressError> {
 	const out = msInflateOneShot(data, CompressFormat.Gzip as int32);
-	if (out.length === 0 && data.length > 0) {
+	if (out.length == 0 && data.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "gzip decompression failed"));
 	}
 	return Result.ok(out);
@@ -88,7 +88,7 @@ export function gunzip(data: string): Result<string, CompressError> {
 // Decompress a zlib-wrapped DEFLATE blob (RFC 1950).
 export function inflate(data: string): Result<string, CompressError> {
 	const out = msInflateOneShot(data, CompressFormat.Zlib as int32);
-	if (out.length === 0 && data.length > 0) {
+	if (out.length == 0 && data.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "zlib decompression failed"));
 	}
 	return Result.ok(out);
@@ -97,7 +97,7 @@ export function inflate(data: string): Result<string, CompressError> {
 // Decompress a raw DEFLATE stream (RFC 1951).
 export function inflateRaw(data: string): Result<string, CompressError> {
 	const out = msInflateOneShot(data, CompressFormat.Deflate as int32);
-	if (out.length === 0 && data.length > 0) {
+	if (out.length == 0 && data.length > 0) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "deflate decompression failed"));
 	}
 	return Result.ok(out);

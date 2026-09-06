@@ -21,9 +21,9 @@ import { NodeKind, IdentifierData, createNodeAt, makeLoc } from "std/meta";
 test "bug082: variant cast widens at a call argument" {
 	const loc = makeLoc(1, 1);
 	const n = createNodeAt(NodeKind.Identifier, { name: "x" } as IdentifierData, loc);
-	assert n.kind === NodeKind.Identifier;
+	assert n.kind == NodeKind.Identifier;
 	const d = n.data as IdentifierData;
-	assert d.name === "x";
+	assert d.name == "x";
 }
 
 // Deliberately NOT covered here — two neighbouring gaps that would keep this
@@ -37,5 +37,5 @@ test "bug082: the uncast literal still works" {
 	const loc = makeLoc(2, 1);
 	const n = createNodeAt(NodeKind.Identifier, { name: "z" }, loc);
 	const d = n.data as IdentifierData;
-	assert d.name === "z";
+	assert d.name == "z";
 }

@@ -84,12 +84,12 @@ function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverC
 	while (i < deps.keys.length) {
 		const name = deps.keys[i];
 		const ver = deps.values[i];
-		if (ver.length > 5 && ver.slice(0, 5) === "file:") {
+		if (ver.length > 5 && ver.slice(0, 5) == "file:") {
 			const relPath = ver.slice(5, ver.length);
 			const absPath = isAbsolute(relPath) ? relPath : join(baseDir, relPath);
 			// Skip if already registered (cycle prevention)
 			let alreadyVisited = false;
-			for (const v of visited) { if (v === absPath) alreadyVisited = true; }
+			for (const v of visited) { if (v == absPath) alreadyVisited = true; }
 			if (!alreadyVisited) {
 				config.aliasKeys.push(name);
 				config.aliasValues.push(absPath);
@@ -111,12 +111,12 @@ function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverC
 
 export function buildResolverConfig(target: Target, resolve: ResolveSection, targetOs: string = platform, projectRoot: string = ""): ResolverConfig {
 	let backend = Backend.C;
-	if (target === Target.JS) { backend = Backend.JS; }
-	if (target === Target.Raiser) { backend = Backend.Raiser; }
-	if (targetOs === "wasm" || targetOs === "emcc") { backend = Backend.Wasm; }
+	if (target == Target.JS) { backend = Backend.JS; }
+	if (target == Target.Raiser) { backend = Backend.Raiser; }
+	if (targetOs == "wasm" || targetOs == "emcc") { backend = Backend.Wasm; }
 	// Resolve stdPath from project root.
 	const root = resolveRuntimeDir();
-	const stdPath = root !== "" ? join(root, "std") : "std";
+	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(backend, stdPath);
 	// Override with build.ms settings if provided
 	if (resolve.extensions.length > 0) {
@@ -136,7 +136,7 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 	// file: deps — resolve directly from build.ms without lockfile.
 	// These are local folder references: "my-lib": "file:../my-lib"
 	// Resolved relative to projectRoot. No cache, no download.
-	if (projectRoot !== "") {
+	if (projectRoot != "") {
 		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
 		if (cfg.valid) {
 			const visited: string[] = [];
@@ -146,18 +146,18 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 	}
 
 	// Registry/git deps — resolve via lockfile → cache paths.
-	const lockPath = projectRoot !== "" ? join(projectRoot, "msc.lock") : "msc.lock";
+	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
 	const lock = readLockfile(lockPath);
 	if (lock.valid) {
 		for (const entry of lock.entries) {
 			const name = entryName(entry.key);
 			let srcPath = "";
-			if (entry.source === "git" && entry.url !== "" && entry.commit !== "") {
+			if (entry.source == "git" && entry.url != "" && entry.commit != "") {
 				srcPath = gitSrcPath(entry.url, entry.commit);
-			} else if (entry.version !== "") {
+			} else if (entry.version != "") {
 				srcPath = registrySrcPath(name, entry.version);
 			}
-			if (srcPath !== "") {
+			if (srcPath != "") {
 				config.aliasKeys.push(name);
 				config.aliasValues.push(srcPath);
 			}
@@ -182,7 +182,7 @@ function reportGraphErrors(graph: ModuleGraph): void {
 
 // Get a specific line from source text (1-based line number)
 function getSourceLine(source: string, lineNum: number): string {
-	if (source.byteLength === 0 || lineNum <= 0) return "";
+	if (source.byteLength == 0 || lineNum <= 0) return "";
 	const lines = source.split("\n");
 	const idx = (lineNum as int32) - 1;
 	if (idx < 0 || idx >= lines.length) return "";
@@ -192,7 +192,7 @@ function getSourceLine(source: string, lineNum: number): string {
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
 	// Header: "error: message" or "warning: message"
-	const isWarn = e.severity === ErrorSeverity.Warning;
+	const isWarn = e.severity == ErrorSeverity.Warning;
 	const levelStr = match (isWarn) {
 		true => bold(yellow("warning")),
 		false => bold(red("error")),
@@ -267,7 +267,7 @@ function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string, source: 
 function exitOnCheckerErrors(ctx: CheckerContext, modPath: string, source: string): void {
 	if (!hasErrors(ctx)) return;
 	for (const e of ctx.errors) {
-		if (e.severity !== Severity.Error) continue;
+		if (e.severity != Severity.Error) continue;
 		renderModuleError(modPath, source, {
 			message: e.message,
 			line: e.line,
@@ -286,7 +286,7 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	let hasErr = false;
 	for (const mod of graph.modules) {
 		for (const e of mod.errors) {
-			if (e.severity !== ErrorSeverity.Error) continue;
+			if (e.severity != ErrorSeverity.Error) continue;
 			hasErr = true;
 			renderModuleError(mod.path, mod.source, e);
 		}
@@ -336,10 +336,10 @@ export function gcModeOf(gc: string): GcMode {
 // Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
 // analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
 export function applyGcMode(opts: CliOptions): void {
-	if (graphPreludeCtx === null) return;
-	if (opts.gcMode === "none") graphPreludeCtx.gcMode = GcMode.None;
-	else if (opts.gcMode === "manual") graphPreludeCtx.gcMode = GcMode.Manual;
-	else if (opts.gcMode === "orc") graphPreludeCtx.gcMode = GcMode.Orc;
+	if (graphPreludeCtx == null) return;
+	if (opts.gcMode == "none") graphPreludeCtx.gcMode = GcMode.None;
+	else if (opts.gcMode == "manual") graphPreludeCtx.gcMode = GcMode.Manual;
+	else if (opts.gcMode == "orc") graphPreludeCtx.gcMode = GcMode.Orc;
 	graphPreludeCtx.targetOs = opts.targetOs;
 }
 
@@ -367,7 +367,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// prelude loads (A2 seeds the graph from a key-named deps file).
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	const _gl0 = performance.now();
-	if (config.stdPath !== "") {
+	if (config.stdPath != "") {
 		loadPreludeModules(graph, provider, config, backendExt);
 	}
 	const _pl0 = performance.now();
@@ -394,7 +394,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	let graphErrors = 0;
 	for (const mod of graph.modules) {
 		for (const e of mod.errors) {
-			if (e.severity === ErrorSeverity.Error) graphErrors = graphErrors + 1;
+			if (e.severity == ErrorSeverity.Error) graphErrors = graphErrors + 1;
 		}
 	}
 	if (graphErrors > 0) {
@@ -419,9 +419,9 @@ let _preludeSeedHit: boolean = false;
 
 function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
 	_preludeSeedHit = false;
-	if (config.stdPath !== "") {
+	if (config.stdPath != "") {
 		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt));
-		if (deps !== null && seedPreludeModules(graph, provider, deps)) {
+		if (deps != null && seedPreludeModules(graph, provider, deps)) {
 			_preludeSeedHit = true;
 			return;
 		}
@@ -437,7 +437,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 			}
 		}
 	}
-	if (config.stdPath !== "") captureStdGraphDeps(graph);
+	if (config.stdPath != "") captureStdGraphDeps(graph);
 }
 
 // Replay a deps snapshot into the graph. All sources are provided UP FRONT —
@@ -490,7 +490,7 @@ function captureStdGraphDeps(graph: ModuleGraph): void {
 	const mods: DepsModuleRow[] = [];
 	for (const p of graph.loadOrder) {
 		const m = findModule(graph, p);
-		if (m === null) continue;
+		if (m == null) continue;
 		const imports: DepsImportRow[] = [];
 		let ii = 0;
 		while (ii < m.imports.length) {
@@ -551,14 +551,14 @@ interface CBuildState {
 // crossed CreateProcessW's 32767-char ceiling — spawn then fails with a bare
 // "fork/exec failed" (exit -1). Keep first occurrence, preserve order.
 function mergeFlagsDeduped(base: string, add: string): string {
-	if (add === "") return base;
+	if (add == "") return base;
 	const seen: HashSet<string> = new HashSet<string>();
 	for (const tok of base.split(" ")) {
-		if (tok !== "") seen.add(tok);
+		if (tok != "") seen.add(tok);
 	}
 	let result = base;
 	for (const tok of add.split(" ")) {
-		if (tok === "") continue;
+		if (tok == "") continue;
 		if (seen.has(tok)) continue;
 		seen.add(tok);
 		result = appendFlag(result, tok);
@@ -573,7 +573,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	// Stable across projects — stdlib/runtime .c files compiled with the same
 	// command text everywhere, so ccache's global store can deduplicate them.
 	const compilerRoot = resolveRuntimeDir();
-	if (compilerRoot !== "") {
+	if (compilerRoot != "") {
 		includePaths.add(compilerRoot);
 		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
 	}
@@ -584,16 +584,16 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	// userProjectFlag() below and call sites in processCompileDirectives +
 	// per-module .ms → .c compile.
 	// --os=bare/solana: force-include manual.h before all .c files (runtime .c files need the defines)
-	if ((opts.targetOs === "bare" || opts.targetOs === "solana") && compilerRoot !== "") {
+	if ((opts.targetOs == "bare" || opts.targetOs == "solana") && compilerRoot != "") {
 		let defines = "-DMSOS_BARE";
-		if (opts.targetOs === "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
+		if (opts.targetOs == "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
 		allFlags = appendFlag(allFlags, `${defines} -include ${compilerRoot}/runtime/manual.h`);
 	}
 	// --os=wasm/emcc: define MSOS_WASM/MSOS_EMCC for runtime @compile files (disables threading)
-	if (opts.targetOs === "wasm") {
+	if (opts.targetOs == "wasm") {
 		allFlags = appendFlag(allFlags, "-DMSOS_WASM");
 	}
-	if (opts.targetOs === "emcc") {
+	if (opts.targetOs == "emcc") {
 		allFlags = appendFlag(allFlags, "-DMSOS_EMCC");
 	}
 	return { allFlags, includePaths };
@@ -607,17 +607,17 @@ function initCBuildState(opts: CliOptions): CBuildState {
 // user code (path may be absolute under projectRoot, or relative to cwd),
 // which needs -I<projectRoot> to resolve `import {...} from "./foo.h"`.
 function isUnder(path: string, dir: string): boolean {
-	if (dir === "" || path === "") return false;
-	if (path === dir) return true;
+	if (dir == "" || path == "") return false;
+	if (path == dir) return true;
 	if (!path.startsWith(dir)) return false;
 	// Require separator after prefix to avoid `/foo/bar` matching `/foo/barbaz`.
 	const next = path.charAt(dir.length);
-	return next === "/" || next === "\\";
+	return next == "/" || next == "\\";
 }
 
 function userProjectFlag(path: string, projectRoot: string, compilerRoot: string): string {
-	if (projectRoot === "" || projectRoot === compilerRoot) return "";
-	if (path === "" || path === ".") return "";
+	if (projectRoot == "" || projectRoot == compilerRoot) return "";
+	if (path == "" || path == ".") return "";
 	if (isUnder(path, compilerRoot)) return "";
 	return `-I${projectRoot}`;
 }
@@ -626,7 +626,7 @@ function userProjectFlag(path: string, projectRoot: string, compilerRoot: string
 // Mirrors @compile path resolution (processCompileDirectives): try CWD first,
 // then search registered include paths (which contain compilerRoot).
 function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
-	if (dir === "" || isAbsolute(dir)) return dir;
+	if (dir == "" || isAbsolute(dir)) return dir;
 	if (exists(dir)) return dir;
 	for (const ip of includePaths) {
 		const candidate = `${ip}/${dir}`;
@@ -639,30 +639,30 @@ function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
 // same rule as @compile: try CWD, then search includePaths. Lets std @passC
 // directives work from any CWD when the compiler is installed elsewhere.
 function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): string {
-	if (flags === "") return flags;
+	if (flags == "") return flags;
 	const parts = flags.split(" ");
 	let result = "";
 	for (const p of parts) {
 		let resolved = p;
-		if (p.length > 2 && p.slice(0, 2) === "-I") {
+		if (p.length > 2 && p.slice(0, 2) == "-I") {
 			resolved = "-I" + resolveIncludeDir(p.slice(2, p.length), includePaths);
-		} else if (p.length > 7 && p.slice(0, 7) === "-iquote") {
+		} else if (p.length > 7 && p.slice(0, 7) == "-iquote") {
 			resolved = "-iquote" + resolveIncludeDir(p.slice(7, p.length), includePaths);
-		} else if (p.length > 8 && p.slice(0, 8) === "-isystem") {
+		} else if (p.length > 8 && p.slice(0, 8) == "-isystem") {
 			resolved = "-isystem" + resolveIncludeDir(p.slice(8, p.length), includePaths);
 		}
-		result = result === "" ? resolved : `${result} ${resolved}`;
+		result = result == "" ? resolved : `${result} ${resolved}`;
 	}
 	return result;
 }
 
 // Register -I/-iquote paths from a module's compiler flags into the include path set.
 function registerIncludePaths(flags: string, paths: HashSet<string>): void {
-	if (flags === "") return;
+	if (flags == "") return;
 	const parts = flags.split(" ");
 	for (const p of parts) {
-		if (p.length > 2 && p.slice(0, 2) === "-I") paths.add(p.slice(2, p.length));
-		else if (p.length > 7 && p.slice(0, 7) === "-iquote") paths.add(p.slice(7, p.length));
+		if (p.length > 2 && p.slice(0, 2) == "-I") paths.add(p.slice(2, p.length));
+		else if (p.length > 7 && p.slice(0, 7) == "-iquote") paths.add(p.slice(7, p.length));
 	}
 }
 
@@ -696,7 +696,7 @@ let emitOnlyMode = false;
 
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string {
 	if (emitOnlyMode) return "";
-	if (directives === "") return "";
+	if (directives == "") return "";
 	// Per-call user-project flag: non-empty only when moduleDir is user code.
 	// Applied to every @compile job this call emits (all share same moduleDir).
 	const upFlag = userProjectFlag(moduleDir, projectRoot, compilerRoot);
@@ -707,10 +707,10 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	let start = 0;
 	let idx = 0;
 	while (idx <= directives.length) {
-		let atEnd = idx === directives.length;
+		let atEnd = idx == directives.length;
 		let atNewline = false;
 		if (!atEnd) {
-			atNewline = directives.slice(idx, idx + 1) === "\n";
+			atNewline = directives.slice(idx, idx + 1) == "\n";
 		}
 		if (atEnd || atNewline) {
 			if (idx > start) {
@@ -726,7 +726,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				// ./ or ../ prefix: resolve relative to the declaring module's directory.
 				// Bare paths: try CWD, then search registered include paths.
 				let fullPath = cPath;
-				if (cPath.slice(0, 2) === "./" || cPath.slice(0, 3) === "../") {
+				if (cPath.slice(0, 2) == "./" || cPath.slice(0, 3) == "../") {
 					fullPath = `${moduleDir}/${cPath}`;
 				} else if (!exists(fullPath)) {
 					for (const dir of includePaths) {
@@ -743,8 +743,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				// See cc.ms `markCppCompile` for the why.
 				markCppCompile(fullPath);
 				let probeFlags = allFlags;
-				if (upFlag !== "") probeFlags = appendFlag(probeFlags, upFlag);
-				if (customFlags !== "") probeFlags = appendFlag(probeFlags, customFlags);
+				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
+				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
 				const probeKey = fullCompileCmd(ccOption, mode, probeFlags);
 				const probeFp = computeFingerprint(fullPath, probeKey);
 				const probeOFile = stableOFileFp(fullPath, probeFp);
@@ -783,7 +783,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	for (const j of jobs) {
 		futures.push(spawn(() => {
 			let r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
-			if (!r.ok && r.error.exitCode === 0) {
+			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
 				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
 				// One retry absorbs it; a real compile error has a nonzero exitCode
@@ -793,8 +793,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
 			// stderr and the join loop only reports the exit code.
-			if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
-			return r.error.exitCode !== 0 ? r.error.exitCode : -1;
+			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
 	const exitCodes: number[] = [];
@@ -807,13 +807,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	while (ci < jobs.length) {
 		const j = jobs[ci];
 		const code = exitCodes[ci];
-		if (code !== 0) {
+		if (code != 0) {
 			// Freestanding targets carry no libc/socket layer, so a prelude @compile
 			// naming a platform engine (std/net -> runtime/io/engineSelect.c) cannot
 			// build there. The module itself is dead code on these targets; dropping
 			// the object is the same call already made for BPF.
-			if (targetOs === "solana" || targetOs === "bare") {
-				const why = targetOs === "solana" ? "BPF unsupported" : "freestanding: no libc";
+			if (targetOs == "solana" || targetOs == "bare") {
+				const why = targetOs == "solana" ? "BPF unsupported" : "freestanding: no libc";
 				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim(`(${why})`)}`);
 				ci = ci + 1;
 				continue;
@@ -850,15 +850,15 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 	for (const j of jobs) {
 		futures.push(spawn(() => {
 			let r = compileCFile(j.cFile, j.oFile, j.flags, mode, ccOption, ccBinary);
-			if (!r.ok && r.error.exitCode === 0) {
+			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
 				r = compileCFile(j.cFile, j.oFile, j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
-			if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
-			return r.error.exitCode !== 0 ? r.error.exitCode : -1;
+			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
 	const codes: number[] = [];
@@ -892,7 +892,7 @@ function mapDirOf(outPath: string): string {
 function countNewlines(s: string): int32 {
 	let n: int32 = 0;
 	for (let i: int32 = 0; i < s.byteLength; i += 1) {
-		if (s.byteAt(i) === "\n".code) n += 1;
+		if (s.byteAt(i) == "\n".code) n += 1;
 	}
 	return n;
 }
@@ -907,7 +907,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
 	if (opts.splitModules) {
-		const splitRoot = opts.outputPath !== "" ? opts.outputPath : (outputDir !== "" ? outputDir : "out/esm");
+		const splitRoot = opts.outputPath != "" ? opts.outputPath : (outputDir != "" ? outputDir : "out/esm");
 		const t0 = performance.now();
 		const entryCanon = canonicalModulePath(entryPath);
 		const tree = emitJSModuleTree(entryCanon, opts, false, splitRoot);
@@ -930,7 +930,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
-	const outDir = outputDir !== "" ? outputDir : "out";
+	const outDir = outputDir != "" ? outputDir : "out";
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
 
@@ -940,7 +940,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const modIdKeys: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		modIdKeys.push(modPath);
 		modIdValues.push(moduleId);
@@ -974,7 +974,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
@@ -989,11 +989,11 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		for (const entry of ctx.jsImportRegistry) {
 			let found = false;
 			for (let ei = 0; ei < extImportKeys.length; ei += 1) {
-				if (extImportKeys[ei] === entry.modulePath) {
+				if (extImportKeys[ei] == entry.modulePath) {
 					// Merge names
 					for (const n of entry.names) {
 						let dup = false;
-						for (const existing of extImportNames[ei]) { if (existing === n) { dup = true; } }
+						for (const existing of extImportNames[ei]) { if (existing == n) { dup = true; } }
 						if (!dup) extImportNames[ei].push(n);
 					}
 					found = true;
@@ -1016,20 +1016,20 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	const pendingInsts = drainPendingInstances();
 	for (const instNode of pendingInsts) {
-		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
 		let owner = "";
-		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
 		let targetIdx: int32 = -1;
 		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] === owner) { targetIdx = pi; }
+			if (unitPaths[pi] == owner) { targetIdx = pi; }
 		}
 		if (targetIdx < 0) {
 			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] === entryPath) { targetIdx = pi; }
+				if (unitPaths[pi] == entryPath) { targetIdx = pi; }
 			}
 		}
 		if (targetIdx >= 0) {
@@ -1041,7 +1041,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.source);
 
@@ -1090,7 +1090,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// `--output` wins here exactly as it does for the C binary. Deriving the
 	// name from the entry file alone collides for directory-style programs,
 	// which are all spelled `main.ms`.
-	const outPath = opts.outputPath !== ""
+	const outPath = opts.outputPath != ""
 		? opts.outputPath
 		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
@@ -1103,7 +1103,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			appendInfo(combined, moduleSmaps[mi], (headerLines + moduleSmapLines[mi]) as int32);
 		}
 		const stdRootForMap = config.stdPath;
-		const stdIgnored = ignoredFileIndexes(combined, (p: string): boolean => stdRootForMap !== "" && p.startsWith(stdRootForMap));
+		const stdIgnored = ignoredFileIndexes(combined, (p: string): boolean => stdRootForMap != "" && p.startsWith(stdRootForMap));
 		writeOutput(`${outPath}.map`, toSourceMapJson(combined, basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
@@ -1115,13 +1115,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 // Returns the .o paths to append via appendFlag, or "" for bare / Solana.
 // Shared by cmdBuildC and cmdTestC so test binaries link the same runtime.
 function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string {
-	if (opts.targetOs === "bare" || opts.targetOs === "solana") return "";
+	if (opts.targetOs == "bare" || opts.targetOs == "solana") return "";
 
 	let rtFiles = "";
-	if (opts.targetOs === "emcc") {
+	if (opts.targetOs == "emcc") {
 		// Single-threaded: Asyncify-based async. spawn/Actor not yet supported.
 		rtFiles = "runtime/promise/dispatchEmcc.c";
-	} else if (opts.targetOs === "wasm") {
+	} else if (opts.targetOs == "wasm") {
 		rtFiles = "runtime/promise/dispatchWasm.c";
 	} else {
 		// Desktop: full dispatcher + thread pool + selectors
@@ -1133,7 +1133,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/actor/actor.c";
-		if (opts.targetOs === "windows") {
+		if (opts.targetOs == "windows") {
 			rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
 		} else {
 			rtFiles = rtFiles + "\n" + "runtime/fs/posix.c";
@@ -1142,7 +1142,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
 
-	if (rtFiles === "") return "";
+	if (rtFiles == "") return "";
 	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 }
 
@@ -1176,11 +1176,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// in resolveTargetGcMode (it has to happen before the check pass).
 	// Both halves come from Anza's platform-tools bundle - a stock LLVM will not
 	// do, so the diagnostic points at the bundle rather than at a package manager.
-	if (opts.targetOs === "solana") {
-		if (opts.mode === 0) opts.mode = 1;
-		if (opts.ccBinary === "") {
+	if (opts.targetOs == "solana") {
+		if (opts.mode == 0) opts.mode = 1;
+		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
-			if (sbfClang === "") {
+			if (sbfClang == "") {
 				console.log(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
 				console.log(`  System clang carries ${bold("bpf")}/${bold("bpfel")} (Linux kernel BPF) — a different ABI, not this.`);
 				console.log(`  Install Anza platform-tools (${bold("cargo build-sbf")} fetches it to ~/.cache/solana),`);
@@ -1189,7 +1189,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			}
 			opts.ccBinary = sbfClang;
 		}
-		if (resolveSbfLinker() === "") {
+		if (resolveSbfLinker() == "") {
 			console.log(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			exit(1);
@@ -1197,31 +1197,31 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// WASM: force release mode, use zig cc with wasm32-wasi target
-	if (opts.targetOs === "wasm") {
-		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
+	if (opts.targetOs == "wasm") {
+		if (opts.mode == 0) opts.mode = 1;  // Release (smaller .wasm)
 		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 	}
 
 	// Emscripten (browser WASM): use emcc, 32-bit pointers
-	if (opts.targetOs === "emcc") {
-		if (opts.mode === 0) opts.mode = 1;  // Release (smaller .wasm)
+	if (opts.targetOs == "emcc") {
+		if (opts.mode == 0) opts.mode = 1;  // Release (smaller .wasm)
 		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 		opts.ccBinary = "emcc";  // emcc for compile + link
 	}
 
 	// Compute output binary path early for change detection
 	let outBinary = opts.outputPath;
-	if (outBinary === "") {
+	if (outBinary == "") {
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
-		const dynLib = opts.isHcr || opts.appMode === "lib";
+		const dynLib = opts.isHcr || opts.appMode == "lib";
 		let suffix = dynLib ? soSuffix() : exeSuffix();
 		// Use target OS suffix (works for both native + cross since targetOs always set).
-		if (opts.targetOs === "windows") suffix = dynLib ? ".dll" : ".exe";
-		if (opts.appMode === "staticlib") suffix = ".a";
-		if (opts.targetOs === "solana") suffix = ".so";
-		if (opts.targetOs === "wasm") suffix = ".wasm";
-		if (opts.targetOs === "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
+		if (opts.targetOs == "windows") suffix = dynLib ? ".dll" : ".exe";
+		if (opts.appMode == "staticlib") suffix = ".a";
+		if (opts.targetOs == "solana") suffix = ".so";
+		if (opts.targetOs == "wasm") suffix = ".wasm";
+		if (opts.targetOs == "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}
 	outBinary = normalize(outBinary);
@@ -1280,7 +1280,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) {
+		if (mod == null) {
 			console.log(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
 			continue;
 		}
@@ -1293,7 +1293,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		// finalization (sgSortRecords, stampJsModulePaths) is skipped on this path.
 		const reusedProgram = lookupModuleProgram(modPath);
 		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram !== null && reusedCtx !== null) {
+		if (reusedProgram != null && reusedCtx != null) {
 			setOuterProgramForComptime(reusedProgram);
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
 			reusedCtx.strictDefs = opts.strictDefs;
@@ -1337,20 +1337,20 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const pendingInsts = drainPendingInstances();
 	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
 		const instNode = pendingInsts[ii];
-		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
 		let owner = "";
-		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
 		let targetProgram: Node | null = null;
-		if (owner !== "" && programByPath.has(owner)) {
+		if (owner != "" && programByPath.has(owner)) {
 			targetProgram = programByPath.get(owner);
 		} else if (programByPath.has(entryPath)) {
 			targetProgram = programByPath.get(entryPath);
 		}
-		if (targetProgram !== null) {
+		if (targetProgram != null) {
 			(targetProgram.data as ProgramData).programStmts.push(instNode);
 		}
 	}
@@ -1407,9 +1407,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		tNative = tNative + (performance.now() - _tn0);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
-			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
-			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
+		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
+			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
+			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
 		const _ta0 = performance.now();
 		const preAnErrors = ctx.errors.length;
@@ -1488,14 +1488,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
 	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
-	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
+	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
 	// Platform-specific runtime: dispatch + selectors + pool + fs.
 	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
-	if (rtObjs !== "") oFiles = appendFlag(oFiles, rtObjs);
+	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
 
 	// Phase C: Codegen + compile each module
 	// Reset generic instance deduplication (first module to codegen wins).
@@ -1558,7 +1558,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			// under projectRoot, not under compilerRoot). Stdlib modules get
 			// stable command text so ccache can dedupe across projects.
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
-			if (upFlag !== "") modFlags = appendFlag(modFlags, upFlag);
+			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags);
 			const modFp = moduleCompileFp(cCode, compileCmd);
 			const oFile = stableOFileFp(p.modPath, modFp);
@@ -1597,7 +1597,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib");
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1615,7 +1615,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode === "lib" || opts.appMode === "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib");
 		// The dispatcher TU is a fixed input to its compile job — its .c must be
 		// fp-keyed and published atomically like any module's: two concurrent
 		// builds with different entries/configs write different dispatcher C to
@@ -1639,15 +1639,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
-		if (code === 0) {
-			if (cj.fp !== "") writeCompileFingerprintFp(cj.modPath, cj.fp);
+		if (code == 0) {
+			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = cj.oFile;
-		} else if (cj.modPath === "") {
+		} else if (cj.modPath == "") {
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			exit(1);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			if (opts.targetOs !== "solana") {
+			if (opts.targetOs != "solana") {
 				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
 			}
@@ -1657,7 +1657,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (moduleCompileFailed) exit(1);
 	oFiles = "";
 	for (const slot of oSlots) {
-		if (slot !== "") oFiles = appendFlag(oFiles, slot);
+		if (slot != "") oFiles = appendFlag(oFiles, slot);
 	}
 
 	// Link all .o files into final binary (or shared library for HCR)
@@ -1668,7 +1668,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let linkFlags = allLink;
 
 	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
-	if (modulesRecompiled === 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
+	if (modulesRecompiled == 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
@@ -1687,7 +1687,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
-	if (opts.targetOs === "emcc" && aliveSet.entries.length > 0) {
+	if (opts.targetOs == "emcc" && aliveSet.entries.length > 0) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
@@ -1699,25 +1699,25 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
-	if (opts.appMode === "staticlib") {
+	if (opts.appMode == "staticlib") {
 		const arRes = archiveStatic(oFiles, outBinary);
 		if (!arRes.ok) {
 			console.log(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
-			if (arRes.error.errorOutput !== "") console.log(arRes.error.errorOutput);
+			if (arRes.error.errorOutput != "") console.log(arRes.error.errorOutput);
 			exit(1);
 		}
-	} else if (opts.targetOs === "solana") {
+	} else if (opts.targetOs == "solana") {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
 			console.log(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
+			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
 			exit(1);
 		}
 	} else {
 		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (!linkRes.ok) {
 			console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
+			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
 			exit(1);
 		}
 	}
@@ -1782,7 +1782,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		// Same reuse as cmdBuildC: the graph-checker phase already ran the full
 		// 3 passes and registered program+ctx. Re-checking here not only doubled
 		// the build time, it dropped cross-module generic instances — those are
@@ -1791,7 +1791,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		// module's TU emits none of them.
 		const reusedProgram = lookupModuleProgram(modPath);
 		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram !== null && reusedCtx !== null) {
+		if (reusedProgram != null && reusedCtx != null) {
 			setOuterProgramForComptime(reusedProgram);
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
 			reusedCtx.strictDefs = opts.strictDefs;
@@ -1818,20 +1818,20 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const pendingInsts = drainPendingInstances();
 	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
 		const instNode = pendingInsts[ii];
-		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
 		let owner = "";
-		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
 		let targetProgram: Node | null = null;
-		if (owner !== "" && programByPath.has(owner)) {
+		if (owner != "" && programByPath.has(owner)) {
 			targetProgram = programByPath.get(owner);
 		} else if (programByPath.has(filePath)) {
 			targetProgram = programByPath.get(filePath);
 		}
-		if (targetProgram !== null) {
+		if (targetProgram != null) {
 			(targetProgram.data as ProgramData).programStmts.push(instNode);
 		}
 	}
@@ -1855,9 +1855,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
-			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
-			else if (opts.gcMode === "orc") ctx.gcMode = GcMode.Orc;
+		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
+			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
+			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
 
 		const preAnErrors = ctx.errors.length;
@@ -1884,14 +1884,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
-	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
+	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
 	// Platform-specific runtime: same set as cmdBuildC, shared via helper.
 	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
-	if (rtObjs !== "") oFiles = appendFlag(oFiles, rtObjs);
+	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
 	// GATHER → DISPATCH → COLLECT, same shape as cmdBuildC. Test dispatcher
@@ -1922,7 +1922,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		let testModFlags = appendFlag(allFlags, `-iquote${dirname(p.modPath)}`);
 		testModFlags = appendFlag(testModFlags, `-iquote${tcd}`);
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
-		if (upFlag !== "") testModFlags = appendFlag(testModFlags, upFlag);
+		if (upFlag != "") testModFlags = appendFlag(testModFlags, upFlag);
 		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags);
 		const modFp = moduleCompileFp(cCode, compileCmd);
 		const oFile = stableOFileFp(p.modPath, modFp);
@@ -1957,10 +1957,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
-		if (code === 0) {
-			if (cj.fp !== "") writeCompileFingerprintFp(cj.modPath, cj.fp);
+		if (code == 0) {
+			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = cj.oFile;
-		} else if (cj.modPath === "") {
+		} else if (cj.modPath == "") {
 			console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		} else {
@@ -1973,7 +1973,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (testFailed) exit(1);
 	oFiles = "";
 	for (const slot of oSlots) {
-		if (slot !== "") oFiles = appendFlag(oFiles, slot);
+		if (slot != "") oFiles = appendFlag(oFiles, slot);
 	}
 
 	// Link and execute
@@ -1993,7 +1993,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linkRes.ok) {
 		console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-		if (linkRes.error.errorOutput !== "") console.log(linkRes.error.errorOutput);
+		if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
 		exit(1);
 	}
 
@@ -2006,7 +2006,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 // ===== Run JS =====
 
 function outRelForModule(modPath: string, projectRoot: string, stdRoot: string): string {
-	if (stdRoot !== "" && modPath.startsWith(stdRoot)) {
+	if (stdRoot != "" && modPath.startsWith(stdRoot)) {
 		let rel = modPath.slice(stdRoot.length, modPath.length);
 		if (rel.startsWith("/")) rel = rel.slice(1, rel.length);
 		return replaceExt(`_std/${rel}`, ".js");
@@ -2020,7 +2020,7 @@ function outRelForModule(modPath: string, projectRoot: string, stdRoot: string):
 
 function lookupOutRel(keys: string[], vals: string[], k: string): string {
 	for (let i = 0; i < keys.length; i += 1) {
-		if (keys[i] === k) return vals[i];
+		if (keys[i] == k) return vals[i];
 	}
 	return "";
 }
@@ -2055,11 +2055,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// while graph module paths keep the spelling the entry was given, so the
 	// configured root can fail to prefix its own entry. Anchor on the entry
 	// when that happens, otherwise every module lands in the _ext fallback.
-	let projectRoot = opts.projectRoot !== "" ? opts.projectRoot : dirname(filePath);
+	let projectRoot = opts.projectRoot != "" ? opts.projectRoot : dirname(filePath);
 	if (!filePath.startsWith(projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`)) {
 		projectRoot = dirname(filePath);
 	}
-	const outRoot = outRootOverride !== "" ? outRootOverride : `${projectRoot}/${outDirForMode(opts.mode)}`;
+	const outRoot = outRootOverride != "" ? outRootOverride : `${projectRoot}/${outDirForMode(opts.mode)}`;
 	const stdRoot = config.stdPath;
 
 	const outRelKeys: string[] = [];
@@ -2076,7 +2076,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
@@ -2099,20 +2099,20 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
 	for (const instNode of drainPendingInstances()) {
-		if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
 		let owner = "";
-		if (instNode.resolvedSym !== null && instNode.resolvedSym.modulePath !== "") {
+		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
 		let targetIdx: int32 = -1;
 		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] === owner) { targetIdx = pi; }
+			if (unitPaths[pi] == owner) { targetIdx = pi; }
 		}
 		if (targetIdx < 0) {
 			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] === filePath) { targetIdx = pi; }
+				if (unitPaths[pi] == filePath) { targetIdx = pi; }
 			}
 		}
 		if (targetIdx >= 0) {
@@ -2127,7 +2127,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const modExportVals: string[][] = [];
 	for (const modPath of unitPaths) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 		modExportKeys.push(modPath);
 		modExportVals.push(mod.exportNames);
 	}
@@ -2144,15 +2144,15 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const ctx = unitCtxs[ui];
 		const mod = findModule(graph, modPath);
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
-		exitOnCheckerErrors(ctx, modPath, mod !== null ? mod.source : "");
+		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.source : "");
 
 		const fromRel = lookupOutRel(outRelKeys, outRelVals, modPath);
 		const importSpecKeys: string[] = [];
 		const importSpecVals: string[] = [];
-		if (mod !== null) {
+		if (mod != null) {
 			for (const imp of mod.imports) {
 				const toRel = lookupOutRel(outRelKeys, outRelVals, imp.sourcePath);
-				if (toRel === "") continue;
+				if (toRel == "") continue;
 				importSpecKeys.push(imp.sourceSpecifier);
 				importSpecVals.push(relSpecBetween(fromRel, toRel));
 			}
@@ -2181,13 +2181,13 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const forced: string[] = [];
 		for (let vi = 0; vi < unitPaths.length; vi += 1) {
-			if (vi === ui) continue;
+			if (vi == ui) continue;
 			for (let mi = 0; mi < moduleNeededMods[vi].length; mi += 1) {
-				if (moduleNeededMods[vi][mi] !== unitPaths[ui]) continue;
+				if (moduleNeededMods[vi][mi] != unitPaths[ui]) continue;
 				for (const n of moduleNeededNames[vi][mi]) {
 					let already = false;
-					for (const e of moduleExported[ui]) { if (e === n) { already = true; } }
-					for (const f of forced) { if (f === n) { already = true; } }
+					for (const e of moduleExported[ui]) { if (e == n) { already = true; } }
+					for (const f of forced) { if (f == n) { already = true; } }
 					if (!already) forced.push(n);
 				}
 			}
@@ -2205,7 +2205,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		ensureDir(dirname(outPath));
 		if (opts.sourcemap) {
 			const mapName = `${basename(outPath)}.map`;
-			const stdIgnored = ignoredFileIndexes(moduleSmaps[ui], (p: string): boolean => stdRoot !== "" && p.startsWith(stdRoot));
+			const stdIgnored = ignoredFileIndexes(moduleSmaps[ui], (p: string): boolean => stdRoot != "" && p.startsWith(stdRoot));
 			writeOutput(`${outPath}.map`, toSourceMapJson(moduleSmaps[ui], basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
 			code = `${code}\n//# sourceMappingURL=${mapName}\n`;
 		}
@@ -2226,18 +2226,18 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 	let entryRel = "";
 	for (let i = 0; i < tree.modulePaths.length; i += 1) {
-		if (tree.modulePaths[i] === filePath) entryRel = tree.moduleOutRels[i];
+		if (tree.modulePaths[i] == filePath) entryRel = tree.moduleOutRels[i];
 	}
 	const entryJs = `${tree.outRoot}/${entryRel}`;
 	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
 	const r = exec(`node ${entryJs}`);
 	if (r.ok) {
-		if (r.value !== "") console.log(r.value);
+		if (r.value != "") console.log(r.value);
 		exit(0);
 	}
-	if (r.error.output !== "") console.log(r.error.output);
-	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
-	exit(r.error.exitCode !== 0 ? r.error.exitCode : 1);
+	if (r.error.output != "") console.log(r.error.output);
+	if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+	exit(r.error.exitCode != 0 ? r.error.exitCode : 1);
 }
 
 // ===== Test (JS backend) =====
@@ -2322,7 +2322,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 	let entries = "";
 	for (let i = 0; i < tree.modulePaths.length; i += 1) {
-		if (tree.testFuncs[i].length === 0) continue;
+		if (tree.testFuncs[i].length == 0) continue;
 		const spec = relSpecBetween(harnessRel, tree.moduleOutRels[i]);
 		let funcs = "";
 		let names = "";
@@ -2342,12 +2342,12 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 	if (opts.verbose) verboseLog(`exec node ${mainJs}`);
 	const r = exec(`node ${mainJs}`);
 	if (r.ok) {
-		if (r.value !== "") console.log(r.value);
+		if (r.value != "") console.log(r.value);
 		exit(0);
 	}
-	if (r.error.output !== "") console.log(r.error.output);
-	if (r.error.errorOutput !== "") console.log(r.error.errorOutput);
-	exit(r.error.exitCode !== 0 ? r.error.exitCode : 1);
+	if (r.error.output != "") console.log(r.error.output);
+	if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+	exit(r.error.exitCode != 0 ? r.error.exitCode : 1);
 }
 
 // ===== Raiser (Bytecode VM) Run =====
@@ -2362,7 +2362,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const entryCanonical = canonicalModulePath(filePath);
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
+		if (mod == null) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 		const program = parseOrExit(mod.source, modPath);
@@ -2406,7 +2406,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	if (ctx.lastOutput.length > 0) {
 		// Print captured output (strip trailing newline for clean display)
 		const lastOut = ctx.lastOutput;
-		if (lastOut.byteLength > 0 && lastOut.slice(lastOut.byteLength - 1, lastOut.byteLength) === "\n") {
+		if (lastOut.byteLength > 0 && lastOut.slice(lastOut.byteLength - 1, lastOut.byteLength) == "\n") {
 			console.log(lastOut.slice(0, lastOut.byteLength - 1));
 		} else {
 			console.log(lastOut);
@@ -2414,7 +2414,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	}
 
 	if (!ranOk) {
-		if (ctx.lastError !== "") {
+		if (ctx.lastError != "") {
 			console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
 		}
 		exit(1);
@@ -2430,7 +2430,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	}
 
 	// C-target parity: the program's exit code becomes msc's own.
-	if (ctx.lastResult.kind === RaiserValueKind.Int) {
+	if (ctx.lastResult.kind == RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal);
 	}
 }

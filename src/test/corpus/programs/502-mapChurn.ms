@@ -22,7 +22,7 @@ function main(): void {
 	console.log("first=" + ks[0]);
 	console.log("last=" + ks[ks.length - 1]);
 	const v = m.get("k1");
-	if (v !== null) { console.log("k1=" + v); }
+	if (v != null) { console.log("k1=" + v); }
 
 	let n = 0;
 	let acc = 0;

@@ -18,10 +18,10 @@ function main(): void {
 	const direct: Thing = mk(7);
 	const alias: TA = mk(7);
 	const chain: TA[] = [mk(1), mk(2)];
-	if (viaAlias(direct) !== 7) exit(1);
-	if (viaAlias(alias) !== 7) exit(1);
-	if (direct.n !== alias.n) exit(1);
-	if (chain[0].n + chain[1].n !== 3) exit(1);
+	if (viaAlias(direct) != 7) exit(1);
+	if (viaAlias(alias) != 7) exit(1);
+	if (direct.n != alias.n) exit(1);
+	if (chain[0].n + chain[1].n != 3) exit(1);
 	console.log("GUARD-OK");
 }
 

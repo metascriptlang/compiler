@@ -39,7 +39,7 @@ function buildDeclared(k: Kit): Opaque {
 test "declared function result reaches a closure param intact" {
 	const k = kit();
 	const d = buildDeclared(k);
-	assert k.readId(d) === 11, "declared: got " + k.readId(d).toString();
+	assert k.readId(d) == 11, "declared: got " + k.readId(d).toString();
 }
 
 test "lambda with an explicit unknown return reaches a closure param intact" {
@@ -48,7 +48,7 @@ test "lambda with an explicit unknown return reaches a closure param intact" {
 		return kk.make(22);
 	};
 	const d = build(k);
-	assert k.readId(d) === 22, "explicit unknown: got " + k.readId(d).toString();
+	assert k.readId(d) == 22, "explicit unknown: got " + k.readId(d).toString();
 }
 
 test "lambda annotated with an alias of unknown reaches a closure param intact" {
@@ -57,7 +57,7 @@ test "lambda annotated with an alias of unknown reaches a closure param intact" 
 		return kk.make(33);
 	};
 	const d = build(k);
-	assert k.readId(d) === 33, "alias annotation: got " + k.readId(d).toString();
+	assert k.readId(d) == 33, "alias annotation: got " + k.readId(d).toString();
 }
 
 test "lambda with an INFERRED unknown return reaches a closure param intact" {
@@ -66,7 +66,7 @@ test "lambda with an INFERRED unknown return reaches a closure param intact" {
 		return kk.make(44);
 	};
 	const d = build(k);
-	assert k.readId(d) === 44, "inferred: got " + k.readId(d).toString();
+	assert k.readId(d) == 44, "inferred: got " + k.readId(d).toString();
 }
 
 test "function expression with an unknown return reaches a closure param intact" {
@@ -75,29 +75,29 @@ test "function expression with an unknown return reaches a closure param intact"
 		return kk.make(55);
 	};
 	const d = build(k);
-	assert k.readId(d) === 55, "function expression: got " + k.readId(d).toString();
+	assert k.readId(d) == 55, "function expression: got " + k.readId(d).toString();
 }
 
 test "lambda result survives being stored and read twice" {
 	const k = kit();
 	const build = (kk: Kit): Opaque => kk.make(66);
 	const d = build(k);
-	assert k.readId(d) === 66, "first read: got " + k.readId(d).toString();
-	assert k.readId(d) === 66, "second read: got " + k.readId(d).toString();
+	assert k.readId(d) == 66, "first read: got " + k.readId(d).toString();
+	assert k.readId(d) == 66, "second read: got " + k.readId(d).toString();
 }
 
 test "lambda typed by CONTEXT reaches a closure param intact" {
 	const k = kit();
 	const build: (kk: Kit) => Opaque = (kk) => kk.make(77);
 	const d = build(k);
-	assert k.readId(d) === 77, "contextual: got " + k.readId(d).toString();
+	assert k.readId(d) == 77, "contextual: got " + k.readId(d).toString();
 }
 
 test "unknown-annotated lambda PARAM relays to a closure param intact" {
 	const k = kit();
 	const relay = (kk: Kit, c: unknown): number => kk.readId(c);
 	const d = k.make(88);
-	assert relay(k, d) === 88, "param relay: got " + relay(k, d).toString();
+	assert relay(k, d) == 88, "param relay: got " + relay(k, d).toString();
 }
 
 test "nested lambda returning unknown reaches a closure param intact" {
@@ -107,5 +107,5 @@ test "nested lambda returning unknown reaches a closure param intact" {
 		return inner(99);
 	};
 	const d = outer(k);
-	assert k.readId(d) === 99, "nested: got " + k.readId(d).toString();
+	assert k.readId(d) == 99, "nested: got " + k.readId(d).toString();
 }

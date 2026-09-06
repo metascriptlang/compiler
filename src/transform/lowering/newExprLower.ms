@@ -48,23 +48,23 @@ import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../tes
 // resolved callee without a user constructor, at least one argument, and a
 // class type carrying field names to map the positional args onto.
 function positionalStruct(node: Node): Type | null {
-	if (node.kind !== NodeKind.NewExpr) return null;
+	if (node.kind != NodeKind.NewExpr) return null;
 	const d = node.data as NewExprData;
-	if (d.newArguments.length === 0) return null;
+	if (d.newArguments.length == 0) return null;
 	const sym = d.newCallee.resolvedSym;
-	if (sym === null || hasFlag(sym, SymbolFlag.HasConstructor)) return null;
+	if (sym == null || hasFlag(sym, SymbolFlag.HasConstructor)) return null;
 	const classType = node.nodeType;
-	if (classType === null) return null;
-	const inner = (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr) ? classType.typeReturn : classType;
-	if (inner === null) return null;
-	if (inner.typeNames === null || d.newArguments.length > inner.typeNames.length) return null;
+	if (classType == null) return null;
+	const inner = (classType.kind == TypeKind.Ref || classType.kind == TypeKind.Ptr) ? classType.typeReturn : classType;
+	if (inner == null) return null;
+	if (inner.typeNames == null || d.newArguments.length > inner.typeNames.length) return null;
 	return inner;
 }
 
 function hasPositionalNew(expr: Node): boolean {
 	let found = false;
 	replaceInExpr(expr, (node: Node): Node => {
-		if (positionalStruct(node) !== null) { found = true; }
+		if (positionalStruct(node) != null) { found = true; }
 		return node;
 	});
 	return found;
@@ -76,8 +76,8 @@ function hasPositionalNew(expr: Node): boolean {
 export function nodeHasPositionalNew(node: Node): boolean {
 	let found = false;
 	function visit(n: Node): void {
-		if (found || n === null) return;
-		if (positionalStruct(n) !== null) { found = true; return; }
+		if (found || n == null) return;
+		if (positionalStruct(n) != null) { found = true; return; }
 		forEachChild(n, visit);
 	}
 	visit(node);
@@ -91,7 +91,7 @@ export function nodeHasPositionalNew(node: Node): boolean {
 function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	return replaceInExpr(expr, (node: Node): Node => {
 		const inner = positionalStruct(node);
-		if (inner === null) return node;
+		if (inner == null) return node;
 		const d = node.data as NewExprData;
 		const args = d.newArguments;
 		d.newArguments = [];
@@ -107,7 +107,7 @@ function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext)
 			const recv = makeIdentResolved(sym, loc);
 			recv.nodeType = ty;
 			const target = makeMember(recv, inner.typeNames[i], loc);
-			if (inner.typeChildren !== null && i < inner.typeChildren.length) {
+			if (inner.typeChildren != null && i < inner.typeChildren.length) {
 				target.nodeType = inner.typeChildren[i];
 			}
 			hoisted.push(makeExprStmt(makeAssign(target, args[i], loc), loc));
@@ -123,39 +123,39 @@ function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext)
 
 function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as VariableDeclData;
-	if (d.initializer === null || containsConditionalEval(d.initializer)) return [stmt];
+	if (d.initializer == null || containsConditionalEval(d.initializer)) return [stmt];
 	const hoisted: Node[] = [];
 	d.initializer = hoistPositionalNews(d.initializer, hoisted, ctx);
-	if (hoisted.length === 0) return [stmt];
+	if (hoisted.length == 0) return [stmt];
 	hoisted.push(stmt);
 	return hoisted;
 }
 
 function expandExprStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr === null || containsConditionalEval(ed.expr)) return [stmt];
+	if (ed.expr == null || containsConditionalEval(ed.expr)) return [stmt];
 	const hoisted: Node[] = [];
 	ed.expr = hoistPositionalNews(ed.expr, hoisted, ctx);
-	if (hoisted.length === 0) return [stmt];
+	if (hoisted.length == 0) return [stmt];
 	hoisted.push(stmt);
 	return hoisted;
 }
 
 function expandReturn(stmt: Node, ctx: TransformContext): Node[] {
 	const rd = stmt.data as ReturnStmtData;
-	if (rd.argument === null || containsConditionalEval(rd.argument)) return [stmt];
+	if (rd.argument == null || containsConditionalEval(rd.argument)) return [stmt];
 	const hoisted: Node[] = [];
 	rd.argument = hoistPositionalNews(rd.argument, hoisted, ctx);
-	if (hoisted.length === 0) return [stmt];
+	if (hoisted.length == 0) return [stmt];
 	hoisted.push(stmt);
 	return hoisted;
 }
 
 function altChainHasPositionalNew(alt: Node): boolean {
-	if (alt.kind !== NodeKind.IfStmt) return false;
+	if (alt.kind != NodeKind.IfStmt) return false;
 	const d = alt.data as IfStmtData;
 	if (hasPositionalNew(d.condition)) return true;
-	if (d.alternate !== null) return altChainHasPositionalNew(d.alternate);
+	if (d.alternate != null) return altChainHasPositionalNew(d.alternate);
 	return false;
 }
 
@@ -165,13 +165,13 @@ function altChainHasPositionalNew(alt: Node): boolean {
 // now-listed inner if (same trick as callHoist expandIf).
 function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	const ifd = stmt.data as IfStmtData;
-	if (ifd.alternate !== null && ifd.alternate.kind === NodeKind.IfStmt && altChainHasPositionalNew(ifd.alternate)) {
+	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasPositionalNew(ifd.alternate)) {
 		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
 	}
 	if (containsConditionalEval(ifd.condition)) return [stmt];
 	const hoisted: Node[] = [];
 	ifd.condition = hoistPositionalNews(ifd.condition, hoisted, ctx);
-	if (hoisted.length === 0) return [stmt];
+	if (hoisted.length == 0) return [stmt];
 	hoisted.push(stmt);
 	return hoisted;
 }
@@ -184,7 +184,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	if (containsConditionalEval(wd.whileCondition)) return [stmt];
 	const pre: Node[] = [];
 	const cond = hoistPositionalNews(wd.whileCondition, pre, ctx);
-	if (pre.length === 0) return [stmt];
+	if (pre.length == 0) return [stmt];
 	const loc = stmt.location;
 	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
 	for (const s of extractBodyStmts(wd.whileBody)) { pre.push(s); }
@@ -216,15 +216,15 @@ export function lowerNewExpr(program: Node, ctx: TransformContext): Node {
 // these pin the pass to leaving unresolved and 0-arg news untouched. The
 // end-to-end lowering is proven by the positional-new guard programs.
 
-test "new Foo() stays NewExpr (no args, nothing to lower)" { assert firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.NewExpr; }
+test "new Foo() stays NewExpr (no args, nothing to lower)" { assert firstExprKindAfter("new Foo();", lowerNewExpr) == NodeKind.NewExpr; }
 
 test "unresolved new Bar(x, y) is left untouched" {
-	assert firstExprKindAfter("new Bar(x, y);", lowerNewExpr) === NodeKind.NewExpr;
+	assert firstExprKindAfter("new Bar(x, y);", lowerNewExpr) == NodeKind.NewExpr;
 }
 
-test "non-new unchanged" { assert firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr; }
+test "non-new unchanged" { assert firstExprKindAfter("foo();", lowerNewExpr) == NodeKind.CallExpr; }
 
-test "stmt count preserved on unresolved input" { assert stmtCountAfter("new A(); new B();", lowerNewExpr) === 2; }
+test "stmt count preserved on unresolved input" { assert stmtCountAfter("new A(); new B();", lowerNewExpr) == 2; }
 
 test "unresolved args preserved in NewExpr" {
 	const result = parseInput("new Foo(1, 2);");
@@ -233,7 +233,7 @@ test "unresolved args preserved in NewExpr" {
 	const prog = lowerNewExpr(result.value, ctx);
 	const stmts = getStmts(prog);
 	const sd = stmts[0].data as ExprStmtData;
-	assert sd.expr.kind === NodeKind.NewExpr;
+	assert sd.expr.kind == NodeKind.NewExpr;
 	const nd = (sd.expr.data as NewExprData);
-	assert nd.newArguments.length === 2;
+	assert nd.newArguments.length == 2;
 }

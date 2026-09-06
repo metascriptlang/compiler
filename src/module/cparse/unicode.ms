@@ -20,7 +20,7 @@ export function decodeUtf8(source: string, pos: int32): int32[] {
 	let i = 1;
 	while (i < len) {
 		const b = source.byteAt(pos + i);
-		if (b < 0 || (b >> 6) !== 2) return [0xFFFD, 1];
+		if (b < 0 || (b >> 6) != 2) return [0xFFFD, 1];
 		cp = (cp << 6) | ((b as int32) & 0x3F);
 		i = i + 1;
 	}
@@ -91,9 +91,9 @@ export function readUniversalChar(source: string, pos: int32, len: int32): int32
 // Strip UTF-8 BOM (EF BB BF) if present at start.
 export function stripBom(source: string): string {
 	if (source.byteLength >= 3 &&
-		source.byteAt(0) === 0xEF &&
-		source.byteAt(1) === 0xBB &&
-		source.byteAt(2) === 0xBF) {
+		source.byteAt(0) == 0xEF &&
+		source.byteAt(1) == 0xBB &&
+		source.byteAt(2) == 0xBF) {
 		return source.byteSlice(3, source.byteLength);
 	}
 	return source;
@@ -107,10 +107,10 @@ export function canonicalizeNewline(source: string): string {
 	const len = source.byteLength;
 	while (i < len) {
 		const ch = source.byteAt(i);
-		if (ch === "\r".code) {
+		if (ch == "\r".code) {
 			parts.push(source.byteSlice(start, i));
 			parts.push("\n");
-			if (i + 1 < len && source.byteAt(i + 1) === "\n".code) {
+			if (i + 1 < len && source.byteAt(i + 1) == "\n".code) {
 				i = i + 2;
 			} else {
 				i = i + 1;
@@ -120,7 +120,7 @@ export function canonicalizeNewline(source: string): string {
 			i = i + 1;
 		}
 	}
-	if (start === 0) return source; // no \r found — return original
+	if (start == 0) return source; // no \r found — return original
 	parts.push(source.byteSlice(start, len));
 	let result = "";
 	for (const p of parts) result = result + p;
@@ -135,12 +135,12 @@ export function removeBackslashNewline(source: string): string {
 	let i = 0;
 	const len = source.byteLength;
 	while (i < len) {
-		if (source.byteAt(i) === "\\".code && i + 1 < len && source.byteAt(i + 1) === "\n".code) {
+		if (source.byteAt(i) == "\\".code && i + 1 < len && source.byteAt(i + 1) == "\n".code) {
 			parts.push(source.byteSlice(start, i));
 			i = i + 2;
 			pending = pending + 1;
 			start = i;
-		} else if (source.byteAt(i) === "\n".code) {
+		} else if (source.byteAt(i) == "\n".code) {
 			i = i + 1;
 			// Emit pending blank lines after this real newline
 			if (pending > 0) {
@@ -155,7 +155,7 @@ export function removeBackslashNewline(source: string): string {
 			i = i + 1;
 		}
 	}
-	if (start === 0 && pending === 0) return source;
+	if (start == 0 && pending == 0) return source;
 	parts.push(source.byteSlice(start, len));
 	while (pending > 0) {
 		parts.push("\n");
@@ -173,9 +173,9 @@ export function convertUniversalChars(source: string): string {
 	let i = 0;
 	const len = source.byteLength;
 	while (i < len) {
-		if (source.byteAt(i) === "\\".code && i + 1 < len) {
+		if (source.byteAt(i) == "\\".code && i + 1 < len) {
 			const next = source.byteAt(i + 1);
-			if (next === "u".code) {
+			if (next == "u".code) {
 				const cp = readUniversalChar(source, i + 2, 4);
 				if (cp >= 0) {
 					parts.push(source.byteSlice(start, i));
@@ -184,7 +184,7 @@ export function convertUniversalChars(source: string): string {
 					start = i;
 					continue;
 				}
-			} else if (next === "U".code) {
+			} else if (next == "U".code) {
 				const cp = readUniversalChar(source, i + 2, 8);
 				if (cp >= 0) {
 					parts.push(source.byteSlice(start, i));
@@ -208,7 +208,7 @@ export function convertUniversalChars(source: string): string {
 			i = i + 1;
 		}
 	}
-	if (start === 0) return source;
+	if (start == 0) return source;
 	parts.push(source.byteSlice(start, len));
 	let result = "";
 	for (const p of parts) result = result + p;
@@ -219,54 +219,54 @@ export function convertUniversalChars(source: string): string {
 
 test "decodeUtf8 ASCII" {
 	const r = decodeUtf8("A", 0);
-	assert r[0] === 65;
-	assert r[1] === 1;
+	assert r[0] == 65;
+	assert r[1] == 1;
 }
 
 test "isIdent1 underscore" {
-	assert isIdent1("_".code) === true;
+	assert isIdent1("_".code) == true;
 }
 
 test "isIdent1 digit false" {
-	assert isIdent1("0".code) === false;
+	assert isIdent1("0".code) == false;
 }
 
 test "isIdent2 digit" {
-	assert isIdent2("0".code) === true;
+	assert isIdent2("0".code) == true;
 }
 
 test "fromHex valid" {
-	assert fromHex("a".code) === 10;
-	assert fromHex("F".code) === 15;
-	assert fromHex("0".code) === 0;
+	assert fromHex("a".code) == 10;
+	assert fromHex("F".code) == 15;
+	assert fromHex("0".code) == 0;
 }
 
 test "fromHex invalid" {
-	assert fromHex("g".code) === -1;
+	assert fromHex("g".code) == -1;
 }
 
 test "canonicalizeNewline" {
-	assert canonicalizeNewline("a\r\nb\rc") === "a\nb\nc";
+	assert canonicalizeNewline("a\r\nb\rc") == "a\nb\nc";
 }
 
 test "canonicalizeNewline no change" {
-	assert canonicalizeNewline("abc\ndef") === "abc\ndef";
+	assert canonicalizeNewline("abc\ndef") == "abc\ndef";
 }
 
 test "removeBackslashNewline" {
 	// "a\<newline>b" → backslash-newline removed → "ab" + trailing compensating \n
-	assert removeBackslashNewline("a\\\nb") === "ab\n";
+	assert removeBackslashNewline("a\\\nb") == "ab\n";
 }
 
 test "removeBackslashNewline no change" {
-	assert removeBackslashNewline("abc") === "abc";
+	assert removeBackslashNewline("abc") == "abc";
 }
 
 test "convertUniversalChars \\u" {
 	const s = convertUniversalChars("\\u0041");
-	assert s === "A";
+	assert s == "A";
 }
 
 test "stripBom no bom" {
-	assert stripBom("hello") === "hello";
+	assert stripBom("hello") == "hello";
 }

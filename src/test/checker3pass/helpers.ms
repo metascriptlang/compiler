@@ -42,7 +42,7 @@ export function checkOnly(source: string): CheckResult {
 	const preludeCtx = getPreludeContext();
 
 	const mod = findModule(graph, modPath);
-	if (mod === null) {
+	if (mod == null) {
 		return { program: null as unknown as Node, ctx: null as unknown as CheckerContext, errors: ["module not found"] };
 	}
 
@@ -55,7 +55,7 @@ export function checkOnly(source: string): CheckResult {
 
 	const errMsgs: string[] = [];
 	for (const err of ctx.errors) {
-		if (err.severity === Severity.Error) {
+		if (err.severity == Severity.Error) {
 			errMsgs.push(err.message);
 		}
 	}
@@ -74,12 +74,12 @@ export function findFirstFuncExpr(program: Node): Node {
 }
 
 export function findFnDecl(program: Node, name: string): Node {
-	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
+	if (program == null || program.kind != NodeKind.Program) return null as unknown as Node;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
-		if (stmt.kind === NodeKind.FunctionDecl) {
+		if (stmt.kind == NodeKind.FunctionDecl) {
 			const fd = stmt.data as FunctionDeclData;
-			if (fd.fnName === name) return stmt;
+			if (fd.fnName == name) return stmt;
 		}
 	}
 	return null as unknown as Node;
@@ -91,12 +91,12 @@ export function findCallByCalleeContains(program: Node, calleeFragment: string):
 }
 
 export function findFirstByKind(root: Node, kind: NodeKind): Node {
-	if (root === null) return null as unknown as Node;
-	if (root.kind === kind) return root;
+	if (root == null) return null as unknown as Node;
+	if (root.kind == kind) return root;
 	let found: Node = null as unknown as Node;
 	walkChildren(root, (child: Node): boolean => {
 		const inner = findFirstByKind(child, kind);
-		if (inner !== null) { found = inner; return true; }
+		if (inner != null) { found = inner; return true; }
 		return false;
 	});
 	return found;
@@ -105,10 +105,10 @@ export function findFirstByKind(root: Node, kind: NodeKind): Node {
 // ===== Private helpers =====
 
 function findCallExprWalk(root: Node, calleeFragment: string): Node {
-	if (root === null) return null as unknown as Node;
-	if (root.kind === NodeKind.CallExpr) {
+	if (root == null) return null as unknown as Node;
+	if (root.kind == NodeKind.CallExpr) {
 		const cd = root.data as CallExprData;
-		if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier) {
+		if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
 			const id = cd.callee.data as IdentifierData;
 			if (id.name.indexOf(calleeFragment) >= 0) return root;
 		}
@@ -116,7 +116,7 @@ function findCallExprWalk(root: Node, calleeFragment: string): Node {
 	let found: Node = null as unknown as Node;
 	walkChildren(root, (child: Node): boolean => {
 		const inner = findCallExprWalk(child, calleeFragment);
-		if (inner !== null) { found = inner; return true; }
+		if (inner != null) { found = inner; return true; }
 		return false;
 	});
 	return found;
@@ -126,7 +126,7 @@ function findCallExprWalk(root: Node, calleeFragment: string): Node {
 // invariant checking and navigation. Callback returns `true` to
 // short-circuit (used by `findFirstByKind` / `findCallExprWalk`).
 function walkChildren(node: Node, cb: (child: Node) => boolean): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
@@ -138,11 +138,11 @@ function walkChildren(node: Node, cb: (child: Node) => boolean): void {
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			if (d.fnBody !== null && cb(d.fnBody)) return;
+			if (d.fnBody != null && cb(d.fnBody)) return;
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			if (d.methodBody !== null && cb(d.methodBody)) return;
+			if (d.methodBody != null && cb(d.methodBody)) return;
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
@@ -150,53 +150,53 @@ function walkChildren(node: Node, cb: (child: Node) => boolean): void {
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			if (d.arrowBody !== null && cb(d.arrowBody)) return;
+			if (d.arrowBody != null && cb(d.arrowBody)) return;
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			if (d.funcExprBody !== null && cb(d.funcExprBody)) return;
+			if (d.funcExprBody != null && cb(d.funcExprBody)) return;
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer !== null && cb(d.initializer)) return;
+			if (d.initializer != null && cb(d.initializer)) return;
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			if (d.callee !== null && cb(d.callee)) return;
+			if (d.callee != null && cb(d.callee)) return;
 			for (const a of d.arguments) { if (cb(a)) return; }
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			if (d.newCallee !== null && cb(d.newCallee)) return;
+			if (d.newCallee != null && cb(d.newCallee)) return;
 			for (const a of d.newArguments) { if (cb(a)) return; }
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
-			if (d.object !== null && cb(d.object)) return;
+			if (d.object != null && cb(d.object)) return;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			if (d.left !== null && cb(d.left)) return;
-			if (d.right !== null && cb(d.right)) return;
+			if (d.left != null && cb(d.left)) return;
+			if (d.right != null && cb(d.right)) return;
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			if (d.expr !== null && cb(d.expr)) return;
+			if (d.expr != null && cb(d.expr)) return;
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument !== null && cb(d.argument)) return;
+			if (d.argument != null && cb(d.argument)) return;
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			if (d.condition !== null && cb(d.condition)) return;
-			if (d.consequent !== null && cb(d.consequent)) return;
-			if (d.alternate !== null && cb(d.alternate)) return;
+			if (d.condition != null && cb(d.condition)) return;
+			if (d.consequent != null && cb(d.consequent)) return;
+			if (d.alternate != null && cb(d.alternate)) return;
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			if (d.whileCondition !== null && cb(d.whileCondition)) return;
-			if (d.whileBody !== null && cb(d.whileBody)) return;
+			if (d.whileCondition != null && cb(d.whileCondition)) return;
+			if (d.whileBody != null && cb(d.whileBody)) return;
 		},
 		_ => {},
 	};

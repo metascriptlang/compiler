@@ -27,7 +27,7 @@ export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 	// but emitting the digits the user wrote keeps the loss in one place instead
 	// of baking a second, front-end rounding into the output.
 	const text = d.isFloat ? "" + d.value : int64ToDecimal(d.intVal);
-	if (text.byteLength > 0 && text.byteAt(0) === "-".code) {
+	if (text.byteLength > 0 && text.byteAt(0) == "-".code) {
 		emit(gen, "(");
 		emit(gen, text);
 		emit(gen, ")");
@@ -58,7 +58,7 @@ export function emitNullLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitBigIntLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as BigIntLiteralData;
-	if (d.bigintValue.byteLength > 0 && d.bigintValue.byteAt(0) === "-".code) {
+	if (d.bigintValue.byteLength > 0 && d.bigintValue.byteAt(0) == "-".code) {
 		emit(gen, "(");
 		emit(gen, d.bigintValue);
 		emit(gen, ")");
@@ -90,8 +90,8 @@ const JS_RESERVED: HashSet<string> = new HashSet<string>([
 export function safeJsName(name: string): string {
 	if (JS_RESERVED.has(name)) return "$" + name;
 	// Operator names (==, <, !=, etc.) — mangle to valid JS identifier
-	if (name.length > 0 && name.byteAt(0) !== "_".code
-		&& name.byteAt(0) !== "$".code
+	if (name.length > 0 && name.byteAt(0) != "_".code
+		&& name.byteAt(0) != "$".code
 		&& !(name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code)
 		&& !(name.byteAt(0) >= "A".code && name.byteAt(0) <= "Z".code)) {
 		let mangled = "$op_";
@@ -123,14 +123,14 @@ export function safeJsName(name: string): string {
 // the bundle is one flat scope (mangle everything), while non-bundle emits one
 // ES module per file where the import/export pair binds public names.
 export function jsSymbolName(gen: JSGenerator, sym: Symbol | null, name: string): string {
-	if (sym === null) return safeJsName(name);
-	if (sym.nativeName !== null && sym.nativeName !== "") return safeJsName(name);
+	if (sym == null) return safeJsName(name);
+	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name);
 	if (!gen.bundleMode && (hasFlag(sym, SymbolFlag.Exported) || hasFlag(sym, SymbolFlag.Imported))) return safeJsName(name);
-	if (sym.symbolKind === SymbolKind.Function && sym.modulePath !== null && sym.modulePath !== "") {
+	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
 		return mangledFunctionName(sym, name, sym.overloadIdx);
 	}
-	if (sym.symbolKind === SymbolKind.Class && sym.modulePath !== null && sym.modulePath !== "") {
+	if (sym.symbolKind == SymbolKind.Class && sym.modulePath != null && sym.modulePath != "") {
 		return mangledGlobalName(sym, name);
 	}
 	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, name);
@@ -142,7 +142,7 @@ function moduleCountExporting(gen: JSGenerator, baseName: string): int32 {
 	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
 		const names = gen.modExportVals[mi];
 		for (let ni = 0; ni < names.length; ni += 1) {
-			if (names[ni] === baseName) { count += 1; break; }
+			if (names[ni] == baseName) { count += 1; break; }
 		}
 	}
 	return count;
@@ -154,10 +154,10 @@ function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string)
 		const names = gen.modExportVals[mi];
 		let exports = false;
 		for (let ni = 0; ni < names.length; ni += 1) {
-			if (names[ni] === baseName) { exports = true; break; }
+			if (names[ni] == baseName) { exports = true; break; }
 		}
 		if (!exports) continue;
-		if (gen.modExportKeys[mi] === modulePath) { return before; }
+		if (gen.modExportKeys[mi] == modulePath) { return before; }
 		before += 1;
 	}
 	return -1;
@@ -188,7 +188,7 @@ const jsGlobalNames: string[] = [
 
 function isJsGlobalName(name: string): boolean {
 	for (const g of jsGlobalNames) {
-		if (g === name) return true;
+		if (g == name) return true;
 	}
 	return false;
 }
@@ -198,23 +198,23 @@ function exportedBindingName(baseName: string): string {
 }
 
 function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
-	const baseName = (sym.originalName !== null && sym.originalName !== "") ? sym.originalName : name;
-	const hasModule = sym.modulePath !== null && sym.modulePath !== "";
+	const baseName = (sym.originalName != null && sym.originalName != "") ? sym.originalName : name;
+	const hasModule = sym.modulePath != null && sym.modulePath != "";
 	// The declaring side sees its own symbols without a modulePath while the
 	// referencing side sees registry clones that carry one; naming must not
 	// depend on which side asks, so empty resolves to the module being emitted.
 	const effPath = hasModule ? sym.modulePath : gen.currentModulePath;
 	let emitted = "";
-	if (sym.symbolKind === SymbolKind.EnumMember && hasModule) {
+	if (sym.symbolKind == SymbolKind.EnumMember && hasModule) {
 		// Checker lowers E.Member to a flat E_Member identifier; the emitted
 		// enum declaration exports exactly those flat names.
 		emitted = safeJsName(name);
-		if (sym.modulePath !== gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
+		if (sym.modulePath != gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
 		return emitted;
 	}
-	if (sym.symbolKind === SymbolKind.Function) {
+	if (sym.symbolKind == SymbolKind.Function) {
 		if (moduleExportsName(gen, effPath, baseName)) {
-			const inSet = sym.overloadIdx > 0 || (sym.overloads !== null && sym.overloads.length > 0);
+			const inSet = sym.overloadIdx > 0 || (sym.overloads != null && sym.overloads.length > 0);
 			// The declaring side compiles alone, so a set spanning modules
 			// never shows in its symbol state — both sides read the collision
 			// off the export surface instead, the one list they share.
@@ -230,7 +230,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 		} else {
 			return safeJsName(name);
 		}
-	} else if (sym.symbolKind === SymbolKind.Class) {
+	} else if (sym.symbolKind == SymbolKind.Class) {
 		if (moduleExportsName(gen, effPath, baseName)) {
 			emitted = exportedBindingName(baseName);
 		} else if (hasModule) {
@@ -243,30 +243,38 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 	} else {
 		return safeJsName(name);
 	}
-	if (effPath !== gen.currentModulePath) recordNeededImport(gen, effPath, emitted);
+	if (effPath != gen.currentModulePath) recordNeededImport(gen, effPath, emitted);
 	return emitted;
 }
 
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
-	if (d.name === "this") { emit(gen, gen.thisName); return; }
+	if (d.name == "this") { emit(gen, gen.thisName); return; }
 	// The name recorded at a call site is what a debugger shows as the name of
 	// the frame it enters, so a renamed callee has to carry its .ms name here.
 	const emitted = jsSymbolName(gen, node.resolvedSym, d.name);
-	if (emitted !== d.name) markNamed(gen, node, d.name);
+	if (emitted != d.name) markNamed(gen, node, d.name);
 	emit(gen, emitted);
 }
 
 // ===== Binary Expression =====
 
+function strictJsOperator(op: string): string {
+	return match (op) {
+		"==" => "===",
+		"!=" => "!==",
+		_ => op,
+	};
+}
+
 export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as BinaryExprData;
 	// Assignment doesn't need outer parens
-	if (d.operator === "=") {
+	if (d.operator == "=") {
 		emitNode(gen, d.left);
 		emit(gen, " = ");
 		emitCopyOnRead(gen, d.right);
-	} else if (d.operator === "+=" || d.operator === "-=" || d.operator === "*=" || d.operator === "/=" || d.operator === "%=") {
+	} else if (d.operator == "+=" || d.operator == "-=" || d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
 		emitNode(gen, d.left);
 		emit(gen, " ");
 		emit(gen, d.operator);
@@ -276,7 +284,7 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 		emit(gen, "(");
 		emitNode(gen, d.left);
 		emit(gen, " ");
-		emit(gen, d.operator);
+		emit(gen, strictJsOperator(d.operator));
 		emit(gen, " ");
 		emitNode(gen, d.right);
 		emit(gen, ")");
@@ -287,10 +295,10 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 
 export function emitUnaryExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as UnaryExprData;
-	if (d.unaryOp === "&") {
+	if (d.unaryOp == "&") {
 		// Address-of: no-op in JS (arrays/strings are already references)
 		emitNode(gen, d.operand);
-	} else if (d.unaryOp === "typeof") {
+	} else if (d.unaryOp == "typeof") {
 		emit(gen, "typeof ");
 		emitNode(gen, d.operand);
 	} else {
@@ -323,8 +331,8 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 function hasNativePattern(s: string): boolean {
 	for (let i = 0; i < s.length; i += 1) {
 		const c = s.charAt(i);
-		if (c === "#" || c === "@") return true;
-		if (c === "$" && i + 1 < s.length && s.charAt(i + 1) === "1") return true;
+		if (c == "#" || c == "@") return true;
+		if (c == "$" && i + 1 < s.length && s.charAt(i + 1) == "1") return true;
 	}
 	return false;
 }
@@ -334,13 +342,13 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 	let i = 0;
 	while (i < pattern.length) {
 		const ch = pattern.charAt(i);
-		if (ch === "#") {
+		if (ch == "#") {
 			if (argIdx < args.length) {
 				emitNode(gen, args[argIdx]);
 				argIdx = argIdx + 1;
 			}
 			i = i + 1;
-		} else if (ch === "@") {
+		} else if (ch == "@") {
 			let first = true;
 			while (argIdx < args.length) {
 				if (!first) emit(gen, ", ");
@@ -349,7 +357,7 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 				first = false;
 			}
 			i = i + 1;
-		} else if (ch === "$" && i + 1 < pattern.length && pattern.charAt(i + 1) === "1") {
+		} else if (ch == "$" && i + 1 < pattern.length && pattern.charAt(i + 1) == "1") {
 			emit(gen, symName);
 			i = i + 2;
 		} else {
@@ -363,7 +371,7 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 // the leftmost object, which is where a debugger expects the call to start.
 function calleeOriginNode(callee: Node): Node {
 	let origin = callee;
-	while (origin.kind === NodeKind.MemberExpr) {
+	while (origin.kind == NodeKind.MemberExpr) {
 		origin = (origin.data as MemberExprData).object;
 	}
 	return origin;
@@ -372,9 +380,9 @@ function calleeOriginNode(callee: Node): Node {
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
 
-	if (d.callee.kind === NodeKind.Identifier
-			&& (d.callee.data as IdentifierData).name === "super"
-			&& d.callee.resolvedSym !== null) {
+	if (d.callee.kind == NodeKind.Identifier
+			&& (d.callee.data as IdentifierData).name == "super"
+			&& d.callee.resolvedSym != null) {
 		mark(gen, d.callee);
 		emit(gen, "super(");
 		emitJoinedNodes(gen, d.arguments, ", ");
@@ -388,9 +396,9 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	// receiver is prepended to match the post-lower arg shape used by free
 	// extension functions.
 	const sym = d.callee.resolvedSym;
-	if (sym !== null && sym.nativeName !== "" && hasNativePattern(sym.nativeName)) {
+	if (sym != null && sym.nativeName != "" && hasNativePattern(sym.nativeName)) {
 		let patternArgs = d.arguments;
-		if (d.callee.kind === NodeKind.MemberExpr) {
+		if (d.callee.kind == NodeKind.MemberExpr) {
 			patternArgs = [(d.callee.data as MemberExprData).object];
 			for (const a of d.arguments) patternArgs.push(a);
 		}
@@ -400,11 +408,11 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	}
 
 	// msPrintln / console.log → console.log (strings are native)
-	const isMsPrintln = d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln";
-	const isConsoleLog = d.callee.kind === NodeKind.MemberExpr
-		&& (d.callee.data as MemberExprData).property === "log"
-		&& (d.callee.data as MemberExprData).object.kind === NodeKind.Identifier
-		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name === "console";
+	const isMsPrintln = d.callee.kind == NodeKind.Identifier && (d.callee.data as IdentifierData).name == "msPrintln";
+	const isConsoleLog = d.callee.kind == NodeKind.MemberExpr
+		&& (d.callee.data as MemberExprData).property == "log"
+		&& (d.callee.data as MemberExprData).object.kind == NodeKind.Identifier
+		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name == "console";
 	if (isMsPrintln || isConsoleLog) {
 		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
 		emit(gen, "console.log(");
@@ -415,11 +423,11 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 
 	// Overloaded call — bind the check-time winner; the identifier's own
 	// resolvedSym is always the primary.
-	if (d.callee.kind === NodeKind.Identifier && sym !== null
-			&& sym.overloads !== null && sym.overloads.length > 0) {
+	if (d.callee.kind == NodeKind.Identifier && sym != null
+			&& sym.overloads != null && sym.overloads.length > 0) {
 		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
 		const ws = w.winnerSym;
-		if (ws !== null && ws.nativeName !== "" && hasNativePattern(ws.nativeName)) {
+		if (ws != null && ws.nativeName != "" && hasNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
 			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name);
 			return;
@@ -433,10 +441,10 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	}
 
 	const memberOverloadSym = node.resolvedSym;
-	if (d.callee.kind === NodeKind.MemberExpr && memberOverloadSym !== null
+	if (d.callee.kind == NodeKind.MemberExpr && memberOverloadSym != null
 			&& memberOverloadSym.overloadIdx > 0
-			&& memberOverloadSym.declNode !== null
-			&& memberOverloadSym.declNode.kind === NodeKind.MethodDecl) {
+			&& memberOverloadSym.declNode != null
+			&& memberOverloadSym.declNode.kind == NodeKind.MethodDecl) {
 		const mem = d.callee.data as MemberExprData;
 		emitNode(gen, mem.object);
 		emit(gen, mem.isOptional ? "?." : ".");
@@ -448,7 +456,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	}
 
 	// Wrap a function-expression callee: (() => 5)()
-	const wrapCallee = d.callee.kind === NodeKind.ArrowFunction || d.callee.kind === NodeKind.FunctionExpr;
+	const wrapCallee = d.callee.kind == NodeKind.ArrowFunction || d.callee.kind == NodeKind.FunctionExpr;
 	if (wrapCallee) {
 		emit(gen, "(");
 		emitNode(gen, d.callee);
@@ -464,14 +472,14 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 // ===== Member Expression =====
 
 export function jsMethodMemberName(methodName: string, sym: Symbol | null): string {
-	if (sym === null || sym.overloadIdx <= 0) return methodName;
+	if (sym == null || sym.overloadIdx <= 0) return methodName;
 	return `${methodName}_u${sym.overloadIdx}`;
 }
 
 export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MemberExprData;
 	// Wrap number literals: (42).toString()
-	if (d.object.kind === NodeKind.NumberLiteral) {
+	if (d.object.kind == NodeKind.NumberLiteral) {
 		emit(gen, "(");
 		emitNode(gen, d.object);
 		emit(gen, ")");
@@ -500,15 +508,15 @@ export function emitArrayAccess(gen: JSGenerator, node: Node): void {
 
 export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ObjectLiteralData;
-	if ((node.flags & NodeFlag.Closure) !== 0) {
+	if ((node.flags & NodeFlag.Closure) != 0) {
 		for (let i = 0; i < d.keys.length; i += 1) {
-			if (d.keys[i] === "fn" && i < d.properties.length) {
+			if (d.keys[i] == "fn" && i < d.properties.length) {
 				emitNode(gen, d.properties[i]);
 				return;
 			}
 		}
 	}
-	if (d.keys.length === 0) {
+	if (d.keys.length == 0) {
 		emit(gen, "{}");
 		return;
 	}
@@ -530,26 +538,26 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayLiteralData;
 	const t = node.nodeType;
 	let typedName = "";
-	if (t !== null && t.kind === TypeKind.SizedArray && t.typeReturn !== null) {
+	if (t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null) {
 		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
-	if (typedName !== "") emit(gen, "new " + typedName + "(");
+	if (typedName != "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
 	for (let i = 0; i < d.elements.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
 		emitCopyOnRead(gen, d.elements[i]);
 	}
 	emit(gen, "]");
-	if (typedName !== "") emit(gen, ")");
+	if (typedName != "") emit(gen, ")");
 }
 
 // ===== Arrow Function =====
 
 export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrowFunctionData;
-	const isAsync = d.arrowFlags === "async" || d.arrowFlags === "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
+	const isAsync = d.arrowFlags == "async" || d.arrowFlags == "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
 	if (isAsync) { emit(gen, "async "); }
-	if (d.arrowParams.length === 1 && !isAsync) {
+	if (d.arrowParams.length == 1 && !isAsync) {
 		emit(gen, d.arrowParams[0]);
 	} else {
 		emit(gen, "(");
@@ -557,7 +565,7 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 		emit(gen, ")");
 	}
 	emit(gen, " => ");
-	if (d.arrowBody.kind === NodeKind.ObjectLiteral) {
+	if (d.arrowBody.kind == NodeKind.ObjectLiteral) {
 		emit(gen, "(");
 		emitNode(gen, d.arrowBody);
 		emit(gen, ")");

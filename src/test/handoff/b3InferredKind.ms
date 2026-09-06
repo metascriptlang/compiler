@@ -21,9 +21,9 @@ import { resolveSimpleTypeStr } from "../../transform/util";
 import { createTransformContext, freshTempSym } from "../../transform/context";
 
 test "Inferred is its own kind, not Pending, not None, not user unknown" {
-	assert inferredType().kind === TypeKind.Inferred;
-	assert inferredType().kind !== TypeKind.Pending;
-	assert inferredType().kind !== noneType().kind;
+	assert inferredType().kind == TypeKind.Inferred;
+	assert inferredType().kind != TypeKind.Pending;
+	assert inferredType().kind != noneType().kind;
 	assert !isUnknownType(inferredType());
 }
 
@@ -38,33 +38,33 @@ test "Inferred stays lenient in assignability — open signatures must match" {
 }
 
 test "Inferred scores as generic in overload relation" {
-	assert typeRelation(inferredType(), numberType()) === TypeRelation.Generic;
-	assert typeRelation(numberType(), inferredType()) === TypeRelation.Generic;
+	assert typeRelation(inferredType(), numberType()) == TypeRelation.Generic;
+	assert typeRelation(numberType(), inferredType()) == TypeRelation.Generic;
 }
 
 test "Inferred displays as <inferring>" {
-	assert typeDisplayName(inferredType()) === "<inferring>";
+	assert typeDisplayName(inferredType()) == "<inferring>";
 }
 
 test "producer: empty annotation resolves to None, not Pending" {
 	// Group A flip — transform/util.ms resolveSimpleTypeStr. Pre-B3 both
 	// arms returned the Pending sentinel; the cell discriminates the flip.
-	assert resolveSimpleTypeStr("").kind === TypeKind.None;
-	assert resolveSimpleTypeStr("SomeNominalType").kind === TypeKind.None;
+	assert resolveSimpleTypeStr("").kind == TypeKind.None;
+	assert resolveSimpleTypeStr("SomeNominalType").kind == TypeKind.None;
 }
 
 test "producer: an untyped transform temp carries None, not Pending" {
 	// Group A flip — transform/context.ms freshTempSym null fallback.
 	const ctx = createTransformContext();
 	const sym = freshTempSym(ctx, "probe", null);
-	assert sym.symbolType.kind === TypeKind.None;
+	assert sym.symbolType.kind == TypeKind.None;
 }
 
 test "Inferred at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	// Inverted 2026-08-06 when B4 armed the seam: an unresolved Inferred
 	// reaching emission is a compiler bug (tyInferred never arrives raw at cgen).
 	const ctx = checkSource("function main(): void { }");
-	assert ctx !== null;
+	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, inferredType());
 	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";

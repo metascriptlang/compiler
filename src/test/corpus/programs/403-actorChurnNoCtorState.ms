@@ -21,7 +21,7 @@ function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 200000; i = i + 1) {
 		const a = new Light();
-		if (a.pid !== 0) { acc = (acc + 1) % 1000; }
+		if (a.pid != 0) { acc = (acc + 1) % 1000; }
 		stop(a.pid, ExitReason.Normal);
 	}
 	console.log(`actor-churn-noctor done acc=${acc}`);

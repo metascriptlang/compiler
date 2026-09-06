@@ -35,12 +35,12 @@ function pendingDedup<T>(x: T | null): int32 {
 
 test "bug059: same-named generic in a second module still reaches codegen" {
 	const w: int32 | null = null;
-	assert pendingDedup(w) === 2;
+	assert pendingDedup(w) == 2;
 }
 
 test "bug059: the second module runs its OWN body, not the first module's" {
 	const a: int32 | null = null;
 	const b: int64 | null = null;
-	assert pendingDedup(a) === 2;
-	assert pendingDedup(b) === 2;
+	assert pendingDedup(a) == 2;
+	assert pendingDedup(b) == 2;
 }

@@ -17,7 +17,7 @@ test "as-cast to type alias with overlapping union field names" {
 	// StringLiteralData = { value: string }
 	// (node.data as StringLiteralData).value should be string, not number
 	const ctx = checkSource("type NodeData = | { value: number } | { value: string };\ntype StringLiteralData = { value: string };\ntype NumberLiteralData = { value: number };\nfunction processStr(data: NodeData): string {\n\tconst sd = data as StringLiteralData;\n\treturn sd.value;\n}\nfunction processNum(data: NodeData): number {\n\tconst nd = data as NumberLiteralData;\n\treturn nd.value;\n}");
-	assert ctx !== null;
+	assert ctx != null;
 	if (ctx.errors.length > 0) {
 		for (const e of ctx.errors) {
 			console.log("UNION-OVERLAP-ERR: " + e);
@@ -40,11 +40,11 @@ test "cross-module as-cast with overlapping union fields" {
 	const registry = checkModuleGraph(graph, "");
 	const preludeCtx = getPreludeContext();
 	const mod = findModule(graph, canonicalModulePath(modB));
-	assert mod !== null;
+	assert mod != null;
 	const pr = parseSource(mod.source);
 	assert pr.ok;
 	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-	assert ctx !== null;
+	assert ctx != null;
 	if (ctx.errors.length > 0) {
 		for (const e of ctx.errors) {
 			console.log("CROSS-OVERLAP-ERR: " + e);

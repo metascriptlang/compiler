@@ -17,14 +17,14 @@ function assignDetach(): boolean {
 	let a: Vec<Pod> = [{ x: 1, y: 2 }];
 	let b: Vec<Pod> = a;
 	b[0].x = 9;
-	return a[0].x === 1 && b[0].x === 9;
+	return a[0].x == 1 && b[0].x == 9;
 }
 
 function pushDetach(): boolean {
 	let a: Vec<Pod> = [{ x: 1, y: 2 }];
 	let b: Vec<Pod> = a;
 	b.push({ x: 3, y: 4 });
-	return a.length === 1 && b.length === 2;
+	return a.length == 1 && b.length == 2;
 }
 
 function reassignDetach(): boolean {
@@ -32,14 +32,14 @@ function reassignDetach(): boolean {
 	let b: Vec<Pod> = [{ x: 5, y: 6 }];
 	b = a;
 	a[0].y = 7;
-	return b[0].y === 2;
+	return b[0].y == 2;
 }
 
 function structField(): boolean {
 	let a: Vec<Pod> = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
 	let b: Vec<Pod> = a;
 	b[1].y = 9;
-	return a[1].y === 4 && b[1].y === 9 && a[0].x === 1;
+	return a[1].y == 4 && b[1].y == 9 && a[0].x == 1;
 }
 
 function main(): void {

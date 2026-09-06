@@ -46,15 +46,15 @@ export function main(): void {
 	// (1) the normal-call side of the relation — was always accepted
 	const viaCall = takesString(d);
 	console.log("viaCall=" + viaCall.toString());
-	if (viaCall !== 7) { throw "GUARD RED: union no longer accepted at a string parameter"; }
+	if (viaCall != 7) { throw "GUARD RED: union no longer accepted at a string parameter"; }
 
 	// (2) match over string-literal arms — lowers through the derived `===`
 	const ord = dirToOrdinal(d);
 	console.log("ord=" + ord.toString());
-	if (ord !== 2) { throw "GUARD RED: match over a string-literal union mis-dispatched"; }
+	if (ord != 2) { throw "GUARD RED: match over a string-literal union mis-dispatched"; }
 
 	// (3) equality, union vs union
-	const eqUU = d === e;
+	const eqUU = d == e;
 	console.log("eqUU=" + eqUU.toString());
 	if (!eqUU) { throw "GUARD RED: === on two string-literal unions is wrong"; }
 
@@ -64,7 +64,7 @@ export function main(): void {
 	if (!eqUS) { throw "GUARD RED: == between a string-literal union and string is wrong"; }
 
 	// (5) inequality must derive from the same base overload
-	const neq = d !== other;
+	const neq = d != other;
 	console.log("neq=" + neq.toString());
 	if (!neq) { throw "GUARD RED: !== on string-literal unions is wrong"; }
 
@@ -76,8 +76,8 @@ export function main(): void {
 	// (7) plain string neighbours — must not regress
 	const a: string = "ab";
 	const b: string = "ab";
-	console.log("plainEq=" + (a === b).toString());
-	if (!(a === b)) { throw "GUARD RED: === on plain strings regressed"; }
+	console.log("plainEq=" + (a == b).toString());
+	if (!(a == b)) { throw "GUARD RED: === on plain strings regressed"; }
 
 	console.log("typeRelationStringUnion ok");
 }

@@ -76,21 +76,21 @@ export function hasActiveFrame(stack: TaDependencyStack): boolean {
 }
 
 export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey, outputHash: number): void {
-	if (stack.frames.length === 0) return;  // defensive
+	if (stack.frames.length == 0) return;  // defensive
 	const frame = stack.frames[stack.frames.length - 1];
 	const entry: TaDependencyEntry = { depKey, expectedHash: outputHash };
 	frame.deps.push(entry);
 }
 
 export function recordDurability(stack: TaDependencyStack, dur: TaDurability): void {
-	if (stack.frames.length === 0) return;
+	if (stack.frames.length == 0) return;
 	const frame = stack.frames[stack.frames.length - 1];
 	// Durability enum: Low=0, Medium=1, High=2. Lower value = less stable.
 	// Use equality checks since < on enums not supported by checker.
-	if (dur === TaDurability.Low) {
+	if (dur == TaDurability.Low) {
 		frame.minDurability = TaDurability.Low;
-	} else if (dur === TaDurability.Medium) {
-		if (frame.minDurability === TaDurability.High) {
+	} else if (dur == TaDurability.Medium) {
+		if (frame.minDurability == TaDurability.High) {
 			frame.minDurability = TaDurability.Medium;
 		}
 	}
@@ -100,16 +100,16 @@ export function recordDurability(stack: TaDependencyStack, dur: TaDurability): v
 test "create starts Red" {
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(key);
-	assert entry.state === TaQueryState.Red;
-	assert entry.computedAt === 0;
-	assert entry.verifiedAt === 0;
-	assert entry.outputHash === 0;
+	assert entry.state == TaQueryState.Red;
+	assert entry.computedAt == 0;
+	assert entry.verifiedAt == 0;
+	assert entry.outputHash == 0;
 }
 
 test "dependencies start empty" {
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(key);
-	assert entry.dependencies.length === 0;
+	assert entry.dependencies.length == 0;
 }
 
 test "starts empty" {
@@ -154,11 +154,11 @@ test "record dependency adds to topmost frame" {
 	pushFrame(stack, k2);
 	recordDependency(stack, depKey, 999);
 	const f2 = popFrame(stack);
-	assert f2.deps.length === 1;
+	assert f2.deps.length == 1;
 	assert queryKeysEqual(f2.deps[0].depKey, depKey);
-	assert f2.deps[0].expectedHash === 999;
+	assert f2.deps[0].expectedHash == 999;
 	const f1 = popFrame(stack);
-	assert f1.deps.length === 0;
+	assert f1.deps.length == 0;
 }
 
 test "record on empty stack is no-op" {
@@ -172,12 +172,12 @@ test "minDurability tracks lowest" {
 	const stack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	pushFrame(stack, key);
-	assert stack.frames[0].minDurability === TaDurability.High;
+	assert stack.frames[0].minDurability == TaDurability.High;
 	recordDurability(stack, TaDurability.Medium);
-	assert stack.frames[0].minDurability === TaDurability.Medium;
+	assert stack.frames[0].minDurability == TaDurability.Medium;
 	recordDurability(stack, TaDurability.Low);
-	assert stack.frames[0].minDurability === TaDurability.Low;
+	assert stack.frames[0].minDurability == TaDurability.Low;
 	recordDurability(stack, TaDurability.High);  // doesn't raise
-	assert stack.frames[0].minDurability === TaDurability.Low;
+	assert stack.frames[0].minDurability == TaDurability.Low;
 	popFrame(stack);
 }

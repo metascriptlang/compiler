@@ -200,15 +200,15 @@ export function makeUnion(): CType {
 // ===== Type helpers =====
 
 export function isInteger(ty: CType): boolean {
-	return ty.kind === CTypeKind.Bool || ty.kind === CTypeKind.Char ||
-		ty.kind === CTypeKind.Short || ty.kind === CTypeKind.Int ||
-		ty.kind === CTypeKind.Long || ty.kind === CTypeKind.LongLong ||
-		ty.kind === CTypeKind.Enum;
+	return ty.kind == CTypeKind.Bool || ty.kind == CTypeKind.Char ||
+		ty.kind == CTypeKind.Short || ty.kind == CTypeKind.Int ||
+		ty.kind == CTypeKind.Long || ty.kind == CTypeKind.LongLong ||
+		ty.kind == CTypeKind.Enum;
 }
 
 export function isFlonum(ty: CType): boolean {
-	return ty.kind === CTypeKind.Float || ty.kind === CTypeKind.Double ||
-		ty.kind === CTypeKind.LongDouble;
+	return ty.kind == CTypeKind.Float || ty.kind == CTypeKind.Double ||
+		ty.kind == CTypeKind.LongDouble;
 }
 
 export function isNumeric(ty: CType): boolean {
@@ -216,19 +216,19 @@ export function isNumeric(ty: CType): boolean {
 }
 
 export function isPointer(ty: CType): boolean {
-	return ty.kind === CTypeKind.Ptr;
+	return ty.kind == CTypeKind.Ptr;
 }
 
 export function isArray(ty: CType): boolean {
-	return ty.kind === CTypeKind.Array;
+	return ty.kind == CTypeKind.Array;
 }
 
 export function isFunc(ty: CType): boolean {
-	return ty.kind === CTypeKind.Func;
+	return ty.kind == CTypeKind.Func;
 }
 
 export function isAggregate(ty: CType): boolean {
-	return ty.kind === CTypeKind.Struct || ty.kind === CTypeKind.Union;
+	return ty.kind == CTypeKind.Struct || ty.kind == CTypeKind.Union;
 }
 
 export function copyType(ty: CType): CType {
@@ -257,7 +257,7 @@ export function copyType(ty: CType): CType {
 function alignUp(n: int32, align: int32): int32 {
 	if (align <= 1) return n;
 	const rem = n % align;
-	if (rem === 0) return n;
+	if (rem == 0) return n;
 	return n + (align - rem);
 }
 
@@ -273,7 +273,7 @@ export function computeStructLayout(ty: CType): void {
 		if (memberAlign > maxAlign) maxAlign = memberAlign;
 
 		// Flexible array member (last member, size 0): no space contribution
-		if (i === ty.members.length - 1 && mem.type.kind === CTypeKind.Array && mem.type.arrayLen < 0) {
+		if (i == ty.members.length - 1 && mem.type.kind == CTypeKind.Array && mem.type.arrayLen < 0) {
 			mem.offset = alignUp(offset, memberAlign);
 			ty.isFlexible = true;
 		} else {
@@ -321,79 +321,79 @@ export function makeMember(name: string, type: CType): CMember {
 test "int type is target-sized on linux x86_64" {
 	const target = targetLinuxX86_64();
 	const intT = makeInt(target);
-	assert intT.size === 4;
-	assert intT.align === 4;
-	assert intT.isSigned === true;
+	assert intT.size == 4;
+	assert intT.align == 4;
+	assert intT.isSigned == true;
 }
 
 test "pointer inherits target pointer size on wasm32" {
 	const target = targetWasm32();
 	const ptrT = makePointer(target, makeVoid());
-	assert ptrT.size === 4;
-	assert ptrT.align === 4;
+	assert ptrT.size == 4;
+	assert ptrT.align == 4;
 }
 
 test "long differs between linux and windows" {
 	const linux = targetLinuxX86_64();
 	const win = targetWindowsX64();
-	assert makeLong(linux).size === 8;
-	assert makeLong(win).size === 4;
+	assert makeLong(linux).size == 8;
+	assert makeLong(win).size == 4;
 }
 
 test "array size = element * count" {
 	const target = targetLinuxX86_64();
 	const arr = makeArray(makeInt(target), 10);
-	assert arr.size === 40;
-	assert arr.align === 4;
-	assert arr.arrayLen === 10;
+	assert arr.size == 40;
+	assert arr.align == 4;
+	assert arr.arrayLen == 10;
 }
 
 test "array incomplete has size -1" {
 	const target = targetLinuxX86_64();
 	const arr = makeArray(makeInt(target), -1);
-	assert arr.size === -1;
-	assert arr.arrayLen === -1;
+	assert arr.size == -1;
+	assert arr.arrayLen == -1;
 }
 
 test "func type size is 1" {
 	const target = targetLinuxX86_64();
 	const fn = makeFunc(makeInt(target));
-	assert fn.size === 1;
-	assert fn.returnType.kind === CTypeKind.Int;
+	assert fn.size == 1;
+	assert fn.returnType.kind == CTypeKind.Int;
 }
 
 test "enum uses int size" {
 	const target = targetLinuxX86_64();
 	const e = makeEnum(target);
-	assert e.size === 4;
-	assert e.isSigned === true;
+	assert e.size == 4;
+	assert e.isSigned == true;
 }
 
 test "isInteger covers enum" {
 	const target = targetLinuxX86_64();
-	assert isInteger(makeEnum(target)) === true;
-	assert isInteger(makeFloat(target)) === false;
+	assert isInteger(makeEnum(target)) == true;
+	assert isInteger(makeFloat(target)) == false;
 }
 
 test "isFlonum" {
 	const target = targetLinuxX86_64();
-	assert isFlonum(makeDouble(target)) === true;
-	assert isFlonum(makeInt(target)) === false;
+	assert isFlonum(makeDouble(target)) == true;
+	assert isFlonum(makeInt(target)) == false;
 }
 
 test "isNumeric covers both" {
 	const target = targetLinuxX86_64();
-	assert isNumeric(makeInt(target)) === true;
-	assert isNumeric(makeFloat(target)) === true;
-	assert isNumeric(makePointer(target, makeVoid())) === false;
+	assert isNumeric(makeInt(target)) == true;
+	assert isNumeric(makeFloat(target)) == true;
+	assert isNumeric(makePointer(target, makeVoid())) == false;
 }
 
 test "copyType sets origin" {
 	const target = targetLinuxX86_64();
 	const original = makeInt(target);
 	const copy = copyType(original);
-	assert copy.kind === CTypeKind.Int;
-	assert copy.origin === original;
+	assert copy.kind == CTypeKind.Int;
+	assert copy.origin == original;
 }
 
 test "struct layout with padding" {
@@ -405,11 +405,11 @@ test "struct layout with padding" {
 		makeMember("b", makeInt(target)),
 	];
 	computeStructLayout(st);
-	assert st.members[0].offset === 0;
-	assert st.members[1].offset === 4; // aligned to 4
-	assert st.size === 8; // 4 (a padded) + 4 (b) = 8
-	assert st.align === 4;
-	assert st.isComplete === true;
+	assert st.members[0].offset == 0;
+	assert st.members[1].offset == 4; // aligned to 4
+	assert st.size == 8; // 4 (a padded) + 4 (b) = 8
+	assert st.align == 4;
+	assert st.isComplete == true;
 }
 
 test "struct layout packed" {
@@ -421,10 +421,10 @@ test "struct layout packed" {
 		makeMember("b", makeInt(target)),
 	];
 	computeStructLayout(st);
-	assert st.members[0].offset === 0;
-	assert st.members[1].offset === 1; // no padding
-	assert st.size === 5;
-	assert st.align === 1;
+	assert st.members[0].offset == 0;
+	assert st.members[1].offset == 1; // no padding
+	assert st.size == 5;
+	assert st.align == 1;
 }
 
 test "union layout" {
@@ -435,10 +435,10 @@ test "union layout" {
 		makeMember("d", makeDouble(target)),
 	];
 	computeUnionLayout(un);
-	assert un.members[0].offset === 0;
-	assert un.members[1].offset === 0;
-	assert un.size === 8; // max(4, 8)
-	assert un.align === 8;
+	assert un.members[0].offset == 0;
+	assert un.members[1].offset == 0;
+	assert un.size == 8; // max(4, 8)
+	assert un.align == 8;
 }
 
 test "struct with flexible array member" {
@@ -449,14 +449,14 @@ test "struct with flexible array member" {
 		makeMember("data", makeArray(makeChar(target), -1)), // flexible
 	];
 	computeStructLayout(st);
-	assert st.members[0].offset === 0;
-	assert st.members[1].offset === 4;
-	assert st.isFlexible === true;
-	assert st.size === 4; // flexible array doesn't contribute
+	assert st.members[0].offset == 0;
+	assert st.members[1].offset == 4;
+	assert st.isFlexible == true;
+	assert st.size == 4; // flexible array doesn't contribute
 }
 
 test "long double differs by target" {
-	assert makeLongDouble(targetLinuxX86_64()).size === 16;
-	assert makeLongDouble(targetMacosAarch64()).size === 8;
-	assert makeLongDouble(targetWindowsX64()).size === 8;
+	assert makeLongDouble(targetLinuxX86_64()).size == 16;
+	assert makeLongDouble(targetMacosAarch64()).size == 8;
+	assert makeLongDouble(targetWindowsX64()).size == 8;
 }

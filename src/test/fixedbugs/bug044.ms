@@ -24,10 +24,10 @@ test "bug044: nullable-ref struct field survives HashMap round-trip" {
 	const ty: Bug044Ty = { kind: 6 };
 	m.set("k", { a: 1, t: ty });
 	const g = m.get("k");
-	assert g !== null;
-	if (g !== null) {
-		assert g.t !== null;
-		if (g.t !== null) assert g.t.kind === 6;
+	assert g != null;
+	if (g != null) {
+		assert g.t != null;
+		if (g.t != null) assert g.t.kind == 6;
 	}
 }
 
@@ -35,6 +35,6 @@ test "bug044: nullable-ref struct field survives array round-trip" {
 	const ty: Bug044Ty = { kind: 7 };
 	const arr: Bug044Entry[] = [{ a: 2, t: ty }];
 	const g = arr[0];
-	assert g.t !== null;
-	if (g.t !== null) assert g.t.kind === 7;
+	assert g.t != null;
+	if (g.t != null) assert g.t.kind == 7;
 }

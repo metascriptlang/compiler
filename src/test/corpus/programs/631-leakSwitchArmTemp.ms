@@ -49,7 +49,7 @@ function parseValue(ch: int32, pos: number): PRes {
 function main(): void {
 	let acc = 0;
 	for (let i = 0; i < 100000; i = i + 1) {
-		const ch: int32 = (i % 2) === 0 ? 116 : 110;
+		const ch: int32 = (i % 2) == 0 ? 116 : 110;
 		const r = parseValue(ch, i % 100);
 		if (r.ok) { acc = ((acc + r.value.pos) % 1000) as int32; }
 	}

@@ -12,19 +12,19 @@ import { hasErrors } from "../../checker/context";
 
 test "number.toString() no checker error" {
 	const ctx = checkSource("const x: number = 42;\nconst s: string = x.toString();");
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }
 
 test "boolean.toString() no checker error" {
 	const ctx = checkSource("const b = true;\nconst s: string = b.toString();");
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }
 
 test "enum.toString() no checker error" {
 	const ctx = checkSource("enum Color { Red, Green, Blue }\nconst c = Color.Red;\nconst s: string = c.toString();");
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }
 

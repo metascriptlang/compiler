@@ -29,7 +29,7 @@ function isExprPositionToken(k: TokenKind): boolean {
 function isJsxStart(s: LexerState): boolean {
 	if (!isExprPositionToken(s.lastToken)) return false;
 	const next = peekAt(s, 1);
-	return isLetter(next) || next === ">".code;
+	return isLetter(next) || next == ">".code;
 }
 
 function emitSimple(s: LexerState, kind: TokenKind, val: string): void {
@@ -68,7 +68,7 @@ function scanJsxText(s: LexerState): void {
 	const startPos = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch === "<".code || ch === "{".code) break;
+		if (ch == "<".code || ch == "{".code) break;
 		advanceChar(s);
 	}
 	const text = s.source.byteSlice(startPos, s.pos);
@@ -83,7 +83,7 @@ function scanJsxIdentifier(s: LexerState): void {
 	const startPos = s.pos;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (isLetter(ch) || isDigit(ch) || ch === "-".code) { advanceChar(s); }
+		if (isLetter(ch) || isDigit(ch) || ch == "-".code) { advanceChar(s); }
 		else { break; }
 	}
 	const name = s.source.byteSlice(startPos, s.pos);
@@ -92,12 +92,12 @@ function scanJsxIdentifier(s: LexerState): void {
 
 function scanJsxChildren(s: LexerState): boolean {
 	const ch = peek(s);
-	if (ch === "<".code) {
-		if (peekAt(s, 1) === "/".code) { emitClose(s); }
+	if (ch == "<".code) {
+		if (peekAt(s, 1) == "/".code) { emitClose(s); }
 		else { emitTagStart(s); }
 		return true;
 	}
-	if (ch === "{".code) { emitBraceOpen(s); return true; }
+	if (ch == "{".code) { emitBraceOpen(s); return true; }
 	scanJsxText(s);
 	return true;
 }
@@ -105,22 +105,22 @@ function scanJsxChildren(s: LexerState): boolean {
 function scanJsxTag(s: LexerState): boolean {
 	const ch = peek(s);
 	if (isWhitespace(ch) || isNewline(ch)) { advanceChar(s); return true; }
-	if (ch === ">".code) {
+	if (ch == ">".code) {
 		emitSimple(s, TokenKind.Gt, ">");
 		s.jsxStack[s.jsxStack.length - 1] = JsxMode.Children;
 		return true;
 	}
-	if (ch === "/".code && peekAt(s, 1) === ">".code) {
+	if (ch == "/".code && peekAt(s, 1) == ">".code) {
 		emitSimple(s, TokenKind.Slash, "/");
 		emitSimple(s, TokenKind.Gt, ">");
 		s.jsxStack.pop();
 		return true;
 	}
-	if (ch === "{".code) { emitBraceOpen(s); return true; }
-	if (ch === "=".code) { emitSimple(s, TokenKind.Assign, "="); return true; }
-	if (ch === ":".code) { emitSimple(s, TokenKind.Colon, ":"); return true; }
-	if (ch === ".".code) { emitSimple(s, TokenKind.Dot, "."); return true; }
-	if (ch === "\"".code || ch === "'".code) { scanString(s, ch); return true; }
+	if (ch == "{".code) { emitBraceOpen(s); return true; }
+	if (ch == "=".code) { emitSimple(s, TokenKind.Assign, "="); return true; }
+	if (ch == ":".code) { emitSimple(s, TokenKind.Colon, ":"); return true; }
+	if (ch == ".".code) { emitSimple(s, TokenKind.Dot, "."); return true; }
+	if (ch == "\"".code || ch == "'".code) { scanString(s, ch); return true; }
 	if (isLetter(ch)) { scanJsxIdentifier(s); return true; }
 	return false;
 }
@@ -128,24 +128,24 @@ function scanJsxTag(s: LexerState): boolean {
 function scanJsxClosing(s: LexerState): boolean {
 	const ch = peek(s);
 	if (isWhitespace(ch) || isNewline(ch)) { advanceChar(s); return true; }
-	if (ch === ">".code) {
+	if (ch == ">".code) {
 		emitSimple(s, TokenKind.Gt, ">");
 		// pop the Closing frame and the element's own Children frame beneath it
 		s.jsxStack.pop();
 		if (s.jsxStack.length > 0) { s.jsxStack.pop(); }
 		return true;
 	}
-	if (ch === ":".code) { emitSimple(s, TokenKind.Colon, ":"); return true; }
-	if (ch === ".".code) { emitSimple(s, TokenKind.Dot, "."); return true; }
+	if (ch == ":".code) { emitSimple(s, TokenKind.Colon, ":"); return true; }
+	if (ch == ".".code) { emitSimple(s, TokenKind.Dot, "."); return true; }
 	if (isLetter(ch)) { scanJsxIdentifier(s); return true; }
 	return false;
 }
 
 function scanJsxBrace(s: LexerState): boolean {
 	const ch = peek(s);
-	if (ch === "<".code && isJsxStart(s)) { emitTagStart(s); return true; }
-	if (ch === "{".code) { emitBraceOpen(s); return true; }
-	if (ch === "}".code) {
+	if (ch == "<".code && isJsxStart(s)) { emitTagStart(s); return true; }
+	if (ch == "{".code) { emitBraceOpen(s); return true; }
+	if (ch == "}".code) {
 		emitSimple(s, TokenKind.RBrace, "}");
 		s.jsxStack.pop();
 		return true;
@@ -156,15 +156,15 @@ function scanJsxBrace(s: LexerState): boolean {
 // Returns true when the JSX modes fully handled this iteration (caller continues the lex loop).
 export function scanJsx(s: LexerState): boolean {
 	const n = s.jsxStack.length;
-	if (n === 0) {
-		if (peek(s) !== "<".code) { return false; }
+	if (n == 0) {
+		if (peek(s) != "<".code) { return false; }
 		if (!isJsxStart(s)) { return false; }
 		emitTagStart(s);
 		return true;
 	}
 	const top = s.jsxStack[n - 1];
-	if (top === JsxMode.Children) { return scanJsxChildren(s); }
-	if (top === JsxMode.Tag) { return scanJsxTag(s); }
-	if (top === JsxMode.Closing) { return scanJsxClosing(s); }
+	if (top == JsxMode.Children) { return scanJsxChildren(s); }
+	if (top == JsxMode.Tag) { return scanJsxTag(s); }
+	if (top == JsxMode.Closing) { return scanJsxClosing(s); }
 	return scanJsxBrace(s);
 }

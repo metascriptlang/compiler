@@ -58,25 +58,25 @@ import { inferredType } from "../../checker/types";
 function _buildExportFor(name: string, declKind: int32): ExportedSymInfo {
 	const zl = makeLoc(0, 0);
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, inferredType(), false);
-	if (declKind === NodeKind.InterfaceDecl) {
+	if (declKind == NodeKind.InterfaceDecl) {
 		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, {
 			interfaceName: name, interfaceFields: [], nameLocation: zl,
 		}, zl);
-	} else if (declKind === NodeKind.TypeAliasDecl) {
+	} else if (declKind == NodeKind.TypeAliasDecl) {
 		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, {
 			aliasName: name, aliasType: "", aliasGenericParams: "",
 			discriminantName: "", discriminantType: "",
 			nameLocation: zl,
 		}, zl);
-	} else if (declKind === NodeKind.ClassDecl) {
+	} else if (declKind == NodeKind.ClassDecl) {
 		sym.declNode = createNodeAt(NodeKind.ClassDecl, {
 			className: name, classBody: [], nameLocation: zl,
 		}, zl);
-	} else if (declKind === NodeKind.ActorDecl) {
+	} else if (declKind == NodeKind.ActorDecl) {
 		sym.declNode = createNodeAt(NodeKind.ActorDecl, {
 			actorName: name, actorBody: [], nameLocation: zl,
 		}, zl);
-	} else if (declKind === NodeKind.EnumDecl) {
+	} else if (declKind == NodeKind.EnumDecl) {
 		sym.declNode = createNodeAt(NodeKind.EnumDecl, {
 			enumName: name, memberLocations: [], nameLocation: zl,
 		}, zl);
@@ -86,27 +86,27 @@ function _buildExportFor(name: string, declKind: int32): ExportedSymInfo {
 
 test "bug028: buildExportInfo does NOT preserve InterfaceDecl in exportInfo.declNode" {
 	const info = _buildExportFor("Foo", NodeKind.InterfaceDecl);
-	assert info.declNode === null;
+	assert info.declNode == null;
 }
 
 test "bug028: buildExportInfo does NOT preserve TypeAliasDecl in exportInfo.declNode" {
 	const info = _buildExportFor("Bar", NodeKind.TypeAliasDecl);
-	assert info.declNode === null;
+	assert info.declNode == null;
 }
 
 test "bug028: buildExportInfo does NOT preserve ClassDecl in exportInfo.declNode" {
 	const info = _buildExportFor("Baz", NodeKind.ClassDecl);
-	assert info.declNode === null;
+	assert info.declNode == null;
 }
 
 test "bug028: buildExportInfo does NOT preserve ActorDecl in exportInfo.declNode" {
 	const info = _buildExportFor("Qux", NodeKind.ActorDecl);
-	assert info.declNode === null;
+	assert info.declNode == null;
 }
 
 test "bug028: buildExportInfo DOES preserve EnumDecl in exportInfo.declNode" {
 	// Safe because ensureShaped has no EnumDecl handler — falls to `_ => {}`.
 	const info = _buildExportFor("Color", NodeKind.EnumDecl);
-	assert info.declNode !== null;
-	assert info.declNode.kind === NodeKind.EnumDecl;
+	assert info.declNode != null;
+	assert info.declNode.kind == NodeKind.EnumDecl;
 }

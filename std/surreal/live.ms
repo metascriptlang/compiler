@@ -42,21 +42,21 @@ export function live(this c: SurrealClient, query: string, callback: (notificati
 	if (!r.ok) return Result.err(r.error);
 	// Surreal wraps query results: [{ status, time, result: <UUID-Tag> }].
 	// On error the same shape carries `status: "ERR"`, `result: <message Text>`.
-	if (r.value.kind !== CborKind.Array || length(r.value) === 0) {
+	if (r.value.kind != CborKind.Array || length(r.value) == 0) {
 		return Result.err(decodeError("LIVE response not an Array of statement results"));
 	}
 	const stmt0 = at(r.value, 0);
-	if (stmt0.kind !== CborKind.Map) {
+	if (stmt0.kind != CborKind.Map) {
 		return Result.err(decodeError("LIVE statement result not a Map"));
 	}
 	const status = getDynamicField(stmt0, "status");
-	if (status.kind === CborKind.Text && asString(status) !== "OK") {
+	if (status.kind == CborKind.Text && asString(status) != "OK") {
 		const msg = getDynamicField(stmt0, "result");
-		const msgText = msg.kind === CborKind.Text ? asString(msg) : "(non-text error message)";
+		const msgText = msg.kind == CborKind.Text ? asString(msg) : "(non-text error message)";
 		return Result.err(rpcError(0 as int32, "LIVE failed: " + msgText));
 	}
 	const innerResult = getDynamicField(stmt0, "result");
-	if (innerResult.kind !== CborKind.Tag) {
+	if (innerResult.kind != CborKind.Tag) {
 		return Result.err(decodeError("LIVE result not a UUID Tag (kind=" + innerResult.kind.toString() + ")"));
 	}
 	const sub: LiveSubscription = { uuid: innerResult, callback: callback };
@@ -98,11 +98,11 @@ export function dispatchOnce(this c: SurrealClient): Result<boolean, SurrealErro
 		return Result.err(connectionFailed("recv: " + recvResult.error.message));
 	}
 	const msg = recvResult.value;
-	if (msg.kind === WsMessageKind.Close) {
+	if (msg.kind == WsMessageKind.Close) {
 		abortConn(c);
 		return Result.err(closed("server closed connection"));
 	}
-	if (msg.kind !== WsMessageKind.Binary) return Result.ok(false);
+	if (msg.kind != WsMessageKind.Binary) return Result.ok(false);
 	const dr = decodeAll(msg.data);
 	if (!dr.ok) return Result.err(decodeError("cbor parse: " + dr.error));
 	if (tryDispatchNotification(c, dr.value)) return Result.ok(true);

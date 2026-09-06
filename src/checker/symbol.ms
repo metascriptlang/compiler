@@ -11,49 +11,49 @@ export function initFnName(className: string): string {
 
 function classStructTypeOf(classSym: Symbol): Type {
 	let t = classSym.symbolType;
-	if (t === null) return null as unknown as Type;
-	if (t.kind === TypeKind.Ref && t.typeReturn !== null) t = t.typeReturn;
+	if (t == null) return null as unknown as Type;
+	if (t.kind == TypeKind.Ref && t.typeReturn != null) t = t.typeReturn;
 	return t;
 }
 
 function isClassBodyDecl(n: Node): boolean {
-	if (n === null) return false;
-	return n.kind === NodeKind.ClassDecl || n.kind === NodeKind.ActorDecl;
+	if (n == null) return false;
+	return n.kind == NodeKind.ClassDecl || n.kind == NodeKind.ActorDecl;
 }
 
 export function classDeclNodeOf(classSym: Symbol): Node {
 	if (isClassBodyDecl(classSym.declNode)) return classSym.declNode;
 	const t = classStructTypeOf(classSym);
-	if (t === null || t.sym === null) return null as unknown as Node;
+	if (t == null || t.sym == null) return null as unknown as Node;
 	if (isClassBodyDecl(t.sym.declNode)) return t.sym.declNode;
 	return null as unknown as Node;
 }
 
 export function parentClassSymOf(classSym: Symbol): Symbol {
 	const t = classStructTypeOf(classSym);
-	if (t === null || t.typeExtra === null) return null as unknown as Symbol;
+	if (t == null || t.typeExtra == null) return null as unknown as Symbol;
 	let p = t.typeExtra;
-	if (p.kind === TypeKind.Ref && p.typeReturn !== null) p = p.typeReturn;
-	if (p.sym === null) return null as unknown as Symbol;
+	if (p.kind == TypeKind.Ref && p.typeReturn != null) p = p.typeReturn;
+	if (p.sym == null) return null as unknown as Symbol;
 	return p.sym;
 }
 
 export function getCtorParamTypes(classSym: Symbol): Type[] {
 	let sym = classSym;
 	let depth = 0;
-	while (sym !== null && depth < 64) {
+	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
-		if (decl === null) return null as unknown as Type[];
+		if (decl == null) return null as unknown as Type[];
 		let body: Node[] = null as unknown as Node[];
-		if (decl.kind === NodeKind.ClassDecl) {
+		if (decl.kind == NodeKind.ClassDecl) {
 			body = (decl.data as ClassDeclData).classBody;
-		} else if (decl.kind === NodeKind.ActorDecl) {
+		} else if (decl.kind == NodeKind.ActorDecl) {
 			body = (decl.data as ActorDeclData).actorBody;
 		}
-		if (body !== null) {
+		if (body != null) {
 			for (const member of body) {
-				if (member.kind === NodeKind.ConstructorDecl && member.nodeType !== null
-						&& member.nodeType.kind === TypeKind.Function) {
+				if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
+						&& member.nodeType.kind == TypeKind.Function) {
 					return member.nodeType.typeChildren;
 				}
 			}
@@ -113,7 +113,7 @@ export enum SymbolFlag {
 
 // Flag helpers
 export function hasFlag(sym: Symbol, flag: SymbolFlag): boolean {
-	return (sym.symFlags & flag) !== 0;
+	return (sym.symFlags & flag) != 0;
 }
 
 export function setFlag(sym: Symbol, flag: SymbolFlag): void {
@@ -124,7 +124,7 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 // Also marks the enum type owner when an enum field is used.
 export function markUsed(sym: Symbol): void {
 	sym.symFlags = sym.symFlags | SymbolFlag.Used;
-	if (sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum && sym.symbolType.sym !== null) {
+	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Enum && sym.symbolType.sym != null) {
 		sym.symbolType.sym.symFlags = sym.symbolType.sym.symFlags | SymbolFlag.Used;
 	}
 }
@@ -180,14 +180,14 @@ export function openScope(table: SymbolTable, kind: ScopeKind): void {
 // lookupSymbol). Caller must ensure sym.nameId is set (via getIdentId or
 // defineSymbol which interns lazily).
 export function addSymbolToScope(scope: Scope, sym: Symbol): void {
-	if (sym.nameId === 0) return;
+	if (sym.nameId == 0) return;
 	if (!scope.symbols.has(sym.nameId)) {
 		scope.symbols.set(sym.nameId, sym);
 	}
 }
 
 export function closeScope(table: SymbolTable): void {
-	if (table.current.parent !== null) {
+	if (table.current.parent != null) {
 		table.current = table.current.parent;
 	}
 }
@@ -195,16 +195,16 @@ export function closeScope(table: SymbolTable): void {
 // ===== Symbol Registration =====
 
 export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, string> {
-	if (sym.nameId === 0) {
+	if (sym.nameId == 0) {
 		sym.nameId = getIdentId(table.identCache, sym.name);
 	}
 	const nameId = sym.nameId;
 	if (table.current.symbols.has(nameId)) {
 		const existing = table.current.symbols.get(nameId);
 		// Allow function overloads: same name, both functions
-		if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
+		if (existing.symbolKind == SymbolKind.Function && sym.symbolKind == SymbolKind.Function) {
 			// overloadIdx only disambiguates same-MODULE functions (module path handles cross-module).
-			if (existing.modulePath === sym.modulePath) {
+			if (existing.modulePath == sym.modulePath) {
 				sym.overloadIdx = existing.overloads.length + 1;
 			}
 			existing.overloads.push(sym);
@@ -224,9 +224,9 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
-	while (scope !== null) {
+	while (scope != null) {
 		const sym = scope.symbols.get(nameId);
-		if (sym !== null) return sym;
+		if (sym != null) return sym;
 		scope = scope.parent;
 	}
 	return null as unknown as Symbol;
@@ -236,16 +236,16 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	const sym = table.current.symbols.get(nameId);
-	if (sym !== null) return sym;
+	if (sym != null) return sym;
 	return null as unknown as Symbol;
 }
 
 export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	let scope = table.current;
-	while (scope !== null && scope.scopeKind !== ScopeKind.Module) {
+	while (scope != null && scope.scopeKind != ScopeKind.Module) {
 		scope = scope.parent;
 	}
-	if (scope === null) return [];
+	if (scope == null) return [];
 	const out: Symbol[] = [];
 	for (const sym of scope.symbols.values()) {
 		out.push(sym);
@@ -297,10 +297,10 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 export function lookupExport(table: SymbolTable, name: string): Symbol {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
-	while (scope !== null) {
-		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
+	while (scope != null) {
+		if (scope.scopeKind == ScopeKind.Module || scope.scopeKind == ScopeKind.Global) {
 			const sym = scope.symbols.get(nameId);
-			if (sym !== null && hasFlag(sym, SymbolFlag.Exported)) return sym;
+			if (sym != null && hasFlag(sym, SymbolFlag.Exported)) return sym;
 		}
 		scope = scope.parent;
 	}
@@ -309,14 +309,14 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 
 // isPointerType — Ref/Ptr are pointer types, Objects are always value types
 export function isPointerType(t: Type, table: SymbolTable): boolean {
-	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr;
+	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr;
 }
 
 // ===== Tests =====
 test "create table" {
 	const table = createSymbolTable();
-	assert table.current.scopeKind === ScopeKind.Global;
-	assert table.current.symbols.size === 0;
+	assert table.current.scopeKind == ScopeKind.Global;
+	assert table.current.symbols.size == 0;
 }
 
 test "define and lookup" {
@@ -324,8 +324,8 @@ test "define and lookup" {
 	const sym = makeSymbol("x", SymbolKind.Variable, noneType(), false);
 	const result = defineSymbol(table, sym);
 	assert result.ok;
-	assert lookupSymbol(table, "x") !== null;
-	assert sym.state === SymbolState.Hollow;
+	assert lookupSymbol(table, "x") != null;
+	assert sym.state == SymbolState.Hollow;
 }
 
 test "duplicate error" {
@@ -343,12 +343,12 @@ test "scope nesting" {
 	openScope(table, ScopeKind.Block);
 	defineSymbol(table, makeSymbol("b", SymbolKind.Variable, noneType(), false));
 	// Inner scope sees both
-	assert lookupSymbol(table, "a") !== null;
-	assert lookupSymbol(table, "b") !== null;
+	assert lookupSymbol(table, "a") != null;
+	assert lookupSymbol(table, "b") != null;
 	closeScope(table);
 	// Outer scope sees only a
-	assert lookupSymbol(table, "a") !== null;
-	assert lookupSymbol(table, "b") === null;
+	assert lookupSymbol(table, "a") != null;
+	assert lookupSymbol(table, "b") == null;
 }
 
 test "shadowing" {
@@ -358,12 +358,12 @@ test "shadowing" {
 	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), true));
 	// Inner lookup finds inner (mutable) shadow
 	const inner = lookupSymbol(table, "x");
-	assert inner !== null;
+	assert inner != null;
 	assert hasFlag(inner, SymbolFlag.Mutable);
 	closeScope(table);
 	// Outer lookup finds outer (immutable) original
 	const outer = lookupSymbol(table, "x");
-	assert outer !== null;
+	assert outer != null;
 	assert !hasFlag(outer, SymbolFlag.Mutable);
 }
 
@@ -372,9 +372,9 @@ test "lookupLocal" {
 	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Block);
 	// lookupLocal does NOT find parent scope
-	assert lookupLocal(table, "x") === null;
+	assert lookupLocal(table, "x") == null;
 	// lookupSymbol DOES find parent scope
-	assert lookupSymbol(table, "x") !== null;
+	assert lookupSymbol(table, "x") != null;
 	closeScope(table);
 }
 
@@ -384,11 +384,11 @@ test "function scope params" {
 	openScope(table, ScopeKind.Function);
 	defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, noneType(), false));
 	defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, noneType(), false));
-	assert lookupSymbol(table, "a") !== null;
-	assert lookupSymbol(table, "b") !== null;
-	assert lookupSymbol(table, "add") !== null;
+	assert lookupSymbol(table, "a") != null;
+	assert lookupSymbol(table, "b") != null;
+	assert lookupSymbol(table, "add") != null;
 	closeScope(table);
-	assert lookupSymbol(table, "a") === null;
+	assert lookupSymbol(table, "a") == null;
 }
 
 test "deeply nested" {
@@ -400,23 +400,23 @@ test "deeply nested" {
 	defineSymbol(table, makeSymbol("block", SymbolKind.Variable, noneType(), false));
 	openScope(table, ScopeKind.Loop);
 	defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, noneType(), false));
-	assert lookupSymbol(table, "global") !== null;
-	assert lookupSymbol(table, "func") !== null;
-	assert lookupSymbol(table, "block") !== null;
-	assert lookupSymbol(table, "loop") !== null;
+	assert lookupSymbol(table, "global") != null;
+	assert lookupSymbol(table, "func") != null;
+	assert lookupSymbol(table, "block") != null;
+	assert lookupSymbol(table, "loop") != null;
 	closeScope(table);
 	closeScope(table);
 	closeScope(table);
-	assert lookupSymbol(table, "loop") === null;
+	assert lookupSymbol(table, "loop") == null;
 }
 
 test "scope kind" {
 	const table = createSymbolTable();
-	assert table.current.scopeKind === ScopeKind.Global;
+	assert table.current.scopeKind == ScopeKind.Global;
 	openScope(table, ScopeKind.Function);
-	assert table.current.scopeKind === ScopeKind.Function;
+	assert table.current.scopeKind == ScopeKind.Function;
 	openScope(table, ScopeKind.Loop);
-	assert table.current.scopeKind === ScopeKind.Loop;
+	assert table.current.scopeKind == ScopeKind.Loop;
 	closeScope(table);
 	closeScope(table);
 }
@@ -430,8 +430,8 @@ test "function overloads allowed" {
 	const r2 = defineSymbol(table, sym2);
 	assert r2.ok;  // no error for function overload
 	const found = lookupSymbol(table, "add");
-	assert found !== null;
-	assert found.overloads.length === 1;
+	assert found != null;
+	assert found.overloads.length == 1;
 }
 
 test "non-function duplicate still errors" {
@@ -453,8 +453,8 @@ test "lookupExport finds exported" {
 	setFlag(sym, SymbolFlag.Exported);
 	defineSymbol(table, sym);
 	const found = lookupExport(table, "foo");
-	assert found !== null;
-	assert found.name === "foo";
+	assert found != null;
+	assert found.name == "foo";
 }
 
 test "lookupExport skips non-exported" {
@@ -462,5 +462,5 @@ test "lookupExport skips non-exported" {
 	openScope(table, ScopeKind.Module);
 	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, noneType(), false));
 	const found = lookupExport(table, "bar");
-	assert found === null;
+	assert found == null;
 }

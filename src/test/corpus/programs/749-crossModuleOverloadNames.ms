@@ -14,8 +14,8 @@ import { Buffer } from "std/core/buffer";
 
 function main(): void {
 	const b = Buffer.alloc(2);
-	if (b.byteLength() !== 2) { console.log("FAIL buffer unit"); return; }
-	if (byteAt("AB", 0) !== 65) { console.log("FAIL string byteAt"); return; }
+	if (b.byteLength() != 2) { console.log("FAIL buffer unit"); return; }
+	if (byteAt("AB", 0) != 65) { console.log("FAIL string byteAt"); return; }
 	console.log("cross-name ok");
 }
 

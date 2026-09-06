@@ -19,14 +19,14 @@ export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
 }
 
 function materializeIntConv(node: Node): Node {
-	if (node.kind === NodeKind.TypeAssertion) {
+	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const kind = intKindOfName(d.asType);
-		if (kind === TypeKind.Unknown) {
+		if (kind == TypeKind.Unknown) {
 			const floatKind = floatKindOfName(d.asType);
-			if (floatKind !== TypeKind.Unknown && d.asExpr !== null) {
+			if (floatKind != TypeKind.Unknown && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;
-				if (srcT !== null && (srcT.kind === TypeKind.Int64 || srcT.kind === TypeKind.Uint64)) {
+				if (srcT != null && (srcT.kind == TypeKind.Int64 || srcT.kind == TypeKind.Uint64)) {
 					return numberOf64(d.asExpr, floatKind, node.location);
 				}
 			}
@@ -34,22 +34,22 @@ function materializeIntConv(node: Node): Node {
 		}
 		return truncateTo(d.asExpr, kind, node.location);
 	}
-	if (node.kind === NodeKind.HiddenStdConv) {
+	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
-		if (d.convType === null) return node;
+		if (d.convType == null) return node;
 		if (isFloatKind(d.convType.kind)) {
 			// int64 is a BigInt at runtime on js; widening to a float must go
 			// through Number() or the BigInt leaks into arithmetic as-is.
-			const srcT = d.convExpr !== null ? d.convExpr.nodeType : null;
-			if (srcT !== null && (srcT.kind === TypeKind.Int64 || srcT.kind === TypeKind.Uint64)) {
+			const srcT = d.convExpr != null ? d.convExpr.nodeType : null;
+			if (srcT != null && (srcT.kind == TypeKind.Int64 || srcT.kind == TypeKind.Uint64)) {
 				return numberOf64(d.convExpr, d.convType.kind, node.location);
 			}
 		}
 		if (!isIntConvKind(d.convType.kind)) return node;
 		// A widening conv marks the 64-bit boundary for BigInt mode; in Number
 		// mode the value is already integral, so the node just drops at codegen.
-		const srcT = d.convExpr !== null ? d.convExpr.nodeType : null;
-		if (srcT !== null && isWideningInt64Conv(srcT, d.convType)) return node;
+		const srcT = d.convExpr != null ? d.convExpr.nodeType : null;
+		if (srcT != null && isWideningInt64Conv(srcT, d.convType)) return node;
 		return truncateTo(d.convExpr, d.convType.kind, node.location);
 	}
 	return node;
@@ -118,31 +118,31 @@ function castOp(input: string): string {
 	const ctx = makeCtx();
 	lowerIntConvJS(result.value, ctx);
 	const stmts = getStmts(result.value);
-	if (stmts.length === 0) return "";
-	if (stmts[0].kind !== NodeKind.ExprStmt) return "";
+	if (stmts.length == 0) return "";
+	if (stmts[0].kind != NodeKind.ExprStmt) return "";
 	const sd = stmts[0].data as ExprStmtData;
-	if (sd.expr.kind !== NodeKind.BinaryExpr) return "";
+	if (sd.expr.kind != NodeKind.BinaryExpr) return "";
 	return (sd.expr.data as BinaryExprData).operator;
 }
 
 // ===== Tests =====
 
-test "int32 cast truncates with or" { assert castOp("x as int32;") === "|"; }
+test "int32 cast truncates with or" { assert castOp("x as int32;") == "|"; }
 
-test "int8 cast truncates with or" { assert castOp("x as int8;") === "|"; }
+test "int8 cast truncates with or" { assert castOp("x as int8;") == "|"; }
 
-test "uint8 cast masks to a byte" { assert castOp("x as uint8;") === "&"; }
+test "uint8 cast masks to a byte" { assert castOp("x as uint8;") == "&"; }
 
-test "uint16 cast masks to a half" { assert castOp("x as uint16;") === "&"; }
+test "uint16 cast masks to a half" { assert castOp("x as uint16;") == "&"; }
 
-test "uint32 cast shifts unsigned" { assert castOp("x as uint32;") === ">>>"; }
+test "uint32 cast shifts unsigned" { assert castOp("x as uint32;") == ">>>"; }
 
-test "int64 cast becomes a call" { assert firstExprKindAfter("x as int64;", lowerIntConvJS) === NodeKind.CallExpr; }
+test "int64 cast becomes a call" { assert firstExprKindAfter("x as int64;", lowerIntConvJS) == NodeKind.CallExpr; }
 
-test "cast to number unchanged" { assert firstExprKindAfter("x as number;", lowerIntConvJS) === NodeKind.TypeAssertion; }
+test "cast to number unchanged" { assert firstExprKindAfter("x as number;", lowerIntConvJS) == NodeKind.TypeAssertion; }
 
-test "cast to string unchanged" { assert firstExprKindAfter("x as string;", lowerIntConvJS) === NodeKind.TypeAssertion; }
+test "cast to string unchanged" { assert firstExprKindAfter("x as string;", lowerIntConvJS) == NodeKind.TypeAssertion; }
 
-test "non-cast unchanged" { assert castOp("x + y;") === "+"; }
+test "non-cast unchanged" { assert castOp("x + y;") == "+"; }
 
-test "identifier unchanged" { assert firstExprKindAfter("x;", lowerIntConvJS) === NodeKind.Identifier; }
+test "identifier unchanged" { assert firstExprKindAfter("x;", lowerIntConvJS) == NodeKind.Identifier; }

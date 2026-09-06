@@ -17,7 +17,7 @@ macro dbl(a: Node): Node {
 function main(): void {
 	const x: number = dbl(5);   // → 10
 	const y: number = dbl(21);  // → 42
-	if (x === 10 && y === 42) {
+	if (x == 10 && y == 42) {
 		console.log("macro-arg-reuse PASS");
 	} else {
 		console.log("macro-arg-reuse FAIL x=" + x.toString() + " y=" + y.toString());

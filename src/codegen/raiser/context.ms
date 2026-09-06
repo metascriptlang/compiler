@@ -217,7 +217,7 @@ export function declareLocalStr(s: RaiserCompState, name: string, reg: int32, is
 
 export function isLocalString(s: RaiserCompState, name: string): boolean {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name === name) {
+		if (s.locals.items[i].name == name) {
 			return s.locals.items[i].isString;
 		}
 	}
@@ -226,7 +226,7 @@ export function isLocalString(s: RaiserCompState, name: string): boolean {
 
 export function resolveLocal(s: RaiserCompState, name: string): int32 {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name === name) {
+		if (s.locals.items[i].name == name) {
 			return s.locals.items[i].reg;
 		}
 	}
@@ -235,7 +235,7 @@ export function resolveLocal(s: RaiserCompState, name: string): int32 {
 
 export function regIsFixedLocal(s: RaiserCompState, reg: int32): boolean {
 	for (const local of s.locals.items) {
-		if (local.reg === reg) return true;
+		if (local.reg == reg) return true;
 	}
 	return false;
 }
@@ -349,7 +349,7 @@ export function declareEnum(s: RaiserCompState, enumName: string, members: strin
 // .index for the value, which may be negative), or -1 if not an enum constant.
 export function findEnumConstant(s: RaiserCompState, key: string): int32 {
 	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
-		if (s.enumMap.items[i].name === key) return i;
+		if (s.enumMap.items[i].name == key) return i;
 	}
 	return -1;
 }
@@ -361,7 +361,7 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 		// Check if entryName starts with prefix
 		if (entryName.length > prefix.length) {
 			const slice = entryName.slice(0, prefix.length);
-			if (slice === prefix) return true;
+			if (slice == prefix) return true;
 		}
 	}
 	return false;
@@ -374,7 +374,7 @@ export function markRegFloat(s: RaiserCompState, reg: int32): void {
 }
 
 export function isRegFloat(s: RaiserCompState, reg: int32): boolean {
-	if (reg >= 0 && reg < 256) { return s.regFlags.isFloat[reg] !== 0; }
+	if (reg >= 0 && reg < 256) { return s.regFlags.isFloat[reg] != 0; }
 	return false;
 }
 
@@ -387,7 +387,7 @@ export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: int32
 
 export function resolveBuiltin(s: RaiserCompState, name: string): int32 {
 	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
-		if (s.builtins.items[i].name === name) {
+		if (s.builtins.items[i].name == name) {
 			return s.builtins.items[i].funcIdx;
 		}
 	}
@@ -456,9 +456,9 @@ export function clearRaiserOnDemand(): void {
 }
 
 export function isRoutineSym(sym: Symbol): boolean {
-	return sym.symbolKind === SymbolKind.Function
-		|| sym.symbolKind === SymbolKind.Method
-		|| sym.symbolKind === SymbolKind.Macro;
+	return sym.symbolKind == SymbolKind.Function
+		|| sym.symbolKind == SymbolKind.Method
+		|| sym.symbolKind == SymbolKind.Macro;
 }
 
 export function callRaiserOnDemand(sym: Symbol): int32 {

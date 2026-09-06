@@ -19,16 +19,16 @@
 
 test "bug048: sibling test block reuses local const name (block A)" {
 	const r = 1 + 1;
-	assert r === 2;
+	assert r == 2;
 }
 
 test "bug048: sibling test block reuses local const name (block B)" {
 	const r = 3 + 4;
-	assert r === 7;
+	assert r == 7;
 }
 
 test "bug048: same again with let" {
 	let r = 10;
 	r = r + 1;
-	assert r === 11;
+	assert r == 11;
 }

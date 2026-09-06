@@ -13,14 +13,14 @@ import { lookupSymbol } from "../../checker/symbol";
 test "as-cast on union: field access resolves without errors" {
 	const src = "type Data = | { value: number } | { name: string };\ntype NameData = { name: string };\nconst d: Data = { name: \"hello\" };\nconst nd = d as NameData;\nconst v: string = nd.name;";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	assert !hasErrors(ctx);
 }
 
 test "as-cast: overlapping field names resolve correct type" {
 	const src = "type Data = | { value: number } | { value: string };\ntype StrData = { value: string };\nconst d: Data = { value: \"hello\" };\nconst sd = d as StrData;\nconst v: string = sd.value;";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	// After as-cast, sd.value should be string, not number
 	assert !hasErrors(ctx);
 }
@@ -31,12 +31,12 @@ test "as-cast: subset fields resolve to full variant type" {
 	// `as { flat: Doc }` (1 field) must resolve to full variant `{ flat: Doc, broken: Doc }` (2 fields)
 	const src = "type DocData = | { text: string } | { children: number[] } | { flat: number, broken: number };\nconst d: DocData = { flat: 1, broken: 2 };\nconst nd = d as { flat: number };";
 	const ctx = checkSource(src);
-	assert ctx !== null;
+	assert ctx != null;
 	const sym = lookupSymbol(ctx.table, "nd");
-	assert sym !== null;
+	assert sym != null;
 	// nodeType should be full variant (2 fields), not subset (1 field)
-	assert sym.symbolType.kind === TypeKind.Struct;
-	assert sym.symbolType.typeNames.length === 2;
+	assert sym.symbolType.kind == TypeKind.Struct;
+	assert sym.symbolType.typeNames.length == 2;
 }
 
 test "E2E C: subset as-cast compiles without type mismatch" {

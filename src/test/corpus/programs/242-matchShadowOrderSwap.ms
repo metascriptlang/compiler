@@ -2,14 +2,14 @@
 // the plain let, and two sibling match-blocks sharing a name.
 
 function pick(sel: int32, tag: string): string {
-	if (sel === 1) {
+	if (sel == 1) {
 		const kw = match (sel) {
 			1 => "uno-" + tag,
 			_ => "y",
 		};
 		console.log("m=" + kw);
 	}
-	if (sel === 0) {
+	if (sel == 0) {
 		let kw = "";
 		kw = "plain-" + tag;
 		console.log("p=" + kw);
@@ -18,7 +18,7 @@ function pick(sel: int32, tag: string): string {
 }
 
 function twin(sel: int32): string {
-	if (sel === 1) {
+	if (sel == 1) {
 		const kw = match (sel) { 1 => "a", _ => "b", };
 		console.log("t1=" + kw);
 	}

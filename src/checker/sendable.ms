@@ -7,16 +7,16 @@ import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
-	if (actorSym.declNode === null || actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
+	if (actorSym.declNode == null || actorSym.declNode.kind != NodeKind.ActorDecl) return false;
 	const actorBody = (actorSym.declNode.data as ActorDeclData).actorBody;
 	for (const m of actorBody) {
-		if (m.kind !== NodeKind.DecoratedDecl) continue;
+		if (m.kind != NodeKind.DecoratedDecl) continue;
 		const dd = m.data as DecoratedDeclData;
-		if (dd.decoratedNode === null || dd.decoratedNode.kind !== NodeKind.PropertyDecl) continue;
-		if ((dd.decoratedNode.data as PropertyDeclData).propName !== fieldName) continue;
+		if (dd.decoratedNode == null || dd.decoratedNode.kind != NodeKind.PropertyDecl) continue;
+		if ((dd.decoratedNode.data as PropertyDeclData).propName != fieldName) continue;
 		for (const dec of dd.decorators) {
-			if (dec.kind === NodeKind.MacroInvocation
-				&& (dec.data as MacroInvocationData).macroName === "nonisolated") return true;
+			if (dec.kind == NodeKind.MacroInvocation
+				&& (dec.data as MacroInvocationData).macroName == "nonisolated") return true;
 		}
 	}
 	return false;
@@ -35,13 +35,13 @@ enum SendLeaf {
 }
 
 function isDeepSendable(t: Type | null, leaves: int32): boolean {
-	if (t === null) return true;
+	if (t == null) return true;
 	if (isPrimitiveKind(t.kind)) return true;
 	return match (t.kind) {
-		TypeKind.String => (leaves & SendLeaf.String) !== 0,
-		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) !== 0,
-		TypeKind.Array => (leaves & SendLeaf.Array) !== 0
-			&& (t.typeReturn === null || isDeepSendable(t.typeReturn, leaves)),
+		TypeKind.String => (leaves & SendLeaf.String) != 0,
+		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) != 0,
+		TypeKind.Array => (leaves & SendLeaf.Array) != 0
+			&& (t.typeReturn == null || isDeepSendable(t.typeReturn, leaves)),
 		TypeKind.Struct when (isStructType(t)) => {
 			for (const ft of t.typeChildren) {
 				if (!isDeepSendable(ft, leaves)) return false;
@@ -55,7 +55,7 @@ function isDeepSendable(t: Type | null, leaves: int32): boolean {
 			return true;
 		},
 		TypeKind.GenericInstance => {
-			if (t.typeReturn !== null && !isDeepSendable(t.typeReturn, leaves)) return false;
+			if (t.typeReturn != null && !isDeepSendable(t.typeReturn, leaves)) return false;
 			for (const ta of t.typeChildren) {
 				if (!isDeepSendable(ta, leaves)) return false;
 			}
@@ -110,18 +110,18 @@ export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, l
 // sendClass: true when the sender cannot park on a reply (void method or discarded
 // result) — a plain const ref is a BORROW and needs the park, so it is rejected.
 function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
-	if (t === null) return true;
+	if (t == null) return true;
 	// move always transfers ownership safely
-	if (argNode !== null && argNode.kind === NodeKind.MoveExpr) return true;
+	if (argNode != null && argNode.kind == NodeKind.MoveExpr) return true;
 	// If the type itself contains no refs, it's always sendable (value copy)
 	if (isTypeSendable(t)) return true;
-	if (t.kind === TypeKind.Ref) {
+	if (t.kind == TypeKind.Ref) {
 		// SHARE — Arc<T> only: atomic rc at the actor boundary makes the binding's
 		// mutability irrelevant (rebinding the handle never writes the pointee).
 		if (isAtomicRef(t)) return true;
 		// BORROW — a const plain ref stays alive only while the sender parks on
 		// the reply, so it is confined to awaited CALL invocations.
-		if (!sendClass && argNode !== null && argNode.resolvedSym !== null
+		if (!sendClass && argNode != null && argNode.resolvedSym != null
 			&& !hasFlag(argNode.resolvedSym, SymbolFlag.Mutable)) return true;
 		return false;
 	}
@@ -132,22 +132,22 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
 export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
-	if (t === null) return false;
-	const isPlainRefBorrow = !sendClass && t.kind === TypeKind.Ref && !isAtomicRef(t)
-		&& argNode.kind !== NodeKind.MoveExpr;
+	if (t == null) return false;
+	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
+		&& argNode.kind != NodeKind.MoveExpr;
 	if (isSendable(t, argNode, sendClass)) return isPlainRefBorrow;
-	const argLabel = argNode.kind === NodeKind.Identifier
+	const argLabel = argNode.kind == NodeKind.Identifier
 		? "'" + (argNode.data as IdentifierData).name + "'"
 		: `arg ${pi}`;
 	const typedesc = typeDisplayName(t);
-	if (sendClass && t.kind === TypeKind.Ref) {
+	if (sendClass && t.kind == TypeKind.Ref) {
 		addError(ctx, `fire-and-forget actor call would share a plain reference across threads\n${typedesc} ${argLabel} — use \`move\`, an \`Arc<T>\` argument, or await the reply (PARALOCK I21)`,
 			argNode.location.line, argNode.location.column);
 		return false;
 	}
 	const hint = match (t.kind) {
 		TypeKind.Ref => {
-			const varName = argNode.kind === NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
+			const varName = argNode.kind == NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
 			return ` — use \`move${varName}\` to transfer ownership`;
 		},
 		TypeKind.Function => " — closures may capture mutable state",
@@ -168,14 +168,14 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 // forEachChild: the earlier hand-written arm list covered 4 shapes and silently
 // let `x++` (UpdateExpr) and any argument wrapped in HiddenStdConv through.
 function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return;
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return;
 	match (node.kind) {
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			let skip = false;
-			for (const p of params) { if (p === d.name) skip = true; }
-			for (const r of reported) { if (r === d.name) skip = true; }
+			for (const p of params) { if (p == d.name) skip = true; }
+			for (const r of reported) { if (r == d.name) skip = true; }
 			if (!skip) {
 				// The lookup is by NAME against the scope of the spawn call site —
 				// the thunk's own scopes are already popped by the time this runs.
@@ -184,8 +184,8 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 				// to actually point at it (resolvedSym is set by the body check that
 				// ran just before; fall back to the name match when it is absent).
 				const sym = lookupSymbol(ctx.table, d.name);
-				const shadowed = node.resolvedSym !== null && node.resolvedSym !== sym;
-				if (!shadowed && sym !== null && hasFlag(sym, SymbolFlag.Mutable)) {
+				const shadowed = node.resolvedSym != null && node.resolvedSym != sym;
+				if (!shadowed && sym != null && hasFlag(sym, SymbolFlag.Mutable)) {
 					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by spawn — use const or move", node.location.line, node.location.column);
 					reported.push(d.name);
 				}
@@ -205,22 +205,22 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 }
 
 export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: Node): void {
-	if (closureNode === null) return;
+	if (closureNode == null) return;
 	let params: string[] = [];
 	let body: Node | null = null;
-	if (closureNode.kind === NodeKind.ArrowFunction) {
+	if (closureNode.kind == NodeKind.ArrowFunction) {
 		const ad = closureNode.data as ArrowFunctionData;
 		params = ad.arrowParams;
 		body = ad.arrowBody;
-	} else if (closureNode.kind === NodeKind.FunctionExpr) {
+	} else if (closureNode.kind == NodeKind.FunctionExpr) {
 		const fd = closureNode.data as FunctionExprData;
 		params = fd.funcExprParams;
 		body = fd.funcExprBody;
 	}
 	const reported: string[] = [];
-	if (body !== null) {
+	if (body != null) {
 		walkForMutableCaptures(body, params, reported, ctx);
-		if (ctx.currentActorName !== "") {
+		if (ctx.currentActorName != "") {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
 		}
@@ -234,9 +234,9 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 // misclassify as bare-this captures.
 function peelHidden(n: Node): Node {
 	let cur = n;
-	while (cur !== null) {
-		if (cur.kind === NodeKind.HiddenDeref) { cur = (cur.data as HiddenDerefData).expr; continue; }
-		if (cur.kind === NodeKind.HiddenStdConv) { cur = (cur.data as HiddenStdConvData).convExpr; continue; }
+	while (cur != null) {
+		if (cur.kind == NodeKind.HiddenDeref) { cur = (cur.data as HiddenDerefData).expr; continue; }
+		if (cur.kind == NodeKind.HiddenStdConv) { cur = (cur.data as HiddenStdConvData).convExpr; continue; }
 		break;
 	}
 	return cur;
@@ -244,16 +244,16 @@ function peelHidden(n: Node): Node {
 
 function isThisIdent(n: Node): boolean {
 	const p = peelHidden(n);
-	if (p === null) return false;
-	if (p.kind !== NodeKind.Identifier) return false;
-	return (p.data as IdentifierData).name === "this";
+	if (p == null) return false;
+	if (p.kind != NodeKind.Identifier) return false;
+	return (p.data as IdentifierData).name == "this";
 }
 
 function writeChainRoot(n: Node): Node {
 	let cur = peelHidden(n);
-	while (cur !== null) {
-		if (cur.kind === NodeKind.MemberExpr) { cur = peelHidden((cur.data as MemberExprData).object); continue; }
-		if (cur.kind === NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
+	while (cur != null) {
+		if (cur.kind == NodeKind.MemberExpr) { cur = peelHidden((cur.data as MemberExprData).object); continue; }
+		if (cur.kind == NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
 		break;
 	}
 	return cur;
@@ -261,36 +261,36 @@ function writeChainRoot(n: Node): Node {
 
 function thisWriteFieldName(n: Node): string {
 	let cur = peelHidden(n);
-	while (cur !== null) {
-		if (cur.kind === NodeKind.MemberExpr) {
+	while (cur != null) {
+		if (cur.kind == NodeKind.MemberExpr) {
 			const d = cur.data as MemberExprData;
 			if (isThisIdent(d.object)) return d.property;
 			cur = peelHidden(d.object); continue;
 		}
-		if (cur.kind === NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
+		if (cur.kind == NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
 		break;
 	}
 	return "";
 }
 
 function pushIfNew(list: string[], key: string): boolean {
-	for (const k of list) { if (k === key) return false; }
+	for (const k of list) { if (k == key) return false; }
 	list.push(key);
 	return true;
 }
 
 function actorDeclaresMethod(ctx: CheckerContext, methodName: string): boolean {
 	const actorSym = lookupSymbol(ctx.table, ctx.currentActorName);
-	if (actorSym === null || actorSym.declNode === null) return false;
-	if (actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
+	if (actorSym == null || actorSym.declNode == null) return false;
+	if (actorSym.declNode.kind != NodeKind.ActorDecl) return false;
 	const body = (actorSym.declNode.data as ActorDeclData).actorBody;
 	for (const m of body) {
 		let mm = m;
-		if (mm.kind === NodeKind.DecoratedDecl) {
+		if (mm.kind == NodeKind.DecoratedDecl) {
 			const dd = mm.data as DecoratedDeclData;
-			if (dd.decoratedNode !== null) mm = dd.decoratedNode;
+			if (dd.decoratedNode != null) mm = dd.decoratedNode;
 		}
-		if (mm.kind === NodeKind.MethodDecl && (mm.data as MethodDeclData).methodName === methodName) return true;
+		if (mm.kind == NodeKind.MethodDecl && (mm.data as MethodDeclData).methodName == methodName) return true;
 	}
 	return false;
 }
@@ -299,20 +299,20 @@ function reportThisFieldWrite(ctx: CheckerContext, target: Node, node: Node, rep
 	if (!isThisIdent(writeChainRoot(target))) return;
 	if (isThisIdent(target)) return;
 	const f = thisWriteFieldName(target);
-	const label = f !== "" ? "'" + f + "'" : "state";
+	const label = f != "" ? "'" + f + "'" : "state";
 	if (pushIfNew(reportedKeys, "w:" + f)) {
 		addError(ctx, "captured actor field " + label + " is read-only inside a spawn thunk — " + verb + " is not allowed; compute into a local and apply after await (PARALOCK S3/E62)", node.location.line, node.location.column);
 	}
 }
 
 function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			const isAsgn = d.operator === "=" || d.operator === "+=" || d.operator === "-=" ||
-				d.operator === "*=" || d.operator === "/=" || d.operator === "%=" ||
-				d.operator === "&&=" || d.operator === "||=" || d.operator === "??=";
+			const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
+				d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
+				d.operator == "&&=" || d.operator == "||=" || d.operator == "??=";
 			if (isAsgn) {
 				reportThisFieldWrite(ctx, d.left, node, reportedKeys, "assignment");
 			}
@@ -345,17 +345,17 @@ function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: stri
 			walkActorSpawnRules(ctx, d.object, reportedKeys);
 		},
 		NodeKind.Identifier => {
-			if ((node.data as IdentifierData).name === "this" && pushIfNew(reportedKeys, "this")) {
+			if ((node.data as IdentifierData).name == "this" && pushIfNew(reportedKeys, "this")) {
 				addError(ctx, "spawn thunk inside an actor method cannot capture 'this' — borrow individual fields instead (PARALOCK S1/E61)", node.location.line, node.location.column);
 			}
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			const nestedSpawn = node.resolvedSym !== null && node.resolvedSym.builtinKind === "PromiseSpawn";
+			const nestedSpawn = node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn";
 			walkActorSpawnRules(ctx, d.callee, reportedKeys);
 			let ai = 0;
 			for (const arg of d.arguments) {
-				if (!(nestedSpawn && ai === 0)) { walkActorSpawnRules(ctx, arg, reportedKeys); }
+				if (!(nestedSpawn && ai == 0)) { walkActorSpawnRules(ctx, arg, reportedKeys); }
 				ai = ai + 1;
 			}
 		},

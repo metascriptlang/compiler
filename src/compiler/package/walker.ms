@@ -22,11 +22,11 @@ import { env } from "std/process";
 // Test scratch dir — OS temp dir without std/os's C-header (see manifest.ms).
 function testTmpDir(): string {
 	const t = env.get("TMP");
-	if (t !== "") return t;
+	if (t != "") return t;
 	const t2 = env.get("TEMP");
-	if (t2 !== "") return t2;
+	if (t2 != "") return t2;
 	const t3 = env.get("TMPDIR");
-	if (t3 !== "") return t3;
+	if (t3 != "") return t3;
 	return "/tmp";
 }
 import { compileGlobs, globMatchAny } from "std/fs/glob";
@@ -83,7 +83,7 @@ export function collectPublishFiles(rootDir: string, includes: string[], exclude
 	while (stack.length > 0) {
 		const relDir = stack[stack.length - 1];
 		stack.pop();
-		const absDir = relDir === "" ? rootDir : join(rootDir, relDir);
+		const absDir = relDir == "" ? rootDir : join(rootDir, relDir);
 		const entries = readDir(absDir);
 
 		let ei = 0;
@@ -94,12 +94,12 @@ export function collectPublishFiles(rootDir: string, includes: string[], exclude
 			// readDir returns names with trailing "/" for directories.
 			let name = raw;
 			let isDirEntry = false;
-			if (name.length > 0 && name.charAt(name.length - 1) === "/") {
+			if (name.length > 0 && name.charAt(name.length - 1) == "/") {
 				isDirEntry = true;
 				name = name.slice(0, name.length - 1);
 			}
 
-			const childRel = relDir === "" ? name : relDir + "/" + name;
+			const childRel = relDir == "" ? name : relDir + "/" + name;
 
 			if (isDirEntry) {
 				// Subtree prune: if the directory's own rel path matches any exclude,
@@ -116,7 +116,7 @@ export function collectPublishFiles(rootDir: string, includes: string[], exclude
 			if (!isFile(absChild)) continue;
 
 			// Force-include build.ms at the root regardless of user `files`.
-			const isRootBuildMs = childRel === "build.ms";
+			const isRootBuildMs = childRel == "build.ms";
 
 			if (!isRootBuildMs) {
 				// If user supplied `includes`, file must match at least one.
@@ -221,16 +221,16 @@ test "walker: empty includes → everything non-builtin-excluded" {
 		const includes: string[] = [];
 		const excludes: string[] = [];
 		const r = collectPublishFiles(root, includes, excludes);
-		assert r.errors.length === 0;
+		assert r.errors.length == 0;
 		// Expect: build.ms, README.md, src/helper.ms, src/main.ms, src/notes.txt,
 		// src/sub/deep.ms (sorted). .git/HEAD and out/generated.c excluded by builtins.
-		assert r.files.length === 6;
-		assert r.files[0].relPath === "README.md";
-		assert r.files[1].relPath === "build.ms";
-		assert r.files[2].relPath === "src/helper.ms";
-		assert r.files[3].relPath === "src/main.ms";
-		assert r.files[4].relPath === "src/notes.txt";
-		assert r.files[5].relPath === "src/sub/deep.ms";
+		assert r.files.length == 6;
+		assert r.files[0].relPath == "README.md";
+		assert r.files[1].relPath == "build.ms";
+		assert r.files[2].relPath == "src/helper.ms";
+		assert r.files[3].relPath == "src/main.ms";
+		assert r.files[4].relPath == "src/notes.txt";
+		assert r.files[5].relPath == "src/sub/deep.ms";
 		cleanupFixture(root);
 	}
 }
@@ -241,13 +241,13 @@ test "walker: includes allowlist" {
 		const includes: string[] = ["src/**/*.ms"];
 		const excludes: string[] = [];
 		const r = collectPublishFiles(root, includes, excludes);
-		assert r.errors.length === 0;
+		assert r.errors.length == 0;
 		// Expect: build.ms (force-included) + all .ms files under src
-		assert r.files.length === 4;
-		assert r.files[0].relPath === "build.ms";
-		assert r.files[1].relPath === "src/helper.ms";
-		assert r.files[2].relPath === "src/main.ms";
-		assert r.files[3].relPath === "src/sub/deep.ms";
+		assert r.files.length == 4;
+		assert r.files[0].relPath == "build.ms";
+		assert r.files[1].relPath == "src/helper.ms";
+		assert r.files[2].relPath == "src/main.ms";
+		assert r.files[3].relPath == "src/sub/deep.ms";
 		cleanupFixture(root);
 	}
 }
@@ -258,12 +258,12 @@ test "walker: excludes subtract from includes" {
 		const includes: string[] = ["src/**/*.ms"];
 		const excludes: string[] = ["src/sub/**"];
 		const r = collectPublishFiles(root, includes, excludes);
-		assert r.errors.length === 0;
+		assert r.errors.length == 0;
 		// Expect: build.ms, src/helper.ms, src/main.ms (sub/ excluded)
-		assert r.files.length === 3;
-		assert r.files[0].relPath === "build.ms";
-		assert r.files[1].relPath === "src/helper.ms";
-		assert r.files[2].relPath === "src/main.ms";
+		assert r.files.length == 3;
+		assert r.files[0].relPath == "build.ms";
+		assert r.files[1].relPath == "src/helper.ms";
+		assert r.files[2].relPath == "src/main.ms";
 		cleanupFixture(root);
 	}
 }
@@ -275,14 +275,14 @@ test "walker: builtin excludes always apply" {
 		const includes: string[] = ["**/*"];
 		const excludes: string[] = [];
 		const r = collectPublishFiles(root, includes, excludes);
-		assert r.errors.length === 0;
+		assert r.errors.length == 0;
 		// .git/HEAD and out/generated.c still excluded
 		let hasGit = false;
 		let hasOut = false;
 		let i = 0;
 		while (i < r.files.length) {
-			if (r.files[i].relPath === ".git/HEAD") hasGit = true;
-			if (r.files[i].relPath === "out/generated.c") hasOut = true;
+			if (r.files[i].relPath == ".git/HEAD") hasGit = true;
+			if (r.files[i].relPath == "out/generated.c") hasOut = true;
 			i = i + 1;
 		}
 		assert !hasGit;
@@ -297,7 +297,7 @@ test "walker: bad glob surfaces error" {
 		const includes: string[] = ["a**b"];
 		const excludes: string[] = [];
 		const r = collectPublishFiles(root, includes, excludes);
-		assert r.errors.length === 1;
+		assert r.errors.length == 1;
 		cleanupFixture(root);
 	}
 }
@@ -307,5 +307,5 @@ test "walker: nonexistent root reports error" {
 	const excludes: string[] = [];
 	const r = collectPublishFiles(join(testTmpDir(), "does-not-exist-xyz-987"), includes, excludes);
 	assert r.errors.length >= 1;
-	assert r.files.length === 0;
+	assert r.files.length == 0;
 }

@@ -29,38 +29,38 @@
 // printed text: node writes them as U+FFFD, C writes raw WTF-8.
 
 test "bug068: length is UTF-16 code units" {
-	assert "axbxc".length === 5;
-	assert "héxlo".length === 5;
-	assert "a—xb".length === 4;
-	assert "日本語x".length === 4;
-	assert "👍x".length === 3;
+	assert "axbxc".length == 5;
+	assert "héxlo".length == 5;
+	assert "a—xb".length == 4;
+	assert "日本語x".length == 4;
+	assert "👍x".length == 3;
 }
 
 test "bug068: indexOf/lastIndexOf are unit-indexed" {
-	assert "héxlo".indexOf("x") === 2;
-	assert "a—xb".indexOf("x") === 2;
-	assert "日本語x".indexOf("x") === 3;
-	assert "👍x".indexOf("x") === 2;
-	assert "a—xb".lastIndexOf("x") === 2;
+	assert "héxlo".indexOf("x") == 2;
+	assert "a—xb".indexOf("x") == 2;
+	assert "日本語x".indexOf("x") == 3;
+	assert "👍x".indexOf("x") == 2;
+	assert "a—xb".lastIndexOf("x") == 2;
 }
 
 test "bug068: padStart/padEnd targets are unit counts" {
-	assert "héxlo".padStart(6, ".") === ".héxlo";
-	assert "a—xb".padStart(6, ".") === "..a—xb";
-	assert "日本語x".padEnd(6, ".") === "日本語x..";
-	assert "👍x".padStart(6, ".") === "...👍x";
+	assert "héxlo".padStart(6, ".") == ".héxlo";
+	assert "a—xb".padStart(6, ".") == "..a—xb";
+	assert "日本語x".padEnd(6, ".") == "日本語x..";
+	assert "👍x".padStart(6, ".") == "...👍x";
 }
 
 test "bug068: charAt and s[i] return the exact astral half" {
-	assert "👍x".charAt(1).charCodeAt(0) === 56320 + 77;
-	assert "👍x"[1].charCodeAt(0) === 56320 + 77;
-	assert "👍x".charAt(0).charCodeAt(0) === 55296 + 61;
-	assert "héxlo"[1] === "é";
+	assert "👍x".charAt(1).charCodeAt(0) == 56320 + 77;
+	assert "👍x"[1].charCodeAt(0) == 56320 + 77;
+	assert "👍x".charAt(0).charCodeAt(0) == 55296 + 61;
+	assert "héxlo"[1] == "é";
 }
 
 test "bug068: slice keeps the half at a mid-pair boundary" {
 	const cut = "👍x".slice(1, 3);
-	assert cut.charCodeAt(0) === 56320 + 77;
-	assert cut.charCodeAt(1) === 120;
-	assert "👍x".slice(0, 1).charCodeAt(0) === 55296 + 61;
+	assert cut.charCodeAt(0) == 56320 + 77;
+	assert cut.charCodeAt(1) == 120;
+	assert "👍x".slice(0, 1).charCodeAt(0) == 55296 + 61;
 }

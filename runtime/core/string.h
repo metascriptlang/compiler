@@ -212,8 +212,9 @@ bool msStringEqualsIgnoreCase(msString a, msString b);
 /* Lexicographic compare (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
 
-/* Operator overload helper — prelude `<` base operator */
+/* Operator overload helpers — prelude `<` and `<=` base operators */
 static inline bool msStringCompareLt(msString a, msString b) { return msStringCompare(a, b) < 0; }
+static inline bool msStringCompareLe(msString a, msString b) { return msStringCompare(a, b) <= 0; }
 
 /* Prefix check */
 bool msStringStartsWith(msString s, msString prefix);

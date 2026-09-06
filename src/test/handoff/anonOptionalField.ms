@@ -26,11 +26,11 @@ function aofPickRef(props: { tag: number; fb?: AofBox }): number {
 }
 
 test "anon optional value field: provided and omitted" {
-	assert aofPick({ when: true, fallback: "f" }) === "f", "provided";
-	assert aofPick({ when: true }) === "none", "omitted";
+	assert aofPick({ when: true, fallback: "f" }) == "f", "provided";
+	assert aofPick({ when: true }) == "none", "omitted";
 }
 
 test "anon optional ref field: omitted is null-sentinel" {
-	assert aofPickRef({ tag: 1, fb: new AofBox(7) }) === 7, "provided";
-	assert aofPickRef({ tag: 1 }) === -1, "omitted";
+	assert aofPickRef({ tag: 1, fb: new AofBox(7) }) == 7, "provided";
+	assert aofPickRef({ tag: 1 }) == -1, "omitted";
 }

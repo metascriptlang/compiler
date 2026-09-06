@@ -49,7 +49,7 @@ function main(): void {
 		count = count + 1;
 		pos = c.error.indexOf("number literals not allowed", pos + 1);
 	}
-	assert count === 1;
+	assert count == 1;
 	// No spurious "recursive macro" warning — rejectNumber is not recursive.
 	assert c.error.indexOf("possible recursive macro", 0) < 0;
 }
