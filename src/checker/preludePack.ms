@@ -1038,9 +1038,9 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) return { convExpr: nd(f[0].parseInt() as int32, nodes) as Node, convType: tp(f[1].parseInt() as int32, types) as Type } as NodeData;
 	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) return { expr: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind === NodeKind.TypeAnnotation) return { annotationType: unescapeP(f[0]) } as NodeData;
-	if (kind === NodeKind.ArrayPattern) return { patternElements: parseNodeArr(f[0], nodes), hasRestElement: f[1] === "1", patternDefaults: [] } as NodeData;
+	if (kind === NodeKind.ArrayPattern) return { patternElements: parseNodeArr(f[0], nodes), hasRestElement: f[1] === "1", patternDefaults: parseNodeArr(f[2], nodes) } as NodeData;
 	if (kind === NodeKind.ObjectPattern) return { patternProps: parseNodeArr(f[0], nodes), hasRestProp: f[1] === "1" } as NodeData;
-	if (kind === NodeKind.ObjectPatternProp) return { propKey: unescapeP(f[0]), propAlias: nd(f[1].parseInt() as int32, nodes) as Node, propDefault: null } as NodeData;
+	if (kind === NodeKind.ObjectPatternProp) return { propKey: unescapeP(f[0]), propAlias: nd(f[1].parseInt() as int32, nodes) as Node, propDefault: nd(f[2].parseInt() as int32, nodes) } as NodeData;
 	if (kind === NodeKind.DestructuringDecl) return { destrPattern: nd(f[0].parseInt() as int32, nodes) as Node, destrInit: nd(f[1].parseInt() as int32, nodes) as Node, destrIsConst: f[2] === "1" } as NodeData;
 	if (kind === NodeKind.VariableDecl) return { declName: unescapeP(f[0]), declType: unescapeP(f[1]), initializer: nd(f[2].parseInt() as int32, nodes) as Node, declKind: f[3].parseInt() as int32 as unknown as DeclKind, nameLocation: parseLoc(f[4]) } as NodeData;
 	if (kind === NodeKind.IfStmt) return { condition: nd(f[0].parseInt() as int32, nodes) as Node, consequent: nd(f[1].parseInt() as int32, nodes) as Node, alternate: nd(f[2].parseInt() as int32, nodes) as Node } as NodeData;
