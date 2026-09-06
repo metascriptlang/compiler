@@ -4,7 +4,7 @@
 import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType } from "./types";
+import { inferredType, noneType, isUnresolvedType, charType, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords } from "./context";
@@ -1342,9 +1342,11 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				const id = elem.data as IdentifierData;
 				if (id.name != "_") {
 					const derived = destrPositionalElemType(iterType, i);
-					if (derived != null) elem.nodeType = derived;
-					if (i < apd.patternDefaults.length && apd.patternDefaults[i] != null) checkExpr(ctx, apd.patternDefaults[i], derived);
-					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst));
+					const hasDefault = i < apd.patternDefaults.length && apd.patternDefaults[i] != null;
+					const bound = hasDefault ? destrDefaultedType(derived) : derived;
+					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
+					if (bound != null) elem.nodeType = bound;
+					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst));
 					markInitialized(ctx.initTracker, id.name);
 				}
 			} else if (elem.kind == NodeKind.SpreadExpr) {
@@ -1392,9 +1394,10 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			if (p.propAlias.kind == NodeKind.Identifier) {
 				const id = p.propAlias.data as IdentifierData;
 				const derived = destrNamedFieldType(iterType, p.propKey);
-				if (derived != null) p.propAlias.nodeType = derived;
-				if (p.propDefault != null) checkExpr(ctx, p.propDefault, derived);
-				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst));
+				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
+				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
+				if (bound != null) p.propAlias.nodeType = bound;
+				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst));
 				markInitialized(ctx.initTracker, id.name);
 			}
 		}

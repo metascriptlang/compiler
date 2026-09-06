@@ -2,13 +2,14 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, Type, TypeKind, createNode,
-	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData,
+	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData, VariableDeclData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames } from "../../checker/types";
+import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, syntheticToken } from "../util";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { nullishLowered } from "../coercion/nullishCoalesce";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken } from "../util";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
 
@@ -100,7 +101,21 @@ export function expandArrayRet(
 				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
 				const elemType = destrElemType(base, i);
 				if (elemType != null) access.nodeType = elemType;
-				items.push(makeVarDecl(id.name, access, declKind, loc));
+				let init = access;
+				if (i < apd.patternDefaults.length && apd.patternDefaults[i] != null) {
+					const def = apd.patternDefaults[i];
+					init = nullishLowered(access, def, loc, elemType);
+					if (destrHasRuntimeLength(base.nodeType)) {
+						const lenMember = makeMember(base, "length", loc);
+						lenMember.nodeType = int32Type();
+						const idx = makeNumber(i, loc);
+						idx.nodeType = int32Type();
+						const guarded = makeConditional(makeBinary(idx, "<", lenMember, loc), init, def, loc);
+						guarded.nodeType = init.nodeType;
+						init = guarded;
+					}
+				}
+				items.push(makeVarDecl(id.name, init, declKind, loc));
 			}
 		}
 	}
@@ -146,7 +161,9 @@ export function expandObjectRet(
 			const memberAccess = makeMember(base, p.propKey, loc);
 			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
 			if (fieldType != null) memberAccess.nodeType = fieldType;
-			items.push(makeVarDecl(id.name, memberAccess, declKind, loc));
+			let init = memberAccess;
+			if (p.propDefault != null) init = nullishLowered(memberAccess, p.propDefault, loc, fieldType);
+			items.push(makeVarDecl(id.name, init, declKind, loc));
 		}
 	}
 	return items;
@@ -204,3 +221,19 @@ test "simple RHS skips temp" { assert stmtCountAfter("const [a, b] = myVar;", lo
 test "non-destructuring passthrough" { assert stmtCountAfter("const x = 1;", lowerDestructuring) == 1; }
 
 test "preserves surrounding stmts" { assert stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) == 5; }
+
+function lastInitKind(input: string): NodeKind {
+	const parsed = parseInput(input);
+	if (!parsed.ok) return NodeKind.Program;
+	const stmts = getStmts(lowerDestructuring(parsed.value, makeCtx()));
+	if (stmts.length == 0) return NodeKind.Program;
+	const last = stmts[stmts.length - 1];
+	if (last.kind != NodeKind.VariableDecl) return last.kind;
+	return (last.data as VariableDeclData).initializer.kind;
+}
+
+test "object default lowers to a conditional init" { assert lastInitKind("const { x = 1 } = f();") == NodeKind.ConditionalExpr; }
+
+test "array default lowers to a conditional init" { assert lastInitKind("const [a = 1] = f();") == NodeKind.ConditionalExpr; }
+
+test "no default keeps a bare access" { assert lastInitKind("const { x } = f();") == NodeKind.MemberExpr; }
