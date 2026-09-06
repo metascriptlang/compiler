@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -1342,6 +1342,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	const bracketToken = current(state);
 	advance(state); // consume '['
 	const elements: Node[] = [];
+	const defaults: Node[] = [];
 	let hasRest = false;
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBracket) {
 		// Rest element: ...x
@@ -1368,10 +1369,12 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			const elemToken = current(state);
 			advance(state);
 			elements.push(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken));
-			// Skip default value: x = defaultVal
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
-				skipDefaultValue(state);
+				const dIdx = elements.length - 1;
+				while (defaults.length < dIdx) { defaults.push(null); }
+				const dExpr = try callExprParser(state);
+				defaults.push(dExpr);
 			}
 		} else if (current(state).kind == TokenKind.Comma) {
 			// Elision: [,, x] — push a placeholder
@@ -1389,6 +1392,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.ArrayPattern, {
 		patternElements: elements,
 		hasRestElement: hasRest,
+		patternDefaults: defaults,
 	}, bracketToken));
 }
 
@@ -1421,36 +1425,41 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
+						propDefault: null,
 					}, keyToken));
 				} else if (current(state).kind == TokenKind.LBracket) {
 					const nested = try parseArrayPattern(state);
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
+						propDefault: null,
 					}, keyToken));
 				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
 					advance(state);
+					let aliasDefault: Node | null = null;
+					if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+						advance(state);
+						aliasDefault = try callExprParser(state);
+					}
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
+						propDefault: aliasDefault,
 					}, keyToken));
-					if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
-						advance(state);
-						skipDefaultValue(state);
-					}
 				}
 			} else {
 				// Shorthand: { key } — alias is same as key
+				let shorthandDefault: Node | null = null;
+				if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+					advance(state);
+					shorthandDefault = try callExprParser(state);
+				}
 				props.push(createNode(NodeKind.ObjectPatternProp, {
 					propKey: keyToken.value,
 					propAlias: createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken),
+					propDefault: shorthandDefault,
 				}, keyToken));
-				// Skip default value: { x = 5 }
-				if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
-					advance(state);
-					skipDefaultValue(state);
-				}
 			}
 		} else {
 			break;
@@ -2167,6 +2176,36 @@ test "object rest" { assert programOk("const {a, ...rest} = obj;"); }
 test "array rest" { assert programOk("const [first, ...rest] = arr;"); }
 
 test "let destructure" { assert programOk("let {x, y} = point;"); }
+
+test "object destructure shorthand default" {
+	const dd = stmtAt("const {a = 1} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey == "a";
+	assert prop.propDefault != null;
+}
+
+test "object destructure alias default" {
+	const dd = stmtAt("const {k: alias = 2} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey == "k";
+	assert prop.propDefault != null;
+}
+
+test "object destructure without default" {
+	const dd = stmtAt("const {a} = obj;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ObjectPatternData;
+	const prop = pat.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propDefault == null;
+}
+
+test "array destructure default" {
+	const dd = stmtAt("const [x = 3] = arr;", 0).data as DestructuringDeclData;
+	const pat = dd.destrPattern.data as ArrayPatternData;
+	assert pat.patternDefaults.length == 1;
+	assert pat.patternDefaults[0] != null;
+}
 
 test "func destr param" { assert programOk("function f({x, y}) { return x; }"); }
 
