@@ -229,6 +229,7 @@ function clonePath(node: Node, loc: SourceLocation): Node {
 		const d = node.data as IdentifierData;
 		const r = makeIdent(d.name, loc);
 		r.nodeType = node.nodeType;
+		r.resolvedSym = node.resolvedSym;
 		return r;
 	}
 	if (node.kind == NodeKind.MemberExpr) {
@@ -877,28 +878,28 @@ function hasAnyUserHook(typeName: string, lctx: LiftCtx): boolean {
 // every non-unary hook that needs to mirror the source's active-variant tag.
 // Value use of a Var<T> hook param — the deref the caller suppressed by
 // keeping the ident raw (Reference liftdestructors.nim:1340 `newDeref`).
-function hookParamDeref(name: string, loc: SourceLocation): Node {
-	return makeHiddenDeref(makeIdent(name, loc), loc);
+function hookParamDeref(sym: Symbol, loc: SourceLocation): Node {
+	return makeHiddenDeref(makeIdentResolved(sym, loc), loc);
 }
 
-function emitTagCopy(buf: NodeBuf, dest: string, src: string, loc: SourceLocation): void {
+function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocation): void {
 	const lhs = makeMember(hookParamDeref(dest, loc), "_tag", loc);
 	const rhs = makeMember(hookParamDeref(src, loc), "_tag", loc);
 	buf.items.push(makeExprStmt(makeAssign(lhs, rhs, loc), loc));
 }
 
-function generateUnionArms(hook: string, typeName: string, objType: Type, p1: string, p2: string, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const isUnary = hook == "destroy" || hook == "wasMoved" || hook == "trace";
 
 	// reference parity: sink must destroy old variant BEFORE reassigning _tag
 	if (hook == "sink") {
 		// 1. Destroy old fields (dispatch on dest._tag)
-		const destroyChain = buildVariantDispatch("destroy", typeName, objType, p1, p1, true, lctx, loc);
+		const destroyChain = buildVariantDispatch("destroy", typeName, objType, s1, s1, true, lctx, loc);
 		if (destroyChain != null) buf.items.push(destroyChain);
 		// 2. Assign _tag
-		emitTagCopy(buf, p1, p2, loc);
+		emitTagCopy(buf, s1, s2, loc);
 		// 3. Assign new fields (dispatch on src._tag, simple assign only)
-		const assignChain = buildVariantChain("sinkAssign", objType, p1, p2, false, lctx, loc);
+		const assignChain = buildVariantChain("sinkAssign", objType, s1, s2, false, lctx, loc);
 		if (assignChain != null) buf.items.push(assignChain);
 		return;
 	}
@@ -912,14 +913,14 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, p1: st
 		const ctr = lctx.tempCounter;
 		lctx.tempCounter = ctr + 1;
 		const blobName = "$blob_" + ctr.toString();
-		const blobInit = hookParamDeref(p1, loc);
+		const blobInit = hookParamDeref(s1, loc);
 		blobInit.nodeType = objType;
 		buf.items.push(makeVarDecl(blobName, blobInit, DeclKind.Let, loc));
-		const zeroDest = hookParamDeref(p1, loc);
+		const zeroDest = hookParamDeref(s1, loc);
 		zeroDest.nodeType = objType;
 		buf.items.push(makeExprStmt(makeAssign(zeroDest, makeNull(loc), loc), loc));
-		emitTagCopy(buf, p1, p2, loc);
-		const copyChain = buildVariantDispatch("copy", typeName, objType, p1, p2, false, lctx, loc);
+		emitTagCopy(buf, s1, s2, loc);
+		const copyChain = buildVariantDispatch("copy", typeName, objType, s1, s2, false, lctx, loc);
 		if (copyChain != null) buf.items.push(copyChain);
 		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "Destroy", loc),
 			[makeHiddenAddr(makeIdent(blobName, loc), loc)], loc), loc));
@@ -927,19 +928,19 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, p1: st
 	}
 
 	// Build if/else chain dispatching on _tag via per-variant helpers
-	const chain = buildVariantDispatch(hook, typeName, objType, p1, p2, isUnary, lctx, loc);
+	const chain = buildVariantDispatch(hook, typeName, objType, s1, s2, isUnary, lctx, loc);
 	if (chain != null) buf.items.push(chain);
 
 	// For wasMoved: set _tag = -1 after dispatch
 	if (hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeAssign(makeMember(hookParamDeref(p1, loc), "_tag", loc), makeNumber(-1, loc), loc), loc));
+		buf.items.push(makeExprStmt(makeAssign(makeMember(hookParamDeref(s1, loc), "_tag", loc), makeNumber(-1, loc), loc), loc));
 	}
 }
 
 // Build if/else chain that dispatches to per-variant helper functions.
 // Each variant's arm logic is extracted into its own function to keep stack frames small.
 // (Without this, the monolithic function hoists ALL variants' locals → stack overflow at -O0)
-function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1: string, p2: string, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
+function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
@@ -952,7 +953,11 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 			// Generate per-variant arm body
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
-			buildVariantArmBody(hook, objType, p1, p2, vi, vName, variant, isUnary, lctx, armBuf, loc);
+			const h1 = makeSymbol(s1.name, SymbolKind.Variable, s1.symbolType, false);
+			const h2 = hook == "trace"
+				? makeSymbol(s2.name, SymbolKind.Variable, createPtr(voidType()), false)
+				: (s2.name == s1.name ? h1 : makeSymbol(s2.name, SymbolKind.Variable, s2.symbolType, false));
+			buildVariantArmBody(hook, objType, h1, h2, vi, vName, variant, isUnary, lctx, armBuf, loc);
 
 			if (armBuf.items.length > 0) {
 				// Generate helper function: TypeName_vN_Suffix(self) or TypeName_vN_Suffix(dest, src)
@@ -965,31 +970,23 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 					let helperFn: Node | null = null;
 					if (isTrace) {
 						// Trace: (self, callback) — self is union type, callback is void*
-						helperFn = makeFnDecl(helperName, [p1, p2], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1.name, h2.name], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
 					} else if (isUnary) {
-						helperFn = makeFnDecl(helperName, [p1], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1.name], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
 					} else {
-						helperFn = makeFnDecl(helperName, [p1, p2], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1.name, h2.name], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
 					}
-					const paramType = createVar(objType);
-					setHookParamType(helperFn, 0, paramType);
-					if (!isUnary && !isTrace) setHookParamType(helperFn, 1, paramType);
-					// Trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
-					if (isTrace) setHookParamType(helperFn, 1, createPtr(voidType()));
+					setHookParamType(helperFn, 0, h1.symbolType);
+					if (!isUnary || isTrace) setHookParamType(helperFn, 1, h2.symbolType);
 					markGeneratedOp(helperFn, helperName);
 					lctx.collector.push(helperFn);
 				}
 
 			// Dispatch: call the helper from the main if/else chain
-			const tagAccess = makeMember(hookParamDeref(p1, loc), "_tag", loc);
+			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-			// Forwarding raw pointers: stamp nodeType=Var so varParamDeref's
-			// takeImplicitAddr recognizes these as already-pointer args. The
-			// trace callback (param 1, Ptr<void>) must stay unstamped — a Var
-			// stamp there makes the arg shim take its address.
-			const fwdType = createVar(objType);
-			const a1 = makeTypedIdent(p1, fwdType, loc);
-			const a2 = hook == "trace" ? makeIdent(p2, loc) : makeTypedIdent(p2, fwdType, loc);
+			const a1 = makeIdentResolved(s1, loc);
+			const a2 = makeIdentResolved(s2, loc);
 			const callArgs: Node[] = (isUnary && hook != "trace")
 				? [a1]
 				: [a1, a2];
@@ -1006,13 +1003,13 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 // skipping void-typed slots (e.g. `Result<void, E>` v0 has no `value`). Used
 // for the `sinkAssign` hook by both inline and helper-extracted dispatch
 // patterns.
-function emitVariantSinkAssign(armBuf: NodeBuf, p1: string, p2: string, vName: string, variant: Type, loc: SourceLocation): void {
+function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: string, variant: Type, loc: SourceLocation): void {
 	let fi = 0;
 	while (fi < variant.typeNames.length) {
 		const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
 		if (ft != null && ft.kind == TypeKind.Void) { fi += 1; continue; }
-		const xBase = makeMember(hookParamDeref(p1, loc), vName, loc);
-		const yBase = makeMember(hookParamDeref(p2, loc), vName, loc);
+		const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
+		const yBase = makeMember(hookParamDeref(s2, loc), vName, loc);
 		armBuf.items.push(makeExprStmt(makeAssign(
 			makeMember(xBase, variant.typeNames[fi], loc),
 			makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
@@ -1021,25 +1018,25 @@ function emitVariantSinkAssign(armBuf: NodeBuf, p1: string, p2: string, vName: s
 }
 
 // Generate the body of a single variant's arm (used by both inline and helper patterns)
-function buildVariantArmBody(hook: string, objType: Type, p1: string, p2: string, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
+function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "destroy") {
 		let fi = variant.typeNames.length - 1;
 		while (fi >= 0) {
-			const xBase = makeMember(hookParamDeref(p1, loc), vName, loc);
-			const yBase = makeMember(hookParamDeref(p1, loc), vName, loc);
+			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
+			const yBase = makeMember(hookParamDeref(s1, loc), vName, loc);
 			const visited: NameSet = createNameSet();
 			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
 			fi -= 1;
 		}
 	} else if (hook == "sinkAssign") {
-		emitVariantSinkAssign(armBuf, p1, p2, vName, variant, loc);
+		emitVariantSinkAssign(armBuf, s1, s2, vName, variant, loc);
 	} else {
 		let fi = 0;
 		while (fi < variant.typeNames.length) {
-			const xBase = makeMember(hookParamDeref(p1, loc), vName, loc);
-			const yBase = (hook == "trace") ? makeIdent(p2, loc)
-				: isUnary ? makeMember(hookParamDeref(p1, loc), vName, loc)
-				: makeMember(hookParamDeref(p2, loc), vName, loc);
+			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
+			const yBase = (hook == "trace") ? makeIdentResolved(s2, loc)
+				: isUnary ? makeMember(hookParamDeref(s1, loc), vName, loc)
+				: makeMember(hookParamDeref(s2, loc), vName, loc);
 			const visited: NameSet = createNameSet();
 			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
 			fi += 1;
@@ -1047,8 +1044,8 @@ function buildVariantArmBody(hook: string, objType: Type, p1: string, p2: string
 	}
 }
 
-// Build if/else chain over variant arms, dispatching on p1._tag
-function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
+// Build if/else chain over variant arms, dispatching on s1._tag
+function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
@@ -1060,10 +1057,10 @@ function buildVariantChain(hook: string, objType: Type, p1: string, p2: string, 
 		const armBuf = newBuf();
 		if (variant != null && variant.typeNames != null) {
 			const vName = "v" + vi.toString();
-			buildVariantArmBody(hook, objType, p1, p2, vi, vName, variant, isUnary, lctx, armBuf, loc);
+			buildVariantArmBody(hook, objType, s1, s2, vi, vName, variant, isUnary, lctx, armBuf, loc);
 		}
 		if (armBuf.items.length > 0) {
-			const tagAccess = makeMember(hookParamDeref(p1, loc), "_tag", loc);
+			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
 			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain != null ? chain : makeNull(loc), loc);
 		}
@@ -1097,19 +1094,22 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const buf = newBuf();
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
-	const p1 = isUnary ? "self" : "dest";
-	const p2 = match (hook) {
+	const hookParamT = classType != null ? classType : createVar(objType);
+	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const n2 = match (hook) {
 		"trace" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
+	const s2Type = isTrace ? createPtr(voidType()) : hookParamT;
+	const s2 = n2 == s1.name ? s1 : makeSymbol(n2, SymbolKind.Variable, s2Type, false);
 
 	// Self-assignment guard for binary hooks (copy, sink): compare the raw
 	// param pointers — Ref params are pointers already, Var<T> params read as
 	// the bare T* now that ident auto-deref no longer applies.
 	if (!isUnary && !isTrace) {
-		const g1 = makeIdent(p1, loc);
-		const g2 = makeIdent(p2, loc);
+		const g1 = makeIdentResolved(s1, loc);
+		const g2 = makeIdentResolved(s2, loc);
 		buf.items.push(makeIf(
 			makeBinary(g1, "===", g2, loc),
 			makeBlock([makeReturn(null as unknown as Node, loc)], loc),
@@ -1129,11 +1129,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(typeName, hook, lctx);
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
-		// Forwarding raw pointer(s) — stamp nodeType=Var (see buildVariantDispatch);
-		// the trace callback stays unstamped.
-		const fwdT = classType != null ? classType : createVar(objType);
-		const u1 = makeTypedIdent(p1, fwdT, loc);
-		const u2 = isTrace ? makeIdent(p2, loc) : makeTypedIdent(p2, fwdT, loc);
+		const u1 = makeIdentResolved(s1, loc);
+		const u2 = makeIdentResolved(s2, loc);
 		if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
 		} else {
@@ -1152,8 +1149,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		// Param accessors (Reference liftdestructors.nim:1340): deref at the
 		// use site — Ref unwraps to Struct, Var<T> unwraps the T*. The trace
 		// callback stays raw (a plain pointer, not a value).
-		const x1 = hookParamDeref(p1, loc);
-		const x2 = isTrace ? makeIdent(p2, loc) : hookParamDeref(p2, loc);
+		const x1 = hookParamDeref(s1, loc);
+		const x2 = isTrace ? makeIdentResolved(s2, loc) : hookParamDeref(s2, loc);
 
 		// Phase 4: when child class has flattened parent fields (HasInheritedFields
 		// flag set in resolveClass), suppress parent hook genCall — fields are
@@ -1165,7 +1162,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
-				generateUnionArms(hook, cName, objType, p1, p2, lctx, buf, loc);
+				generateUnionArms(hook, cName, objType, s1, s2, lctx, buf, loc);
 			}
 		} else if (hook == "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
@@ -1204,11 +1201,11 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 
 	let fnNode: Node | null = null;
 	if (isTrace) {
-		fnNode = makeFnDecl(cName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1.name, s2.name], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
 	} else if (isUnary) {
-		fnNode = makeFnDecl(cName + suffix, [p1], [typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1.name], [typeName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(cName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1.name, s2.name], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 	// Set hook param types explicitly (reference parity: symPrototype sets dest.typ/src.typ directly).
 	// For class types, use classType (Ref<Struct>) — already a pointer.
@@ -1278,18 +1275,19 @@ function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, l
 // dup emission in the old Path A / Path B, just deduplicated.
 function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const dupStmts: Node[] = [];
+	const srcSym = makeSymbol("src", SymbolKind.Variable, classType != null ? classType : objType, false);
 	if (isRef) {
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
-		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
+		dupStmts.push(makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc));
 		dupStmts.push(makeExprStmt(makeCall(makeIdent("msIncref", loc), [makeIdent("$result", loc)], loc), loc));
 		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
-		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+		dupStmts.push(makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc));
+		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	}
-	const dupNode = makeFnDecl(cName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	const dupNode = makeFnDecl(cName + "Dup", [srcSym.name], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	const dupType = classType != null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
@@ -1568,17 +1566,18 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
-	const p1 = isUnary ? "self" : "dest";
-	const p2 = isUnary ? "self" : "src";
+	const hookParamT = createVar(t);
+	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
 
 	if (!isUnary) {
 		buf.items.push(makeIf(
-			makeBinary(makeIdent(p1, loc), "===", makeIdent(p2, loc), loc),
+			makeBinary(makeIdentResolved(s1, loc), "===", makeIdentResolved(s2, loc), loc),
 			makeBlock([makeReturn(null as unknown as Node, loc)], loc), null as unknown as Node, loc));
 	}
 
-	const x1 = hookParamDeref(p1, loc);
-	const x2 = hookParamDeref(p2, loc);
+	const x1 = hookParamDeref(s1, loc);
+	const x2 = hookParamDeref(s2, loc);
 	if (hook == "destroy") {
 		for (let i = t.typeChildren.length - 1; i >= 0; i -= 1) {
 			const visited: NameSet = createNameSet();
@@ -1593,8 +1592,8 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 
 	const suffix = hookSuffix(hook);
 	const fnNode = isUnary
-		? makeFnDecl(tupleName + suffix, [p1], [tupleName], makeBlock(buf.items, loc), "", "void", loc)
-		: makeFnDecl(tupleName + suffix, [p1, p2], [tupleName, tupleName], makeBlock(buf.items, loc), "", "void", loc);
+		? makeFnDecl(tupleName + suffix, [s1.name], [tupleName], makeBlock(buf.items, loc), "", "void", loc)
+		: makeFnDecl(tupleName + suffix, [s1.name, s2.name], [tupleName, tupleName], makeBlock(buf.items, loc), "", "void", loc);
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
@@ -1736,21 +1735,22 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
-	const p1 = isUnary ? "self" : "dest";
-	const p2 = isUnary ? "self" : "src";
+	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
+	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, arrayType, false);
 
 	if (hook == "destroy") {
-		const selfNode = makeIdent(p1, loc);
+		const selfNode = makeIdentResolved(s1, loc);
 		selfNode.nodeType = arrayType;
 		arrayOp(hook, elemType, selfNode, selfNode, lctx, buf, loc);
 	} else if (hook == "wasMoved") {
-		const d1 = makeHiddenDeref(makeIdent(p1, loc), loc);
+		const d1 = makeHiddenDeref(makeIdentResolved(s1, loc), loc);
 		d1.nodeType = arrayType;
 		arrayOp(hook, elemType, d1, d1, lctx, buf, loc);
 	} else if (hook == "copy") {
-		const destNode = makeHiddenDeref(makeIdent(p1, loc), loc);
+		const destNode = makeHiddenDeref(makeIdentResolved(s1, loc), loc);
 		destNode.nodeType = arrayType;
-		const srcNode = makeIdent(p2, loc);
+		const srcNode = makeIdentResolved(s2, loc);
 		srcNode.nodeType = arrayType;
 		const selfCheck = makeIf(
 			makeBinary(
@@ -1766,9 +1766,9 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 		buf.items.push(selfCheck);
 		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
 	} else {
-		const destNode = makeHiddenDeref(makeIdent(p1, loc), loc);
+		const destNode = makeHiddenDeref(makeIdentResolved(s1, loc), loc);
 		destNode.nodeType = arrayType;
-		const srcNode = makeIdent(p2, loc);
+		const srcNode = makeIdentResolved(s2, loc);
 		srcNode.nodeType = arrayType;
 		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
 	}
@@ -1777,9 +1777,9 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 
 	let fnNode: Node | null = null;
 	if (isUnary) {
-		fnNode = makeFnDecl(seqName + suffix, [p1], [seqName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(seqName + suffix, [s1.name], [seqName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(seqName + suffix, [p1, p2], [seqName, seqName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(seqName + suffix, [s1.name, s2.name], [seqName, seqName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 
 	// Set param types based on hook kind.
