@@ -795,6 +795,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as ObjectPatternPropData;
 			setStr(objHeap, handle, "propKey", d.propKey);
 			setNode(objHeap, arrHeap, handle, "propAlias", d.propAlias);
+			setNode(objHeap, arrHeap, handle, "propDefault", d.propDefault);
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
@@ -1551,7 +1552,8 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.ObjectPatternProp => {
 			const propKey = readStr(objHeap, h, "propKey");
 			const propAlias = readNode(objHeap, arrHeap, h, "propAlias", loc);
-			return createNodeAt(NodeKind.ObjectPatternProp, { propKey, propAlias, propDefault: null }, loc);
+			const propDefault = readNode(objHeap, arrHeap, h, "propDefault", loc);
+			return createNodeAt(NodeKind.ObjectPatternProp, { propKey, propAlias, propDefault }, loc);
 		},
 		NodeKind.DestructuringDecl => {
 			const destrPattern = readNode(objHeap, arrHeap, h, "destrPattern", loc);
