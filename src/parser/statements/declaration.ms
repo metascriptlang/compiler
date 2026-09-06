@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -25,13 +25,13 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
 	const locations: SourceLocation[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const specifier = current(state);
 		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
 		locations.push(makeLoc(specifier.line, specifier.column));
 		advance(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.As) {
 			advance(state);
 			aliases.push(current(state).value);
 			advance(state);
@@ -39,7 +39,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 			aliases.push(specName);
 		}
 		names.push(specName);
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		} else {
 			break;
@@ -57,7 +57,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 export function parseStaticVariableDecl(state: ParserState): NodeResult {
 	advance(state);
 	const k = current(state).kind;
-	if (k !== TokenKind.Const && k !== TokenKind.Let && k !== TokenKind.Var) {
+	if (k != TokenKind.Const && k != TokenKind.Let && k != TokenKind.Var) {
 		return Result.err(`Expected 'const', 'let' or 'var' after 'static' at line ${current(state).line}`);
 	}
 	const decl = try parseVariableDecl(state);
@@ -70,10 +70,10 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Destructuring: const { a, b } = ... or const [ x, y ] = ...
-	if (current(state).kind === TokenKind.LBrace) {
+	if (current(state).kind == TokenKind.LBrace) {
 		const pattern = try parseObjectPattern(state);
 		skipOptionalType(state);
-		if (current(state).kind !== TokenKind.Assign) {
+		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
@@ -82,14 +82,14 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
-			destrIsConst: keyword.kind === TokenKind.Const,
+			destrIsConst: keyword.kind == TokenKind.Const,
 		}, keyword));
 	}
 
-	if (current(state).kind === TokenKind.LBracket) {
+	if (current(state).kind == TokenKind.LBracket) {
 		const pattern = try parseArrayPattern(state);
 		skipOptionalType(state);
-		if (current(state).kind !== TokenKind.Assign) {
+		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
@@ -98,7 +98,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
-			destrIsConst: keyword.kind === TokenKind.Const,
+			destrIsConst: keyword.kind == TokenKind.Const,
 		}, keyword));
 	}
 
@@ -114,12 +114,12 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 
 	// Uninitialized declaration: `let x: Type;` — requires type annotation, disallowed for const
 	let init: Node | null = null;
-	if (current(state).kind === TokenKind.Assign) {
+	if (current(state).kind == TokenKind.Assign) {
 		advance(state);
 		init = try callExprParser(state);
-	} else if (declType === "") {
+	} else if (declType == "") {
 		return Result.err(`Expected '=' or type annotation in declaration at line ${current(state).line}`);
-	} else if (keyword.kind === TokenKind.Const) {
+	} else if (keyword.kind == TokenKind.Const) {
 		return Result.err(`'const' declaration must be initialized at line ${current(state).line}`);
 	}
 	consumeSemicolon(state);
@@ -156,17 +156,17 @@ function stripFirstDefault(arr: Node[]): Node[] {
 // Appends generic names. Used by both regular and extern function parsers.
 function applyExtensionFlags(flags: string, params: string[], fnParamTypes: string[], genericNames: string): string {
 	// Instance extension: first param has "this:" prefix
-	if (params.length > 0 && params[0].length > 5 && params[0].slice(0, 5) === "this:") {
+	if (params.length > 0 && params[0].length > 5 && params[0].slice(0, 5) == "this:") {
 		const receiverName = params[0].slice(5, params[0].length);
 		const receiverType = fnParamTypes[0];
-		if (flags === "") { flags = `ext:${receiverName}:${receiverType}`; }
+		if (flags == "") { flags = `ext:${receiverName}:${receiverType}`; }
 		else { flags = `${flags}|ext:${receiverName}:${receiverType}`; }
 		params[0] = receiverName;
 	}
 	// Static extension: first param has "typeof:" prefix
-	if (params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:") {
+	if (params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:") {
 		const staticType = params[0].slice(7, params[0].length);
-		if (flags === "") { flags = `sext:${staticType}`; }
+		if (flags == "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
 	}
 	// Out/ref/readonly parameters: strip prefix, encode positions in flags
@@ -174,37 +174,37 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	let refPositions = "";
 	let rdonlyPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
-		if (params[oi].length > 4 && params[oi].slice(0, 4) === "out:") {
+		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
-			if (outPositions === "") { outPositions = `${oi}`; }
+			if (outPositions == "") { outPositions = `${oi}`; }
 			else { outPositions = `${outPositions},${oi}`; }
 		}
-		if (params[oi].length > 4 && params[oi].slice(0, 4) === "ref:") {
+		if (params[oi].length > 4 && params[oi].slice(0, 4) == "ref:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
-			if (refPositions === "") { refPositions = `${oi}`; }
+			if (refPositions == "") { refPositions = `${oi}`; }
 			else { refPositions = `${refPositions},${oi}`; }
 		}
-		if (params[oi].length > 7 && params[oi].slice(0, 7) === "rdonly:") {
+		if (params[oi].length > 7 && params[oi].slice(0, 7) == "rdonly:") {
 			params[oi] = params[oi].slice(7, params[oi].length);
-			if (rdonlyPositions === "") { rdonlyPositions = `${oi}`; }
+			if (rdonlyPositions == "") { rdonlyPositions = `${oi}`; }
 			else { rdonlyPositions = `${rdonlyPositions},${oi}`; }
 		}
 	}
-	if (outPositions !== "") {
-		if (flags === "") { flags = `out:${outPositions}`; }
+	if (outPositions != "") {
+		if (flags == "") { flags = `out:${outPositions}`; }
 		else { flags = `${flags}|out:${outPositions}`; }
 	}
-	if (refPositions !== "") {
-		if (flags === "") { flags = `ref:${refPositions}`; }
+	if (refPositions != "") {
+		if (flags == "") { flags = `ref:${refPositions}`; }
 		else { flags = `${flags}|ref:${refPositions}`; }
 	}
-	if (rdonlyPositions !== "") {
-		if (flags === "") { flags = `rdonly:${rdonlyPositions}`; }
+	if (rdonlyPositions != "") {
+		if (flags == "") { flags = `rdonly:${rdonlyPositions}`; }
 		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
 	}
 	// Encode generic param names
-	if (genericNames !== "") {
-		if (flags === "") { flags = `gen:${genericNames}`; }
+	if (genericNames != "") {
+		if (flags == "") { flags = `gen:${genericNames}`; }
 		else { flags = `${flags}|gen:${genericNames}`; }
 	}
 	return flags;
@@ -216,27 +216,27 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 export function parseFunctionDecl(state: ParserState): NodeResult {
 	const fnToken = current(state);
 	let flags = "";
-	if (current(state).kind === TokenKind.Async) {
+	if (current(state).kind == TokenKind.Async) {
 		flags = "async";
 		advance(state); // consume 'async'
 	}
 	advance(state); // consume 'function'
 	// Check for generator: function* name()
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Star) {
-		if (flags === "async") { flags = "async_generator"; }
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Star) {
+		if (flags == "async") { flags = "async_generator"; }
 		else { flags = "generator"; }
 		advance(state); // consume '*'
 	}
 	const nameToken = current(state);
 	// Accept Ident, OperatorIdent (backtick-quoted: `==`, `[]`), TemplateNoSub, or contextual keywords
-	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
+	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind != TokenKind.TemplateNoSub && nameToken.kind != TokenKind.OperatorIdent) {
 		return Result.err(`Expected function name at line ${nameToken.line}`);
 	}
 
 	advance(state);
 	// Capture optional generic params: function id<T>(x: T): T
 	const genericNames = captureGenericParams(state);
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after function name at line ${current(state).line}`);
 	}
 
@@ -251,7 +251,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	flags = applyExtensionFlags(flags, params, fnParamTypes, genericNames);
 
 	// Static extensions strip the synthetic typeof param (not a runtime param)
-	const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:";
+	const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:";
 
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
@@ -263,10 +263,10 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	//   function f(k: K): void { ... }   // implementation comes last
 	let fnBody: Node;
 	let fnFlagsFinal: string;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 		advance(state); // consume ;
 		fnBody = createNode(NodeKind.BlockStmt, { statements: [] }, fnToken);
-		fnFlagsFinal = flags === "" ? "overload" : (flags + " overload");
+		fnFlagsFinal = flags == "" ? "overload" : (flags + " overload");
 	} else {
 		fnBody = try callBlockParser(state);
 		fnFlagsFinal = flags;
@@ -296,7 +296,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Side-effect import: import "module";
-	if (current(state).kind === TokenKind.String) {
+	if (current(state).kind == TokenKind.String) {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
@@ -309,22 +309,22 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	}
 
 	// Namespace import: import * as ns from "module";
-	if (current(state).kind === TokenKind.Star) {
+	if (current(state).kind == TokenKind.Star) {
 		advance(state); // skip *
-		if (current(state).kind !== TokenKind.As) {
+		if (current(state).kind != TokenKind.As) {
 			return Result.err(`Expected 'as' after 'import *' at line ${current(state).line}`);
 		}
 		advance(state); // skip 'as'
-		if (current(state).kind !== TokenKind.Ident) {
+		if (current(state).kind != TokenKind.Ident) {
 			return Result.err(`Expected namespace name after 'import * as' at line ${current(state).line}`);
 		}
 		const nsName = current(state).value;
 		advance(state);
-		if (current(state).kind !== TokenKind.From) {
+		if (current(state).kind != TokenKind.From) {
 			return Result.err(`Expected 'from' after 'import * as ${nsName}' at line ${current(state).line}`);
 		}
 		advance(state);
-		if (current(state).kind !== TokenKind.String) {
+		if (current(state).kind != TokenKind.String) {
 			return Result.err(`Expected module path string at line ${current(state).line}`);
 		}
 		const source = current(state).value;
@@ -335,7 +335,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		}, importToken));
 	}
 
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' or string after 'import' at line ${current(state).line}`);
 	}
 
@@ -344,17 +344,17 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	const names = specs.names;
 	const aliases = specs.aliases;
 
-	if (current(state).kind !== TokenKind.RBrace) {
+	if (current(state).kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' after import specifiers at line ${current(state).line}`);
 	}
 
 	advance(state);
-	if (current(state).kind !== TokenKind.From) {
+	if (current(state).kind != TokenKind.From) {
 		return Result.err(`Expected 'from' after import specifiers at line ${current(state).line}`);
 	}
 
 	advance(state);
-	if (current(state).kind !== TokenKind.String) {
+	if (current(state).kind != TokenKind.String) {
 		return Result.err(`Expected module path string at line ${current(state).line}`);
 	}
 
@@ -380,13 +380,13 @@ export function parseExportDecl(state: ParserState): NodeResult {
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
 	const nextKind = current(state).kind;
 	// Star re-export: export * from "module";
-	if (nextKind === TokenKind.Star) {
+	if (nextKind == TokenKind.Star) {
 		advance(state); // skip *
-		if (current(state).kind !== TokenKind.From) {
+		if (current(state).kind != TokenKind.From) {
 			return Result.err(`Expected 'from' after 'export *' at line ${current(state).line}`);
 		}
 		advance(state);
-		if (current(state).kind !== TokenKind.String) {
+		if (current(state).kind != TokenKind.String) {
 			return Result.err(`Expected module path string at line ${current(state).line}`);
 		}
 		const source = current(state).value;
@@ -398,17 +398,17 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 	// Re-export: export { X, Y } from "module";
-	if (nextKind === TokenKind.LBrace) {
+	if (nextKind == TokenKind.LBrace) {
 		advance(state); // skip '{'
 		const specs = parseSpecifierList(state);
 		const names = specs.names;
 		const aliases = specs.aliases;
-		if (current(state).kind === TokenKind.RBrace) { advance(state); }
-		if (current(state).kind !== TokenKind.From) {
+		if (current(state).kind == TokenKind.RBrace) { advance(state); }
+		if (current(state).kind != TokenKind.From) {
 			return Result.err(`Expected 'from' after export specifiers at line ${current(state).line}`);
 		}
 		advance(state);
-		if (current(state).kind !== TokenKind.String) {
+		if (current(state).kind != TokenKind.String) {
 			return Result.err(`Expected module path string at line ${current(state).line}`);
 		}
 		const source = current(state).value;
@@ -420,87 +420,87 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Function) {
+	if (nextKind == TokenKind.Function) {
 		const decl = try parseFunctionDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Const || nextKind === TokenKind.Let) {
+	if (nextKind == TokenKind.Const || nextKind == TokenKind.Let) {
 		const decl = try parseVariableDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Enum) {
+	if (nextKind == TokenKind.Enum) {
 		const decl = try parseEnumDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Interface) {
+	if (nextKind == TokenKind.Interface) {
 		const decl = try parseInterfaceDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Struct) {
+	if (nextKind == TokenKind.Struct) {
 		const decl = try parseStructDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Type) {
+	if (nextKind == TokenKind.Type) {
 		const decl = try parseTypeAliasDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Distinct) {
+	if (nextKind == TokenKind.Distinct) {
 		const decl = try parseDistinctTypeDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Class || nextKind === TokenKind.Abstract) {
+	if (nextKind == TokenKind.Class || nextKind == TokenKind.Abstract) {
 		const decl = try parseClassDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Actor) {
+	if (nextKind == TokenKind.Actor) {
 		const decl = try parseActorDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Macro) {
+	if (nextKind == TokenKind.Macro) {
 		const decl = try parseMacroDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Converter) {
+	if (nextKind == TokenKind.Converter) {
 		const decl = try parseConverterDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
-	if (nextKind === TokenKind.Template) {
+	if (nextKind == TokenKind.Template) {
 		// parseFunctionDecl consumes the keyword token — 'template' acts like 'function'
 		const decl = try parseFunctionDecl(state);
 		const fd = decl.data as FunctionDeclData;
-		fd.fnFlags = fd.fnFlags === "" ? "template" : fd.fnFlags + " template";
+		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
 	// export async function f() {}
-	if (nextKind === TokenKind.Async) {
+	if (nextKind == TokenKind.Async) {
 		const decl = try parseFunctionDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
 	// export extern function f(): void;
-	if (nextKind === TokenKind.Extern) {
+	if (nextKind == TokenKind.Extern) {
 		const decl = try parseExternDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
 	// export default <expr>;
-	if (nextKind === TokenKind.Default) {
+	if (nextKind == TokenKind.Default) {
 		advance(state);
 		// Check if default is followed by a declaration
 		const afterDefault = current(state).kind;
-		if (afterDefault === TokenKind.Function) {
+		if (afterDefault == TokenKind.Function) {
 			const decl = try parseFunctionDecl(state);
 			const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken);
 			exportNode.flags = exportNode.flags | NodeFlag.ExportDefault;
@@ -533,18 +533,18 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	// Tier 3: capture optional generic params: type Box<T> = ...
 	const genericNames = captureGenericParams(state);
-	if (genericNames !== "") {
+	if (genericNames != "") {
 		addGenericDecl(nameToken.value, genericNames);
 	}
 
-	if (current(state).kind !== TokenKind.Assign) {
+	if (current(state).kind != TokenKind.Assign) {
 		return Result.err(`Expected '=' in type alias at line ${current(state).line}`);
 	}
 
 	advance(state);
 
 	// Discriminated union: type X = match (disc: EnumOrBool) { Key => { fields }, ... }
-	if (current(state).kind === TokenKind.Match) {
+	if (current(state).kind == TokenKind.Match) {
 		return parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, typeToken, nameToken);
 	}
 
@@ -582,7 +582,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, genericNames: string, typeToken: Token, aliasNameToken: Token): NodeResult {
 	advance(state); // consume 'match'
 
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'match' in discriminated union at line ${current(state).line}`);
 	}
 	advance(state); // consume '('
@@ -593,7 +593,7 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, gene
 	}
 	advance(state);
 
-	if (current(state).kind !== TokenKind.Colon) {
+	if (current(state).kind != TokenKind.Colon) {
 		return Result.err(`Expected ':' after discriminant name at line ${current(state).line}`);
 	}
 	advance(state); // consume ':'
@@ -604,12 +604,12 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, gene
 	const discTypeEnd = state.position;
 	const discriminantType = collectTokenText(state, discTypeStart, discTypeEnd);
 
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after discriminant type at line ${current(state).line}`);
 	}
 	advance(state); // consume ')'
 
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' to start variant list at line ${current(state).line}`);
 	}
 	advance(state); // consume '{'
@@ -617,25 +617,25 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, gene
 	const variantKeys: string[] = [];
 	const variantTypes: string[] = [];
 
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		// Parse variant key: EnumType.Member, just Member, or boolean literal (true/false)
 		// Boolean literals are accepted for match-type unions over `boolean` discriminants.
 		const tok = current(state);
-		const isBoolLit = tok.kind === TokenKind.True || tok.kind === TokenKind.False;
+		const isBoolLit = tok.kind == TokenKind.True || tok.kind == TokenKind.False;
 		if (!isBoolLit && !isIdentLike(tok)) {
 			return Result.err(`Expected variant key at line ${tok.line}`);
 		}
-		let key = isBoolLit ? (tok.kind === TokenKind.True ? "true" : "false") : tok.value;
+		let key = isBoolLit ? (tok.kind == TokenKind.True ? "true" : "false") : tok.value;
 		advance(state); // consume first ident
 		// Handle dotted names like NodeKind.NumLit
-		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 			advance(state); // consume '.'
 			key = `${key}.${current(state).value}`;
 			advance(state); // consume member name
 		}
 		variantKeys.push(key);
 
-		if (current(state).kind !== TokenKind.Arrow) {
+		if (current(state).kind != TokenKind.Arrow) {
 			return Result.err(`Expected '=>' after variant key at line ${current(state).line}`);
 		}
 		advance(state); // consume '=>'
@@ -648,12 +648,12 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, gene
 		variantTypes.push(variantType);
 
 		// Optional comma separator
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.RBrace) {
+	if (current(state).kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' to end variant list at line ${current(state).line}`);
 	}
 	advance(state); // consume '}'
@@ -696,7 +696,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' after enum name at line ${current(state).line}`);
 	}
 
@@ -705,7 +705,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	const memberLocs: SourceLocation[] = [];
 	const values: number[] = [];
 	let nextValue: number = 0;
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const member = current(state);
 		if (!isPropertyName(member)) {
 			return Result.err(`Expected enum member name at line ${member.line}`);
@@ -715,10 +715,10 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		memberLocs.push(makeLocFromToken(member));
 		advance(state);
 		// Optional value: A = 1 — parse number literal
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 			advance(state);
 			const valTok = current(state);
-			if (valTok.kind === TokenKind.Number) {
+			if (valTok.kind == TokenKind.Number) {
 				nextValue = parseFloat(valTok.value);
 				advance(state);
 			} else {
@@ -728,12 +728,12 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		values.push(nextValue);
 		nextValue = nextValue + 1;
 
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.RBrace) {
+	if (current(state).kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' after enum members at line ${current(state).line}`);
 	}
 
@@ -752,8 +752,8 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 
 // Parse interface body: { field: Type; ... } — shared by parseInterfaceDecl and extern interface.
 function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string, nodeKind: NodeKind, nameLoc: SourceLocation = null as unknown as SourceLocation): NodeResult {
-	const keyword = nodeKind === NodeKind.StructDecl ? "struct" : "interface";
-	let ifaceIsGeneric = genericNames !== "";
+	const keyword = nodeKind == NodeKind.StructDecl ? "struct" : "interface";
+	let ifaceIsGeneric = genericNames != "";
 	if (ifaceIsGeneric) {
 		addGenericDecl(name, genericNames);
 	}
@@ -762,25 +762,25 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	// Capture each parent type expression (e.g. "Y", "Container<int>", "A<T>")
 	// as a raw string. Comma-separated at top level; `<>` nesting tracked.
 	const extendsList: string[] = [];
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 		advance(state);
-		while (!isAtEnd(state) && current(state).kind !== TokenKind.LBrace) {
+		while (!isAtEnd(state) && current(state).kind != TokenKind.LBrace) {
 			const parentStart = state.position;
 			let depth = 0;
 			while (!isAtEnd(state)) {
 				const tk = current(state).kind;
-				if (depth === 0 && (tk === TokenKind.Comma || tk === TokenKind.LBrace)) break;
-				if (tk === TokenKind.Lt) depth = depth + 1;
-				else if (tk === TokenKind.Gt) depth = depth - 1;
+				if (depth == 0 && (tk == TokenKind.Comma || tk == TokenKind.LBrace)) break;
+				if (tk == TokenKind.Lt) depth = depth + 1;
+				else if (tk == TokenKind.Gt) depth = depth - 1;
 				advance(state);
 			}
 			const parentExpr = collectTokenText(state, parentStart, state.position).trim();
-			if (parentExpr !== "") extendsList.push(parentExpr);
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) advance(state);
+			if (parentExpr != "") extendsList.push(parentExpr);
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) advance(state);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' after ${keyword} name at line ${current(state).line}`);
 	}
 
@@ -789,7 +789,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldTypes: string[] = [];
 	const fieldTypeExprs: Node[] = [];
 	const fieldLocations: SourceLocation[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const field = current(state);
 		if (!isPropertyName(field)) {
 			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
@@ -799,8 +799,8 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		fieldLocations.push(makeLocFromToken(field));
 		advance(state);
 		let fieldIsOptional = false;
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
-			if (nodeKind === NodeKind.StructDecl) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
+			if (nodeKind == NodeKind.StructDecl) {
 				return Result.err(`Optional field '${field.value}?' in struct at line ${field.line}: '?' means '| null' and a struct field is a value type — write the nullable union type explicitly`);
 			}
 			fieldIsOptional = true;
@@ -811,12 +811,12 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		fieldTypes.push(fieldIsOptional ? optionalizeTypeString(fieldTypeStr) : fieldTypeStr);
 		fieldTypeExprs.push(getLastTypeExpr());
 
-		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
+		if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.Comma)) {
 			advance(state);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.RBrace) {
+	if (current(state).kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' after ${keyword} body at line ${current(state).line}`);
 	}
 
@@ -839,7 +839,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		interfaceFieldTypes: fieldTypes,
 		interfaceExtends: extendsList,
 		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
-		nameLocation: nameLoc !== null ? nameLoc : makeLocFromToken(token),
+		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 	}, token);
 	ifaceNode.typeExprs = fieldTypeExprs;
 	// Repurpose paramLocations for per-field name source locations (used by resolvePass
@@ -859,7 +859,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	advance(state);
 
 	let genericNames = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 		genericNames = captureGenericParams(state);
 	}
 
@@ -868,26 +868,26 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	// list captured into interfaceExtends. See LANG.md §4.6.
 	// Brace depth tracked so anonymous object operands `{ role: string; }` —
 	// which contain semicolons — don't terminate the RHS prematurely.
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 		advance(state);
 		const rhsStart = state.position;
 		let braceDepth = 0;
 		while (!isAtEnd(state)) {
 			const tk = current(state).kind;
-			if (tk === TokenKind.LBrace) braceDepth = braceDepth + 1;
-			else if (tk === TokenKind.RBrace) braceDepth = braceDepth - 1;
-			else if (tk === TokenKind.Semicolon && braceDepth === 0) break;
+			if (tk == TokenKind.LBrace) braceDepth = braceDepth + 1;
+			else if (tk == TokenKind.RBrace) braceDepth = braceDepth - 1;
+			else if (tk == TokenKind.Semicolon && braceDepth == 0) break;
 			advance(state);
 		}
 		const rhsExpr = collectTokenText(state, rhsStart, state.position).trim();
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) advance(state);
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) advance(state);
 		const parts = splitTopLevel(rhsExpr, "&");
 		const aliasExtends: string[] = [];
 		for (const p of parts) {
 			const tp = p.trim();
-			if (tp !== "") aliasExtends.push(tp);
+			if (tp != "") aliasExtends.push(tp);
 		}
-		if (genericNames !== "") addGenericDecl(nameToken.value, genericNames);
+		if (genericNames != "") addGenericDecl(nameToken.value, genericNames);
 		const aliasNode = createNode(nodeKind, {
 			interfaceName: nameToken.value,
 			interfaceFields: [],
@@ -917,10 +917,10 @@ export function parseStructDecl(state: ParserState): NodeResult {
 export function parseClassDecl(state: ParserState): NodeResult {
 	const classToken = current(state);
 	// Skip 'abstract' modifier if present
-	if (current(state).kind === TokenKind.Abstract) {
+	if (current(state).kind == TokenKind.Abstract) {
 		advance(state);
 	}
-	if (current(state).kind !== TokenKind.Class) {
+	if (current(state).kind != TokenKind.Class) {
 		return Result.err(`Expected 'class' at line ${current(state).line}`);
 	}
 	advance(state);
@@ -933,9 +933,9 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 	// Optional generic type parameters: class Foo<T>
 	let classIsGeneric = false;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 		const genericNames = captureGenericParams(state);
-		if (genericNames !== "") {
+		if (genericNames != "") {
 			addGenericDecl(nameToken.value, genericNames);
 			classIsGeneric = true;
 		}
@@ -943,19 +943,19 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 	// Optional extends: class Foo extends Bar / class Foo extends Bar<T>
 	let extendsName = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 		advance(state);
 		const extStart = state.position;
 		if (isIdentLike(current(state))) {
 			advance(state);
 			// Capture generic args via depth-tracked skip — preserved in extendsName.
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 				let depth = 1;
 				advance(state);
 				while (!isAtEnd(state) && depth > 0) {
 					const tk = current(state).kind;
-					if (tk === TokenKind.Lt) depth = depth + 1;
-					else if (tk === TokenKind.Gt) depth = depth - 1;
+					if (tk == TokenKind.Lt) depth = depth + 1;
+					else if (tk == TokenKind.Gt) depth = depth - 1;
 					advance(state);
 				}
 			}
@@ -964,21 +964,21 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	}
 
 	// Optional implements: class Foo implements Bar, Baz — skip
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Implements) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Implements) {
 		advance(state);
-		while (!isAtEnd(state) && current(state).kind !== TokenKind.LBrace) {
+		while (!isAtEnd(state) && current(state).kind != TokenKind.LBrace) {
 			advance(state);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' after class declaration at line ${current(state).line}`);
 	}
 	advance(state);
 
 	const members: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		if (current(state).kind === TokenKind.Semicolon) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
 		}
@@ -986,7 +986,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		members.push(member);
 	}
 
-	if (current(state).kind === TokenKind.RBrace) {
+	if (current(state).kind == TokenKind.RBrace) {
 		advance(state);
 	}
 
@@ -995,9 +995,9 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		let fnJoined = "";
 		let ftJoined = "";
 		for (const member of members) {
-			if (member.kind === NodeKind.PropertyDecl) {
+			if (member.kind == NodeKind.PropertyDecl) {
 				const pd = member.data as PropertyDeclData;
-				if (fnJoined !== "") { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
+				if (fnJoined != "") { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
 				fnJoined = `${fnJoined}${pd.propName}`;
 				ftJoined = `${ftJoined}${pd.propType}`;
 			}
@@ -1018,7 +1018,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 export function parseActorDecl(state: ParserState): NodeResult {
 	const actorToken = current(state);
-	if (current(state).kind !== TokenKind.Actor) {
+	if (current(state).kind != TokenKind.Actor) {
 		return Result.err(`Expected 'actor' at line ${current(state).line}`);
 	}
 	advance(state);
@@ -1030,21 +1030,21 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Optional generic type parameters: actor Foo<T>
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 		const genericNames = captureGenericParams(state);
-		if (genericNames !== "") {
+		if (genericNames != "") {
 			addGenericDecl(nameToken.value, genericNames);
 		}
 	}
 
-	if (current(state).kind !== TokenKind.LBrace) {
+	if (current(state).kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' after actor declaration at line ${current(state).line}`);
 	}
 	advance(state);
 
 	const members: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		if (current(state).kind === TokenKind.Semicolon) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
 		}
@@ -1052,7 +1052,7 @@ export function parseActorDecl(state: ParserState): NodeResult {
 		members.push(member);
 	}
 
-	if (current(state).kind === TokenKind.RBrace) {
+	if (current(state).kind == TokenKind.RBrace) {
 		advance(state);
 	}
 
@@ -1067,9 +1067,9 @@ function parseClassMember(state: ParserState): NodeResult {
 	const memberToken = current(state);
 
 	// Decorator before class member: @name(...) member
-	if (current(state).kind === TokenKind.At) {
+	if (current(state).kind == TokenKind.At) {
 		const decorators: Node[] = [];
-		while (!isAtEnd(state) && current(state).kind === TokenKind.At) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
 			decorators.push(dec);
 		}
@@ -1082,65 +1082,65 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Capture access modifiers: public, private, protected
 	let memberVisibility = "";
-	if (current(state).kind === TokenKind.Public) {
+	if (current(state).kind == TokenKind.Public) {
 		memberVisibility = "public";
 		advance(state);
-	} else if (current(state).kind === TokenKind.Private) {
+	} else if (current(state).kind == TokenKind.Private) {
 		memberVisibility = "private";
 		advance(state);
-	} else if (current(state).kind === TokenKind.Protected) {
+	} else if (current(state).kind == TokenKind.Protected) {
 		memberVisibility = "protected";
 		advance(state);
 	}
 
 	// Check for static
 	let memberIsStatic = false;
-	if (current(state).kind === TokenKind.Static) {
+	if (current(state).kind == TokenKind.Static) {
 		memberIsStatic = true;
 		advance(state);
 	}
 
 	// Check for readonly
 	let memberIsReadonly = false;
-	if (current(state).kind === TokenKind.Readonly) {
+	if (current(state).kind == TokenKind.Readonly) {
 		memberIsReadonly = true;
 		advance(state);
 	}
 
 	// Check for abstract (skip as modifier)
-	if (current(state).kind === TokenKind.Abstract) {
+	if (current(state).kind == TokenKind.Abstract) {
 		advance(state);
 	}
 
 	// Check for extern modifier on methods
 	let memberFlags = "";
-	if (current(state).kind === TokenKind.Extern) {
+	if (current(state).kind == TokenKind.Extern) {
 		memberFlags = "extern";
 		advance(state);
 	}
 
 	// Check for async modifier on methods
-	if (current(state).kind === TokenKind.Async) {
-		if (memberFlags !== "") { memberFlags = `${memberFlags}_async`; }
+	if (current(state).kind == TokenKind.Async) {
+		if (memberFlags != "") { memberFlags = `${memberFlags}_async`; }
 		else { memberFlags = "async"; }
 		advance(state);
 	}
 
 	// Check for generator star on methods
-	if (current(state).kind === TokenKind.Star) {
-		if (memberFlags === "async") { memberFlags = "async_generator"; }
+	if (current(state).kind == TokenKind.Star) {
+		if (memberFlags == "async") { memberFlags = "async_generator"; }
 		else { memberFlags = "generator"; }
 		advance(state);
 	}
 
 	// Constructor — early return, own scope for try
-	if (current(state).kind === TokenKind.Constructor) {
+	if (current(state).kind == TokenKind.Constructor) {
 		return parseClassConstructor(state);
 	}
 
 	// Get/Set accessors — early return
 	// Lookahead must use peek() to skip comments, not raw state.tokens[pos+1]
-	if ((current(state).kind === TokenKind.Get || current(state).kind === TokenKind.Set) &&
+	if ((current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set) &&
 		isIdentLike(peek(state, 1))) {
 		return parseClassAccessor(state, memberIsStatic, memberFlags, memberVisibility);
 	}
@@ -1153,13 +1153,13 @@ function parseClassMember(state: ParserState): NodeResult {
 	advance(state);
 
 	let memberIsOptional = false;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
 		memberIsOptional = true;
 		advance(state);
 	}
 
 	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
-	if (!isAtEnd(state) && (current(state).kind === TokenKind.LParen || current(state).kind === TokenKind.Lt)) {
+	if (!isAtEnd(state) && (current(state).kind == TokenKind.LParen || current(state).kind == TokenKind.Lt)) {
 		if (memberIsOptional) {
 			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
 		}
@@ -1171,7 +1171,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	const propType = memberIsOptional ? optionalizeTypeString(propTypeRaw) : propTypeRaw;
 	const propTypeExpr = getLastTypeExpr();
 	let propInit: Node = null as unknown as Node;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 		advance(state);
 		propInit = try callExprParser(state);
 	}
@@ -1251,8 +1251,8 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string): NodeResult {
 	// Capture optional generic params: method<T>(...) — same as regular function parser
 	const genericNames = captureGenericParams(state);
-	if (genericNames !== "") {
-		if (flags === "") { flags = `gen:${genericNames}`; }
+	if (genericNames != "") {
+		if (flags == "") { flags = `gen:${genericNames}`; }
 		else { flags = `${flags}|gen:${genericNames}`; }
 	}
 	const raw = parseParamList(state, nameToken.value);
@@ -1267,9 +1267,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 
 	// Extern methods: 'from "c_name";' instead of body
 	let methodNativeName = "";
-	if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.From) {
 		advance(state); // consume 'from'
-		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.String) {
 			methodNativeName = current(state).value;
 			advance(state);
 		}
@@ -1294,7 +1294,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	}
 
 	// Abstract methods / extern without 'from' — just semicolon
-	if (current(state).kind === TokenKind.Semicolon) {
+	if (current(state).kind == TokenKind.Semicolon) {
 		consumeSemicolon(state);
 		const mNode2 = createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
@@ -1342,11 +1342,10 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	const bracketToken = current(state);
 	advance(state); // consume '['
 	const elements: Node[] = [];
-	const defaults: Node[] = [];
 	let hasRest = false;
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBracket) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBracket) {
 		// Rest element: ...x
-		if (current(state).kind === TokenKind.DotDotDot) {
+		if (current(state).kind == TokenKind.DotDotDot) {
 			hasRest = true;
 			const spreadToken = current(state);
 			advance(state);
@@ -1357,11 +1356,11 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 					spreadArg: createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent),
 				}, spreadToken));
 			}
-		} else if (current(state).kind === TokenKind.LBracket) {
+		} else if (current(state).kind == TokenKind.LBracket) {
 			// Nested array pattern
 			const nested = try parseArrayPattern(state);
 			elements.push(nested);
-		} else if (current(state).kind === TokenKind.LBrace) {
+		} else if (current(state).kind == TokenKind.LBrace) {
 			// Nested object pattern
 			const nested = try parseObjectPattern(state);
 			elements.push(nested);
@@ -1369,30 +1368,27 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			const elemToken = current(state);
 			advance(state);
 			elements.push(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken));
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+			// Skip default value: x = defaultVal
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
-				const dIdx = elements.length - 1;
-				while (defaults.length < dIdx) { defaults.push(null); }
-				const dExpr = try callExprParser(state);
-				defaults.push(dExpr);
+				skipDefaultValue(state);
 			}
-		} else if (current(state).kind === TokenKind.Comma) {
+		} else if (current(state).kind == TokenKind.Comma) {
 			// Elision: [,, x] — push a placeholder
 			elements.push(createNode(NodeKind.Identifier, { name: "_" }, current(state)));
 		} else {
 			break;
 		}
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		} else {
 			break;
 		}
 	}
-	if (current(state).kind === TokenKind.RBracket) { advance(state); }
+	if (current(state).kind == TokenKind.RBracket) { advance(state); }
 	return Result.ok(createNode(NodeKind.ArrayPattern, {
 		patternElements: elements,
 		hasRestElement: hasRest,
-		patternDefaults: defaults,
 	}, bracketToken));
 }
 
@@ -1401,9 +1397,9 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 	advance(state); // consume '{'
 	const props: Node[] = [];
 	let hasRest = false;
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		// Rest property: ...rest
-		if (current(state).kind === TokenKind.DotDotDot) {
+		if (current(state).kind == TokenKind.DotDotDot) {
 			hasRest = true;
 			const spreadToken = current(state);
 			advance(state);
@@ -1418,59 +1414,54 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 			const keyToken = current(state);
 			advance(state);
 			// Check for rename: { key: alias } or { key: { nested } } or { key: [nested] }
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume ':'
-				if (current(state).kind === TokenKind.LBrace) {
+				if (current(state).kind == TokenKind.LBrace) {
 					const nested = try parseObjectPattern(state);
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
-						propDefault: null,
 					}, keyToken));
-				} else if (current(state).kind === TokenKind.LBracket) {
+				} else if (current(state).kind == TokenKind.LBracket) {
 					const nested = try parseArrayPattern(state);
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
-						propDefault: null,
 					}, keyToken));
 				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
 					advance(state);
-					let aliasDefault: Node | null = null;
-					if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
-						advance(state);
-						aliasDefault = try callExprParser(state);
-					}
 					props.push(createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: createNode(NodeKind.Identifier, { name: aliasToken.value }, aliasToken),
-						propDefault: aliasDefault,
 					}, keyToken));
+					if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+						advance(state);
+						skipDefaultValue(state);
+					}
 				}
 			} else {
 				// Shorthand: { key } — alias is same as key
-				let shorthandDefault: Node | null = null;
-				if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
-					advance(state);
-					shorthandDefault = try callExprParser(state);
-				}
 				props.push(createNode(NodeKind.ObjectPatternProp, {
 					propKey: keyToken.value,
 					propAlias: createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken),
-					propDefault: shorthandDefault,
 				}, keyToken));
+				// Skip default value: { x = 5 }
+				if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+					advance(state);
+					skipDefaultValue(state);
+				}
 			}
 		} else {
 			break;
 		}
-		if (current(state).kind === TokenKind.Comma) {
+		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
 		} else {
 			break;
 		}
 	}
-	if (current(state).kind === TokenKind.RBrace) { advance(state); }
+	if (current(state).kind == TokenKind.RBrace) { advance(state); }
 	return Result.ok(createNode(NodeKind.ObjectPattern, {
 		patternProps: props,
 		hasRestProp: hasRest,
@@ -1491,25 +1482,25 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 	advance(state);
 
 	// @comptime { ... } — produce ComptimeBlock instead of MacroInvocation
-	if (macroName === "comptime" && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if (macroName == "comptime" && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const comptimeBody = try callBlockParser(state);
 		return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody }, atToken));
 	}
 
 	// Optional arguments: @name(arg1, arg2)
 	const args: Node[] = [];
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
 		advance(state); // consume '('
-		while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+		while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 			const arg = try callExprParser(state);
 			args.push(arg);
-			if (current(state).kind === TokenKind.Comma) {
+			if (current(state).kind == TokenKind.Comma) {
 				advance(state);
 			} else {
 				break;
 			}
 		}
-		if (current(state).kind === TokenKind.RParen) {
+		if (current(state).kind == TokenKind.RParen) {
 			advance(state);
 		}
 	}
@@ -1525,9 +1516,9 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 
 // Returns native name or "". Caller handles its own terminator after the call.
 function parseOptionalFromClause(state: ParserState): string {
-	if (isAtEnd(state) || current(state).kind !== TokenKind.From) return "";
+	if (isAtEnd(state) || current(state).kind != TokenKind.From) return "";
 	advance(state); // consume 'from'
-	if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.String) {
 		const name = current(state).value;
 		advance(state);
 		return name;
@@ -1554,19 +1545,19 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		TokenKind.Macro => ExternKind.Macro,
 		_ => ExternKind.Invalid,
 	};
-	if (externKind === ExternKind.Invalid) {
+	if (externKind == ExternKind.Invalid) {
 		return Result.err(`Expected declaration keyword after 'extern' at line ${kindToken.line}`);
 	}
 	advance(state); // consume the keyword
 
 	// For macro: optional '@' prefix
-	if (externKind === ExternKind.Macro && !isAtEnd(state) && current(state).kind === TokenKind.At) {
+	if (externKind == ExternKind.Macro && !isAtEnd(state) && current(state).kind == TokenKind.At) {
 		advance(state);
 	}
 
 	// Parse name (includes backtick operator names like `==`, `<`, `[]`)
 	const nameToken = current(state);
-	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind !== TokenKind.OperatorIdent) {
+	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind != TokenKind.OperatorIdent) {
 		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line}`);
 	}
 	advance(state);
@@ -1575,7 +1566,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	const genericNames = captureGenericParams(state);
 
 	// Extern functions → FunctionDecl with "extern" in fnFlags (Standard reference: importc pragma)
-	if (externKind === ExternKind.Function) {
+	if (externKind == ExternKind.Function) {
 		const raw = parseParamList(state, nameToken.value);
 		const externParamTypeExprs = getLastParamTypeExprs();
 		const externParamLocs = getLastParamLocations();
@@ -1591,14 +1582,14 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		// Parse optional 'from "c_name"' clause or body/semicolon
 		let fnBody: Node = createNode(NodeKind.BlockStmt, { statements: [] as Node[] }, externToken);
 		let nativeName = parseOptionalFromClause(state);
-		if (nativeName !== "" || (isAtEnd(state) || current(state).kind !== TokenKind.LBrace)) {
+		if (nativeName != "" || (isAtEnd(state) || current(state).kind != TokenKind.LBrace)) {
 			consumeSemicolon(state);
 		} else {
 			fnBody = try callBlockParser(state);
 		}
 
 		// Static extensions strip the synthetic typeof param (not a runtime param)
-		const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:";
+		const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:";
 
 		const externFnNode = createNode(NodeKind.FunctionDecl, {
 			fnName: nameToken.value,
@@ -1618,30 +1609,30 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	}
 
 	// Extern enum with body: parse as EnumDecl with ExternC flag.
-	if (externKind === ExternKind.Enum && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if (externKind == ExternKind.Enum && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		advance(state); // skip {
 		const members: string[] = [];
 		const memberLocs: SourceLocation[] = [];
 		const values: number[] = [];
 		let nextValue: number = 0;
-		while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 			const member = current(state);
 			if (!isPropertyName(member)) break;
 			members.push(member.value);
 			memberLocs.push(makeLocFromToken(member));
 			advance(state);
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
-				if (current(state).kind === TokenKind.Number) {
+				if (current(state).kind == TokenKind.Number) {
 					nextValue = parseFloat(current(state).value);
 					advance(state);
 				}
 			}
 			values.push(nextValue);
 			nextValue = nextValue + 1;
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) advance(state);
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) advance(state);
 		}
-		if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) advance(state);
+		if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) advance(state);
 		const enumNode = createNode(NodeKind.EnumDecl, {
 			enumName: nameToken.value,
 			enumMembers: members,
@@ -1656,17 +1647,17 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern interface with field body: parse as InterfaceDecl with ExternC flag.
 	// Reuses the full interface resolution pipeline (fields, types, generics).
 	// Only applies when body contains fields (name: Type), not methods (name(): Type).
-	if ((externKind === ExternKind.Interface || externKind === ExternKind.Struct) && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
-		const bodyNodeKind = externKind === ExternKind.Struct ? NodeKind.StructDecl : NodeKind.InterfaceDecl;
+	if ((externKind == ExternKind.Interface || externKind == ExternKind.Struct) && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
+		const bodyNodeKind = externKind == ExternKind.Struct ? NodeKind.StructDecl : NodeKind.InterfaceDecl;
 		// Peek ahead to determine if body has fields or methods
 		const savedPos = state.position;
 		let hasFieldBody = true;
 		advance(state); // skip {
-		if (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		if (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 			// Check second token after field name: colon = field, lparen = method
 			if (isPropertyName(current(state))) {
 				advance(state); // skip name
-				if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+				if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
 					hasFieldBody = false; // method signature, not field
 				}
 			}
@@ -1685,26 +1676,26 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern class with body: parse as ClassDecl with ExternC flag.
 	// Class body supports fields (name: Type) and extern methods (name(...): Type).
 	// parseClassMember already handles 'extern' modifier on methods.
-	if (externKind === ExternKind.Class && !isAtEnd(state)) {
+	if (externKind == ExternKind.Class && !isAtEnd(state)) {
 		// genericNames already captured before extern kind dispatch
-		if (genericNames !== "") {
+		if (genericNames != "") {
 			addGenericDecl(nameToken.value, genericNames);
 		}
 		let extendsName = "";
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 			advance(state);
 			if (isIdentLike(current(state))) { extendsName = current(state).value; advance(state); }
 			skipGenericParams(state);
 		}
-		if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 			advance(state); // skip {
 			const members: Node[] = [];
-			while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-				if (current(state).kind === TokenKind.Semicolon) { advance(state); continue; }
+			while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+				if (current(state).kind == TokenKind.Semicolon) { advance(state); continue; }
 				const member = try parseClassMember(state);
 				members.push(member);
 			}
-			if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) advance(state);
+			if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) advance(state);
 			const classNode = createNode(NodeKind.ClassDecl, {
 				className: nameToken.value,
 				classExtends: extendsName,
@@ -1731,16 +1722,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	const externType = captureOptionalType(state);
 	const externTypeExpr = getLastTypeExpr();
 
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 		advance(state);
 		skipTypeAnnotation(state);
 	}
 
 	// Parse optional 'from "c_name"' clause or body/semicolon
 	const externNativeName = parseOptionalFromClause(state);
-	if (externNativeName !== "") {
+	if (externNativeName != "") {
 		consumeSemicolon(state);
-	} else if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	} else if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
 	} else {
 		consumeSemicolon(state);
@@ -1763,7 +1754,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	const distinctToken = current(state);
 	advance(state); // consume 'distinct'
 
-	if (current(state).kind !== TokenKind.Type) {
+	if (current(state).kind != TokenKind.Type) {
 		return Result.err(`Expected 'type' after 'distinct' at line ${current(state).line}`);
 	}
 	advance(state); // consume 'type'
@@ -1774,7 +1765,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	}
 	advance(state);
 
-	if (current(state).kind !== TokenKind.Assign) {
+	if (current(state).kind != TokenKind.Assign) {
 		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line}`);
 	}
 	advance(state);
@@ -1850,15 +1841,15 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state, nameToken.value);
 	const params = extractParamNames(raw);
 	const paramTypes = extractParamTypes(raw);
-	if (params.length !== 1) {
+	if (params.length != 1) {
 		return Result.err(`converter '${nameToken.value}' must take exactly one parameter at line ${nameToken.line}`);
 	}
-	if (paramTypes[0] !== "Node") {
+	if (paramTypes[0] != "Node") {
 		return Result.err(`converter '${nameToken.value}' source must be a compile-time type (Node), got '${paramTypes[0]}' at line ${nameToken.line}`);
 	}
 
 	const macroDeclReturnType = captureOptionalType(state);
-	if (macroDeclReturnType === "") {
+	if (macroDeclReturnType == "") {
 		return Result.err(`converter '${nameToken.value}' requires an explicit return type at line ${nameToken.line}`);
 	}
 	const returnTypeExpr = getLastTypeExpr();
@@ -1905,21 +1896,21 @@ test "import star as" { assert programOk("import * as ns from \"./lib\";"); }
 
 test "import star as data" {
 	const d = stmtAt("import * as ns from \"./lib\";", 0).data as ImportDeclData;
-	assert d.importNames[0] === "*";
-	assert d.importAliases[0] === "ns";
-	assert d.importSource === "./lib";
+	assert d.importNames[0] == "*";
+	assert d.importAliases[0] == "ns";
+	assert d.importSource == "./lib";
 }
 
 test "export star" { assert programOk("export * from \"./lib\";"); }
 
-test "export star is ExportDecl" { assert stmtKind("export * from \"./lib\";") === NodeKind.ExportDecl; }
+test "export star is ExportDecl" { assert stmtKind("export * from \"./lib\";") == NodeKind.ExportDecl; }
 
 test "export star data" {
 	const ex = stmtAt("export * from \"./lib\";", 0).data as ExportDeclData;
 	const imp = ex.exportedDecl.data as ImportDeclData;
-	assert imp.importNames[0] === "*";
-	assert imp.importAliases[0] === "*";
-	assert imp.importSource === "./lib";
+	assert imp.importNames[0] == "*";
+	assert imp.importAliases[0] == "*";
+	assert imp.importSource == "./lib";
 }
 // Type alias — distinct paths: simple, generic, union, function type
 test "type simple" { assert programOk("type ID = number;"); }
@@ -1956,13 +1947,13 @@ test "export struct" { assert programOk("export struct Vec2 { x: number; y: numb
 
 test "export distinct type" { assert programOk("export distinct type EntityId = number;"); }
 
-test "export distinct is ExportDecl" { assert stmtKind("export distinct type EntityId = number;") === NodeKind.ExportDecl; }
+test "export distinct is ExportDecl" { assert stmtKind("export distinct type EntityId = number;") == NodeKind.ExportDecl; }
 
 test "export distinct wraps distinct alias" {
 	const ex = stmtAt("export distinct type EntityId = number;", 0).data as ExportDeclData;
 	const d = ex.exportedDecl.data as TypeAliasDeclData;
 	assert d.aliasIsDistinct;
-	assert d.aliasName === "EntityId";
+	assert d.aliasName == "EntityId";
 }
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
@@ -1984,16 +1975,16 @@ test "enum complex value" { assert programOk("enum E { A = fn(1, 2), B = arr[0] 
 // Var declarations
 test "var decl" { assert programOk("var x = 1;"); }
 
-test "var is VariableDecl" { assert stmtKind("var x = 1;") === NodeKind.VariableDecl; }
+test "var is VariableDecl" { assert stmtKind("var x = 1;") == NodeKind.VariableDecl; }
 
 test "var declKind is Var" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	assert d.declKind === DeclKind.Var;
+	assert d.declKind == DeclKind.Var;
 }
 
 test "var declName" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	assert d.declName === "x";
+	assert d.declName == "x";
 }
 
 test "var typed" { assert programOk("var x: number = 1;"); }
@@ -2016,44 +2007,44 @@ test "extern interface" { assert programOk("extern interface Stream { read(): nu
 
 test "extern macro" { assert programOk("extern macro @inject;"); }
 
-test "extern function is FunctionDecl" { assert stmtKind("extern function f(): void;") === NodeKind.FunctionDecl; }
+test "extern function is FunctionDecl" { assert stmtKind("extern function f(): void;") == NodeKind.FunctionDecl; }
 
 test "extern function has extern flag" {
 	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-	assert d.fnFlags === "extern";
+	assert d.fnFlags == "extern";
 }
 
-test "extern const is ExternDecl" { assert stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl; }
+test "extern const is ExternDecl" { assert stmtKind("extern const STDIN: int32;") == NodeKind.ExternDecl; }
 
 test "extern name field" {
 	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-	assert d.externName === "STDIN";
-	assert d.externType === "FILE";
+	assert d.externName == "STDIN";
+	assert d.externType == "FILE";
 }
 
 test "extern class kind" {
 	// extern class with body → ClassDecl with ExternC flag
-	assert stmtKind("extern class FILE {}") === NodeKind.ClassDecl;
+	assert stmtKind("extern class FILE {}") == NodeKind.ClassDecl;
 }
 
 test "extern var with type and from" {
 	const d = stmtAt("extern var errno: int32 from \"ms_errno\";", 0).data as ExternDeclData;
-	assert d.externKind === ExternKind.Var;
-	assert d.externName === "errno";
-	assert d.externType === "int32";
-	assert d.nativeName === "ms_errno";
+	assert d.externKind == ExternKind.Var;
+	assert d.externName == "errno";
+	assert d.externType == "int32";
+	assert d.nativeName == "ms_errno";
 }
 
 test "extern const no from" {
 	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-	assert d.externKind === ExternKind.Const;
-	assert d.nativeName === "";
+	assert d.externKind == ExternKind.Const;
+	assert d.nativeName == "";
 }
 
 test "extern class opaque" {
 	const d = stmtAt("extern class FILE;", 0).data as ExternDeclData;
-	assert d.externKind === ExternKind.Class;
-	assert d.externType === "";
+	assert d.externKind == ExternKind.Class;
+	assert d.externType == "";
 }
 
 test "extern generics" { assert programOk("extern function sort<T>(arr: T[]): void;"); }
@@ -2064,21 +2055,21 @@ test "extern error" { assert !programOk("extern 42"); }
 
 test "export extern function" { assert programOk("export extern function foo(x: number): void;"); }
 
-test "export extern function is ExportDecl" { assert stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl; }
+test "export extern function is ExportDecl" { assert stmtKind("export extern function foo(): void;") == NodeKind.ExportDecl; }
 
 test "extern function from" { assert programOk("extern function floor(x: number): number from \"msFloor\";"); }
 
 test "extern function from nativeName" {
 	const d = stmtAt("extern function floor(x: number): number from \"msFloor\";", 0).data as FunctionDeclData;
-	assert d.fnName === "floor";
-	assert d.nativeName === "msFloor";
-	assert d.fnFlags === "extern";
+	assert d.fnName == "floor";
+	assert d.nativeName == "msFloor";
+	assert d.fnFlags == "extern";
 }
 
 test "extern function without from" {
 	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-	assert d.fnName === "printf";
-	assert d.nativeName === "";
+	assert d.fnName == "printf";
+	assert d.nativeName == "";
 }
 
 // Distinct type
@@ -2086,7 +2077,7 @@ test "distinct type" { assert programOk("distinct type UserId = number;"); }
 
 test "distinct type string" { assert programOk("distinct type Email = string;"); }
 
-test "distinct is TypeAliasDecl" { assert stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl; }
+test "distinct is TypeAliasDecl" { assert stmtKind("distinct type X = number;") == NodeKind.TypeAliasDecl; }
 
 test "distinct flag true" {
 	const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
@@ -2095,7 +2086,7 @@ test "distinct flag true" {
 
 test "distinct name field" {
 	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
-	assert d.aliasName === "Email";
+	assert d.aliasName == "Email";
 }
 
 test "type alias not distinct" {
@@ -2105,23 +2096,23 @@ test "type alias not distinct" {
 // Macro declaration
 test "macro decl" { assert programOk("macro deriveEq(target) { return target; }"); }
 
-test "macro is MacroDecl" { assert stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl; }
+test "macro is MacroDecl" { assert stmtKind("macro foo(x) { return x; }") == NodeKind.MacroDecl; }
 
 test "macro name field" {
 	const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
-	assert d.macroDeclName === "deriveEq";
+	assert d.macroDeclName == "deriveEq";
 }
 
 test "macro multi param" { assert programOk("macro foo(a, b, c) { return a; }"); }
 
 test "macro params field" {
 	const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
-	assert d.macroDeclParams.length === 3;
+	assert d.macroDeclParams.length == 3;
 }
 
 test "macro body is block" {
 	const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
-	assert d.macroDeclBody.kind === NodeKind.BlockStmt;
+	assert d.macroDeclBody.kind == NodeKind.BlockStmt;
 }
 
 test "macro return type" { assert programOk("macro foo(): Node { return x; }"); }
@@ -2141,31 +2132,31 @@ test "extension parses" { assert programOk("function f(this s: string) { return 
 test "extension flags" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	assert d.fnFlags === "ext:s:string";
+	assert d.fnFlags == "ext:s:string";
 }
 
 test "extension keeps receiver in params" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	assert d.params.length === 1;
-	assert d.params[0] === "s";
+	assert d.params.length == 1;
+	assert d.params[0] == "s";
 }
 
 test "extension with extra params" {
 	const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	assert d.params.length === 2;
-	assert d.params[0] === "s";
-	assert d.params[1] === "n";
+	assert d.params.length == 2;
+	assert d.params[0] == "s";
+	assert d.params[1] == "n";
 }
 
 test "no receiver flags empty" {
 	const n = stmtAt("function f(x: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	assert d.fnFlags === "";
+	assert d.fnFlags == "";
 }
 
-test "object destructure" { assert stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl; }
+test "object destructure" { assert stmtKind("const {a, b} = obj;") == NodeKind.DestructuringDecl; }
 
 test "array destructure" { assert programOk("const [x, y] = arr;"); }
 
@@ -2176,36 +2167,6 @@ test "object rest" { assert programOk("const {a, ...rest} = obj;"); }
 test "array rest" { assert programOk("const [first, ...rest] = arr;"); }
 
 test "let destructure" { assert programOk("let {x, y} = point;"); }
-
-test "object destructure shorthand default" {
-	const dd = stmtAt("const {a = 1} = obj;", 0).data as DestructuringDeclData;
-	const pat = dd.destrPattern.data as ObjectPatternData;
-	const prop = pat.patternProps[0].data as ObjectPatternPropData;
-	assert prop.propKey === "a";
-	assert prop.propDefault !== null;
-}
-
-test "object destructure alias default" {
-	const dd = stmtAt("const {k: alias = 2} = obj;", 0).data as DestructuringDeclData;
-	const pat = dd.destrPattern.data as ObjectPatternData;
-	const prop = pat.patternProps[0].data as ObjectPatternPropData;
-	assert prop.propKey === "k";
-	assert prop.propDefault !== null;
-}
-
-test "object destructure without default" {
-	const dd = stmtAt("const {a} = obj;", 0).data as DestructuringDeclData;
-	const pat = dd.destrPattern.data as ObjectPatternData;
-	const prop = pat.patternProps[0].data as ObjectPatternPropData;
-	assert prop.propDefault === null;
-}
-
-test "array destructure default" {
-	const dd = stmtAt("const [x = 3] = arr;", 0).data as DestructuringDeclData;
-	const pat = dd.destrPattern.data as ArrayPatternData;
-	assert pat.patternDefaults.length === 1;
-	assert pat.patternDefaults[0] !== null;
-}
 
 test "func destr param" { assert programOk("function f({x, y}) { return x; }"); }
 

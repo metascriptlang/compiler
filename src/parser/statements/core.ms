@@ -29,8 +29,8 @@ export function parseStatement(state: ParserState): NodeResult {
 	const token = current(state);
 
 	// Async function declaration — before match to avoid try-in-match-arm limitation
-	if (token.kind === TokenKind.Async) {
-		if (peek(state, 1).kind === TokenKind.Function) {
+	if (token.kind == TokenKind.Async) {
+		if (peek(state, 1).kind == TokenKind.Function) {
 			const asyncFn = try parseFunctionDecl(state);
 			return Result.ok(attachComments(state, asyncFn));
 		}
@@ -39,9 +39,9 @@ export function parseStatement(state: ParserState): NodeResult {
 	}
 
 	// @comptime { ... } — intercept before decorator loop
-	if (token.kind === TokenKind.At) {
-		if (peek(state, 1).value === "comptime" &&
-			peek(state, 2).kind === TokenKind.LBrace) {
+	if (token.kind == TokenKind.At) {
+		if (peek(state, 1).value == "comptime" &&
+			peek(state, 2).kind == TokenKind.LBrace) {
 			advance(state); // consume '@'
 			advance(state); // consume 'comptime'
 			const comptimeBody = try parseBlockStmt(state);
@@ -52,22 +52,22 @@ export function parseStatement(state: ParserState): NodeResult {
 
 	// Template declaration — `template name<T>(...): T { ... }`
 	// Parsed like a function but without the `function` keyword.
-	if (token.kind === TokenKind.Template) {
+	if (token.kind == TokenKind.Template) {
 		const fn = try parseFunctionDecl(state);
 		const fd = fn.data as FunctionDeclData;
-		fd.fnFlags = fd.fnFlags === "" ? "template" : fd.fnFlags + " template";
+		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
 		return Result.ok(attachComments(state, fn));
 	}
 
 	// Decorator / directive handling — before match to avoid try-in-match-arm limitation
-	if (token.kind === TokenKind.At) {
+	if (token.kind == TokenKind.At) {
 		const decorators: Node[] = [];
-		while (!isAtEnd(state) && current(state).kind === TokenKind.At) {
+		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
 			decorators.push(dec);
 		}
 		// Standalone directive: @name(args); — semicolon means no inner declaration
-		if (decorators.length === 1 && !isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+		if (decorators.length == 1 && !isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 			consumeSemicolon(state);
 			const node = createNode(NodeKind.ExprStmt, { expr: decorators[0] }, token);
 			return Result.ok(attachComments(state, node));
@@ -135,10 +135,10 @@ export function parseStatement(state: ParserState): NodeResult {
 // `when` must not introduce a scope of its own.
 
 function isNumericStr(s: string): boolean {
-	if (s.length === 0) return false;
+	if (s.length == 0) return false;
 	for (let i = 0; i < s.length; i += 1) {
 		const c = s.charAt(i);
-		if (i === 0 && c === "-" && s.length > 1) continue;
+		if (i == 0 && c == "-" && s.length > 1) continue;
 		if (c < "0" || c > "9") return false;
 	}
 	return true;
@@ -149,9 +149,9 @@ function cmpStr(a: string, b: string): int32 {
 	for (let i = 0; i < n; i += 1) {
 		const ca = a.byteAt(i);
 		const cb = b.byteAt(i);
-		if (ca !== cb) return ca < cb ? -1 : 1;
+		if (ca != cb) return ca < cb ? -1 : 1;
 	}
-	if (a.length === b.length) return 0;
+	if (a.length == b.length) return 0;
 	return a.length < b.length ? -1 : 1;
 }
 
@@ -160,23 +160,23 @@ function applyCmp(lhs: string, rhs: string, op: TokenKind): boolean {
 	if (isNumericStr(lhs) && isNumericStr(rhs)) {
 		const a = parseIntStr(lhs);
 		const b = parseIntStr(rhs);
-		c = a === b ? 0 : (a < b ? -1 : 1);
+		c = a == b ? 0 : (a < b ? -1 : 1);
 	} else {
 		c = cmpStr(lhs, rhs);
 	}
-	if (op === TokenKind.EqEq || op === TokenKind.EqEqEq) return c === 0;
-	if (op === TokenKind.BangEq || op === TokenKind.BangEqEq) return c !== 0;
-	if (op === TokenKind.Lt) return c < 0;
-	if (op === TokenKind.LtEq) return c <= 0;
-	if (op === TokenKind.Gt) return c > 0;
+	if (op == TokenKind.EqEq || op == TokenKind.EqEqEq) return c == 0;
+	if (op == TokenKind.BangEq || op == TokenKind.BangEqEq) return c != 0;
+	if (op == TokenKind.Lt) return c < 0;
+	if (op == TokenKind.LtEq) return c <= 0;
+	if (op == TokenKind.Gt) return c > 0;
 	return c >= 0;
 }
 
 function isCmpOp(k: TokenKind): boolean {
-	return k === TokenKind.EqEq || k === TokenKind.EqEqEq
-		|| k === TokenKind.BangEq || k === TokenKind.BangEqEq
-		|| k === TokenKind.Lt || k === TokenKind.LtEq
-		|| k === TokenKind.Gt || k === TokenKind.GtEq;
+	return k == TokenKind.EqEq || k == TokenKind.EqEqEq
+		|| k == TokenKind.BangEq || k == TokenKind.BangEqEq
+		|| k == TokenKind.Lt || k == TokenKind.LtEq
+		|| k == TokenKind.Gt || k == TokenKind.GtEq;
 }
 
 // The condition grammar is CLOSED — flag names, literals, !, &&, ||, comparisons and
@@ -184,28 +184,28 @@ function isCmpOp(k: TokenKind): boolean {
 // expression grammar would need a symbol table that does not exist at parse time.
 function parseWhenPrimary(state: ParserState): Result<boolean, string> {
 	const tok = current(state);
-	if (tok.kind === TokenKind.LParen) {
+	if (tok.kind == TokenKind.LParen) {
 		advance(state);
 		const inner = try parseWhenOr(state);
-		if (current(state).kind !== TokenKind.RParen) {
+		if (current(state).kind != TokenKind.RParen) {
 			return Result.err(`Expected ')' in 'when' condition at line ${current(state).line}`);
 		}
 		advance(state);
 		return Result.ok(inner);
 	}
-	if (tok.kind === TokenKind.Bang) {
+	if (tok.kind == TokenKind.Bang) {
 		advance(state);
 		const v = try parseWhenPrimary(state);
 		return Result.ok(!v);
 	}
-	if (tok.kind === TokenKind.Ident) {
+	if (tok.kind == TokenKind.Ident) {
 		const name = tok.value;
 		advance(state);
 		if (isCmpOp(current(state).kind)) {
 			const op = current(state).kind;
 			advance(state);
 			const rhsTok = current(state);
-			if (rhsTok.kind !== TokenKind.String && rhsTok.kind !== TokenKind.Number && rhsTok.kind !== TokenKind.Ident) {
+			if (rhsTok.kind != TokenKind.String && rhsTok.kind != TokenKind.Number && rhsTok.kind != TokenKind.Ident) {
 				return Result.err(`Expected a literal after the comparison in 'when' condition at line ${rhsTok.line}`);
 			}
 			advance(state);
@@ -218,7 +218,7 @@ function parseWhenPrimary(state: ParserState): Result<boolean, string> {
 
 function parseWhenAnd(state: ParserState): Result<boolean, string> {
 	let left = try parseWhenPrimary(state);
-	while (current(state).kind === TokenKind.AmpAmp) {
+	while (current(state).kind == TokenKind.AmpAmp) {
 		advance(state);
 		const right = try parseWhenPrimary(state);
 		left = left && right;
@@ -228,7 +228,7 @@ function parseWhenAnd(state: ParserState): Result<boolean, string> {
 
 function parseWhenOr(state: ParserState): Result<boolean, string> {
 	let left = try parseWhenAnd(state);
-	while (current(state).kind === TokenKind.PipePipe) {
+	while (current(state).kind == TokenKind.PipePipe) {
 		advance(state);
 		const right = try parseWhenAnd(state);
 		left = left || right;
@@ -237,12 +237,12 @@ function parseWhenOr(state: ParserState): Result<boolean, string> {
 }
 
 function parseWhenHead(state: ParserState): Result<boolean, string> {
-	if (current(state).kind !== TokenKind.LParen) {
+	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'when' at line ${current(state).line}`);
 	}
 	advance(state);
 	const v = try parseWhenOr(state);
-	if (current(state).kind !== TokenKind.RParen) {
+	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after 'when' condition at line ${current(state).line}`);
 	}
 	advance(state);
@@ -250,7 +250,7 @@ function parseWhenHead(state: ParserState): Result<boolean, string> {
 }
 
 function blockStatements(node: Node): Node[] {
-	if (node.kind !== NodeKind.BlockStmt) return [];
+	if (node.kind != NodeKind.BlockStmt) return [];
 	return (node.data as BlockStmtData).statements;
 }
 
@@ -265,9 +265,9 @@ export function parseWhenChain(state: ParserState): NodesResult {
 	let picked = firstCond;
 	if (firstCond) { chosen = blockStatements(firstBlock); }
 
-	while (current(state).kind === TokenKind.Else) {
+	while (current(state).kind == TokenKind.Else) {
 		advance(state);
-		if (current(state).kind === TokenKind.When) {
+		if (current(state).kind == TokenKind.When) {
 			advance(state);
 			const cond = try parseWhenHead(state);
 			const blk = try parseBlockStmt(state);
@@ -286,14 +286,14 @@ export function parseWhenChain(state: ParserState): NodesResult {
 
 export function parseBlockStmt(state: ParserState): NodeResult {
 	const token = current(state);
-	if (token.kind !== TokenKind.LBrace) {
+	if (token.kind != TokenKind.LBrace) {
 		return Result.err(`Expected '{' at line ${token.line}`);
 	}
 	advance(state); // consume '{'
 
 	const stmts: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		if (current(state).kind === TokenKind.When) {
+	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		if (current(state).kind == TokenKind.When) {
 			const picked = try parseWhenChain(state);
 			for (const w of picked) { stmts.push(w); }
 			continue;
@@ -303,7 +303,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 	}
 
 	const closeToken = current(state);
-	if (closeToken.kind !== TokenKind.RBrace) {
+	if (closeToken.kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' at line ${closeToken.line}`);
 	}
 	advance(state); // consume '}'
@@ -328,7 +328,7 @@ export function parseProgram(state: ParserState): NodeResult {
 	const token = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
-		if (current(state).kind === TokenKind.When) {
+		if (current(state).kind == TokenKind.When) {
 			const chain = parseWhenChain(state);
 			if (chain.ok) {
 				for (const w of chain.value) { stmts.push(w); }
