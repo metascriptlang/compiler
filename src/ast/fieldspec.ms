@@ -328,7 +328,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	const block = createNodeAt(NodeKind.BlockStmt, { statements: [a] } as NodeData, makeLoc(7, 8));
 	const matchCase = createNodeAt(NodeKind.MatchCase, { casePatterns: [a], caseGuard: a, caseBody: a } as NodeData, makeLoc(9, 2));
 	const switchCase = createNodeAt(NodeKind.SwitchCase, { caseTests: [n1], caseStmts: [a], isDefault: true } as NodeData, makeLoc(10, 2));
-	const objPatProp = createNodeAt(NodeKind.ObjectPatternProp, { propKey: "k", propAlias: a, propDefault: null } as NodeData, makeLoc(11, 2));
+	const objPatProp = createNodeAt(NodeKind.ObjectPatternProp, { propKey: "k", propAlias: a, propDefault: n1 } as NodeData, makeLoc(11, 2));
 	const objPat = createNodeAt(NodeKind.ObjectPattern, { patternProps: [objPatProp], hasRestProp: true } as NodeData, makeLoc(12, 2));
 	const fnDecl = createNodeAt(NodeKind.FunctionDecl, { fnName: "fd", params: ["p1", "p2"], fnParamTypes: ["int32", "string"], fnBody: block, fnFlags: "ff", fnReturnType: "int32", fnDefaults: [n1], nativeName: "nn", nameLocation: pkLoc(1) } as NodeData, makeLoc(13, 1));
 	// header-column coverage rides on two samples: flags/typeArg/typeExpr/
@@ -379,7 +379,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.HiddenStdConv, { convExpr: a, convType: convTypeSample } as NodeData, makeLoc(17, 31)));
 	out.push(createNodeAt(NodeKind.HiddenSubConv, { convExpr: a, convType: convTypeSample } as NodeData, makeLoc(17, 32)));
 	out.push(createNodeAt(NodeKind.TypeAnnotation, { annotationType: "float32" } as NodeData, makeLoc(17, 33)));
-	out.push(createNodeAt(NodeKind.ArrayPattern, { patternElements: [a, n1], hasRestElement: true, patternDefaults: [] } as NodeData, makeLoc(17, 34)));
+	out.push(createNodeAt(NodeKind.ArrayPattern, { patternElements: [a, n1], hasRestElement: true, patternDefaults: [null, n1] } as NodeData, makeLoc(17, 34)));
 	out.push(objPat);
 	out.push(objPatProp);
 	out.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: objPat, destrInit: n1, destrIsConst: true } as NodeData, makeLoc(17, 37)));
