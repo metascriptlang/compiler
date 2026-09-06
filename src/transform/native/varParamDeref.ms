@@ -3,16 +3,21 @@
 // a location, not a raw pointer-typed identifier (Reference: tyVar use deref).
 // Args bound to a Var formal get the implicit ADDR instead (Reference
 // takeImplicitAddr): HiddenAddr around the lvalue, except forwarding — an
-// arg that already denotes a Var param (user: resolvedSym; synthesized hook
-// bodies: nodeType stamp from destructorLifting) passes its pointer raw.
+// arg that already denotes a Var param passes its pointer raw. Generated
+// lifecycle ops are skipped: destructorLifting emits their derefs already.
 
 import { Node, NodeKind, Type, TypeKind, CallExprData, OutExprData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
 import { makeHiddenDeref, makeHiddenAddr } from "../util";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 function isVarType(t: Type): boolean {
 	return t != null && t.kind == TypeKind.Var;
+}
+
+function isGeneratedOp(n: Node): boolean {
+	return n.resolvedSym != null && hasFlag(n.resolvedSym, SymbolFlag.GeneratedOp);
 }
 
 function calleeFormals(d: CallExprData): Type[] {
@@ -40,7 +45,7 @@ function wrapVarUse(node: Node): Node {
 function isForwardingVarIdent(n: Node): boolean {
 	if (n == null || n.kind != NodeKind.Identifier) return false;
 	if (n.resolvedSym != null) return isVarType(n.resolvedSym.symbolType);
-	// Unannotated synthetic idents (destructorLifting forwarding args) pass raw;
+	// Unannotated synthetic idents (synthesized forwarding args) pass raw;
 	// checker-typed user idents always carry nodeType, so null means synthetic.
 	if (n.nodeType == null) return true;
 	return isVarType(n.nodeType);
@@ -63,6 +68,7 @@ function takeImplicitAddr(arg: Node): Node {
 
 function visit(node: Node): Node {
 	if (node == null) return node;
+	if (node.kind == NodeKind.FunctionDecl && isGeneratedOp(node)) return node;
 	if (node.kind == NodeKind.Identifier) return wrapVarUse(node);
 	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) return node;
 	if (node.kind == NodeKind.OutExpr) {
