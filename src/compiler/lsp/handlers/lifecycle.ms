@@ -11,7 +11,7 @@ import {
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
 import { CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles } from "./shared";
-import { buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile, resetFormatOptions } from "./diagnostics";
+import { buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile, resetFormatOptions, resetLspTargetCache } from "./diagnostics";
 import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
 import {
@@ -146,6 +146,7 @@ export function handleDidSave(params: string, db: TransAmDb): string {
 	// Reload format config when build.ms or msc.json is saved
 	if (path.endsWith("/build.ms") || path.endsWith("/msc.json")) {
 		resetFormatOptions();
+		resetLspTargetCache();
 	}
 	return "";
 }

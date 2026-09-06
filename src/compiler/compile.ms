@@ -26,6 +26,7 @@ import { aliveSetHasModule, clearSkippedTypeInfos } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
+import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { setTargetSizes, isAwaitable } from "../checker/types";
 import { lookupSymbol, SymbolFlag } from "../checker/symbol";
@@ -308,6 +309,30 @@ function resetCompiledOFiles(): void {
 	_compiledOFiles = new HashSet<string>();
 }
 
+// Resolve the gc mode the build will actually run with, BEFORE the graph is
+// checked — the checker needs it (freestanding async gate) and it must agree
+// with what codegen/cc see later. Freestanding targets carry no allocator of
+// their own, so they imply --gc=manual; an explicit --gc= always wins for
+// bare (the user asked for it), while solana keeps its older unconditional
+// force because its SBF runtime cannot host DRC/ORC at all.
+// Mutates opts so every later consumer reads one resolved value.
+export function resolveTargetGcMode(opts: CliOptions): void {
+	if (opts.targetOs === "solana") {
+		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
+		return;
+	}
+	if (opts.targetOs === "bare" && !opts.gcExplicit) opts.gcMode = "manual";
+}
+
+// String gc mode → checker enum. Single spelling of the mapping that
+// applyGcMode and the per-module stamping in cmdBuildC/cmdTest repeat.
+export function gcModeOf(gc: string): GcMode {
+	if (gc === "none") return GcMode.None;
+	if (gc === "manual") return GcMode.Manual;
+	if (gc === "drc") return GcMode.Drc;
+	return GcMode.Orc;
+}
+
 // Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
 // analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
 export function applyGcMode(opts: CliOptions): void {
@@ -325,7 +350,7 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, gcMode: GcMode = GcMode.Orc): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
@@ -360,7 +385,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, gcMode);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -783,8 +808,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code !== 0) {
-			if (targetOs === "solana") {
-				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim("(BPF unsupported)")}`);
+			// Freestanding targets carry no libc/socket layer, so a prelude @compile
+			// naming a platform engine (std/net -> runtime/io/engineSelect.c) cannot
+			// build there. The module itself is dead code on these targets; dropping
+			// the object is the same call already made for BPF.
+			if (targetOs === "solana" || targetOs === "bare") {
+				const why = targetOs === "solana" ? "BPF unsupported" : "freestanding: no libc";
+				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim(`(${why})`)}`);
 				ci = ci + 1;
 				continue;
 			}
@@ -1130,19 +1160,23 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = performance.now();
+	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
+	// checker needs the resolved mode (freestanding async gate) — applyGcMode
+	// below runs too late for that, it only re-stamps the prelude context.
+	resolveTargetGcMode(opts);
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
 	applyGcMode(opts);
 
-	// Solana: resolve the SBF toolchain, force --gc=manual, force release mode.
-	// Both halves come from Anza's platform-tools bundle — a stock LLVM will not
+	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
+	// in resolveTargetGcMode (it has to happen before the check pass).
+	// Both halves come from Anza's platform-tools bundle - a stock LLVM will not
 	// do, so the diagnostic points at the bundle rather than at a package manager.
 	if (opts.targetOs === "solana") {
-		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
 		if (opts.mode === 0) opts.mode = 1;
 		if (opts.ccBinary === "") {
 			const sbfClang = resolveBpfClang();
@@ -1216,6 +1250,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const includePaths = bs.includePaths;
 	let oFiles = "";
 	let totalCheckerErrors = 0;
+	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
+	const fsAsyncHits: { modPath: string, source: string, line: int32, column: int32 }[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
@@ -1347,6 +1383,19 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		tMacro = tMacro + (performance.now() - _tmc0);
+		// FREESTANDING E01 — the freestanding runtime carries no dispatcher, no
+		// thread pool and no await slots, so an emitted await/spawn reaches clang
+		// as a wall of undeclared msAwaitSlot* / msFuture* symbols. Collect the
+		// sites HERE, before transformProgram: promiseLower erases every AwaitExpr,
+		// so a post-transform scan finds nothing. Reporting is deferred to after
+		// DCE (below) so async the program never reaches stays silent, and std/ is
+		// skipped entirely — the prelude declares async surface for every build.
+		if (opts.gcMode === "manual" && !(config.stdPath !== "" && modPath.startsWith(config.stdPath))) {
+			for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
+				const hitLoc = freestandingAsyncLoc(hitNode);
+				fsAsyncHits.push({ modPath, source: cm.source, line: hitLoc.line, column: hitLoc.column });
+			}
+		}
 		const _tx0 = performance.now();
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		tXform = tXform + (performance.now() - _tx0);
@@ -1410,9 +1459,28 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
-	// Release DCE input arrays — no longer needed after alive set computed.
+	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
+
+	// FREESTANDING E01 — report the async sites collected in A2, but only for
+	// modules DCE kept: async in a module nothing reaches is never emitted, so
+	// it is not an error. One diagnostic per site, then stop (matching the
+	// type-error gate: never reach codegen with a known-unlinkable program).
+	if (fsAsyncHits.length > 0) {
+		let fsReported = 0;
+		for (const h of fsAsyncHits) {
+			if (!aliveSetHasModule(aliveSet, h.modPath)) continue;
+			renderModuleError(h.modPath, h.source, {
+				message: FREESTANDING_ASYNC_MSG,
+				line: h.line,
+				column: h.column,
+				severity: ErrorSeverity.Error,
+			});
+			fsReported = fsReported + 1;
+		}
+		if (fsReported > 0) exit(1);
+	}
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
 	const tC = performance.now();
@@ -1682,11 +1750,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const t0 = performance.now();
 	// Same compiler resolution as cmdBuildC: a test build emits and links C with
 	// the same flags, so it needs the same --cc normalization and the same
-	// LTO capability resolution once the compiler is known.
+	// LTO capability resolution once the compiler is known — and the same
+	// target-implied gc resolution, so the checker sees the mode the test
+	// binary will actually be built with.
+	resolveTargetGcMode(opts);
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];

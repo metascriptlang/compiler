@@ -50,6 +50,9 @@ export interface CliOptions {
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
+	gcExplicit: boolean;       // true when --gc= was passed. Distinguishes an explicit
+	                           // --gc=orc from the default, so target-implied modes
+	                           // (--os=bare/solana => manual) never override the user.
 	lto: string;               // --lto=off|thin|full: link-time optimization strategy (empty = mode default)
 	autoYes: boolean;          // --yes: auto-accept managed toolchain install (also MSC_AUTO_INSTALL_CC=1)
 	defines: DefineTable;      // -d:name[=value] conditional symbols (Nim condsyms.nim)
@@ -96,6 +99,7 @@ export function parseArgs(): CliOptions {
 		strictDefs: false,
 		strictNullChecks: false,
 		gcMode: "orc",
+		gcExplicit: false,
 		lto: "",
 		autoYes: false,
 		defines: createDefineTable(),
@@ -201,12 +205,16 @@ export function parseArgs(): CliOptions {
 			opts.strictNullChecks = true;
 		} else if (arg === "--gc=none") {
 			opts.gcMode = "none";
+			opts.gcExplicit = true;
 		} else if (arg === "--gc=manual") {
 			opts.gcMode = "manual";
+			opts.gcExplicit = true;
 		} else if (arg === "--gc=drc") {
 			opts.gcMode = "drc";
+			opts.gcExplicit = true;
 		} else if (arg === "--gc=orc") {
 			opts.gcMode = "orc";
+			opts.gcExplicit = true;
 		} else if (arg.startsWith("--lto=")) {
 			const ltoVal = arg.slice(6, arg.length);
 			if (ltoVal === "off" || ltoVal === "thin" || ltoVal === "full") {

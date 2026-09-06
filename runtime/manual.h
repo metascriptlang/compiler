@@ -125,6 +125,12 @@ static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
     return msAllocTyped(size, type);
 }
 
+/* drc.h's counterpart only skips the zero-fill; the arena and the calloc path
+ * both hand back zeroed memory anyway, so there is nothing to skip here. */
+static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
+    return msAllocTyped(size, type);
+}
+
 /* ===== RC Operations (all no-ops in both modes) ===== */
 
 static inline void  msIncRef(void* p)            { (void)p; }
@@ -338,6 +344,31 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msClosureSink(d, ...) do { (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, e)  ((void)0)
 
+/* Cyclic ref =copy - system.h:347 without the refcount traffic. */
+#define msRefCopyCyclic(d, s) do { (d) = (s); } while(0)
+
+/* Closure array - mirrors system.h:64-82. manual.h owns the SYSTEM_H guard, so
+ * runtime/core/array.c sees these only if we declare them here. */
+#ifndef MS_CLOSURE_ARRAY_DEFINED
+#define MS_CLOSURE_ARRAY_DEFINED
+typedef struct {
+    int64_t cap;
+    msClosure data[];
+} msClosurePayload;
+
+typedef struct {
+    int64_t len;
+    msClosurePayload* p;
+} msClosureArray;
+
+#define MS_EMPTY_CLOSURE_ARRAY ((msClosureArray){0, NULL})
+
+void msClosureArrayDestroy(msClosureArray* arr);
+void msClosureArrayPush(msClosureArray* arr, msClosure value);
+void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src);
+void msClosureArrayWasMoved(msClosureArray* arr);
+#endif
+
 #define msMapFree(m)          ((void)0)
 #define msMapCopy(m)          ((void)0)
 #define msMapWasMoved(m)      do { (m).len = 0; (m).p = (void*)0; } while(0)
@@ -426,23 +457,55 @@ static inline void  msLockedRelease(void* cell)              { (void)cell; }
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
+/* Teardown critical section - drc.h:411-412 already stubs these when ORC is off;
+ * manual.h owns the guard, so the same pair has to exist here. */
+static inline void msOrcBeginTeardown(void) {}
+static inline void msOrcEndTeardown(void) {}
 
 /* ===== Async stubs ===== */
 #ifndef MS_THREAD_LOCAL
 #define MS_THREAD_LOCAL
 #endif
 
-#define MS_FUTURE_STRUCT(name, valtype) \
-    typedef struct { bool finished; bool failed; bool cancelled; void* error; valtype value; } name
+/* Layout mirrors future.h:88-157 exactly. Two properties are load-bearing and
+ * neither is cosmetic:
+ *   - msFutureBase is TAGGED and MS_FUTURE_STRUCT nests it as the first field.
+ *     Codegen emits a forward `typedef struct X X;` and then MS_FUTURE_STRUCT(X,..)
+ *     for every instantiated Promise<T> (future.h:127). An untagged macro makes
+ *     the expansion a fresh anonymous type, which collides with that forward
+ *     declaration - the whole "typedef redefinition" family.
+ *   - only the same set of concrete instantiations as future.h. msFuture_msString
+ *     is NOT one of them: codegen emits it per module, so declaring it here is a
+ *     second definition of the same tag.
+ * Atomics are dropped (manual mode is single-threaded) and msFutureCb stays
+ * opaque - nothing in this mode fires callbacks. */
+typedef struct msFutureCb msFutureCb;
 
-typedef struct { bool finished; bool failed; bool cancelled; void* error; } msFutureBase;
+typedef struct msFutureBase {
+    bool finished;
+    bool failed;
+    bool cancelled;
+    bool crossThreadPublished;
+    void* error;
+    void (*valueDestructor)(void*);
+    msFutureCb* callbacks;
+    msFutureCb* cbTail;
+    bool errorObserved;
+} msFutureBase;
+
+#define MS_FUTURE_STRUCT(name, valtype) \
+    typedef struct name { msFutureBase base; valtype value; } name
+
 typedef msFutureBase msFuture_void;
-typedef struct { bool finished; bool failed; bool cancelled; void* error; void* value; } msFuture_ptr;
 MS_FUTURE_STRUCT(msFuture_double, double);
 MS_FUTURE_STRUCT(msFuture_int32, int32_t);
 MS_FUTURE_STRUCT(msFuture_int64, int64_t);
 MS_FUTURE_STRUCT(msFuture_bool, bool);
-MS_FUTURE_STRUCT(msFuture_msString, msString);
+MS_FUTURE_STRUCT(msFuture_ptr, void*);
+typedef msFuture_ptr msFuture;
+
+/* future.h:530 without the refcount check - manual mode never frees. */
+#define msFutureDrcDestroy(f) ((void)(f))
 
 static inline void* msWaitFor(void* fut)    { (void)fut; return (void*)0; }
 static inline void msWaitForReady(void* fut) { (void)fut; }

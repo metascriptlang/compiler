@@ -1,17 +1,20 @@
 // LSP Handlers — Diagnostics, format violations, dependency recording, transitive diagnostics.
 
 import {
-	TransAmDb, dbParse, dbTypeCheck, getFileId, getFilePath,
+	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
 	clearImportsFor, getTransitiveDependents, recordModuleImport
 } from "../../transam/index";
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
+import { platform, env, cwd } from "std/process";
+import { mkdir, writeFile } from "std/fs";
 import { lspNotification, lspFormatMessage, lspPathToUri, dirname } from "../protocol";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
-import { loadFmtSection, validateBuildConfig } from "../../buildConfig";
+import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
+import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
 import { dbGetSource, lspEnsureFileLoaded } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
@@ -47,6 +50,43 @@ export function getFormatOptions(db: TransAmDb, path: string): FormatOptions {
 export function resetFormatOptions(): void {
 	_fmtOptionsCacheKeys = [];
 	_fmtOptionsCacheValues = [];
+}
+
+// ===== LSP Target from build.ms =====
+
+// Effective build target for diagnostics that depend on target capabilities.
+// Mirrors the compile-side resolution: os defaults to the host platform, gc
+// infers from os (bare/solana => manual, else orc). An explicit lsp.gc wins.
+export interface LspTarget {
+	os: string;
+	gc: string;
+}
+
+let _lspTargetCacheKeys: string[] = [];
+let _lspTargetCacheValues: LspTarget[] = [];
+
+export function getLspTarget(path: string): LspTarget {
+	const projectRoot = findProjectRoot(path);
+	for (let i = 0; i < _lspTargetCacheKeys.length; i = i + 1) {
+		if (_lspTargetCacheKeys[i] === projectRoot) return _lspTargetCacheValues[i];
+	}
+	let section: LspSection = { os: "", gc: "" };
+	if (projectRoot !== "") {
+		section = loadLspSection(projectRoot);
+	}
+	const os = section.os !== "" ? section.os : platform;
+	const gc = section.gc !== ""
+		? section.gc
+		: ((os === "bare" || os === "solana") ? "manual" : "orc");
+	const target: LspTarget = { os, gc };
+	_lspTargetCacheKeys.push(projectRoot);
+	_lspTargetCacheValues.push(target);
+	return target;
+}
+
+export function resetLspTargetCache(): void {
+	_lspTargetCacheKeys = [];
+	_lspTargetCacheValues = [];
 }
 
 // ===== Format Violation Check =====
@@ -216,6 +256,29 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		}
 	}
 
+	// FREESTANDING E01 (LSP side): when build.ms declares a freestanding target
+	// (effective gc = manual), async/await/spawn surface is a WARNING, not an
+	// error — the editor cannot know if the user will build with a different
+	// target. Silent unless the lsp section opts in (host default never manual).
+	const lspTarget = getLspTarget(path);
+	if (lspTarget.gc === "manual" && !(db.stdPath !== "" && path.startsWith(db.stdPath))) {
+		const fsProgram = dbGetCheckedProgram(db, path);
+		if (fsProgram !== null) {
+			const fsHits = collectFreestandingAsync(fsProgram);
+			for (let fi = 0; fi < fsHits.length; fi = fi + 1) {
+				const loc = freestandingAsyncLoc(fsHits[fi]);
+				if (loc === null) continue;
+				const fsLine = loc.line > 0 ? loc.line - 1 : 0;
+				const fsCol = loc.column > 0 ? loc.column - 1 : 0;
+				if (diagCount > 0) diagArray = diagArray + ",";
+				diagArray = diagArray + lspFmtDiagnostic(
+					fsLine, fsCol, fsCol + 1, 2, FREESTANDING_ASYNC_MSG, "metascript", 0, 0
+				);
+				diagCount = diagCount + 1;
+			}
+		}
+	}
+
 	// Circular dependency warnings — at the import declaration line
 	const circProgram = dbParse(db, path);
 	if (circProgram !== null && circProgram.kind === NodeKind.Program) {
@@ -348,4 +411,46 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 		result = result + lspFormatMessage(notif);
 	}
 	return result;
+}
+
+// ===== Tests — LSP target resolution =====
+
+function lspProbeTmpDir(): string {
+	const t = env.get("TMP");
+	if (t !== "") return t;
+	const t2 = env.get("TEMP");
+	if (t2 !== "") return t2;
+	const t3 = env.get("TMPDIR");
+	if (t3 !== "") return t3;
+	return "/tmp";
+}
+
+test "getLspTarget infers manual for bare os" {
+	const dir = lspProbeTmpDir() + "/msc-lspprobe-bare";
+	mkdir(dir);
+	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\" } };\n\nexport default config;\n");
+	resetLspTargetCache();
+	const t = getLspTarget(dir + "/main.ms");
+	assert t.os === "bare";
+	assert t.gc === "manual";
+}
+
+test "getLspTarget keeps explicit gc over inference" {
+	const dir = lspProbeTmpDir() + "/msc-lspprobe-gc";
+	mkdir(dir);
+	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\", gc: \"drc\" } };\n\nexport default config;\n");
+	resetLspTargetCache();
+	const t = getLspTarget(dir + "/main.ms");
+	assert t.os === "bare";
+	assert t.gc === "drc";
+}
+
+test "getLspTarget defaults to host + orc without section" {
+	const dir = lspProbeTmpDir() + "/msc-lspprobe-none";
+	mkdir(dir);
+	writeFile(dir + "/build.ms", "const config = { entry: \"./src/index\" };\n\nexport default config;\n");
+	resetLspTargetCache();
+	const t = getLspTarget(dir + "/main.ms");
+	assert t.os === platform;
+	assert t.gc === "orc";
 }

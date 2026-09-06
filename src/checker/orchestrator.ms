@@ -4,7 +4,7 @@
 import { platform } from "std/process";
 import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation } from "../ast/node";
 import {
-	CheckerContext, createModuleContextWithCache, Severity,
+	CheckerContext, createModuleContextWithCache, Severity, GcMode,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	collectExports, registerExtension,
 } from "./context";
@@ -59,7 +59,11 @@ export function setGraphCheckTiming(on: boolean): void {
 // for the @platform("...") block-form directive filter to evaluate against
 // the correct target during collectDirectives (which runs as part of this
 // check pass, BEFORE cmdBuildC's applyGcMode propagates targetOs elsewhere).
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform): ExportRegistry {
+// gcMode: memory-management mode of the build, resolved from --gc + the target
+// (--os=bare/solana imply Manual). Stamped on the same context and for the same
+// reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
+// freestanding async gate) run inside this pass, long before applyGcMode.
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, gcMode: GcMode = GcMode.Orc): ExportRegistry {
 	const registry = createExportRegistry();
 
 	// PROFILE: sub-phase timings summed across all modules (-t only).
@@ -79,6 +83,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const baseCtx = buildPreludeContext(stdPath, backendExt);
 	tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
+	baseCtx.gcMode = gcMode;
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
 

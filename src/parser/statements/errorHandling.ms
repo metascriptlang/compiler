@@ -42,8 +42,8 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			if (isIdentLike(current(state))) {
 				const catchToken = current(state);
 				catchParam = catchToken.value;
-				catchParamLine = catchToken.line;
-				catchParamCol = catchToken.column;
+				catchParamLine = catchToken.line as int32;
+				catchParamCol = catchToken.column as int32;
 				advance(state);
 				skipOptionalType(state);
 			}

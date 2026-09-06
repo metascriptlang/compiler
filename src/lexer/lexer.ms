@@ -131,7 +131,7 @@ function lexLineAt(input: string, index: int32): int32 {
 	if (!result.ok) return 0;
 	const tokens = result.value;
 	if (index >= tokens.length) return 0;
-	return tokens[index].line;
+	return tokens[index].line as int32;
 }
 
 function lexColAt(input: string, index: int32): int32 {
@@ -139,7 +139,7 @@ function lexColAt(input: string, index: int32): int32 {
 	if (!result.ok) return 0;
 	const tokens = result.value;
 	if (index >= tokens.length) return 0;
-	return tokens[index].column;
+	return tokens[index].column as int32;
 }
 
 // ===== Integration Tests =====

@@ -59,6 +59,45 @@ function monoOwnerPath(t: Type): string {
 	return getGlobalTypeOwner(t.typeName);
 }
 
+// Declaring module of the generic a GenericInstance instantiates. The instance
+// itself carries no symbol (it is built structurally), but its `typeExtra` still
+// points at the declared base type, which the collect pass stamped with the
+// declaring symbol — the same identity monoOwnerPath reads for a named struct.
+function monoGenericOwner(gi: Type): string {
+	let base: Type | null = gi.typeExtra;
+	let hops = 0;
+	while (base !== null && hops < 8
+			&& (base.kind === TypeKind.Ref || base.kind === TypeKind.Ptr || base.kind === TypeKind.GenericInstance)) {
+		base = base.kind === TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
+		hops = hops + 1;
+	}
+	if (base !== null) {
+		const owner = monoOwnerPath(base);
+		if (owner !== "") return owner;
+	}
+	return getGlobalTypeOwner(gi.typeName);
+}
+
+// The BASE of a monomorphized name, qualified by the module that declared the
+// generic. Two modules may declare same-named generics, and an instance name is
+// the C identity of its struct, its DRC hooks and its TypeInfo — so it has to
+// carry the declaring module exactly like a named struct type ARGUMENT already
+// does above (`Name_<hash(owner)>`), like a proc name (mangleProcName) and like
+// the pending-instance dedup key. An unknown owner (test contexts, builtins
+// that are never declared) keeps the bare spelling.
+export function monoBaseName(baseName: string, ownerPath: string): string {
+	if (baseName === "" || ownerPath === "") return baseName;
+	if (baseName.indexOf("__", 0) >= 0) return baseName;
+	return baseName + "_" + hashToBase36(ownerPath);
+}
+
+// One spelling of "the name of this generic instance", shared by checker,
+// analyzer, transform and codegen so the struct, its hooks and every call site
+// cannot drift apart.
+export function monoInstanceName(gi: Type): string {
+	return mangleMonoName(monoBaseName(gi.typeName, monoGenericOwner(gi)), gi.typeChildren);
+}
+
 // C-safe type key for name mangling and dedup.
 export function monoTypeKey(t: Type | null): string {
 	if (t === null) return "null";

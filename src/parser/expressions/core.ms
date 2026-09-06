@@ -67,7 +67,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			if (isGenericCallAhead(state)) {
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs !== "") {
-					addExplicitTypeArg(token.line, token.column, typeArgs);
+					addExplicitTypeArg(token.line as int32, token.column as int32, typeArgs);
 					state.pendingTypeArg = typeArgs;
 				}
 				continue;
@@ -387,7 +387,7 @@ function parsePrimary(state: ParserState): ExprResult {
 				const ltToken = current(state);
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs !== "") {
-					addExplicitTypeArg(ltToken.line, ltToken.column, typeArgs);
+					addExplicitTypeArg(ltToken.line as int32, ltToken.column as int32, typeArgs);
 					newTypeArg = typeArgs;
 				}
 			}

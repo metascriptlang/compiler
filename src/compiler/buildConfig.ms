@@ -38,6 +38,15 @@ export function defaultFmtSection(): FmtSection {
 	return { printWidth: -1, tabWidth: -1, useTabs: -1, singleQuote: -1 };
 }
 
+export interface LspSection {
+	os: string;            // "" = host platform
+	gc: string;            // "" = infer from os (bare/solana -> manual, else orc)
+}
+
+export function defaultLspSection(): LspSection {
+	return { os: "", gc: "" };
+}
+
 export interface CcTargetSection {
 	entry: string;
 	compiler: string;
@@ -145,6 +154,7 @@ export interface BuildConfig {
 	build: BuildSection;
 	resolve: ResolveSection;
 	fmt: FmtSection;
+	lsp: LspSection;
 	cc: CcSection;
 	package: PackageSection;
 	deps: DepsSection;
@@ -265,6 +275,17 @@ function extractFmt(fmtNode: Node): FmtSection {
 	const sq = findObjField(fmtNode, "singleQuote");
 	if (sq !== null) { fmt.singleQuote = nodeBool(sq); }
 	return fmt;
+}
+
+// Extract LspSection from an ObjectLiteral node.
+function extractLsp(lspNode: Node): LspSection {
+	const lsp = defaultLspSection();
+	if (lspNode === null || lspNode.kind !== NodeKind.ObjectLiteral) return lsp;
+	const os = nodeString(findObjField(lspNode, "os"));
+	if (os.length > 0) lsp.os = os;
+	const gc = nodeString(findObjField(lspNode, "gc"));
+	if (gc.length > 0) lsp.gc = gc;
+	return lsp;
 }
 
 // Extract a CcTargetSection from an ObjectLiteral node.
@@ -392,12 +413,13 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
 	const defRs = defaultResolveSection();
 	const defFmt = defaultFmtSection();
+	const defLsp = defaultLspSection();
 	const defCc = defaultCcSection();
 	const defPkg = defaultPackageSection();
 	const defDeps = defaultDepsSection();
 	const defDevDeps = defaultDepsSection();
 	const defGi: string[] = [];
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, valid: false };
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, valid: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -418,6 +440,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const bs = extractBuild(findObjField(configObj, "build"));
 	const rs = extractResolve(findObjField(configObj, "resolve"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
+	const lsp = extractLsp(findObjField(configObj, "lsp"));
 	const cc = extractCc(findObjField(configObj, "cc"));
 	const pkg = extractPackage(findObjField(configObj, "package"));
 	const deps = extractDeps(findObjField(configObj, "deps"));
@@ -425,7 +448,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 
 	const globalImports = extractGlobalImports(findObjField(configObj, "globalImports"));
 
-	return { entry, build: bs, resolve: rs, fmt, cc, package: pkg, deps, devDeps, globalImports, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -467,6 +490,23 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 			}
 		}
 	}
+	const lspNode = findObjField(configObj, "lsp");
+	if (lspNode !== null && lspNode.kind === NodeKind.ObjectLiteral) {
+		const osNode = findObjField(lspNode, "os");
+		if (osNode !== null) {
+			const osVal = nodeString(osNode);
+			if (osVal !== "bare" && osVal !== "solana" && osVal !== "wasm" && osVal !== "emcc" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd" && osVal !== "ios" && osVal !== "android") {
+				warnings.push({ message: `lsp.os: unknown target '${osVal}' — valid: bare, solana, wasm, emcc, linux, macos, windows, darwin, freebsd, ios, android`, line: osNode.location.line });
+			}
+		}
+		const gcNode = findObjField(lspNode, "gc");
+		if (gcNode !== null) {
+			const gcVal = nodeString(gcNode);
+			if (gcVal !== "none" && gcVal !== "manual" && gcVal !== "drc" && gcVal !== "orc") {
+				warnings.push({ message: `lsp.gc: unknown mode '${gcVal}' — valid: none, manual, drc, orc`, line: gcNode.location.line });
+			}
+		}
+	}
 	return warnings;
 }
 
@@ -480,6 +520,18 @@ export function loadFmtSection(dir: string): FmtSection {
 	const configObj = parseBuildSource(fmtSource);
 	if (configObj === null) return defaultFmtSection();
 	return extractFmt(findObjField(configObj, "fmt"));
+}
+
+// Load only the lsp section from build.ms at the given directory.
+// Returns default (empty os/gc = host platform, inferred gc) if absent or unparseable.
+export function loadLspSection(dir: string): LspSection {
+	const buildPath = dir + "/build.ms";
+	if (!exists(buildPath)) return defaultLspSection();
+	const lspSource = try readFile(buildPath) catch "";
+	if (lspSource.length === 0) return defaultLspSection();
+	const configObj = parseBuildSource(lspSource);
+	if (configObj === null) return defaultLspSection();
+	return extractLsp(findObjField(configObj, "lsp"));
 }
 
 // ===== Tests — package/deps extraction =====
@@ -503,6 +555,7 @@ function testExtractFromSource(source: string): BuildConfig {
 		entry, build: extractBuild(findObjField(configObj, "build")),
 		resolve: extractResolve(findObjField(configObj, "resolve")),
 		fmt: extractFmt(findObjField(configObj, "fmt")),
+		lsp: extractLsp(findObjField(configObj, "lsp")),
 		cc: extractCc(findObjField(configObj, "cc")),
 		package: pkg, deps, devDeps,
 		globalImports: extractGlobalImports(findObjField(configObj, "globalImports")),
@@ -572,6 +625,36 @@ test "extractGlobalImports mixes flat and from-object" {
 test "extractGlobalImports absent yields empty" {
 	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
 	assert cfg.globalImports.length === 0;
+}
+
+test "extractLsp reads os and gc" {
+	const cfg = testExtractFromSource("const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;");
+	assert cfg.lsp.os === "bare";
+	assert cfg.lsp.gc === "manual";
+}
+
+test "extractLsp absent yields defaults" {
+	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
+	assert cfg.lsp.os === "";
+	assert cfg.lsp.gc === "";
+}
+
+test "extractLsp partial fields" {
+	const cfg = testExtractFromSource("const config = { lsp: { os: \"solana\" } }; export default config;");
+	assert cfg.lsp.os === "solana";
+	assert cfg.lsp.gc === "";
+}
+
+test "validateBuildConfig flags bad lsp.os and lsp.gc" {
+	const src = "const config = { lsp: { os: \"bar\", gc: \"arc\" } }; export default config;";
+	const warnings = validateBuildConfig(".", src);
+	assert warnings.length === 2;
+}
+
+test "validateBuildConfig accepts valid lsp values" {
+	const src = "const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;";
+	const warnings = validateBuildConfig(".", src);
+	assert warnings.length === 0;
 }
 
 test "extractDeps empty block" {
