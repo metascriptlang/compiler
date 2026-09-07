@@ -683,12 +683,6 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
 		return dest;
 	}
-	if (asyncKind == "WaitFor" && d.arguments.length == 1) {
-		const futReg = compileExpr(s, d.arguments[0]);
-		const dest = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
-		return dest;
-	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.

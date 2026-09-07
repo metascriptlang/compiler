@@ -39,7 +39,7 @@ export function isCSwitchableType(t: Type | null): boolean {
 
 // Future storage contract (PARALOCK Amendment F) — single source of truth for
 // EVERY writer (asyncBridge completion/stepper/resume, lowerPromiseSpawn) and
-// reader (lowerWaitFor, awaitLower). Exactly one of these holds per type:
+// reader (awaitLower). Exactly one of these holds per type:
 //   inlineInFuture → 16-byte typed slot (msFutureCreateInline / msSpawnInto)
 //   boxedInFuture  → heap box in the void* slot (msSinkBoxStruct / msUnboxStruct)
 //   neither        → primitive bits in the void* slot
@@ -89,8 +89,7 @@ export function unboxFnNameForType(t: Type | null): string {
 }
 
 // Shared classifier for ALL "void* -> typed value" call sites
-// (awaitLower.makeUnboxCall, promiseLower.lowerWaitFor's boxed branches,
-// asyncBridge's spawn-result reads). Centralizes the 4-tier dispatch so
+// (awaitLower.makeUnboxCall, asyncBridge's spawn-result reads). Centralizes the 4-tier dispatch so
 // adding a new TypeKind only requires editing one place — previously three
 // drifted copies caused Bug B (Array missing in awaitLower only).
 //
@@ -164,6 +163,13 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
 	n.resolvedSym = sym;
 	n.nodeType = sym.symbolType;
+	return n;
+}
+
+export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
+	n.resolvedSym = sym;
+	if (t != null) { n.nodeType = t; }
 	return n;
 }
 

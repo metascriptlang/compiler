@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, unboxVoidPtrToTyped } from "../util";
+import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -225,27 +225,6 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 	return typedCall;
 }
 
-// waitFor(fut) — dispatch based on return type:
-//   void            → msWaitFor(fut)                (block, discard result)
-//   inlineInFuture  → msWaitForStruct(fut)          (typed inline read — String)
-//   everything else → unboxVoidPtrToTyped(msWaitFor) (primitive bits / heap box)
-function lowerWaitFor(node: Node, loc: SourceLocation): Node {
-	const cd = node.data as CallExprData;
-	const retType = node.nodeType;
-	if (retType == null || retType.kind == TypeKind.Void) {
-		return makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
-	}
-	if (inlineInFuture(retType)) {
-		const waitStruct = makeCall(makeIdent("msWaitForStruct", loc), cd.arguments, loc);
-		waitStruct.nodeType = retType;
-		return waitStruct;
-	}
-	// Everything else (primitive boxed in void*, Array/Ref heap-boxed): wait
-	// then dispatch through the shared unbox helper.
-	const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
-	return unboxVoidPtrToTyped(waitCall, retType, loc);
-}
-
 // ===== Public dispatch =====
 
 // Dispatch a builtin Promise/WaitFor call. Returns the rewritten Node if
@@ -262,7 +241,6 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
 	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc);
-	if (builtinKind == "WaitFor") return lowerWaitFor(node, loc);
 	return null as unknown as Node;
 }
 
