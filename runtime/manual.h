@@ -281,10 +281,10 @@ static inline void msExit(int32_t code) {
 /* ===== I/O ===== */
 #ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
-extern uint64_t sol_log_(const char* msg, uint64_t len);
+#define MS_SOL_LOG_STATIC_SYSCALL_MURMUR3 0x207559bdULL
 static inline void msPrintln(msString s) {
     if (s.p != (void*)0 && s.len > 0) {
-        sol_log_(s.p->data, (uint64_t)s.len);
+        ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(s.p->data, (uint64_t)s.len);
     }
 }
 #else
