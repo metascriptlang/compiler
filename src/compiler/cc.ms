@@ -487,6 +487,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, `-target ${SBF_TARGET}`);
 		flags = appendFlag(flags, "-fno-builtin");
 		flags = appendFlag(flags, "-fPIC");
+		flags = appendFlag(flags, "-fvisibility=hidden");
 		// Per-symbol sections so the --gc-sections at link time can strip what
 		// the program does not reach.
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
