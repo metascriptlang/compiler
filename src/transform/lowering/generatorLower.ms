@@ -26,14 +26,15 @@ import {
 	BinaryExprData, UnaryExprData, CallExprData,
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
-	IdentifierData, Symbol,
+	IdentifierData, Symbol, SymbolKind,
 	isEmptyBlock,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
+import { makeSymbol } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdent, makeNull, makeNumber, makeBool,
+	makeIdent, makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
@@ -77,6 +78,8 @@ export interface StateCollector {
 	loopStack: LoopFrame[];
 	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
 	finallyStack: FinallyFrame[];
+	stateSym: Symbol;
+	curExcSym: Symbol;
 }
 
 
@@ -145,9 +148,9 @@ function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
 	return makeIterResult(makeNull(loc), true, loc, resultType);
 }
 
-export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
+export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
 	return makeExprStmt(
-		makeAssign(makeTypedIdent("$state", numberType(), loc), makeNumber(stateNum, loc), loc),
+		makeAssign(makeTypedIdentResolved(stateSym, numberType(), loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
@@ -157,39 +160,39 @@ export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
 // dispatcher re-evaluates. Safe only when no nested loop sits between the
 // rewrite point and the dispatcher; rewriteLoopExits enforces by not
 // descending into nested loops/switch.
-function makeStateGoto(stateNum: number, loc: SourceLocation): Node {
-	return makeBlock([makeStateAssign(stateNum, loc), makeContinue(loc)], loc);
+function makeStateGoto(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
+	return makeBlock([makeStateAssign(stateNum, loc, stateSym), makeContinue(loc)], loc);
 }
 
 // Descends Block/If/Try only — nested loops and switch own their own
 // break/continue scope.
-function rewriteOrRecurse(stmt: Node, top: LoopFrame, loc: SourceLocation): Node {
+function rewriteOrRecurse(stmt: Node, top: LoopFrame, loc: SourceLocation, stateSym: Symbol): Node {
 	if (stmt == null) return stmt;
-	if (stmt.kind == NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc);
-	if (stmt.kind == NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc);
-	rewriteLoopExits(stmt, top, loc);
+	if (stmt.kind == NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc, stateSym);
+	if (stmt.kind == NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc, stateSym);
+	rewriteLoopExits(stmt, top, loc, stateSym);
 	return stmt;
 }
 
-function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation): void {
+function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation, stateSym: Symbol): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			for (let i = 0; i < d.statements.length; i += 1) {
-				d.statements[i] = rewriteOrRecurse(d.statements[i], top, loc);
+				d.statements[i] = rewriteOrRecurse(d.statements[i], top, loc, stateSym);
 			}
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			d.consequent = rewriteOrRecurse(d.consequent, top, loc);
-			d.alternate = rewriteOrRecurse(d.alternate, top, loc);
+			d.consequent = rewriteOrRecurse(d.consequent, top, loc, stateSym);
+			d.alternate = rewriteOrRecurse(d.alternate, top, loc, stateSym);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			d.tryBody = rewriteOrRecurse(d.tryBody, top, loc);
-			d.catchBody = rewriteOrRecurse(d.catchBody, top, loc);
-			d.finallyBody = rewriteOrRecurse(d.finallyBody, top, loc);
+			d.tryBody = rewriteOrRecurse(d.tryBody, top, loc, stateSym);
+			d.catchBody = rewriteOrRecurse(d.catchBody, top, loc, stateSym);
+			d.finallyBody = rewriteOrRecurse(d.finallyBody, top, loc, stateSym);
 		},
 		_ => {},
 	};
@@ -257,7 +260,7 @@ export function containsYield(node: Node | null): boolean {
 
 // Emit yield: transition to next state + return IteratorResult.
 function emitYield(sc: StateCollector, currentState: number, nextSt: number, yieldArg: Node, loc: SourceLocation, resultType: Type | null): void {
-	sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc));
+	sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc, sc.stateSym));
 	sc.items[currentState].stmts.push(makeReturn(makeIterResult(yieldArg, false, loc, resultType), loc));
 	sc.items[currentState].isYield = true;
 	sc.items[currentState].nextState = nextSt;
@@ -302,12 +305,12 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			// Direct break: post-break stmts are dead, no need for trailing continue.
 			const top = sc.loopStack[sc.loopStack.length - 1];
 			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
-			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc));
+			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc, sc.stateSym));
 			return;
 		} else if (stmt.kind == NodeKind.ContinueStmt && sc.loopStack.length > 0) {
 			const top = sc.loopStack[sc.loopStack.length - 1];
 			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
-			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc));
+			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc, sc.stateSym));
 			return;
 		} else if (stmt.kind == NodeKind.ReturnStmt && sc.finallyStack.length > 0) {
 			// finallyPath port: a bare return inside a SPLIT try runs every
@@ -322,7 +325,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			// Nested break/continue inside pushed-as-is stmt (e.g. `if (x) break;`
 			// where the if has no yield) needs the trailing-continue form.
 			if (sc.loopStack.length > 0) {
-				rewriteLoopExits(stmt, sc.loopStack[sc.loopStack.length - 1], loc);
+				rewriteLoopExits(stmt, sc.loopStack[sc.loopStack.length - 1], loc, sc.stateSym);
 			}
 			sc.items[currentState].stmts.push(stmt);
 			i += 1;
@@ -373,7 +376,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			// Flush current state to a new condition state so pre-loop stmts
 			// don't re-execute on back-edge. Same pattern as reference closureiters.
 			const condState = allocState(sc);
-			sc.items[currentState].stmts.push(makeStateAssign(condState, loc));
+			sc.items[currentState].stmts.push(makeStateAssign(condState, loc, sc.stateSym));
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
 			splitWhile(stmt, sc, condState, afterSt, loc, resultType);
 			currentState = afterSt;
@@ -426,7 +429,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 	}
 	// Final state transitions to exit
 	if (currentState != exitState) {
-		sc.items[currentState].stmts.push(makeStateAssign(exitState, loc));
+		sc.items[currentState].stmts.push(makeStateAssign(exitState, loc, sc.stateSym));
 	}
 }
 
@@ -446,8 +449,8 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 	sc.items[condState].stmts.push(
 		makeIf(
 			wd.whileCondition,
-			makeBlock([makeStateAssign(bodyStart, loc)], loc),
-			makeBlock([makeStateAssign(exitState, loc)], loc),
+			makeBlock([makeStateAssign(bodyStart, loc, sc.stateSym)], loc),
+			makeBlock([makeStateAssign(exitState, loc, sc.stateSym)], loc),
 			loc,
 		),
 	);
@@ -470,7 +473,7 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	// tryExit sits inside the excLanding range below so a trailing await's resume
 	// (the re-raising read) routes to the catch, not the shared post-try state.
 	const tryExit = allocState(sc);
-	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
+	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
 
 	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 	// exceptionTable: every state produced for the try body lands on the catch.
@@ -478,7 +481,7 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	for (let s = tryStart; s < sc.items.length; s += 1) {
 		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
 	}
-	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc));
+	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 
 	// Rewrite the catch variable to read the env-carried current exception
 	// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
@@ -492,7 +495,7 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	// env field falls back to void* and the exception leaks (no destructor hook).
 	if (node.nodeType != null) sc.excType = node.nodeType;
 	if (td.catchName != "") {
-		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType);
+		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType, sc.curExcSym);
 	}
 	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
 }
@@ -505,16 +508,16 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 // finally state index so later excLanding mark-loops can skip it.
 function appendNormalFinally(sc: StateCollector, exitStateIdx: number, finStmts: Node[], afterSt: number, loc: SourceLocation): number {
 	const finNormal = allocState(sc);
-	sc.items[exitStateIdx].stmts.push(makeStateAssign(finNormal, loc));
+	sc.items[exitStateIdx].stmts.push(makeStateAssign(finNormal, loc, sc.stateSym));
 	for (const s of finStmts) sc.items[finNormal].stmts.push(s);
-	sc.items[finNormal].stmts.push(makeStateAssign(afterSt, loc));
+	sc.items[finNormal].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 	return finNormal;
 }
 
 function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, finStmts: Node[], loc: SourceLocation): void {
 	for (const s of finStmts) sc.items[finReraiseIdx].stmts.push(s);
-	sc.items[finReraiseIdx].stmts.push(makeStateAssign(-1, loc));
-	const curExcRef = makeIdent("$curExc", loc);
+	sc.items[finReraiseIdx].stmts.push(makeStateAssign(-1, loc, sc.stateSym));
+	const curExcRef = makeTypedIdentResolved(sc.curExcSym, null, loc);
 	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	sc.items[finReraiseIdx].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
 }
@@ -542,7 +545,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 	if (node.nodeType != null) sc.excType = node.nodeType;
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
-	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc));
+	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
 	sc.finallyStack.push({ stmts: finStmts, loopDepth: sc.loopStack.length });
 
 	if (td.catchBody == null) {
@@ -581,18 +584,18 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
 // stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
-function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null): void {
+function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null, newSym: Symbol): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (d.name == oldName) {
 			d.name = newName;
 			if (typ != null) node.nodeType = typ;
-			node.resolvedSym = null;
+			node.resolvedSym = newSym;
 		}
 		return;
 	}
-	forEachChild(node, (child: Node): void => { renameIdentInSubtree(child, oldName, newName, typ); });
+	forEachChild(node, (child: Node): void => { renameIdentInSubtree(child, oldName, newName, typ, newSym); });
 }
 
 // Wrapping-catch body: capture the exception into $exc, then map the raising
@@ -605,18 +608,18 @@ export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
 	// MOVE (reference nkFastAsgn — no incref): $curExc becomes the exception's sole
 	// owner and the env's DRC hooks free it once. A copy here over-owns (the sole
 	// currException ref is dropped by the clear without decref) → leak on every catch.
-	stmts.push(makeExprStmt(makeAssign(makeIdent("$curExc", loc), makeMoveExpr(makeIdent("$excCaught", loc), loc), loc), loc));
+	stmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.curExcSym, null, loc), makeMoveExpr(makeIdent("$excCaught", loc), loc), loc), loc));
 	// Terminal re-raises $curExc — the slot the store above just filled — never
 	// $excCaught, which the store's move already nulled (reference closureiters
 	// wrapIntoTryExcept re-raises :curExc). Typed so the raise-arg sink fires.
-	const curExcRef = makeIdent("$curExc", loc);
+	const curExcRef = makeTypedIdentResolved(sc.curExcSym, null, loc);
 	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	const rethrow = createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc));
-	let chain: Node = makeBlock([makeStateAssign(-1, loc), rethrow], loc);
+	let chain: Node = makeBlock([makeStateAssign(-1, loc, sc.stateSym), rethrow], loc);
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
 		if (sc.items[i].excLanding >= 0) {
-			const cond = makeBinary(makeIdent("$state", loc), "===", makeNumber(i, loc), loc);
-			const then = makeBlock([makeStateAssign(sc.items[i].excLanding, loc)], loc);
+			const cond = makeBinary(makeTypedIdentResolved(sc.stateSym, null, loc), "===", makeNumber(i, loc), loc);
+			const then = makeBlock([makeStateAssign(sc.items[i].excLanding, loc, sc.stateSym)], loc);
 			chain = makeIf(cond, then, chain, loc);
 		}
 	}
@@ -636,6 +639,7 @@ export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLo
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 	const curExcDecl = makeVarDecl("$curExc", makeNull(loc), DeclKind.Let, loc);
+	curExcDecl.resolvedSym = sc.curExcSym;
 	// No known exception type (catch-less try/finally): a raw Ptr<void> holder.
 	// Never noneType() — TypeKind.None is a sentinel that trips the codegen
 	// unresolved-type gate. DRC corner (documented, same as an untyped env
@@ -660,8 +664,8 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 		sc.items[currentState].stmts.push(
 			makeIf(
 				id.condition,
-				makeBlock([makeStateAssign(thenStart, loc)], loc),
-				makeBlock([makeStateAssign(elseStart, loc)], loc),
+				makeBlock([makeStateAssign(thenStart, loc, sc.stateSym)], loc),
+				makeBlock([makeStateAssign(elseStart, loc, sc.stateSym)], loc),
 				loc,
 			),
 		);
@@ -681,12 +685,12 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 			const elseStmts = extractBodyStmts(id.alternate);
 			for (const s of elseStmts) elseBlockStmts.push(s);
 		}
-		elseBlockStmts.push(makeStateAssign(joinState, loc));
+		elseBlockStmts.push(makeStateAssign(joinState, loc, sc.stateSym));
 
 		sc.items[currentState].stmts.push(
 			makeIf(
 				id.condition,
-				makeBlock([makeStateAssign(thenStart, loc)], loc),
+				makeBlock([makeStateAssign(thenStart, loc, sc.stateSym)], loc),
 				makeBlock(elseBlockStmts, loc),
 				loc,
 			),
@@ -699,14 +703,14 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 // ===== Return Rewriting =====
 // Rewrite return stmts in generator body: return val → $state = -1; return { value: val, done: true }
 
-function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | null): void {
+function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | null, stateSym: Symbol): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind == NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
 			// Replace with block: { $state = -1; return { value: val, done: true }; }
 			const block = makeBlock([
-				makeStateAssign(-1, loc),
+				makeStateAssign(-1, loc, stateSym),
 				makeReturn(makeIterResult(rd.argument!, true, loc, resultType), loc),
 			], loc);
 			stmts[i] = block;
@@ -748,7 +752,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
 		const stateIdx = sc.items[i].index;
 		const cond = makeBinary(
-			makeIdent("$state", loc), "===",
+			makeTypedIdentResolved(sc.stateSym, null, loc), "===",
 			makeNumber(stateIdx, loc), loc,
 		);
 		const body = makeBlock(sc.items[i].stmts, loc);
@@ -773,12 +777,14 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	// Build IteratorResult<T> type for stamping yield/return literals
 	const iterResultType = buildIterResultType(returnNodeType);
+	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
 
 	// 3. Rewrite return statements
-	rewriteReturns(bodyStmts, loc, iterResultType);
+	rewriteReturns(bodyStmts, loc, iterResultType, stateSym);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [] };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
@@ -828,7 +834,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   let local1; let local2; ...
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
-	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
+	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
+	stateDecl.resolvedSym = stateSym;
+	newBodyStmts.push(stateDecl);
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
 	for (const localName of nc.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.

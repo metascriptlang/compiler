@@ -19,11 +19,12 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, Symbol, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, Symbol, SymbolKind, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
 import { mapChildren } from "../walker";
+import { makeSymbol } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import {
-	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
+	makeIdent, makeTypedIdent, makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
@@ -211,7 +212,7 @@ function finalliesBeforeReturn(pending: Node[][]): Node[] {
 	return out;
 }
 
-function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string, pendingFinallies: Node[][]): void {
+function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string, pendingFinallies: Node[][], stateSym: Symbol): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt == null) continue;
@@ -225,7 +226,7 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 				// finallyPath: enclosing split-try finallies run before the
 				// function exits (before $state=-1 and the completion).
 				for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(fs);
-				blockStmts.push(makeStateAssign(-1, loc));
+				blockStmts.push(makeStateAssign(-1, loc, stateSym));
 				for (const cs of completeStmts) blockStmts.push(cs);
 				blockStmts.push(makeReturn(makeNull(loc), loc));
 				const block = makeBlock(blockStmts, loc);
@@ -233,21 +234,21 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 			},
 			NodeKind.BlockStmt => {
 				const bd = stmt.data as BlockStmtData;
-				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
+				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies, stateSym);
 			},
 			NodeKind.IfStmt => {
 				const id = stmt.data as IfStmtData;
 				if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
+					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies, stateSym);
 				}
 				if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
+					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies, stateSym);
 				}
 			},
 			NodeKind.WhileStmt => {
 				const wd = stmt.data as WhileStmtData;
 				if (wd.whileBody != null && wd.whileBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies);
+					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, pendingFinallies, stateSym);
 				}
 			},
 			NodeKind.TryCatchStmt => {
@@ -263,10 +264,10 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 					childPending.push(extractBodyStmts(td.finallyBody));
 				}
 				if (td.tryBody != null && td.tryBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
+					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending, stateSym);
 				}
 				if (td.catchBody != null && td.catchBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending);
+					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutName, childPending, stateSym);
 				}
 			},
 			_ => {},
@@ -458,7 +459,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 					const futName = "$yf" + i;
 					const yfType = promiseTypeFor(state.yieldVarType);
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdent(futName, yfType, loc), yieldArg, loc), loc));
-					stateStmts.push(makeExprStmt(makeAssign(makeIdent("$state", loc), makeNumber(state.nextState, loc), loc), loc));
+					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.stateSym, null, loc), makeNumber(state.nextState, loc), loc), loc));
 					const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
 					finishedCheck.nodeType = booleanType();
 					stateStmts.push(makeIf(finishedCheck, makeBlock([makeContinue(loc)], loc), makeBlock([], loc), loc));
@@ -474,7 +475,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		}
 
 		const cond = makeBinary(
-			makeTypedIdent("$state", numberType(), loc), "===",
+			makeTypedIdentResolved(sc.stateSym, numberType(), loc), "===",
 			makeNumber(state.index, loc), loc,
 		);
 		const body = makeBlock(stateStmts, loc);
@@ -507,8 +508,10 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
 
+	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
-	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutName, []);
+	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutName, [], stateSym);
 
 	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
@@ -519,7 +522,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
 
 	// 4. Split at yield points (reuse generatorLower's algorithm)
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [] };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym: makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true) };
 	const initState = allocState(sc);
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);
@@ -599,6 +602,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// let $state = 0;
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
 	stateDecl.nodeType = numberType();
+	stateDecl.resolvedSym = stateSym;
 	outerStmts.push(stateDecl);
 
 	// Env-carried current exception (reference :curExc) — buildExcRouting stores
@@ -621,15 +625,17 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// const $stepper = function() { ... };
 	// No self-reference needed — msAsyncCb handles re-registration externally.
+	const stepperSym = makeSymbol("$stepper", SymbolKind.Variable, closureType, false);
 	const stepperDecl = makeVarDecl("$stepper", stepperFnExpr, DeclKind.Const, loc);
 	stepperDecl.nodeType = closureType;
+	stepperDecl.resolvedSym = stepperSym;
 	outerStmts.push(stepperDecl);
 
 
 	// msAsyncStart($retFut, $stepper) — createCb pattern: C callback drives the stepper
 	const kickoffCall = makeCall(
 		makeIdent("msAsyncStart", loc),
-		[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdent("$stepper", closureType, loc)],
+		[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdentResolved(stepperSym, closureType, loc)],
 		loc,
 	);
 	outerStmts.push(makeExprStmt(kickoffCall, loc));
