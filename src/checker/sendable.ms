@@ -220,6 +220,8 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 	const reported: string[] = [];
 	if (body != null) {
 		walkForMutableCaptures(body, params, reported, ctx);
+		const writeReported: string[] = [];
+		walkSpawnWrites(ctx, body, params, writeReported);
 		if (ctx.currentActorName != "") {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
@@ -308,6 +310,47 @@ function reportThisFieldWrite(ctx: CheckerContext, target: Node, node: Node, rep
 function isAsgnOperator(op: string): boolean {
 	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" ||
 		op == "%=" || op == "&&=" || op == "||=" || op == "??=";
+}
+
+function isLockedSectionCall(node: Node): boolean {
+	const d = node.data as CallExprData;
+	const callee = peelHidden(d.callee);
+	if (callee == null || callee.kind != NodeKind.Identifier) return false;
+	const name = (callee.data as IdentifierData).name;
+	return name == "lockedUpdate" || name == "lockedRead";
+}
+
+function reportCapturedWrite(ctx: CheckerContext, target: Node, node: Node, params: string[], reported: string[]): void {
+	const root = writeChainRoot(target);
+	if (root == null || root.kind != NodeKind.Identifier) return;
+	const name = (root.data as IdentifierData).name;
+	if (name == "this") return;
+	for (const p of params) { if (p == name) return; }
+	for (const r of reported) { if (r == name) return; }
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym == null) return;
+	if (root.resolvedSym != null && root.resolvedSym != sym) return;
+	addError(ctx, "captured '" + name + "' is read-only inside a spawn thunk — assignment is not allowed; use `move`, or write through a Locked<T> critical section (PARALOCK E24/E147)", node.location.line, node.location.column);
+	reported.push(name);
+}
+
+function walkSpawnWrites(ctx: CheckerContext, node: Node, params: string[], reported: string[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.CallExpr && isLockedSectionCall(node)) return;
+	match (node.kind) {
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			if (isAsgnOperator(d.operator)) { reportCapturedWrite(ctx, d.left, node, params, reported); }
+			walkSpawnWrites(ctx, d.left, params, reported);
+			walkSpawnWrites(ctx, d.right, params, reported);
+		},
+		NodeKind.UpdateExpr => {
+			const d = node.data as UpdateExprData;
+			reportCapturedWrite(ctx, d.updateArg, node, params, reported);
+			walkSpawnWrites(ctx, d.updateArg, params, reported);
+		},
+		_ => { forEachChild(node, (child: Node): void => { walkSpawnWrites(ctx, child, params, reported); }); },
+	};
 }
 
 function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
