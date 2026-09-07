@@ -105,15 +105,19 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 	emit(gen, ";\n");
 }
 
+// A class declaration that produces no JS at all: an `extern class` binds a
+// native global, and a class merged onto a callable namespace resolves to the
+// prelude function of the same name. Both emitters must agree — the ES-module
+// path writes `export ` before it dispatches, so it has to decide first or it
+// leaves a dangling keyword behind.
+export function classEmitsNoJs(node: Node): boolean {
+	if ((node.flags & NodeFlag.ExternC) != 0) return true;
+	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
+}
+
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
-	// Merged callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
-	// name resolves to a prelude Function bound to the native global —
-	// emitting a class here would shadow it. Reads of its statics emit as
-	// raw native member accesses.
-	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		return;
-	}
+	if (classEmitsNoJs(node)) return;
 	emit(gen, "class ");
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
 	if (d.classExtends != "") {
@@ -193,8 +197,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 }
 
 export function emitClassDecl(gen: JSGenerator, node: Node): void {
-	// Extern class: native JS type — skip emission entirely
-	if ((node.flags & NodeFlag.ExternC) != 0) return;
+	if (classEmitsNoJs(node)) return;
 	emitIndent(gen);
 	emitClassDeclInner(gen, node);
 }
@@ -390,6 +393,8 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	// Non-bundle: ES module export
+	if (inner.kind == NodeKind.ClassDecl && classEmitsNoJs(inner)) return;
+	if (inner.kind == NodeKind.ActorDecl && (inner.flags & NodeFlag.ExternC) != 0) return;
 	emitIndent(gen);
 	emit(gen, "export ");
 	match (inner.kind) {

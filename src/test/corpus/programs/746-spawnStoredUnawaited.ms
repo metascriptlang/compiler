@@ -1,4 +1,3 @@
-// @xfail(esm): tree emit: native Promise.resolve shadowed by the emitted class Promise in _std/core/promise
 // @stdout: spawn-only done
 // @maxrss: 16
 // @serial

@@ -1,5 +1,4 @@
 // @stdout: try-await-lowering acc=8
-// @xfail(esm): tree emit: native Promise.resolve shadowed by the emitted class Promise in _std/core/promise
 // note: Regression guard for the finallyPath port (generatorLower splitTryFinally).
 //   PROVEN RED: before the port, an `await` inside a try body was never split
 //   across the state machine — the YieldExpr asyncDesugar produces survived every

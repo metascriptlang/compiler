@@ -1,7 +1,6 @@
 // @maxrss: 200
 // @stdout: leak-send-moved-arg-async done
 // @serial
-// @xfail(esm): tree emit: native Promise.resolve shadowed by the emitted class Promise in _std/core/promise
 // note: Sibling of 418 (sync void, FIXED). This pins the async half. History of
 //   what this program caught, in order:
 //   (1) the moved-ref leak — FIXED; the ledger on this shape at 2k sends reports
