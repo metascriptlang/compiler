@@ -19,7 +19,7 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, Symbol, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
 import { mapChildren } from "../walker";
 import { TransformContext } from "../context";
 import {
@@ -36,7 +36,7 @@ import { stmtCountAfter } from "../testUtil";
 // Walk body to collect variable name → Type BEFORE rewriting. Used to set nodeType
 // on hoisted locals so lambda lifting creates correctly typed env struct fields.
 
-interface VarTypeInfo { name: string; varType: Type; }
+interface VarTypeInfo { name: string; varType: Type; varSym: Symbol | null; }
 
 function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 	if (node == null) return;
@@ -52,7 +52,7 @@ function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 				varType = node.resolvedSym.symbolType;
 			}
 			if (varType != null) {
-				result.push({ name: d.declName, varType });
+				result.push({ name: d.declName, varType, varSym: node.resolvedSym });
 			}
 		},
 		NodeKind.BlockStmt => {
@@ -79,6 +79,13 @@ function findVarType(entries: VarTypeInfo[], name: string): Type {
 		if (e.name == name) return e.varType;
 	}
 	return null as unknown as Type;
+}
+
+function findVarSym(entries: VarTypeInfo[], name: string): Symbol | null {
+	for (const e of entries) {
+		if (e.name == name) return e.varSym;
+	}
+	return null;
 }
 
 // Promise<T> from inner type, or Promise<void> if null
@@ -539,7 +546,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 			// Set $yf type to Promise<T> where T = yield variable type
 			const yfVarType = sc.items[si].yieldVarType;
 			const yfFutType = promiseTypeFor(yfVarType);
-			varTypes.push({ name: yfName, varType: yfFutType });
+			varTypes.push({ name: yfName, varType: yfFutType, varSym: null });
 		}
 	}
 
@@ -608,6 +615,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 		if (origType != null) {
 			localDecl.nodeType = origType;
 		}
+		localDecl.resolvedSym = findVarSym(varTypes, localName);
 		outerStmts.push(localDecl);
 	}
 

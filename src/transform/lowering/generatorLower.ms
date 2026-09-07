@@ -84,7 +84,7 @@ export interface StateCollector {
 
 // Collect name→Type from VarDecl nodes in the body.
 // Reference parity (captureVar): env fields always carry their original type.
-function collectDeclTypes(node: Node, names: string[], types: Type[]): void {
+function collectDeclTypes(node: Node, names: string[], types: Type[], syms: Symbol[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
@@ -95,32 +95,33 @@ function collectDeclTypes(node: Node, names: string[], types: Type[]): void {
 			if (t != null) {
 				names.push(d.declName);
 				types.push(t);
+				syms.push(node.resolvedSym);
 			}
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { collectDeclTypes(s, names, types); }
+			for (const s of d.statements) { collectDeclTypes(s, names, types, syms); }
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			collectDeclTypes(d.whileBody, names, types);
+			collectDeclTypes(d.whileBody, names, types, syms);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			collectDeclTypes(d.consequent, names, types);
-			collectDeclTypes(d.alternate, names, types);
+			collectDeclTypes(d.consequent, names, types, syms);
+			collectDeclTypes(d.alternate, names, types, syms);
 		},
 		_ => {},
 	};
 }
 
-function lookupDeclType(names: string[], types: Type[], name: string): Type {
+function lookupDeclIdx(names: string[], name: string): int32 {
 	let i = 0;
 	while (i < names.length) {
-		if (names[i] == name) return types[i];
+		if (names[i] == name) return i as int32;
 		i = i + 1;
 	}
-	return null as unknown as Type;
+	return -1 as int32;
 }
 
 function buildIterResultType(returnNodeType: Type | null): Type | null {
@@ -764,7 +765,8 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	collectDeclNames(body, nc, false);
 	const dtNames: string[] = [];
 	const dtTypes: Type[] = [];
-	collectDeclTypes(body, dtNames, dtTypes);
+	const dtSyms: Symbol[] = [];
+	collectDeclTypes(body, dtNames, dtTypes, dtSyms);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -832,8 +834,11 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
 		const decl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
-		const dt = lookupDeclType(dtNames, dtTypes, localName);
-		if (dt != null) decl.nodeType = dt;
+		const dtIdx = lookupDeclIdx(dtNames, localName);
+		if (dtIdx >= 0) {
+			decl.nodeType = dtTypes[dtIdx];
+			decl.resolvedSym = dtSyms[dtIdx];
+		}
 		newBodyStmts.push(decl);
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
