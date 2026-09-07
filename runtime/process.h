@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <string.h>
 #include <spawn.h>
+#include <poll.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #define MS_SPAWN_ENVIRON (*_NSGetEnviron())
@@ -406,18 +407,18 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 // then queries getters for additional metadata before building Result/Error.
 //
 // POSIX: pipe() × 2 + posix_spawn("/bin/sh", "-c", cmd) with dup2 file
-//        actions + read loops + waitpid(). Stderr captured separately.
+//        actions + a poll() pump over both pipes + waitpid(). Stderr captured
+//        separately.
 // Windows: CreatePipe() × 2 + CreateProcess() + ReadFile loops +
 //          WaitForSingleObject + GetExitCodeProcess.
 //
 // Output cap: 16 MB per stream. Longer outputs are truncated (matches stdout
 // capture semantics in popen-based shells like Bun.$).
 //
-// Known limitation (v1): sequential read of stdout-first-then-stderr can
-// deadlock if child writes >64KB to stderr while we're blocked on stdout
-// read. For build-introspection tools (pkg-config, llvm-config, brew --prefix)
-// outputs are tiny so this is not hit in practice. Upgrade to select()/poll()
-// when a deadlock case appears.
+// Both platforms service the two pipes from one thread and never let either
+// fill: a child that writes past the pipe buffer on one stream while the
+// parent is committed to the other deadlocks both, and a C compiler dumping
+// warnings clears 64 KB routinely.
 
 /* Thread-local: exec() runs concurrently on pool workers (parallel @compile /
  * module compile); shared globals would cross-attribute exit codes between jobs. */
@@ -436,35 +437,38 @@ static inline int32_t msProcSpawnGetPipeOk(void) { return _msProcSpawnPipeOk; }
 #define MS_SPAWN_MAX_OUTPUT (16 * 1024 * 1024)
 
 #ifndef _WIN32
-/* Drain a fd into a heap buffer; returns malloc'd buffer + length via out params.
- * 1 on success, 0 on read error. Caller frees *outBuf. */
-static inline int _msSpawnDrainFd(int fd, char** outBuf, size_t* outLen) {
-	size_t cap = 4096;
-	size_t len = 0;
-	char* buf = (char*)malloc(cap);
-	if (!buf) { *outBuf = NULL; *outLen = 0; return 0; }
+/* Move whatever is currently readable on `fd` into a growable buffer. Only ever
+ * called on a descriptor poll() just reported ready, so the read cannot block.
+ * Returns 0 once the pipe is at EOF (every write end closed), on a read error,
+ * or on allocation failure.
+ *
+ * Past MS_SPAWN_MAX_OUTPUT the data is read and discarded rather than left in
+ * the pipe: stopping the reads would refill the buffer and block the child in
+ * write(), which is the very deadlock this pump exists to avoid. */
+static inline int msSpawnPumpFd(int fd, char** buf, size_t* cap, size_t* len) {
+	if (*buf == NULL) return 0;
+
 	char chunk[4096];
-	ssize_t n;
-	while ((n = read(fd, chunk, sizeof(chunk))) > 0) {
-		size_t got = (size_t)n;
-		if (len + got > MS_SPAWN_MAX_OUTPUT) {
-			got = MS_SPAWN_MAX_OUTPUT - len;
-			if (got == 0) break;
-		}
-		while (len + got + 1 > cap) {
-			cap *= 2;
-			char* nb = (char*)realloc(buf, cap);
-			if (!nb) { free(buf); *outBuf = NULL; *outLen = 0; return 0; }
-			buf = nb;
-		}
-		memcpy(buf + len, chunk, got);
-		len += got;
-		if (len >= MS_SPAWN_MAX_OUTPUT) break;
+	ssize_t n = read(fd, chunk, sizeof(chunk));
+	if (n == 0) return 0;
+	if (n < 0) {
+		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+		_msProcSpawnPipeOk = 0;
+		return 0;
 	}
-	if (n < 0 && errno != 0) { free(buf); *outBuf = NULL; *outLen = 0; return 0; }
-	buf[len] = '\0';
-	*outBuf = buf;
-	*outLen = len;
+
+	size_t got = (size_t)n;
+	if (*len >= MS_SPAWN_MAX_OUTPUT) return 1;               /* capped: drained and dropped */
+	if (*len + got > MS_SPAWN_MAX_OUTPUT) got = MS_SPAWN_MAX_OUTPUT - *len;
+	while (*len + got + 1 > *cap) {
+		size_t newCap = *cap * 2;
+		char* grown = (char*)realloc(*buf, newCap);
+		if (!grown) { free(*buf); *buf = NULL; return 0; }  /* realloc keeps the old block on failure */
+		*buf = grown;
+		*cap = newCap;
+	}
+	memcpy(*buf + *len, chunk, got);
+	*len += got;
 	return 1;
 }
 
@@ -472,12 +476,30 @@ static inline int _msSpawnDrainFd(int fd, char** outBuf, size_t* outLen) {
  * populate the thread-local result state. Takes ownership of the fds + pid;
  * returns captured stdout. */
 static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
-	char* outBuf = NULL; size_t outLen = 0;
-	char* errBuf = NULL; size_t errLen = 0;
-	if (!_msSpawnDrainFd(outFd, &outBuf, &outLen)) _msProcSpawnPipeOk = 0;
-	if (!_msSpawnDrainFd(errFd, &errBuf, &errLen)) _msProcSpawnPipeOk = 0;
+	size_t outCap = 4096, outLen = 0;
+	size_t errCap = 4096, errLen = 0;
+	char* outBuf = (char*)malloc(outCap);
+	char* errBuf = (char*)malloc(errCap);
+	int outOpen = 1, errOpen = 1;
+	while (outOpen || errOpen) {
+		struct pollfd fds[2];
+		int outSlot = -1, errSlot = -1;
+		nfds_t nfds = 0;
+		if (outOpen) { outSlot = (int)nfds; fds[nfds].fd = outFd; fds[nfds].events = POLLIN; fds[nfds].revents = 0; nfds++; }
+		if (errOpen) { errSlot = (int)nfds; fds[nfds].fd = errFd; fds[nfds].events = POLLIN; fds[nfds].revents = 0; nfds++; }
+		if (poll(fds, nfds, -1) < 0) {
+			if (errno == EINTR) continue;
+			_msProcSpawnPipeOk = 0;
+			break;
+		}
+		if (outSlot >= 0 && fds[outSlot].revents && !msSpawnPumpFd(outFd, &outBuf, &outCap, &outLen)) outOpen = 0;
+		if (errSlot >= 0 && fds[errSlot].revents && !msSpawnPumpFd(errFd, &errBuf, &errCap, &errLen)) errOpen = 0;
+	}
 	close(outFd);
 	close(errFd);
+	/* A failed allocation means the captured text is incomplete. Report it as a
+	 * pipe error instead of handing back a short read that reads like success. */
+	if (!outBuf || !errBuf) _msProcSpawnPipeOk = 0;
 
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0) {
@@ -500,8 +522,8 @@ static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
 
 	msString stdoutResult = MS_EMPTY_STRING;
 	msString stderrResult = MS_EMPTY_STRING;
-	if (outBuf) { stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
-	if (errBuf) { stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
+	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
 	_msProcSpawnStderr = stderrResult;
 	return stdoutResult;
 }
