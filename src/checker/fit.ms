@@ -313,10 +313,79 @@ export function checkRelationalOperands(ctx: CheckerContext, op: string, leftTyp
 	if (!relationalNeedsOperator(leftType) && !relationalNeedsOperator(rightType)) return;
 	if (ctx.extensionRegistry != null
 		&& resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) != null) return;
-	addError(ctx, "operator '" + op + "' is not defined for '" + typeDisplayName(leftType)
+	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
 		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
 		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + "): boolean`",
 		node.location.line, node.location.column);
+}
+
+function binaryOperandClass(op: string): string {
+	if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**") return "arith";
+	if (op == "==" || op == "!=" || op == "===" || op == "!==") return "eq";
+	return "";
+}
+
+function binaryOperandSkip(t: Type): boolean {
+	if (t == null) return true;
+	const s = skipModifier(t);
+	if (hasGenericParams(s) || isUnknownType(s) || isUnresolvedType(s) || isMaybeType(s)) return true;
+	const k = s.kind;
+	return k == TypeKind.Error || k == TypeKind.Null || k == TypeKind.Union
+		|| k == TypeKind.GenericParam || k == TypeKind.GenericInstance
+		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
+		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional
+		|| k == TypeKind.Result || k == TypeKind.BigInt;
+}
+
+function binaryPointerish(k: TypeKind): boolean {
+	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Cursor
+		|| k == TypeKind.Borrow || k == TypeKind.Function || k == TypeKind.Array
+		|| k == TypeKind.Span || k == TypeKind.SizedArray || k == TypeKind.CString;
+}
+
+function arithOperandsOk(op: string, a: Type, b: Type): boolean {
+	if (isNumeric(a) && isNumeric(b)) return true;
+	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
+	if (op == "+" && (isStringLike(a) || isStringLike(b))) return true;
+	if (a.kind == TypeKind.Ptr || b.kind == TypeKind.Ptr) return true;
+	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
+	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
+	return false;
+}
+
+function equalityOperandsOk(a: Type, b: Type): boolean {
+	if (isNumeric(a) && isNumeric(b)) return true;
+	if (isStringLike(a) && isStringLike(b)) return true;
+	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
+	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
+	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
+	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
+	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
+	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
+	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
+	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
+	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
+	return false;
+}
+
+export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
+	const cls = binaryOperandClass(op);
+	if (cls == "") return false;
+	if (leftType == null || rightType == null) return false;
+	if (binaryOperandSkip(leftType) || binaryOperandSkip(rightType)) return false;
+	const a = skipModifier(leftType);
+	const b = skipModifier(rightType);
+	if (a == null || b == null) return false;
+	const ok = cls == "arith" ? arithOperandsOk(op, a, b) : equalityOperandsOk(a, b);
+	if (ok) return false;
+	if (ctx.extensionRegistry != null
+		&& resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) != null) return false;
+	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
+		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
+		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + ")`",
+		node.location.line, node.location.column);
+	return true;
 }
 
 // ===== Integer Literal Coercion =====
