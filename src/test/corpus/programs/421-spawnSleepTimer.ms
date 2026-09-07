@@ -1,7 +1,7 @@
-// @skip-js: waitFor() is a C-backend intrinsic - std/core/promise declares it in
-//   index.cms/index.rms only, so BOTH js lanes fail the checker outright
-//   ("Undefined variable 'waitFor'", measured 2026-09-05). Same class as
-//   405/406/414/415: a primitive with no js binding, not a backend gap.
+// @skip-js: spawn has no working js lowering - the emitted
+//   _std/core/promise/index.js dies at "TypeError: Promise.resolve is not a
+//   function" before any user code runs (measured 2026-09-07, tree mode, after
+//   this file moved off waitFor onto await). Same class as 405/406/414/415.
 // @stdout: spawn-timer done 100
 // @serial
 
@@ -25,9 +25,9 @@
 //   Same family as the 419 hang (a pool worker minting a completion channel
 //   nobody drains); this is the timer half of it.
 //   The js/esm lanes are skipped, not xfailed: the shape this program needs
-//   (a blocking waitFor INSIDE a spawn thunk, so the timer is armed on a pool
-//   worker) has no js spelling at all - there is nothing for those lanes to
-//   run once the C intrinsic is unavailable.
+//   (a blocking await INSIDE a spawn thunk, so the timer is armed on a pool
+//   worker) has no working js lowering at all - there is nothing for those
+//   lanes to run.
 //   NOT verified on this host: macOS/kqueue, where the same thread-local
 //   dispatcher and heap are shared code but were never measured. Linux WAS
 //   measured (WSL, cross-built drc): 6/6 hang before the fix, 6/6 pass after.
@@ -39,10 +39,10 @@ async function tick(): Promise<int32> {
 function main(): void {
 	let total = 0;
 	for (let round = 0; round < 25; round = round + 1) {
-		const a = spawn(() => waitFor(tick()));
-		const b = spawn(() => waitFor(tick()));
-		const c = spawn(() => waitFor(tick()));
-		const d = spawn(() => waitFor(tick()));
+		const a = spawn(() => { return await tick(); });
+		const b = spawn(() => { return await tick(); });
+		const c = spawn(() => { return await tick(); });
+		const d = spawn(() => { return await tick(); });
 		total = total + (await a) + (await b) + (await c) + (await d);
 	}
 	console.log(`spawn-timer done ${total}`);

@@ -70,8 +70,8 @@ async function single(): Promise<int32> {
 }
 
 function main(): int32 {
-    const badSingle = waitFor(single());
-    const bad = waitFor(run());
+    const badSingle = await single();
+    const bad = await run();
     if (badSingle != 0 || bad != 0) return 1;
     console.log("ok");
     return 0;

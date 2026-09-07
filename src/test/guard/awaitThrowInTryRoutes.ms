@@ -42,8 +42,8 @@ async function valCase(): Promise<int32> {
 }
 
 function main(): int32 {
-    const a = waitFor(voidCase());
-    const b = waitFor(valCase());
+    const a = await voidCase();
+    const b = await valCase();
     if (a != 4 || b != 5) {
         console.log("GUARD-FAIL a=" + a.toString() + " b=" + b.toString());
         return 1;

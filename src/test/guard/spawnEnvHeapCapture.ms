@@ -34,7 +34,7 @@ function work(cc: string, jobs: Job[]): int32 {
         }));
     }
     let total = 0;
-    for (const f of futures) total = total + waitFor(f);
+    for (const f of futures) total = total + await f;
     return total;
 }
 

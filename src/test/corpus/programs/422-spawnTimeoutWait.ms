@@ -1,6 +1,6 @@
-// @skip-js: waitFor() is a C-backend intrinsic (see 421-spawnSleepTimer); the
-//   { timeout } options object rides the same fused C-only lowering, so there
-//   is no js spelling of this shape at all.
+// @skip-js: spawn has no working js lowering (see 421-spawnSleepTimer); the
+//   { timeout } options object rides the same fused C-only lowering on top of
+//   that, so there is no js spelling of this shape at all.
 // @stdout: spawn-timeout done 100
 // @serial
 
@@ -44,10 +44,10 @@ function main(): void {
 		// Fused form - `const h = spawn(fn, {timeout}); await h` (deferred)
 		// does not parse the options object and fails at the C boundary
 		// (msSpawn takes one argument), so this IS the only live spelling.
-		total = total + (await spawn(() => waitFor(tick()), { timeout: 4000 }));
-		total = total + (await spawn(() => waitFor(tick()), { timeout: 4000 }));
-		total = total + (await spawn(() => waitFor(tick()), { timeout: 4000 }));
-		total = total + (await spawn(() => waitFor(tick()), { timeout: 4000 }));
+		total = total + (await spawn(() => { return await tick(); }, { timeout: 4000 }));
+		total = total + (await spawn(() => { return await tick(); }, { timeout: 4000 }));
+		total = total + (await spawn(() => { return await tick(); }, { timeout: 4000 }));
+		total = total + (await spawn(() => { return await tick(); }, { timeout: 4000 }));
 	}
 	console.log(`spawn-timeout done ${total}`);
 }

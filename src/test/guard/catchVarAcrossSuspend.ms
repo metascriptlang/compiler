@@ -35,7 +35,7 @@ async function work(i: int32): Promise<int32> {
 
 function main(): void {
     let acc = 0;
-    for (let n = 0; n < 50; n = n + 1) { acc = acc + waitFor(work(n)); }
+    for (let n = 0; n < 50; n = n + 1) { acc = acc + await work(n); }
     console.log(acc.toString());
 }
 

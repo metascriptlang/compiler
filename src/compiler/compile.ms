@@ -798,7 +798,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		}));
 	}
 	const exitCodes: number[] = [];
-	for (const f of futures) exitCodes.push(waitFor(f));
+	for (const f of futures) exitCodes.push(await f);
 
 	// === 3. COLLECT (serial from main thread) ===
 	let oFiles = "";
@@ -862,7 +862,7 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 		}));
 	}
 	const codes: number[] = [];
-	for (const f of futures) codes.push(waitFor(f));
+	for (const f of futures) codes.push(await f);
 	return codes;
 }
 
