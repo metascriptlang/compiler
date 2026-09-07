@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { makeIdent, makeIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
+import { makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName, hookBaseCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
@@ -1276,16 +1276,19 @@ function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, l
 function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const dupStmts: Node[] = [];
 	const srcSym = makeSymbol("src", SymbolKind.Variable, classType != null ? classType : objType, false);
+	const resultSym = makeSymbol("$result", SymbolKind.Variable, classType != null ? classType : objType, true);
+	const resultDecl = makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc);
+	resultDecl.resolvedSym = resultSym;
 	if (isRef) {
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
-		dupStmts.push(makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc));
-		dupStmts.push(makeExprStmt(makeCall(makeIdent("msIncref", loc), [makeIdent("$result", loc)], loc), loc));
-		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+		dupStmts.push(resultDecl);
+		dupStmts.push(makeExprStmt(makeCall(makeIdent("msIncref", loc), [makeTypedIdentResolved(resultSym, null, loc)], loc), loc));
+		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
-		dupStmts.push(makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc));
-		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
-		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+		dupStmts.push(resultDecl);
+		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
+		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	}
 	const dupNode = makeFnDecl(cName + "Dup", [srcSym.name], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	const dupType = classType != null ? classType : objType;
