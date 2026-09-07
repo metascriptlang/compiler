@@ -17,10 +17,10 @@ import {
 	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, VariableDeclData,
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData,
 	MatchCaseData, SpliceManyData,
-	Type, Symbol,
+	Type, TypeKind, Symbol,
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
-import { inferredType, errorType, voidType, typeNameOf, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
+import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
 import { isAssignable } from "./compat";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -158,19 +158,21 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 	const genNames = extractGenericNames(fd.fnFlags);
 	const boundNames: string[] = [];
 	const boundTypes: Type[] = [];
+	const boundFrom: int32[] = [];
 	for (let i: int32 = 0; i < args.length; i++) {
 		const declared = symType.typeChildren[i + offset];
 		const argT = args[i].nodeType;
 		if (declared == null || argT == null) continue;
-		const dn = typeNameOf(declared);
-		if (nameIndex(genNames, dn) >= 0) {
+		const dn = declared.kind == TypeKind.GenericParam ? declared.typeName : "";
+		if (dn != "" && nameIndex(genNames, dn) >= 0) {
 			const bidx = nameIndex(boundNames, dn);
 			if (bidx < 0) {
 				boundNames.push(dn);
 				boundTypes.push(argT);
+				boundFrom.push(i);
 			} else if (!isAssignable(argT, boundTypes[bidx])) {
-				addError(ctx, `Template '${sym.name}': argument ${i + 1} has type ${typeDisplayName(argT)} but ${dn} was bound to ${typeDisplayName(boundTypes[bidx])}`,
-					callNode.location.line, callNode.location.column);
+				addError(ctx, `Argument type mismatch in '${sym.name}' arg ${i}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(boundTypes[bidx])} — '${dn}' was bound by argument ${boundFrom[bidx]}`,
+					args[i].location.line, args[i].location.column);
 				return false;
 			}
 			continue;
