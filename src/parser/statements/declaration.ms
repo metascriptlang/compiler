@@ -1757,7 +1757,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 }
 
 // ===== Distinct Type Declaration =====
-// syntax: 'distinct' 'type' ID '=' type ';'
+// syntax: 'distinct' 'type' ID ('<' params '>')? '=' type ';'
 
 export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	const distinctToken = current(state);
@@ -1773,6 +1773,11 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected identifier after 'distinct type' at line ${nameToken.line}`);
 	}
 	advance(state);
+
+	const distinctGenericNames = captureGenericParams(state);
+	if (distinctGenericNames != "") {
+		addGenericDecl(nameToken.value, distinctGenericNames);
+	}
 
 	if (current(state).kind != TokenKind.Assign) {
 		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line}`);
@@ -1793,7 +1798,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		aliasName: nameToken.value,
 		aliasType: distinctAliasType,
 		aliasIsDistinct: true,
-		aliasGenericParams: "",
+		aliasGenericParams: distinctGenericNames,
 		discriminantName: "",
 		discriminantType: "",
 		variantKeys: [] as string[],
