@@ -150,3 +150,4 @@ import "./bug131NarrowedUnionMemberRead";
 import "./bug132LiftedFnUnionVariantHooks";
 import "./bug133LoopEnvRedirectShadow";
 import "./bug134ShadowBindingIdentity";
+import "./bug135CrossModuleTypeArgLeak";
