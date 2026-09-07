@@ -68,3 +68,25 @@ export extern function clear<T>(this s: HashSet<T>): void from "#.clear()";
 export extern function toItems<T>(this s: HashSet<T>): T[] from "Array.from(#.values())";
 export extern function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): void from "#.forEach(#)";
 export extern function toItems<T>(this s: Set<T>): T[] from "Array.from(#.values())";
+
+// ===== BitSet<E> =====
+// Same source as the native prelude: a set of enum members in one word, bit
+// position = member ordinal. int32 keeps this a plain Number on this backend —
+// no BigInt, so the operators are the machine's own.
+export distinct type BitSet<E> = int32;
+
+export function has<E>(this self: BitSet<E>, member: E): boolean {
+	return (((self as int32) >> (member as int32)) & 1) != 0;
+}
+
+export function incl<E>(this self: BitSet<E>, member: E): BitSet<E> {
+	return ((self as int32) | ((1 as int32) << (member as int32))) as BitSet<E>;
+}
+
+export function excl<E>(this self: BitSet<E>, member: E): BitSet<E> {
+	return ((self as int32) & ~((1 as int32) << (member as int32))) as BitSet<E>;
+}
+
+export function isEmpty<E>(this self: BitSet<E>): boolean {
+	return (self as int32) == 0;
+}

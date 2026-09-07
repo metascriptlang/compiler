@@ -33,6 +33,7 @@ import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
+import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerVoidBind } from "./desugar/voidBindLower";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
@@ -171,6 +172,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// backends are inverse directions of the same T|null lowering. Keeps JS on
 	// native null (platform interop) and codegen dumb.
 	if (jsBackend) { result = unwrapMaybe(result, ctx); }
+	// Enum operands of a BitSet expression still carry their ordinal; turn each
+	// into its bit before any backend sees the operator.
+	result = lowerBitSet(result, ctx);
 	result = lowerDCE(result, ctx);
 	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
 	// Must trail resolveRuntimeIdents: the synthesized `Math` receiver has to
