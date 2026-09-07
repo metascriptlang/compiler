@@ -32,9 +32,9 @@ type ChildVisitor = (child: Node) => void;
 
 // Visit all child nodes of a given node (read-only, no mutation).
 export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
-	if (node === null) return;
+	if (node == null) return;
 	const cb = (n: Node): void => {
-		if (n !== null) cbRaw(n);
+		if (n != null) cbRaw(n);
 	};
 	match (node.kind) {
 		// Program root
@@ -83,7 +83,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			const d = node.data as ForOfStmtData;
 			cb(d.forOfIterable);
 			cb(d.forOfBody);
-			if (d.forOfPattern !== null) { cb(d.forOfPattern); }
+			if (d.forOfPattern != null) { cb(d.forOfPattern); }
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
@@ -340,7 +340,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
 			cb(d.assertExpr);
-			if (d.assertMessageExpr !== null) cb(d.assertMessageExpr);
+			if (d.assertMessageExpr != null) cb(d.assertMessageExpr);
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;
@@ -352,7 +352,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			if (d.propInitializer !== null) { cb(d.propInitializer); }
+			if (d.propInitializer != null) { cb(d.propInitializer); }
 		},
 		NodeKind.ArrayPattern => {
 			const d = node.data as ArrayPatternData;
@@ -363,7 +363,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			}
 			i = 0;
 			while (i < d.patternDefaults.length) {
-				if (d.patternDefaults[i] !== null) { cb(d.patternDefaults[i]); }
+				if (d.patternDefaults[i] != null) { cb(d.patternDefaults[i]); }
 				i += 1;
 			}
 		},
@@ -377,8 +377,8 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		},
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
-			if (d.propAlias !== null) { cb(d.propAlias); }
-			if (d.propDefault !== null) { cb(d.propDefault); }
+			if (d.propAlias != null) { cb(d.propAlias); }
+			if (d.propDefault != null) { cb(d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
 			const d = node.data as TypeGenericData;
@@ -414,7 +414,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 				cb(d.typExprParams[i]);
 				i += 1;
 			}
-			if (d.typExprReturn !== null) { cb(d.typExprReturn); }
+			if (d.typExprReturn != null) { cb(d.typExprReturn); }
 		},
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
@@ -423,8 +423,8 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 				cb(d.typExprFieldTypes[i]);
 				i += 1;
 			}
-			if (d.typExprIndexKey !== null) { cb(d.typExprIndexKey); }
-			if (d.typExprIndexValue !== null) { cb(d.typExprIndexValue); }
+			if (d.typExprIndexKey != null) { cb(d.typExprIndexKey); }
+			if (d.typExprIndexValue != null) { cb(d.typExprIndexValue); }
 			// Per-field decorators (V2): each inner array holds 0+ decorator nodes
 			let di = 0;
 			while (di < d.typExprFieldDecorators.length) {

@@ -81,7 +81,7 @@ export function synthToken(loc: SourceLocation): Token {
 }
 
 export function mkNumber(val: number, loc: SourceLocation): Node {
-	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0, intVal: val as int64 }, synthToken(loc));
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 != 0, intVal: val as int64 }, synthToken(loc));
 }
 
 export function mkString(val: string, loc: SourceLocation): Node {
@@ -161,14 +161,14 @@ function mapTypes(types: Type[], loc: SourceLocation, visited: Type[]): Node[] {
 
 // Pick t.typeName when set, else the kind-specific fallback sentinel.
 function nameOrDefault(t: Type, fallback: string): string {
-	return t.typeName !== "" ? t.typeName : fallback;
+	return t.typeName != "" ? t.typeName : fallback;
 }
 
 // Cycle detection — linear scan over the visiting stack (typically <10 deep).
 // Reference identity: same Type instance, not structural equality.
 function isVisiting(visited: Type[], t: Type): boolean {
 	for (const v of visited) {
-		if (v === t) return true;
+		if (v == t) return true;
 	}
 	return false;
 }
@@ -195,32 +195,32 @@ function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
 
-	if (t.sym === null || t.sym.declNode === null) return out;
+	if (t.sym == null || t.sym.declNode == null) return out;
 	let decl = t.sym.declNode;
 	// Peel ExportDecl wrapper if present (e.g., `export class User { ... }`)
-	if (decl.kind === NodeKind.ExportDecl) {
+	if (decl.kind == NodeKind.ExportDecl) {
 		const ed = decl.data as ExportDeclData;
-		if (ed.exportedDecl !== null) decl = ed.exportedDecl;
+		if (ed.exportedDecl != null) decl = ed.exportedDecl;
 	}
-	if (decl.kind !== NodeKind.ClassDecl) return out;
+	if (decl.kind != NodeKind.ClassDecl) return out;
 
 	const cd = decl.data as ClassDeclData;
 	// Walk classBody, collect (propName → decorators) for non-static properties
 	for (const member of cd.classBody) {
-		if (member === null) continue;
+		if (member == null) continue;
 		let inner = member;
 		let decorators: Node[] = [];
-		if (member.kind === NodeKind.DecoratedDecl) {
+		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
 			decorators = dd.decorators;
-			if (dd.decoratedNode !== null) inner = dd.decoratedNode;
+			if (dd.decoratedNode != null) inner = dd.decoratedNode;
 		}
-		if (inner.kind !== NodeKind.PropertyDecl) continue;
+		if (inner.kind != NodeKind.PropertyDecl) continue;
 		const pd = inner.data as PropertyDeclData;
 		if (pd.propIsStatic) continue;
 		// Find the field index in t.typeNames and store decorators at that slot
 		for (let j = 0; j < t.typeNames.length; j = j + 1) {
-			if (t.typeNames[j] === pd.propName) {
+			if (t.typeNames[j] == pd.propName) {
 				out[j] = decorators;
 				break;
 			}
@@ -255,7 +255,7 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 // the macro VM somehow sees a mid-substitution Type, the raw flags would
 // add 1048576 to the reported size. Mask defensively.
 function arrayToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
-	const size: number = t.kind === TypeKind.SizedArray
+	const size: number = t.kind == TypeKind.SizedArray
 		? (t.typeFlags & ~TypeFlag.Substituting) as number
 		: -1;
 	return createNodeAt(NodeKind.TypeArray, {
@@ -283,12 +283,12 @@ function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 // Lazy-instantiate pattern from src/transform/lowering/destructorLifting.ms:128 —
 // idempotent (gated on typeReturn === null), proven elsewhere in compiler.
 function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
-	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Union) {
-		if (t.typeReturn === null) {
+	if (t.typeExtra != null && t.typeExtra.kind == TypeKind.Union) {
+		if (t.typeReturn == null) {
 			const decl = getGenericDecl(t.typeName);
-			if (decl !== "") instantiateGenericBody(t, decl);
+			if (decl != "") instantiateGenericBody(t, decl);
 		}
-		if (t.typeReturn !== null && t.typeReturn.kind === TypeKind.Union) {
+		if (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union) {
 			return unionToAst(t.typeReturn, loc, visited);
 		}
 	}
@@ -327,7 +327,7 @@ function unionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	let discField: string = "";
 	const variantKeys: string[] = [];
 	let discKind: string = "";
-	if (t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0) {
+	if (t.typeExtra != null && t.typeNames != null && t.typeNames.length > 0) {
 		discField = t.typeNames[0];
 		// typeNames[1+] hold the variant keys ("K.A","K.B" for enum disc;
 		// "true","false" for boolean disc). Format kept verbatim — encode
@@ -387,10 +387,10 @@ function fallbackTypeName(t: Type, loc: SourceLocation): Node {
 // to break the cycle (e.g., `Tree { children: Tree[] }` → outer Tree expands,
 // inner reference back to Tree hits the visited check and emits Identifier("Tree")).
 function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]): Node {
-	if (t === null) return atomicTypeNode("<null>", loc);
+	if (t == null) return atomicTypeNode("<null>", loc);
 
 	const atomicName = atomicTypeName(t);
-	if (atomicName !== "") return atomicTypeNode(atomicName, loc);
+	if (atomicName != "") return atomicTypeNode(atomicName, loc);
 
 	// Cycle break — emit name placeholder and stop descending.
 	// Pre-push check so Alias peel below also benefits (e.g., `type X = X`).
@@ -400,7 +400,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 
 	visited.push(t);
 	const result: Node = match (t.kind) {
-		TypeKind.Alias => t.typeReturn !== null
+		TypeKind.Alias => t.typeReturn != null
 			? mapTypeToAstWith(t.typeReturn, loc, visited)
 			: fallbackTypeName(t, loc),
 		// Maybe<T> is the checker's INTERNAL carrier for `T | null` — macros
@@ -408,7 +408,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		// Leaking the carrier made codec macros treat nullable fields as
 		// nested structs and emit garbage C (bug: JSON.parse<T> with a
 		// `string | null` field).
-		TypeKind.Struct when (isMaybeType(t) && t.typeReturn !== null) => maybeToUnionAst(t, loc, visited),
+		TypeKind.Struct when (isMaybeType(t) && t.typeReturn != null) => maybeToUnionAst(t, loc, visited),
 		TypeKind.Struct => structToAst(t, loc, visited),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
 		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
@@ -422,7 +422,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		// fell through to the int-cast jsonInt branch, generating bad C
 		// (cast msString → int64). See bug028 for the regression test.
 		TypeKind.StringLiteral => createNodeAt(NodeKind.StringLiteral, { value: nameOrDefault(t, "") }, loc),
-		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") === "true" }, loc),
+		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") == "true" }, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
 			=> modifierToAst(t, loc, visited),
 		_ => fallbackTypeName(t, loc),
@@ -481,7 +481,7 @@ function setBool(objHeap: RaiserObjectHeap, h: number, name: string, val: boolea
 }
 
 function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node | null): void {
-	if (child === null) {
+	if (child == null) {
 		// Represent null Node fields as RaiserValue.Nil — readNode handles this on the way back
 		heapObjectSetField(objHeap, h, name, raiserNil());
 		return;
@@ -562,19 +562,19 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 // details (auto-deref of class pointers, implicit numeric casts).
 export function stripMacroArgWrappers(node: Node): Node {
 	let n = node;
-	while (n !== null) {
-		if (n.kind === NodeKind.HiddenDeref || n.kind === NodeKind.HiddenAddr) {
+	while (n != null) {
+		if (n.kind == NodeKind.HiddenDeref || n.kind == NodeKind.HiddenAddr) {
 			n = (n.data as HiddenDerefData).expr;
-		} else if (n.kind === NodeKind.HiddenStdConv || n.kind === NodeKind.HiddenSubConv) {
+		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
-		} else if (n.kind === NodeKind.ObjectLiteral && isMaybeType(n.nodeType)) {
+		} else if (n.kind == NodeKind.ObjectLiteral && isMaybeType(n.nodeType)) {
 			// synthMaybeWrap (checker/fit.ms) materializes T → Maybe<T> as a
 			// carrier literal { value, present } instead of a Hidden conv, so
 			// the kind test above cannot see it. Unwrap by TYPE: only the
 			// checker can stamp IsMaybe on an object literal — a user cannot
 			// spell the carrier — so this never peels source the author wrote.
 			const d = n.data as ObjectLiteralData;
-			if (d.keys.length === 2 && d.keys[0] === "value" && d.keys[1] === "present") {
+			if (d.keys.length == 2 && d.keys[0] == "value" && d.keys[1] == "present") {
 				n = d.properties[0];
 			} else {
 				break;
@@ -632,7 +632,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			if (node.resolvedSym !== null && (node.flags & NodeFlag.BoundSym) !== 0) {
+			if (node.resolvedSym != null && (node.flags & NodeFlag.BoundSym) != 0) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym)));
 			}
 		},
@@ -679,7 +679,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as ObjectLiteralData;
 			setNodes(objHeap, arrHeap, handle, "properties", d.properties);
 			setStrs(objHeap, arrHeap, handle, "keys", d.keys);
-			if (d.keyLocations !== null) {
+			if (d.keyLocations != null) {
 				setLocs(objHeap, arrHeap, handle, "keyLocations", d.keyLocations);
 			}
 		},
@@ -1124,10 +1124,10 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	// Forward-only: macros READ value.nodeType. Reverse path (valueToNode) ignores
 	// nodeType — checker re-resolves types on macro output, so round-trip
 	// asymmetry is intentional.
-	if (node.nodeType !== null) {
+	if (node.nodeType != null) {
 		const typeAst = mapTypeToAst(node.nodeType, node.location);
 		setNode(objHeap, arrHeap, handle, "nodeType", typeAst);
-	} else if (node.nodeTypeAst !== null) {
+	} else if (node.nodeTypeAst != null) {
 		// Mirror of nodeToASTLiteral's nodeTypeAst fallback (expand.ms) — the
 		// two serialization paths must stay in sync or a carrier node loses
 		// its type on whichever path lacks the fallback.
@@ -1141,7 +1141,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	// need it can re-resolve via the parent module.
 	//
 	// Forward-only like nodeType. valueToNode ignores `resolvedSym`.
-	if (node.resolvedSym !== null) {
+	if (node.resolvedSym != null) {
 		heapObjectSetField(objHeap, handle, "resolvedSym", symbolToValue(node.resolvedSym, objHeap));
 	}
 
@@ -1152,7 +1152,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 
 function readStr(objHeap: RaiserObjectHeap, h: number, name: string): string {
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind === RaiserValueKind.String) return v.strVal;
+	if (v.kind == RaiserValueKind.String) return v.strVal;
 	return "";
 }
 
@@ -1167,8 +1167,8 @@ function readInt(objHeap: RaiserObjectHeap, h: number, name: string): number {
 
 function readFloat(objHeap: RaiserObjectHeap, h: number, name: string): number {
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind === RaiserValueKind.Float) return v.floatVal;
-	if (v.kind === RaiserValueKind.Int) return v.intVal + 0.0;
+	if (v.kind == RaiserValueKind.Float) return v.floatVal;
+	if (v.kind == RaiserValueKind.Int) return v.intVal + 0.0;
 	return 0.0;
 }
 
@@ -1180,20 +1180,20 @@ function readBool(objHeap: RaiserObjectHeap, h: number, name: string): boolean {
 	// so without this leniency, BooleanLiteral fields stored from comparison
 	// expressions silently default to false. See bug026.
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind === RaiserValueKind.Bool || v.kind === RaiserValueKind.Int) return v.intVal !== 0;
+	if (v.kind == RaiserValueKind.Bool || v.kind == RaiserValueKind.Int) return v.intVal != 0;
 	return false;
 }
 
 function readNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node {
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind === RaiserValueKind.Nil) return null as unknown as Node;
+	if (v.kind == RaiserValueKind.Nil) return null as unknown as Node;
 	return valueToNode(v, objHeap, arrHeap, fallbackLoc);
 }
 
 function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: Node[] = [];
-	if (v.kind !== RaiserValueKind.Array) return result;
+	if (v.kind != RaiserValueKind.Array) return result;
 	const handle = v.intVal;
 	const len = heapArrayLen(arrHeap, handle);
 	let i = 0;
@@ -1208,13 +1208,13 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: numbe
 function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): string[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: string[] = [];
-	if (v.kind !== RaiserValueKind.Array) return result;
+	if (v.kind != RaiserValueKind.Array) return result;
 	const handle = v.intVal;
 	const len = heapArrayLen(arrHeap, handle);
 	let i = 0;
 	while (i < len) {
 		const elem = heapArrayGet(arrHeap, handle, i);
-		if (elem.kind === RaiserValueKind.String) {
+		if (elem.kind == RaiserValueKind.String) {
 			result.push(elem.strVal);
 		} else {
 			result.push("");
@@ -1227,13 +1227,13 @@ function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): SourceLocation[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: SourceLocation[] = [];
-	if (v.kind !== RaiserValueKind.Array) return result;
+	if (v.kind != RaiserValueKind.Array) return result;
 	const handle = v.intVal;
 	const len = heapArrayLen(arrHeap, handle);
 	let i = 0;
 	while (i < len) {
 		const elem = heapArrayGet(arrHeap, handle, i);
-		if (elem.kind === RaiserValueKind.Object) {
+		if (elem.kind == RaiserValueKind.Object) {
 			result.push(readLoc(objHeap, elem.intVal));
 		}
 		i = i + 1;
@@ -1256,14 +1256,14 @@ function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
 function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node[][] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: Node[][] = [];
-	if (v.kind !== RaiserValueKind.Array) return result;
+	if (v.kind != RaiserValueKind.Array) return result;
 	const handle = v.intVal;
 	const len = heapArrayLen(arrHeap, handle);
 	let i = 0;
 	while (i < len) {
 		const elem = heapArrayGet(arrHeap, handle, i);
 		const inner: Node[] = [];
-		if (elem.kind === RaiserValueKind.Array) {
+		if (elem.kind == RaiserValueKind.Array) {
 			const ih = elem.intVal;
 			const ilen = heapArrayLen(arrHeap, ih);
 			let j = 0;
@@ -1282,7 +1282,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 	return match (val.kind) {
 		RaiserValueKind.Int => mkNumber(val.intVal, fallbackLoc),
 		RaiserValueKind.Float => mkNumber(val.floatVal, fallbackLoc),
-		RaiserValueKind.Bool => mkBool(val.intVal !== 0, fallbackLoc),
+		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
 		RaiserValueKind.String => mkString(val.strVal, fallbackLoc),
 		RaiserValueKind.Nil => mkNull(fallbackLoc),
 		RaiserValueKind.Array => {
@@ -1301,22 +1301,22 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			const handle = val.intVal;
 			// Check for "kind" field — if present, this is a serialized Node
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
-			if (kindField.kind === RaiserValueKind.Int) {
+			if (kindField.kind == RaiserValueKind.Int) {
 				const out = readNodeFromObject(handle, kindField.intVal as NodeKind, objHeap, arrHeap, fallbackLoc);
 				// Preserve type-AST hint so subsequent macro expansions see the
 				// original arg's type info (Node.nodeType is a Type and can't
 				// be round-tripped; the type-AST Node form survives via
 				// nodeTypeAst). Fixes Bug 6 nested-macro re-expansion path.
-				if (out !== null) {
+				if (out != null) {
 					const ntField = heapObjectGetField(objHeap, handle, "nodeType");
-					if (ntField.kind === RaiserValueKind.Object) {
+					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 					}
 					// One flag, by name, not the whole word: a macro that could set
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
 					const rawFlags = readInt(objHeap, handle, "flags") as int32;
-					if ((rawFlags & NodeFlag.StaticStorage) !== 0) {
+					if ((rawFlags & NodeFlag.StaticStorage) != 0) {
 						out.flags = out.flags | NodeFlag.StaticStorage;
 					}
 				}
@@ -1354,7 +1354,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			// it was asked to carry.
 			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind === RaiserValueKind.Float, intVal: value as int64, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind == RaiserValueKind.Float, intVal: value as int64, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
 		},
 		NodeKind.StringLiteral => {
 			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
@@ -1376,7 +1376,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.Identifier => {
 			const n = createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
-			if (hv.kind === RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
+			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
 				n.resolvedSym = _boundSyms[hv.intVal];
 				n.flags = n.flags | NodeFlag.BoundSym;
 			}
@@ -1924,14 +1924,14 @@ test "NumberLiteral serialization" {
 	const loc = makeLoc(5, 10);
 	const node = mkNumber(42, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	assert val.kind === RaiserValueKind.Object;
+	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal === (NodeKind.NumberLiteral as number);
+	assert kindVal.intVal == (NodeKind.NumberLiteral as number);
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
-	assert numVal.kind === RaiserValueKind.Int;
-	assert numVal.intVal === 42;
+	assert numVal.kind == RaiserValueKind.Int;
+	assert numVal.intVal == 42;
 	const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
-	assert lineVal.intVal === 5;
+	assert lineVal.intVal == 5;
 }
 
 test "NumberLiteral serialization — float stays float-boxed" {
@@ -1941,8 +1941,8 @@ test "NumberLiteral serialization — float stays float-boxed" {
 	const node = createNode(NodeKind.NumberLiteral, { value: 3.5, isFloat: true, intVal: 0 as int64 }, synthToken(loc));
 	const val = nodeToValue(node, objHeap, arrHeap);
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
-	assert numVal.kind === RaiserValueKind.Float;
-	assert numVal.floatVal === 3.5;
+	assert numVal.kind == RaiserValueKind.Float;
+	assert numVal.floatVal == 3.5;
 }
 
 test "StringLiteral serialization" {
@@ -1951,11 +1951,11 @@ test "StringLiteral serialization" {
 	const loc = makeLoc(1, 0);
 	const node = mkString("hello", loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	assert val.kind === RaiserValueKind.Object;
+	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal === (NodeKind.StringLiteral as number);
+	assert kindVal.intVal == (NodeKind.StringLiteral as number);
 	const strVal = heapObjectGetField(objHeap, val.intVal, "value");
-	assert strVal.strVal === "hello";
+	assert strVal.strVal == "hello";
 }
 
 test "BooleanLiteral serialization" {
@@ -1964,11 +1964,11 @@ test "BooleanLiteral serialization" {
 	const loc = makeLoc(1, 0);
 	const node = mkBool(true, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	assert val.kind === RaiserValueKind.Object;
+	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal === (NodeKind.BooleanLiteral as number);
+	assert kindVal.intVal == (NodeKind.BooleanLiteral as number);
 	const bVal = heapObjectGetField(objHeap, val.intVal, "boolValue");
-	assert bVal.intVal === 1;
+	assert bVal.intVal == 1;
 }
 
 test "Identifier serialization" {
@@ -1977,11 +1977,11 @@ test "Identifier serialization" {
 	const loc = makeLoc(1, 0);
 	const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
 	const val = nodeToValue(node, objHeap, arrHeap);
-	assert val.kind === RaiserValueKind.Object;
+	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal === (NodeKind.Identifier as number);
+	assert kindVal.intVal == (NodeKind.Identifier as number);
 	const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
-	assert nameVal.strVal === "foo";
+	assert nameVal.strVal == "foo";
 }
 
 test "BinaryExpr serialization" {
@@ -1994,17 +1994,17 @@ test "BinaryExpr serialization" {
 		operator: "+", left, right,
 	}, synthToken(loc));
 	const val = nodeToValue(binNode, objHeap, arrHeap);
-	assert val.kind === RaiserValueKind.Object;
+	assert val.kind == RaiserValueKind.Object;
 	const opVal = heapObjectGetField(objHeap, val.intVal, "operator");
-	assert opVal.strVal === "+";
+	assert opVal.strVal == "+";
 	const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
-	assert leftVal.kind === RaiserValueKind.Object;
+	assert leftVal.kind == RaiserValueKind.Object;
 	const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
-	assert leftKind.intVal === (NodeKind.NumberLiteral as number);
+	assert leftKind.intVal == (NodeKind.NumberLiteral as number);
 	const rightVal = heapObjectGetField(objHeap, val.intVal, "right");
-	assert rightVal.kind === RaiserValueKind.Object;
+	assert rightVal.kind == RaiserValueKind.Object;
 	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
-	assert rightKind.intVal === (NodeKind.NumberLiteral as number);
+	assert rightKind.intVal == (NodeKind.NumberLiteral as number);
 }
 
 // ===== Round-trip tests (Phase A3) =====
@@ -2015,9 +2015,9 @@ test "round-trip NumberLiteral" {
 	const orig = mkNumber(42, makeLoc(1, 0));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, orig.location);
-	assert back.kind === NodeKind.NumberLiteral;
+	assert back.kind == NodeKind.NumberLiteral;
 	const d = back.data as NumberLiteralData;
-	assert d.value === 42;
+	assert d.value == 42;
 }
 
 test "round-trip StringLiteral" {
@@ -2026,9 +2026,9 @@ test "round-trip StringLiteral" {
 	const orig = mkString("hello", makeLoc(1, 0));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, orig.location);
-	assert back.kind === NodeKind.StringLiteral;
+	assert back.kind == NodeKind.StringLiteral;
 	const d = back.data as StringLiteralData;
-	assert d.value === "hello";
+	assert d.value == "hello";
 }
 
 test "round-trip BooleanLiteral" {
@@ -2037,9 +2037,9 @@ test "round-trip BooleanLiteral" {
 	const orig = mkBool(true, makeLoc(1, 0));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, orig.location);
-	assert back.kind === NodeKind.BooleanLiteral;
+	assert back.kind == NodeKind.BooleanLiteral;
 	const d = back.data as BooleanLiteralData;
-	assert d.boolValue === true;
+	assert d.boolValue == true;
 }
 
 test "round-trip Identifier" {
@@ -2049,9 +2049,9 @@ test "round-trip Identifier" {
 	const orig = createNode(NodeKind.Identifier, { name: "myVar" }, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.Identifier;
+	assert back.kind == NodeKind.Identifier;
 	const d = back.data as IdentifierData;
-	assert d.name === "myVar";
+	assert d.name == "myVar";
 }
 
 test "round-trip BinaryExpr" {
@@ -2063,13 +2063,13 @@ test "round-trip BinaryExpr" {
 	const orig = createNode(NodeKind.BinaryExpr, { operator: "+", left, right }, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.BinaryExpr;
+	assert back.kind == NodeKind.BinaryExpr;
 	const d = back.data as BinaryExprData;
-	assert d.operator === "+";
-	assert d.left.kind === NodeKind.NumberLiteral;
-	assert d.right.kind === NodeKind.NumberLiteral;
-	assert (d.left.data as NumberLiteralData).value === 1;
-	assert (d.right.data as NumberLiteralData).value === 2;
+	assert d.operator == "+";
+	assert d.left.kind == NodeKind.NumberLiteral;
+	assert d.right.kind == NodeKind.NumberLiteral;
+	assert (d.left.data as NumberLiteralData).value == 1;
+	assert (d.right.data as NumberLiteralData).value == 2;
 }
 
 test "round-trip CallExpr with arguments" {
@@ -2083,12 +2083,12 @@ test "round-trip CallExpr with arguments" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.CallExpr;
+	assert back.kind == NodeKind.CallExpr;
 	const d = back.data as CallExprData;
-	assert d.callee.kind === NodeKind.Identifier;
-	assert d.arguments.length === 2;
-	assert d.arguments[0].kind === NodeKind.StringLiteral;
-	assert d.arguments[1].kind === NodeKind.NumberLiteral;
+	assert d.callee.kind == NodeKind.Identifier;
+	assert d.arguments.length == 2;
+	assert d.arguments[0].kind == NodeKind.StringLiteral;
+	assert d.arguments[1].kind == NodeKind.NumberLiteral;
 }
 
 test "round-trip MemberExpr" {
@@ -2101,10 +2101,10 @@ test "round-trip MemberExpr" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.MemberExpr;
+	assert back.kind == NodeKind.MemberExpr;
 	const d = back.data as MemberExprData;
-	assert d.property === "bar";
-	assert d.object.kind === NodeKind.Identifier;
+	assert d.property == "bar";
+	assert d.object.kind == NodeKind.Identifier;
 }
 
 test "round-trip BlockStmt with statements" {
@@ -2115,10 +2115,10 @@ test "round-trip BlockStmt with statements" {
 	const orig = createNode(NodeKind.BlockStmt, { statements: [ret] }, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.BlockStmt;
+	assert back.kind == NodeKind.BlockStmt;
 	const d = back.data as BlockStmtData;
-	assert d.statements.length === 1;
-	assert d.statements[0].kind === NodeKind.ReturnStmt;
+	assert d.statements.length == 1;
+	assert d.statements[0].kind == NodeKind.ReturnStmt;
 }
 
 test "round-trip IfStmt" {
@@ -2131,11 +2131,11 @@ test "round-trip IfStmt" {
 	const orig = createNode(NodeKind.IfStmt, { condition: cond, consequent: cons, alternate: alt }, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.IfStmt;
+	assert back.kind == NodeKind.IfStmt;
 	const d = back.data as IfStmtData;
-	assert d.condition.kind === NodeKind.BooleanLiteral;
-	assert d.consequent.kind === NodeKind.BlockStmt;
-	assert d.alternate.kind === NodeKind.BlockStmt;
+	assert d.condition.kind == NodeKind.BooleanLiteral;
+	assert d.consequent.kind == NodeKind.BlockStmt;
+	assert d.alternate.kind == NodeKind.BlockStmt;
 }
 
 test "round-trip VariableDecl" {
@@ -2149,12 +2149,12 @@ test "round-trip VariableDecl" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.VariableDecl;
+	assert back.kind == NodeKind.VariableDecl;
 	const d = back.data as VariableDeclData;
-	assert d.declName === "x";
-	assert d.declType === "number";
-	assert d.declKind === DeclKind.Const;
-	assert d.initializer.kind === NodeKind.NumberLiteral;
+	assert d.declName == "x";
+	assert d.declType == "number";
+	assert d.declKind == DeclKind.Const;
+	assert d.initializer.kind == NodeKind.NumberLiteral;
 }
 
 test "round-trip FunctionDecl" {
@@ -2169,13 +2169,13 @@ test "round-trip FunctionDecl" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.FunctionDecl;
+	assert back.kind == NodeKind.FunctionDecl;
 	const d = back.data as FunctionDeclData;
-	assert d.fnName === "add";
-	assert d.params.length === 2;
-	assert d.params[0] === "a";
-	assert d.params[1] === "b";
-	assert d.fnReturnType === "number";
+	assert d.fnName == "add";
+	assert d.params.length == 2;
+	assert d.params[0] == "a";
+	assert d.params[1] == "b";
+	assert d.fnReturnType == "number";
 }
 
 test "round-trip ImportDecl" {
@@ -2188,12 +2188,12 @@ test "round-trip ImportDecl" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.ImportDecl;
+	assert back.kind == NodeKind.ImportDecl;
 	const d = back.data as ImportDeclData;
-	assert d.importNames.length === 2;
-	assert d.importNames[0] === "X";
-	assert d.importAliases[1] === "Z";
-	assert d.importSource === "./mod";
+	assert d.importNames.length == 2;
+	assert d.importNames[0] == "X";
+	assert d.importAliases[1] == "Z";
+	assert d.importSource == "./mod";
 }
 
 test "round-trip Program with multiple statements" {
@@ -2208,11 +2208,11 @@ test "round-trip Program with multiple statements" {
 	const orig = createNode(NodeKind.Program, { programStmts: [decl, ret] }, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.Program;
+	assert back.kind == NodeKind.Program;
 	const d = back.data as ProgramData;
-	assert d.programStmts.length === 2;
-	assert d.programStmts[0].kind === NodeKind.VariableDecl;
-	assert d.programStmts[1].kind === NodeKind.ReturnStmt;
+	assert d.programStmts.length == 2;
+	assert d.programStmts[0].kind == NodeKind.VariableDecl;
+	assert d.programStmts[1].kind == NodeKind.ReturnStmt;
 }
 
 // ===== A2 Day 1 — SpliceMany schema round-trip =====
@@ -2232,13 +2232,13 @@ test "round-trip SpliceMany with multiple decls" {
 	const orig = createNodeAt(NodeKind.SpliceMany, { spliceNodes: [a, b] }, loc);
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.SpliceMany;
+	assert back.kind == NodeKind.SpliceMany;
 	const d = back.data as SpliceManyData;
-	assert d.spliceNodes.length === 2;
-	assert d.spliceNodes[0].kind === NodeKind.VariableDecl;
-	assert (d.spliceNodes[0].data as VariableDeclData).declName === "a";
-	assert d.spliceNodes[1].kind === NodeKind.VariableDecl;
-	assert (d.spliceNodes[1].data as VariableDeclData).declName === "b";
+	assert d.spliceNodes.length == 2;
+	assert d.spliceNodes[0].kind == NodeKind.VariableDecl;
+	assert (d.spliceNodes[0].data as VariableDeclData).declName == "a";
+	assert d.spliceNodes[1].kind == NodeKind.VariableDecl;
+	assert (d.spliceNodes[1].data as VariableDeclData).declName == "b";
 }
 
 test "round-trip empty SpliceMany" {
@@ -2248,8 +2248,8 @@ test "round-trip empty SpliceMany" {
 	const orig = createNodeAt(NodeKind.SpliceMany, { spliceNodes: [] }, loc);
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.SpliceMany;
-	assert (back.data as SpliceManyData).spliceNodes.length === 0;
+	assert back.kind == NodeKind.SpliceMany;
+	assert (back.data as SpliceManyData).spliceNodes.length == 0;
 }
 
 test "round-trip nested expressions" {
@@ -2265,15 +2265,15 @@ test "round-trip nested expressions" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.BinaryExpr;
+	assert back.kind == NodeKind.BinaryExpr;
 	const outer = back.data as BinaryExprData;
-	assert outer.operator === "*";
-	assert outer.left.kind === NodeKind.BinaryExpr;
+	assert outer.operator == "*";
+	assert outer.left.kind == NodeKind.BinaryExpr;
 	const innerBack = outer.left.data as BinaryExprData;
-	assert innerBack.operator === "+";
-	assert (innerBack.left.data as NumberLiteralData).value === 1;
-	assert (innerBack.right.data as NumberLiteralData).value === 2;
-	assert (outer.right.data as NumberLiteralData).value === 3;
+	assert innerBack.operator == "+";
+	assert (innerBack.left.data as NumberLiteralData).value == 1;
+	assert (innerBack.right.data as NumberLiteralData).value == 2;
+	assert (outer.right.data as NumberLiteralData).value == 3;
 }
 
 test "round-trip MatchCase with guard" {
@@ -2293,12 +2293,12 @@ test "round-trip MatchCase with guard" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.MatchCase;
+	assert back.kind == NodeKind.MatchCase;
 	const d = back.data as MatchCaseData;
-	assert d.casePatterns.length === 1;
-	assert d.caseGuard !== null;
-	assert d.caseGuard.kind === NodeKind.BinaryExpr;
-	assert (d.caseGuard.data as BinaryExprData).operator === ">";
+	assert d.casePatterns.length == 1;
+	assert d.caseGuard != null;
+	assert d.caseGuard.kind == NodeKind.BinaryExpr;
+	assert (d.caseGuard.data as BinaryExprData).operator == ">";
 }
 
 test "round-trip MatchCase without guard (null)" {
@@ -2312,9 +2312,9 @@ test "round-trip MatchCase without guard (null)" {
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
-	assert back.kind === NodeKind.MatchCase;
+	assert back.kind == NodeKind.MatchCase;
 	const d = back.data as MatchCaseData;
-	assert d.caseGuard === null;
+	assert d.caseGuard == null;
 }
 
 // ===== mapTypeToAst tests — Day 1 (atomic types) =====
@@ -2338,39 +2338,39 @@ function makePrimType(k: TypeKind): Type {
 
 test "mapTypeToAst — number primitive emits Identifier(\"number\")" {
 	const out = mapTypeToAst(makePrimType(TypeKind.Number), makeLoc(1, 0));
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "number";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "number";
 }
 
 test "mapTypeToAst — string primitive emits Identifier(\"string\")" {
 	const out = mapTypeToAst(makePrimType(TypeKind.String), makeLoc(1, 0));
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "string";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "string";
 }
 
 test "mapTypeToAst — boolean primitive emits Identifier(\"boolean\")" {
 	const out = mapTypeToAst(makePrimType(TypeKind.Boolean), makeLoc(1, 0));
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "boolean";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "boolean";
 }
 
 test "mapTypeToAst — int32 primitive emits Identifier(\"int32\")" {
 	const out = mapTypeToAst(makePrimType(TypeKind.Int32), makeLoc(1, 0));
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "int32";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — float64 primitive emits Identifier(\"float64\")" {
 	const out = mapTypeToAst(makePrimType(TypeKind.Float64), makeLoc(1, 0));
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "float64";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "float64";
 }
 
 test "mapTypeToAst — null type emits Identifier(\"<null>\") sentinel" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(null, loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "<null>";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "<null>";
 }
 
 test "mapTypeToAst — not-yet-handled kind falls back to typeName when set" {
@@ -2379,15 +2379,15 @@ test "mapTypeToAst — not-yet-handled kind falls back to typeName when set" {
 	const t = makePrimType(TypeKind.Enum);
 	t.typeName = "Color";
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "Color";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "Color";
 }
 
 test "mapTypeToAst — not-yet-handled kind with no typeName emits Identifier(\"unknown\")" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makePrimType(TypeKind.Enum), loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "unknown";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "unknown";
 }
 
 // ===== mapTypeToAst tests — Day 2 (Struct → TypeObject) =====
@@ -2404,26 +2404,26 @@ test "mapTypeToAst — Struct emits TypeObject with field names + types" {
 	const loc = makeLoc(1, 0);
 	const t = makeStructType("User", ["name", "age"], [makePrimType(TypeKind.String), makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldNames.length === 2;
-	assert d.typExprFieldNames[0] === "name";
-	assert d.typExprFieldNames[1] === "age";
-	assert d.typExprFieldTypes.length === 2;
-	assert d.typExprFieldTypes[0].kind === NodeKind.Identifier;
-	assert (d.typExprFieldTypes[0].data as IdentifierData).name === "string";
-	assert (d.typExprFieldTypes[1].data as IdentifierData).name === "int32";
-	assert d.typExprIndexKey === null;
-	assert d.typExprIndexValue === null;
+	assert d.typExprFieldNames.length == 2;
+	assert d.typExprFieldNames[0] == "name";
+	assert d.typExprFieldNames[1] == "age";
+	assert d.typExprFieldTypes.length == 2;
+	assert d.typExprFieldTypes[0].kind == NodeKind.Identifier;
+	assert (d.typExprFieldTypes[0].data as IdentifierData).name == "string";
+	assert (d.typExprFieldTypes[1].data as IdentifierData).name == "int32";
+	assert d.typExprIndexKey == null;
+	assert d.typExprIndexValue == null;
 }
 
 test "mapTypeToAst — empty Struct emits TypeObject with empty arrays" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeStructType("Empty", [], []), loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldNames.length === 0;
-	assert d.typExprFieldTypes.length === 0;
+	assert d.typExprFieldNames.length == 0;
+	assert d.typExprFieldTypes.length == 0;
 }
 
 test "mapTypeToAst — nested Struct recurses into TypeObject field types" {
@@ -2431,25 +2431,25 @@ test "mapTypeToAst — nested Struct recurses into TypeObject field types" {
 	const inner = makeStructType("Inner", ["x"], [makePrimType(TypeKind.Int32)]);
 	const outer = makeStructType("Outer", ["payload"], [inner]);
 	const out = mapTypeToAst(outer, loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldTypes.length === 1;
-	assert d.typExprFieldTypes[0].kind === NodeKind.TypeObject;
+	assert d.typExprFieldTypes.length == 1;
+	assert d.typExprFieldTypes[0].kind == NodeKind.TypeObject;
 	const innerData = d.typExprFieldTypes[0].data as TypeObjectData;
-	assert innerData.typExprFieldNames[0] === "x";
-	assert (innerData.typExprFieldTypes[0].data as IdentifierData).name === "int32";
+	assert innerData.typExprFieldNames[0] == "x";
+	assert (innerData.typExprFieldTypes[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — anonymous Struct (empty typeName) still emits TypeObject" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeStructType("", ["v"], [makePrimType(TypeKind.Boolean)]), loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldNames[0] === "v";
-	assert (d.typExprFieldTypes[0].data as IdentifierData).name === "boolean";
+	assert d.typExprFieldNames[0] == "v";
+	assert (d.typExprFieldTypes[0].data as IdentifierData).name == "boolean";
 	// V2: decorators array initialized empty for non-class types
-	assert d.typExprFieldDecorators.length === 1;
-	assert d.typExprFieldDecorators[0].length === 0;
+	assert d.typExprFieldDecorators.length == 1;
+	assert d.typExprFieldDecorators[0].length == 0;
 }
 
 // ===== mapTypeToAst tests — V2 (decorators on class fields) =====
@@ -2463,7 +2463,7 @@ function makeDecoratedField(propName: string, propType: string, decorators: Node
 		propVisibility: "",
 		propInitializer: null as unknown as Node,
 	}, loc);
-	if (decorators.length === 0) return propNode;
+	if (decorators.length == 0) return propNode;
 	return createNodeAt(NodeKind.DecoratedDecl, {
 		decorators, decoratedNode: propNode,
 	}, loc);
@@ -2498,14 +2498,14 @@ test "mapTypeToAst — class field with @rename decorator surfaces in typExprFie
 	}, loc);
 	const t = makeClassWithDecoratedFields("Doc", ["id", "name"], [[renameDecorator], []]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators.length === 2;
+	assert d.typExprFieldDecorators.length == 2;
 	// Field 0 (id) has the rename decorator
-	assert d.typExprFieldDecorators[0].length === 1;
-	assert d.typExprFieldDecorators[0][0].kind === NodeKind.CallExpr;
+	assert d.typExprFieldDecorators[0].length == 1;
+	assert d.typExprFieldDecorators[0][0].kind == NodeKind.CallExpr;
 	// Field 1 (name) has none
-	assert d.typExprFieldDecorators[1].length === 0;
+	assert d.typExprFieldDecorators[1].length == 0;
 }
 
 test "mapTypeToAst — class with multiple decorators on one field preserves order" {
@@ -2515,9 +2515,9 @@ test "mapTypeToAst — class with multiple decorators on one field preserves ord
 	const t = makeClassWithDecoratedFields("Item", ["v"], [[dec1, dec2]]);
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators[0].length === 2;
-	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name === "skip";
-	assert (d.typExprFieldDecorators[0][1].data as IdentifierData).name === "validate";
+	assert d.typExprFieldDecorators[0].length == 2;
+	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name == "skip";
+	assert (d.typExprFieldDecorators[0][1].data as IdentifierData).name == "validate";
 }
 
 test "mapTypeToAst — non-class Struct (interface-style, no declNode) gets empty decorators" {
@@ -2526,9 +2526,9 @@ test "mapTypeToAst — non-class Struct (interface-style, no declNode) gets empt
 	// No sym/declNode set
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators.length === 2;
-	assert d.typExprFieldDecorators[0].length === 0;
-	assert d.typExprFieldDecorators[1].length === 0;
+	assert d.typExprFieldDecorators.length == 2;
+	assert d.typExprFieldDecorators[0].length == 0;
+	assert d.typExprFieldDecorators[1].length == 0;
 }
 
 test "mapTypeToAst — methods in classBody are skipped (V2 scope = fields only)" {
@@ -2562,9 +2562,9 @@ test "mapTypeToAst — methods in classBody are skipped (V2 scope = fields only)
 	t.sym.declNode = classDecl;
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators.length === 1;
-	assert d.typExprFieldDecorators[0].length === 1;  // method ignored, only field's decorator surfaces
-	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name === "rename";
+	assert d.typExprFieldDecorators.length == 1;
+	assert d.typExprFieldDecorators[0].length == 1;  // method ignored, only field's decorator surfaces
+	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name == "rename";
 }
 
 test "mapTypeToAst — class wrapped in ExportDecl peels through to find class body" {
@@ -2578,8 +2578,8 @@ test "mapTypeToAst — class wrapped in ExportDecl peels through to find class b
 	t.sym.declNode = exportDecl;
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators[0].length === 1;
-	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name === "validate";
+	assert d.typExprFieldDecorators[0].length == 1;
+	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name == "validate";
 }
 
 // ===== mapTypeToAst tests — Day 3 (Array / SizedArray / Span → TypeArray) =====
@@ -2594,29 +2594,29 @@ function makeArrayType(kind: TypeKind, element: Type, size: int32): Type {
 test "mapTypeToAst — Array<T> emits TypeArray with size=-1" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeArrayType(TypeKind.Array, makePrimType(TypeKind.Int32), 0), loc);
-	assert out.kind === NodeKind.TypeArray;
+	assert out.kind == NodeKind.TypeArray;
 	const d = out.data as TypeArrayData;
-	assert d.typExprSize === -1;
-	assert d.typExprElement.kind === NodeKind.Identifier;
-	assert (d.typExprElement.data as IdentifierData).name === "int32";
+	assert d.typExprSize == -1;
+	assert d.typExprElement.kind == NodeKind.Identifier;
+	assert (d.typExprElement.data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — SizedArray<T, N> emits TypeArray with size=N" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeArrayType(TypeKind.SizedArray, makePrimType(TypeKind.Float64), 16), loc);
-	assert out.kind === NodeKind.TypeArray;
+	assert out.kind == NodeKind.TypeArray;
 	const d = out.data as TypeArrayData;
-	assert d.typExprSize === 16;
-	assert (d.typExprElement.data as IdentifierData).name === "float64";
+	assert d.typExprSize == 16;
+	assert (d.typExprElement.data as IdentifierData).name == "float64";
 }
 
 test "mapTypeToAst — Span<T> emits TypeArray with size=-1" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeArrayType(TypeKind.Span, makePrimType(TypeKind.String), 0), loc);
-	assert out.kind === NodeKind.TypeArray;
+	assert out.kind == NodeKind.TypeArray;
 	const d = out.data as TypeArrayData;
-	assert d.typExprSize === -1;
-	assert (d.typExprElement.data as IdentifierData).name === "string";
+	assert d.typExprSize == -1;
+	assert (d.typExprElement.data as IdentifierData).name == "string";
 }
 
 test "mapTypeToAst — Array<Array<T>> emits nested TypeArray" {
@@ -2624,11 +2624,11 @@ test "mapTypeToAst — Array<Array<T>> emits nested TypeArray" {
 	const inner = makeArrayType(TypeKind.Array, makePrimType(TypeKind.Int32), 0);
 	const outer = makeArrayType(TypeKind.Array, inner, 0);
 	const out = mapTypeToAst(outer, loc);
-	assert out.kind === NodeKind.TypeArray;
+	assert out.kind == NodeKind.TypeArray;
 	const d = out.data as TypeArrayData;
-	assert d.typExprElement.kind === NodeKind.TypeArray;
+	assert d.typExprElement.kind == NodeKind.TypeArray;
 	const innerData = d.typExprElement.data as TypeArrayData;
-	assert (innerData.typExprElement.data as IdentifierData).name === "int32";
+	assert (innerData.typExprElement.data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — SizedArray with Substituting flag bit masked from size" {
@@ -2637,7 +2637,7 @@ test "mapTypeToAst — SizedArray with Substituting flag bit masked from size" {
 	t.typeFlags = (8 + TypeFlag.Substituting) as int32;
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeArrayData;
-	assert d.typExprSize === 8;
+	assert d.typExprSize == 8;
 }
 
 test "mapTypeToAst — Array<Struct> embeds TypeObject as element" {
@@ -2645,11 +2645,11 @@ test "mapTypeToAst — Array<Struct> embeds TypeObject as element" {
 	const struct = makeStructType("Item", ["id"], [makePrimType(TypeKind.Int32)]);
 	const arr = makeArrayType(TypeKind.Array, struct, 0);
 	const out = mapTypeToAst(arr, loc);
-	assert out.kind === NodeKind.TypeArray;
+	assert out.kind == NodeKind.TypeArray;
 	const d = out.data as TypeArrayData;
-	assert d.typExprElement.kind === NodeKind.TypeObject;
+	assert d.typExprElement.kind == NodeKind.TypeObject;
 	const elemData = d.typExprElement.data as TypeObjectData;
-	assert elemData.typExprFieldNames[0] === "id";
+	assert elemData.typExprFieldNames[0] == "id";
 }
 
 // ===== mapTypeToAst tests — Day 4 (GenericInstance / GenericParam) =====
@@ -2671,41 +2671,41 @@ test "mapTypeToAst — GenericInstance Container<int32> emits TypeGeneric" {
 	const loc = makeLoc(1, 0);
 	const t = makeGenericInstance("Container", [makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert d.typExprBase.kind === NodeKind.Identifier;
-	assert (d.typExprBase.data as IdentifierData).name === "Container";
-	assert d.typExprArgs.length === 1;
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert d.typExprBase.kind == NodeKind.Identifier;
+	assert (d.typExprBase.data as IdentifierData).name == "Container";
+	assert d.typExprArgs.length == 1;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — GenericInstance Map<string, int32> emits two-arg TypeGeneric" {
 	const loc = makeLoc(1, 0);
 	const t = makeGenericInstance("Map", [makePrimType(TypeKind.String), makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Map";
-	assert d.typExprArgs.length === 2;
-	assert (d.typExprArgs[0].data as IdentifierData).name === "string";
-	assert (d.typExprArgs[1].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Map";
+	assert d.typExprArgs.length == 2;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "string";
+	assert (d.typExprArgs[1].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — GenericInstance with no args emits TypeGeneric with empty args" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeGenericInstance("Bare", []), loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Bare";
-	assert d.typExprArgs.length === 0;
+	assert (d.typExprBase.data as IdentifierData).name == "Bare";
+	assert d.typExprArgs.length == 0;
 }
 
 test "mapTypeToAst — GenericInstance with anonymous base falls back to <anon-generic>" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeGenericInstance("", [makePrimType(TypeKind.Boolean)]), loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "<anon-generic>";
+	assert (d.typExprBase.data as IdentifierData).name == "<anon-generic>";
 }
 
 test "mapTypeToAst — nested GenericInstance Result<Container<int32>, string>" {
@@ -2713,40 +2713,40 @@ test "mapTypeToAst — nested GenericInstance Result<Container<int32>, string>" 
 	const inner = makeGenericInstance("Container", [makePrimType(TypeKind.Int32)]);
 	const outer = makeGenericInstance("Result", [inner, makePrimType(TypeKind.String)]);
 	const out = mapTypeToAst(outer, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Result";
-	assert d.typExprArgs.length === 2;
-	assert d.typExprArgs[0].kind === NodeKind.TypeGeneric;
+	assert (d.typExprBase.data as IdentifierData).name == "Result";
+	assert d.typExprArgs.length == 2;
+	assert d.typExprArgs[0].kind == NodeKind.TypeGeneric;
 	const innerData = d.typExprArgs[0].data as TypeGenericData;
-	assert (innerData.typExprBase.data as IdentifierData).name === "Container";
-	assert (innerData.typExprArgs[0].data as IdentifierData).name === "int32";
-	assert (d.typExprArgs[1].data as IdentifierData).name === "string";
+	assert (innerData.typExprBase.data as IdentifierData).name == "Container";
+	assert (innerData.typExprArgs[0].data as IdentifierData).name == "int32";
+	assert (d.typExprArgs[1].data as IdentifierData).name == "string";
 }
 
 test "mapTypeToAst — GenericParam T emits Identifier(\"T\")" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeGenericParam("T"), loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "T";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "T";
 }
 
 test "mapTypeToAst — anonymous GenericParam falls back to Identifier(\"T\")" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeGenericParam(""), loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "T";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "T";
 }
 
 test "mapTypeToAst — GenericInstance carrying GenericParam (uninstantiated) preserves param name" {
 	const loc = makeLoc(1, 0);
 	const t = makeGenericInstance("Container", [makeGenericParam("U")]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert d.typExprArgs.length === 1;
-	assert d.typExprArgs[0].kind === NodeKind.Identifier;
-	assert (d.typExprArgs[0].data as IdentifierData).name === "U";
+	assert d.typExprArgs.length == 1;
+	assert d.typExprArgs[0].kind == NodeKind.Identifier;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "U";
 }
 
 // ===== mapTypeToAst tests — Day 5 (Alias peel + cycle handling) =====
@@ -2761,17 +2761,17 @@ function makeAliasType(name: string, inner: Type): Type {
 test "mapTypeToAst — Alias peels transparently to inner primitive" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeAliasType("MyInt", makePrimType(TypeKind.Int32)), loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "int32";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Alias peels through to inner Struct" {
 	const loc = makeLoc(1, 0);
 	const inner = makeStructType("User", ["id"], [makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(makeAliasType("UserAlias", inner), loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldNames[0] === "id";
+	assert d.typExprFieldNames[0] == "id";
 }
 
 test "mapTypeToAst — Alias with null typeReturn falls through to fallback" {
@@ -2779,8 +2779,8 @@ test "mapTypeToAst — Alias with null typeReturn falls through to fallback" {
 	const t = makePrimType(TypeKind.Alias);
 	t.typeName = "Bare";
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "Bare";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "Bare";
 }
 
 test "mapTypeToAst — self-aliased Type (`type X = X`) terminates via cycle break" {
@@ -2789,8 +2789,8 @@ test "mapTypeToAst — self-aliased Type (`type X = X`) terminates via cycle bre
 	t.typeName = "Loop";
 	t.typeReturn = t;  // self-alias — would stack-overflow without visited gate
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "Loop";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "Loop";
 }
 
 test "mapTypeToAst — chained alias (A → B → int32) peels through both layers" {
@@ -2798,8 +2798,8 @@ test "mapTypeToAst — chained alias (A → B → int32) peels through both laye
 	const aliasB = makeAliasType("B", makePrimType(TypeKind.Int32));
 	const aliasA = makeAliasType("A", aliasB);
 	const out = mapTypeToAst(aliasA, loc);
-	assert out.kind === NodeKind.Identifier;
-	assert (out.data as IdentifierData).name === "int32";
+	assert out.kind == NodeKind.Identifier;
+	assert (out.data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — self-referential Struct (Tree<children: Tree[]>) terminates via cycle break" {
@@ -2809,14 +2809,14 @@ test "mapTypeToAst — self-referential Struct (Tree<children: Tree[]>) terminat
 	tree.typeNames = ["children"];
 	tree.typeChildren = [makeArrayType(TypeKind.Array, tree, 0)];  // Tree[] containing Tree itself
 	const out = mapTypeToAst(tree, loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldNames[0] === "children";
+	assert d.typExprFieldNames[0] == "children";
 	// Tree[] field: TypeArray with element being the cycle-break Identifier
-	assert d.typExprFieldTypes[0].kind === NodeKind.TypeArray;
+	assert d.typExprFieldTypes[0].kind == NodeKind.TypeArray;
 	const arrData = d.typExprFieldTypes[0].data as TypeArrayData;
-	assert arrData.typExprElement.kind === NodeKind.Identifier;
-	assert (arrData.typExprElement.data as IdentifierData).name === "Tree";
+	assert arrData.typExprElement.kind == NodeKind.Identifier;
+	assert (arrData.typExprElement.data as IdentifierData).name == "Tree";
 }
 
 test "mapTypeToAst — mutually-recursive Structs (A.b: B, B.a: A) terminate" {
@@ -2830,13 +2830,13 @@ test "mapTypeToAst — mutually-recursive Structs (A.b: B, B.a: A) terminate" {
 	b.typeNames = ["a"];
 	b.typeChildren = [a];
 	const out = mapTypeToAst(a, loc);
-	assert out.kind === NodeKind.TypeObject;
+	assert out.kind == NodeKind.TypeObject;
 	const aData = out.data as TypeObjectData;
-	assert aData.typExprFieldTypes[0].kind === NodeKind.TypeObject;
+	assert aData.typExprFieldTypes[0].kind == NodeKind.TypeObject;
 	const bData = aData.typExprFieldTypes[0].data as TypeObjectData;
 	// B.a: should be cycle-broken to Identifier("A")
-	assert bData.typExprFieldTypes[0].kind === NodeKind.Identifier;
-	assert (bData.typExprFieldTypes[0].data as IdentifierData).name === "A";
+	assert bData.typExprFieldTypes[0].kind == NodeKind.Identifier;
+	assert (bData.typExprFieldTypes[0].data as IdentifierData).name == "A";
 }
 
 test "mapTypeToAst — sibling references to same Struct expand independently (not a cycle)" {
@@ -2846,8 +2846,8 @@ test "mapTypeToAst — sibling references to same Struct expand independently (n
 	const outer = makeStructType("Outer", ["left", "right"], [shared, shared]);
 	const out = mapTypeToAst(outer, loc);
 	const d = out.data as TypeObjectData;
-	assert d.typExprFieldTypes[0].kind === NodeKind.TypeObject;
-	assert d.typExprFieldTypes[1].kind === NodeKind.TypeObject;  // both fully expanded
+	assert d.typExprFieldTypes[0].kind == NodeKind.TypeObject;
+	assert d.typExprFieldTypes[1].kind == NodeKind.TypeObject;  // both fully expanded
 }
 
 // ===== mapTypeToAst tests — Day 6 (Union → TypeUnion) =====
@@ -2862,11 +2862,11 @@ test "mapTypeToAst — Union of primitives emits TypeUnion with all members" {
 	const loc = makeLoc(1, 0);
 	const t = makeUnionType([makePrimType(TypeKind.String), makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeUnion;
+	assert out.kind == NodeKind.TypeUnion;
 	const d = out.data as TypeUnionData;
-	assert d.typExprMembers.length === 2;
-	assert (d.typExprMembers[0].data as IdentifierData).name === "string";
-	assert (d.typExprMembers[1].data as IdentifierData).name === "int32";
+	assert d.typExprMembers.length == 2;
+	assert (d.typExprMembers[0].data as IdentifierData).name == "string";
+	assert (d.typExprMembers[1].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Union with Struct member recurses into TypeObject" {
@@ -2875,26 +2875,26 @@ test "mapTypeToAst — Union with Struct member recurses into TypeObject" {
 	const t = makeUnionType([makePrimType(TypeKind.Null), struct]);
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeUnionData;
-	assert d.typExprMembers.length === 2;
-	assert (d.typExprMembers[0].data as IdentifierData).name === "null";
-	assert d.typExprMembers[1].kind === NodeKind.TypeObject;
+	assert d.typExprMembers.length == 2;
+	assert (d.typExprMembers[0].data as IdentifierData).name == "null";
+	assert d.typExprMembers[1].kind == NodeKind.TypeObject;
 }
 
 test "mapTypeToAst — single-variant Union emits TypeUnion with one member" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeUnionType([makePrimType(TypeKind.Boolean)]), loc);
-	assert out.kind === NodeKind.TypeUnion;
+	assert out.kind == NodeKind.TypeUnion;
 	const d = out.data as TypeUnionData;
-	assert d.typExprMembers.length === 1;
-	assert (d.typExprMembers[0].data as IdentifierData).name === "boolean";
+	assert d.typExprMembers.length == 1;
+	assert (d.typExprMembers[0].data as IdentifierData).name == "boolean";
 }
 
 test "mapTypeToAst — empty Union (degenerate) emits TypeUnion with empty members" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makeUnionType([]), loc);
-	assert out.kind === NodeKind.TypeUnion;
+	assert out.kind == NodeKind.TypeUnion;
 	const d = out.data as TypeUnionData;
-	assert d.typExprMembers.length === 0;
+	assert d.typExprMembers.length == 0;
 }
 
 test "mapTypeToAst — nested Union<Union<...>, T> recurses correctly" {
@@ -2903,11 +2903,11 @@ test "mapTypeToAst — nested Union<Union<...>, T> recurses correctly" {
 	const outer = makeUnionType([inner, makePrimType(TypeKind.Null)]);
 	const out = mapTypeToAst(outer, loc);
 	const d = out.data as TypeUnionData;
-	assert d.typExprMembers.length === 2;
-	assert d.typExprMembers[0].kind === NodeKind.TypeUnion;
+	assert d.typExprMembers.length == 2;
+	assert d.typExprMembers[0].kind == NodeKind.TypeUnion;
 	const innerData = d.typExprMembers[0].data as TypeUnionData;
-	assert innerData.typExprMembers.length === 2;
-	assert (d.typExprMembers[1].data as IdentifierData).name === "null";
+	assert innerData.typExprMembers.length == 2;
+	assert (d.typExprMembers[1].data as IdentifierData).name == "null";
 }
 
 // ===== mapTypeToAst tests — Day 7 (Ref/Ptr/Borrow/Sink/Lent/Var/Distinct → TypeGeneric) =====
@@ -2920,59 +2920,59 @@ function makeModifierType(kind: TypeKind, inner: Type): Type {
 
 test "mapTypeToAst — Ref<T> emits TypeGeneric(\"Ref\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Ref, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Ref";
-	assert d.typExprArgs.length === 1;
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Ref";
+	assert d.typExprArgs.length == 1;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Ptr<T> emits TypeGeneric(\"Ptr\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Ptr, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Ptr";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Ptr";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Borrow<T> emits TypeGeneric(\"Borrow\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Borrow, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Borrow";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Borrow";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Sink<T> emits TypeGeneric(\"Sink\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Sink, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Sink";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Sink";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Lent<T> emits TypeGeneric(\"Lent\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Lent, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Lent";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Lent";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Var<T> emits TypeGeneric(\"Var\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Var, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Var";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Var";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Distinct<T> emits TypeGeneric(\"Distinct\", [T])" {
 	const out = mapTypeToAst(makeModifierType(TypeKind.Distinct, makePrimType(TypeKind.Int32)), makeLoc(1, 0));
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Distinct";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (d.typExprBase.data as IdentifierData).name == "Distinct";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — nested modifier Ref<Ptr<T>> recurses through both layers" {
@@ -2980,23 +2980,23 @@ test "mapTypeToAst — nested modifier Ref<Ptr<T>> recurses through both layers"
 	const inner = makeModifierType(TypeKind.Ptr, makePrimType(TypeKind.Int32));
 	const outer = makeModifierType(TypeKind.Ref, inner);
 	const out = mapTypeToAst(outer, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Ref";
-	assert d.typExprArgs[0].kind === NodeKind.TypeGeneric;
+	assert (d.typExprBase.data as IdentifierData).name == "Ref";
+	assert d.typExprArgs[0].kind == NodeKind.TypeGeneric;
 	const innerData = d.typExprArgs[0].data as TypeGenericData;
-	assert (innerData.typExprBase.data as IdentifierData).name === "Ptr";
-	assert (innerData.typExprArgs[0].data as IdentifierData).name === "int32";
+	assert (innerData.typExprBase.data as IdentifierData).name == "Ptr";
+	assert (innerData.typExprArgs[0].data as IdentifierData).name == "int32";
 }
 
 test "mapTypeToAst — Ref<Struct> wraps TypeObject inside TypeGeneric" {
 	const loc = makeLoc(1, 0);
 	const struct = makeStructType("User", ["id"], [makePrimType(TypeKind.Int32)]);
 	const out = mapTypeToAst(makeModifierType(TypeKind.Ref, struct), loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Ref";
-	assert d.typExprArgs[0].kind === NodeKind.TypeObject;
+	assert (d.typExprBase.data as IdentifierData).name == "Ref";
+	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
 }
 
 test "mapTypeToAst — modifier with null inner falls through to <null> sentinel" {
@@ -3004,10 +3004,10 @@ test "mapTypeToAst — modifier with null inner falls through to <null> sentinel
 	const t = makePrimType(TypeKind.Ref);
 	// typeReturn left null
 	const out = mapTypeToAst(t, loc);
-	assert out.kind === NodeKind.TypeGeneric;
+	assert out.kind == NodeKind.TypeGeneric;
 	const d = out.data as TypeGenericData;
-	assert (d.typExprBase.data as IdentifierData).name === "Ref";
-	assert (d.typExprArgs[0].data as IdentifierData).name === "<null>";
+	assert (d.typExprBase.data as IdentifierData).name == "Ref";
+	assert (d.typExprArgs[0].data as IdentifierData).name == "<null>";
 }
 
 // ===== Day 8 tests — nodeToValue emits `nodeType` field for typed Nodes =====
@@ -3019,17 +3019,17 @@ test "nodeToValue — Node with primitive nodeType emits Identifier under \"node
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
 	ident.nodeType = makePrimType(TypeKind.Int32);
 	const v = nodeToValue(ident, objH, arrH);
-	assert v.kind === RaiserValueKind.Object;
+	assert v.kind == RaiserValueKind.Object;
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert typeFieldVal.kind === RaiserValueKind.Object;
+	assert typeFieldVal.kind == RaiserValueKind.Object;
 	// The serialized type-AST is an Identifier — read its "name" field.
 	const nameVal = heapObjectGetField(objH, typeFieldVal.intVal, "name");
-	assert nameVal.kind === RaiserValueKind.String;
-	assert nameVal.strVal === "int32";
+	assert nameVal.kind == RaiserValueKind.String;
+	assert nameVal.strVal == "int32";
 	// And its kind is NodeKind.Identifier.
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
-	assert kindVal.kind === RaiserValueKind.Int;
-	assert kindVal.intVal === NodeKind.Identifier as number;
+	assert kindVal.kind == RaiserValueKind.Int;
+	assert kindVal.intVal == NodeKind.Identifier as number;
 }
 
 test "nodeToValue — Node with null nodeType skips emitting the field" {
@@ -3039,10 +3039,10 @@ test "nodeToValue — Node with null nodeType skips emitting the field" {
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
 	// nodeType left null
 	const v = nodeToValue(ident, objH, arrH);
-	assert v.kind === RaiserValueKind.Object;
+	assert v.kind == RaiserValueKind.Object;
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
 	// Field absent → heap returns Nil
-	assert typeFieldVal.kind === RaiserValueKind.Nil;
+	assert typeFieldVal.kind == RaiserValueKind.Nil;
 }
 
 test "nodeToValue — Node with Struct nodeType emits TypeObject with field info" {
@@ -3054,9 +3054,9 @@ test "nodeToValue — Node with Struct nodeType emits TypeObject with field info
 	ident.nodeType = struct;
 	const v = nodeToValue(ident, objH, arrH);
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert typeFieldVal.kind === RaiserValueKind.Object;
+	assert typeFieldVal.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
-	assert kindVal.intVal === NodeKind.TypeObject as number;
+	assert kindVal.intVal == NodeKind.TypeObject as number;
 }
 
 test "nodeToValue — TypeObject heap dispatch emits typExprFieldDecorators array (V2)" {
@@ -3072,18 +3072,18 @@ test "nodeToValue — TypeObject heap dispatch emits typExprFieldDecorators arra
 	ident.nodeType = t;
 	const v = nodeToValue(ident, objH, arrH);
 	const typeVal = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert typeVal.kind === RaiserValueKind.Object;
+	assert typeVal.kind == RaiserValueKind.Object;
 	const decorsVal = heapObjectGetField(objH, typeVal.intVal, "typExprFieldDecorators");
 	// Outer array — 2 entries (one per field)
-	assert decorsVal.kind === RaiserValueKind.Array;
-	assert heapArrayLen(arrH, decorsVal.intVal) === 2;
+	assert decorsVal.kind == RaiserValueKind.Array;
+	assert heapArrayLen(arrH, decorsVal.intVal) == 2;
 	// First inner array — 1 decorator (rename CallExpr)
 	const firstInner = heapArrayGet(arrH, decorsVal.intVal, 0);
-	assert firstInner.kind === RaiserValueKind.Array;
-	assert heapArrayLen(arrH, firstInner.intVal) === 1;
+	assert firstInner.kind == RaiserValueKind.Array;
+	assert heapArrayLen(arrH, firstInner.intVal) == 1;
 	// Second inner array — empty (name has no decorators)
 	const secondInner = heapArrayGet(arrH, decorsVal.intVal, 1);
-	assert heapArrayLen(arrH, secondInner.intVal) === 0;
+	assert heapArrayLen(arrH, secondInner.intVal) == 0;
 }
 
 test "nodeToValue — synthesized type-AST node has no nested nodeType (recursion terminates)" {
@@ -3096,7 +3096,7 @@ test "nodeToValue — synthesized type-AST node has no nested nodeType (recursio
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
 	// The synthesized Identifier (the type AST) should NOT have its own "nodeType" field.
 	const innerTypeField = heapObjectGetField(objH, typeFieldVal.intVal, "nodeType");
-	assert innerTypeField.kind === RaiserValueKind.Nil;
+	assert innerTypeField.kind == RaiserValueKind.Nil;
 }
 
 test "nodeToValue — self-referential nodeType (Tree) terminates via cycle break" {
@@ -3112,9 +3112,9 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	// Must not stack-overflow — Day 5 visited barrier breaks the cycle inside mapTypeToAst.
 	const v = nodeToValue(ident, objH, arrH);
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert typeFieldVal.kind === RaiserValueKind.Object;
+	assert typeFieldVal.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
-	assert kindVal.intVal === NodeKind.TypeObject as number;
+	assert kindVal.intVal == NodeKind.TypeObject as number;
 }
 
 test "valueToNode — drops nodeType field (forward-only design)" {
@@ -3125,9 +3125,9 @@ test "valueToNode — drops nodeType field (forward-only design)" {
 	ident.nodeType = makePrimType(TypeKind.Int32);
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
-	assert back.kind === NodeKind.Identifier;
-	assert (back.data as IdentifierData).name === "x";
-	assert back.nodeType === null;  // forward-only: reverse path leaves nodeType null
+	assert back.kind == NodeKind.Identifier;
+	assert (back.data as IdentifierData).name == "x";
+	assert back.nodeType == null;  // forward-only: reverse path leaves nodeType null
 }
 
 test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
@@ -3143,16 +3143,16 @@ test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
 	const v = nodeToValue(expr, objH, arrH);
 	// Outer BinaryExpr has nodeType
 	const outerType = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert outerType.kind === RaiserValueKind.Object;
+	assert outerType.kind == RaiserValueKind.Object;
 	// Left child has its own nodeType
 	const leftVal = heapObjectGetField(objH, v.intVal, "left");
-	assert leftVal.kind === RaiserValueKind.Object;
+	assert leftVal.kind == RaiserValueKind.Object;
 	const leftType = heapObjectGetField(objH, leftVal.intVal, "nodeType");
-	assert leftType.kind === RaiserValueKind.Object;
+	assert leftType.kind == RaiserValueKind.Object;
 	// Right child likewise
 	const rightVal = heapObjectGetField(objH, v.intVal, "right");
 	const rightType = heapObjectGetField(objH, rightVal.intVal, "nodeType");
-	assert rightType.kind === RaiserValueKind.Object;
+	assert rightType.kind == RaiserValueKind.Object;
 }
 
 // ===== Day 9 tests — nodeToValue emits `resolvedSym` for bound Nodes =====
@@ -3191,13 +3191,13 @@ test "nodeToValue — Node with resolvedSym emits { name, kind } object" {
 	ident.resolvedSym = makeSymbol("myVar", SymbolKind.Variable);
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
-	assert symVal.kind === RaiserValueKind.Object;
+	assert symVal.kind == RaiserValueKind.Object;
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
-	assert nameVal.kind === RaiserValueKind.String;
-	assert nameVal.strVal === "myVar";
+	assert nameVal.kind == RaiserValueKind.String;
+	assert nameVal.strVal == "myVar";
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "kind");
-	assert kindVal.kind === RaiserValueKind.Int;
-	assert kindVal.intVal === SymbolKind.Variable as number;
+	assert kindVal.kind == RaiserValueKind.Int;
+	assert kindVal.intVal == SymbolKind.Variable as number;
 }
 
 test "nodeToValue — Node without resolvedSym skips emitting the field" {
@@ -3208,7 +3208,7 @@ test "nodeToValue — Node without resolvedSym skips emitting the field" {
 	// resolvedSym left as null cast
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
-	assert symVal.kind === RaiserValueKind.Nil;
+	assert symVal.kind == RaiserValueKind.Nil;
 }
 
 test "nodeToValue — different SymbolKinds preserved correctly" {
@@ -3220,7 +3220,7 @@ test "nodeToValue — different SymbolKinds preserved correctly" {
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "kind");
-	assert kindVal.intVal === SymbolKind.Function as number;
+	assert kindVal.intVal == SymbolKind.Function as number;
 }
 
 test "valueToNode — drops resolvedSym field (forward-only design)" {
@@ -3231,10 +3231,10 @@ test "valueToNode — drops resolvedSym field (forward-only design)" {
 	ident.resolvedSym = makeSymbol("x", SymbolKind.Variable);
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
-	assert back.kind === NodeKind.Identifier;
-	assert (back.data as IdentifierData).name === "x";
+	assert back.kind == NodeKind.Identifier;
+	assert (back.data as IdentifierData).name == "x";
 	// Forward-only: reverse path leaves resolvedSym as the null-cast sentinel.
-	assert back.resolvedSym === null;
+	assert back.resolvedSym == null;
 }
 
 test "nodeToValue — Symbol with empty name still emits object with empty string" {
@@ -3246,7 +3246,7 @@ test "nodeToValue — Symbol with empty name still emits object with empty strin
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
-	assert nameVal.strVal === "";
+	assert nameVal.strVal == "";
 }
 
 test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
@@ -3261,13 +3261,13 @@ test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
 	const v = nodeToValue(expr, objH, arrH);
 	const leftVal = heapObjectGetField(objH, v.intVal, "left");
 	const leftSym = heapObjectGetField(objH, leftVal.intVal, "resolvedSym");
-	assert leftSym.kind === RaiserValueKind.Object;
+	assert leftSym.kind == RaiserValueKind.Object;
 	const leftKind = heapObjectGetField(objH, leftSym.intVal, "kind");
-	assert leftKind.intVal === SymbolKind.Variable as number;
+	assert leftKind.intVal == SymbolKind.Variable as number;
 	const rightVal = heapObjectGetField(objH, v.intVal, "right");
 	const rightSym = heapObjectGetField(objH, rightVal.intVal, "resolvedSym");
 	const rightKind = heapObjectGetField(objH, rightSym.intVal, "kind");
-	assert rightKind.intVal === SymbolKind.Function as number;
+	assert rightKind.intVal == SymbolKind.Function as number;
 }
 
 test "ObjectLiteral keyLocations survive the node→value→node round-trip" {
@@ -3281,14 +3281,14 @@ test "ObjectLiteral keyLocations survive the node→value→node round-trip" {
 	}, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
 	const back = valueToNode(val, objHeap, arrHeap, loc);
-	assert back.kind === NodeKind.ObjectLiteral;
+	assert back.kind == NodeKind.ObjectLiteral;
 	const d = back.data as ObjectLiteralData;
-	assert d.keys.length === 2;
-	assert d.keyLocations.length === 2;
-	assert d.keyLocations[0].line === 4;
-	assert d.keyLocations[0].column === 2;
-	assert d.keyLocations[1].line === 5;
-	assert d.keyLocations[1].column === 2;
+	assert d.keys.length == 2;
+	assert d.keyLocations.length == 2;
+	assert d.keyLocations[0].line == 4;
+	assert d.keyLocations[0].column == 2;
+	assert d.keyLocations[1].line == 5;
+	assert d.keyLocations[1].column == 2;
 }
 
 test "round-trip InterfaceDecl keeps interfaceExtends" {
@@ -3301,8 +3301,8 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
-	assert d.interfaceExtends.length === 1, "a dropped extends list is a null array the resolver walks";
-	assert d.interfaceExtends[0] === "Base";
+	assert d.interfaceExtends.length == 1, "a dropped extends list is a null array the resolver walks";
+	assert d.interfaceExtends[0] == "Base";
 }
 
 test "round-trip StructDecl keeps interfaceExtends" {
@@ -3315,7 +3315,7 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
-	assert d.interfaceExtends.length === 1;
+	assert d.interfaceExtends.length == 1;
 }
 
 test "round-trip TypeAliasDecl keeps aliasGenericParams" {
@@ -3329,7 +3329,7 @@ test "round-trip TypeAliasDecl keeps aliasGenericParams" {
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as TypeAliasDeclData;
-	assert d.aliasGenericParams === "T";
+	assert d.aliasGenericParams == "T";
 }
 
 test "round-trip WhileStmt keeps whileLabel" {
@@ -3342,7 +3342,7 @@ test "round-trip WhileStmt keeps whileLabel" {
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as WhileStmtData;
-	assert d.whileLabel === "outer";
+	assert d.whileLabel == "outer";
 }
 
 test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
@@ -3356,5 +3356,5 @@ test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as NumberLiteralData;
 	assert d.isBitPattern, "bit-pattern-ness is not recomputable from the value";
-	assert d.outOfRangeText === "0xFF";
+	assert d.outOfRangeText == "0xFF";
 }

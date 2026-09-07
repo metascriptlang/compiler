@@ -36,7 +36,7 @@ type ExpandingVisitor = (node: Node) => Node[];
 // Bottom-up: recurse into children first, then apply visitor to the node itself
 
 export function walkNode(node: Node, visitor: Visitor): Node {
-	if (node === null) return null as unknown as Node;
+	if (node == null) return null as unknown as Node;
 	// Recurse into children first (bottom-up)
 	walkChildren(node, visitor);
 	// Then let visitor transform this node
@@ -99,7 +99,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as ForOfStmtData;
 			d.forOfIterable = f(d.forOfIterable);
 			d.forOfBody = f(d.forOfBody);
-			if (d.forOfPattern !== null) { d.forOfPattern = f(d.forOfPattern); }
+			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern); }
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
@@ -212,7 +212,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer !== null) d.initializer = f(d.initializer);
+			if (d.initializer != null) d.initializer = f(d.initializer);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
@@ -364,11 +364,11 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
 			d.assertExpr = f(d.assertExpr);
-			if (d.assertMessageExpr !== null) { d.assertMessageExpr = f(d.assertMessageExpr); }
+			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			if (d.propInitializer !== null) { d.propInitializer = f(d.propInitializer); }
+			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
 		},
 		NodeKind.ArrayPattern => {
 			const d = node.data as ArrayPatternData;
@@ -379,7 +379,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 			}
 			i = 0;
 			while (i < d.patternDefaults.length) {
-				if (d.patternDefaults[i] !== null) { d.patternDefaults[i] = f(d.patternDefaults[i]); }
+				if (d.patternDefaults[i] != null) { d.patternDefaults[i] = f(d.patternDefaults[i]); }
 				i += 1;
 			}
 		},
@@ -393,8 +393,8 @@ export function mapChildren(node: Node, f: Visitor): void {
 		},
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
-			if (d.propAlias !== null) { d.propAlias = f(d.propAlias); }
-			if (d.propDefault !== null) { d.propDefault = f(d.propDefault); }
+			if (d.propAlias != null) { d.propAlias = f(d.propAlias); }
+			if (d.propDefault != null) { d.propDefault = f(d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
 			const d = node.data as TypeGenericData;
@@ -430,7 +430,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 				d.typExprParams[i] = f(d.typExprParams[i]);
 				i += 1;
 			}
-			if (d.typExprReturn !== null) { d.typExprReturn = f(d.typExprReturn); }
+			if (d.typExprReturn != null) { d.typExprReturn = f(d.typExprReturn); }
 		},
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
@@ -439,8 +439,8 @@ export function mapChildren(node: Node, f: Visitor): void {
 				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i]);
 				i += 1;
 			}
-			if (d.typExprIndexKey !== null) { d.typExprIndexKey = f(d.typExprIndexKey); }
-			if (d.typExprIndexValue !== null) { d.typExprIndexValue = f(d.typExprIndexValue); }
+			if (d.typExprIndexKey != null) { d.typExprIndexKey = f(d.typExprIndexKey); }
+			if (d.typExprIndexValue != null) { d.typExprIndexValue = f(d.typExprIndexValue); }
 			// Per-field decorators (V2): walk each decorator node in place
 			let di = 0;
 			while (di < d.typExprFieldDecorators.length) {
@@ -497,9 +497,9 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 
 // Check if a node is a function boundary (FunctionDecl, ArrowFunction, FunctionExpr)
 export function isFuncBoundary(node: Node): boolean {
-	return node.kind === NodeKind.FunctionDecl ||
-		node.kind === NodeKind.ArrowFunction ||
-		node.kind === NodeKind.FunctionExpr;
+	return node.kind == NodeKind.FunctionDecl ||
+		node.kind == NodeKind.ArrowFunction ||
+		node.kind == NodeKind.FunctionExpr;
 }
 
 // ===== 1:N Block Expansion =====
@@ -550,7 +550,7 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 }
 
 export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
-	if (node === null) return;
+	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
 			replaceProgStmts(node, expander, ctx, onFnEntry, onFnExit);
@@ -560,27 +560,27 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			if (onFnEntry !== null) onFnEntry(node);
+			if (onFnEntry != null) onFnEntry(node);
 			walkExpandBlocksHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit !== null) onFnExit(node);
+			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			if (onFnEntry !== null) onFnEntry(node);
+			if (onFnEntry != null) onFnEntry(node);
 			walkExpandBlocksHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit !== null) onFnExit(node);
+			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			if (onFnEntry !== null) onFnEntry(node);
+			if (onFnEntry != null) onFnEntry(node);
 			walkExpandBlocksHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit !== null) onFnExit(node);
+			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			if (onFnEntry !== null) onFnEntry(node);
+			if (onFnEntry != null) onFnEntry(node);
 			walkExpandBlocksHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit !== null) onFnExit(node);
+			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -752,8 +752,8 @@ export function mapExprChildren(node: Node, f: Visitor): void {
 
 // Check if any node in an expression tree has the given NodeKind.
 export function containsExprKind(node: Node, kind: NodeKind): boolean {
-	if (node === null) return false;
-	if (node.kind === kind) return true;
+	if (node == null) return false;
+	if (node.kind == kind) return true;
 	let found = false;
 	mapExprChildren(node, (child: Node): Node => {
 		if (!found && containsExprKind(child, kind)) { found = true; }
@@ -765,7 +765,7 @@ export function containsExprKind(node: Node, kind: NodeKind): boolean {
 // Bottom-up expression tree walk: recurse into children first, then apply replacer.
 // If replacer returns a different node, use it as the replacement.
 export function replaceInExpr(node: Node, replacer: Visitor): Node {
-	if (node === null) return node;
+	if (node == null) return node;
 	mapExprChildren(node, (child: Node): Node => replaceInExpr(child, replacer));
 	return replacer(node);
 }

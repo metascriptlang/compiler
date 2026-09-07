@@ -816,7 +816,7 @@ const nodeCache: NodeCacheEntry[] = [];
 export function nodeCacheGet(key: number): Node {
 	let i = 0;
 	while (i < nodeCache.length) {
-		if (nodeCache[i].key === key) return nodeCache[i].node;
+		if (nodeCache[i].key == key) return nodeCache[i].node;
 		i = i + 1;
 	}
 	return null as unknown as Node;
@@ -825,7 +825,7 @@ export function nodeCacheGet(key: number): Node {
 export function nodeCacheStore(key: number, node: Node): void {
 	let i = 0;
 	while (i < nodeCache.length) {
-		if (nodeCache[i].key === key) {
+		if (nodeCache[i].key == key) {
 			nodeCache[i].node = node;
 			return;
 		}
@@ -835,10 +835,10 @@ export function nodeCacheStore(key: number, node: Node): void {
 }
 
 export function isEmptyBlock(node: Node): boolean {
-	if (node === null) return true;
-	if (node.kind !== NodeKind.BlockStmt) return false;
+	if (node == null) return true;
+	if (node.kind != NodeKind.BlockStmt) return false;
 	const d = node.data as BlockStmtData;
-	return d.statements.length === 0;
+	return d.statements.length == 0;
 }
 
 // Flatten a left-associative BinaryExpr(+) chain into its leaf nodes.
@@ -849,9 +849,9 @@ export function collectConcatParts(node: Node): Node[] {
 	const stack: Node[] = [node];
 	while (stack.length > 0) {
 		const cur = stack.pop();
-		if (cur.kind === NodeKind.BinaryExpr) {
+		if (cur.kind == NodeKind.BinaryExpr) {
 			const d = cur.data as BinaryExprData;
-			if (d.operator === "+") {
+			if (d.operator == "+") {
 				stack.push(d.right);
 				stack.push(d.left);
 				continue;

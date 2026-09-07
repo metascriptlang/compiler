@@ -30,7 +30,7 @@ const KNOWN_GAPS: string[] = [
 
 function endsWith(s: string, suffix: string): boolean {
 	if (s.length < suffix.length) return false;
-	return s.slice(s.length - suffix.length, s.length) === suffix;
+	return s.slice(s.length - suffix.length, s.length) == suffix;
 }
 
 function trim(s: string): string {
@@ -39,8 +39,8 @@ function trim(s: string): string {
 	// tableMentions then never matches and all 6 tables fail spuriously.
 	let a = 0;
 	let b = s.length;
-	while (a < b && (s.slice(a, a + 1) === " " || s.slice(a, a + 1) === "\t" || s.slice(a, a + 1) === "\n" || s.slice(a, a + 1) === "\r")) a = a + 1;
-	while (b > a && (s.slice(b - 1, b) === " " || s.slice(b - 1, b) === "\t" || s.slice(b - 1, b) === "\n" || s.slice(b - 1, b) === "\r")) b = b - 1;
+	while (a < b && (s.slice(a, a + 1) == " " || s.slice(a, a + 1) == "\t" || s.slice(a, a + 1) == "\n" || s.slice(a, a + 1) == "\r")) a = a + 1;
+	while (b > a && (s.slice(b - 1, b) == " " || s.slice(b - 1, b) == "\t" || s.slice(b - 1, b) == "\n" || s.slice(b - 1, b) == "\r")) b = b - 1;
 	return s.slice(a, b);
 }
 
@@ -52,7 +52,7 @@ function refersToNode(t: string): boolean {
 		const after = i + 4;
 		if (after >= t.length) return true;
 		const c = t.slice(after, after + 1);
-		if (c === "[" || c === " " || c === ")" || c === "," || c === "|" || c === ";") return true;
+		if (c == "[" || c == " " || c == ")" || c == "," || c == "|" || c == ";") return true;
 		p = after;
 	}
 }
@@ -63,10 +63,10 @@ function collectFieldsInto(body: string, out: string[]): void {
 		if (colon < 0) continue;
 		const name = trim(part.slice(0, colon));
 		const ty = part.slice(colon + 1, part.length);
-		if (name.length === 0) continue;
+		if (name.length == 0) continue;
 		if (!refersToNode(ty)) continue;
 		let seen = false;
-		for (const n of out) { if (n === name) { seen = true; } }
+		for (const n of out) { if (n == name) { seen = true; } }
 		if (!seen) out.push(name);
 	}
 }
@@ -99,18 +99,18 @@ function readOrEmpty(path: string): string {
 }
 
 function firstUnreadable(paths: string[]): string {
-	for (const p of paths) { if (readOrEmpty(p).length === 0) return p; }
+	for (const p of paths) { if (readOrEmpty(p).length == 0) return p; }
 	return "";
 }
 
 function isKnownGap(key: string): boolean {
-	for (const g of KNOWN_GAPS) { if (g === key) return true; }
+	for (const g of KNOWN_GAPS) { if (g == key) return true; }
 	return false;
 }
 
 test "child-table guard: every source it inspects is readable" {
 	const missing = firstUnreadable(TABLE_PATHS);
-	assert missing === "", "cannot read " + missing + " — run from the recompiler root";
+	assert missing == "", "cannot read " + missing + " — run from the recompiler root";
 	assert readOrEmpty(NODE_SRC).length > 0, "cannot read " + NODE_SRC + " — run from the recompiler root";
 }
 
@@ -138,7 +138,7 @@ test "child-table guard: every Node-typed field is handled by every table" {
 		}
 		ti = ti + 1;
 	}
-	assert count === 0,
+	assert count == 0,
 		"AST field not traversed by " + count.toString() + " table(s) — add the field or record it in KNOWN_GAPS:" + unexpected;
 }
 
@@ -159,6 +159,6 @@ test "child-table guard: KNOWN_GAPS has no stale entry" {
 		}
 		ti = ti + 1;
 	}
-	assert count === 0,
+	assert count == 0,
 		"KNOWN_GAPS lists " + count.toString() + " entry(s) that are now handled — delete them so the guard keeps its teeth:" + stale;
 }

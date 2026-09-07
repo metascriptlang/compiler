@@ -70,7 +70,7 @@ export function taHashKey(key: TaQueryKey): number {
 // ===== AST Content Hash Helpers =====
 
 function hS(h: number, s: string): number {
-	if (s === null) return combine(h, 0);
+	if (s == null) return combine(h, 0);
 	return combine(h, taHashString(s));
 }
 
@@ -84,12 +84,12 @@ function hB(h: number, b: boolean): number {
 }
 
 function hN(h: number, node: Node | null): number {
-	if (node === null) return combine(h, 0);
+	if (node == null) return combine(h, 0);
 	return combine(h, transAmHashNode(node));
 }
 
 function hNodes(h: number, nodes: Node[]): number {
-	if (nodes === null) return combine(h, 0);
+	if (nodes == null) return combine(h, 0);
 	h = hI(h, nodes.length);
 	for (const node of nodes) {
 		h = hN(h, node);
@@ -98,7 +98,7 @@ function hNodes(h: number, nodes: Node[]): number {
 }
 
 function hStrings(h: number, strs: string[]): number {
-	if (strs === null) return combine(h, 0);
+	if (strs == null) return combine(h, 0);
 	h = hI(h, strs.length);
 	for (const s of strs) {
 		h = hS(h, s);
@@ -107,7 +107,7 @@ function hStrings(h: number, strs: string[]): number {
 }
 
 function hNumbers(h: number, nums: number[]): number {
-	if (nums === null) return combine(h, 0);
+	if (nums == null) return combine(h, 0);
 	h = hI(h, nums.length);
 	for (const n of nums) {
 		h = hI(h, n);
@@ -131,7 +131,7 @@ function hNumbers(h: number, nums: number[]): number {
 // extend this function to hash the new channel.
 
 export function transAmHashNode(node: Node): number {
-	if (node === null) return 0;
+	if (node == null) return 0;
 	let h: number = (node.kind * 2654435761) % PRIME;
 
 	match (node.kind) {
@@ -381,14 +381,14 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); h = hB(h, d.propIsReadonly); h = hS(h, d.propVisibility); if (d.propInitializer !== null) { h = hNodes(h, [d.propInitializer]); }
+			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); h = hB(h, d.propIsReadonly); h = hS(h, d.propVisibility); if (d.propInitializer != null) { h = hNodes(h, [d.propInitializer]); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			h = hS(h, d.methodName); h = hStrings(h, d.methodParams); h = hStrings(h, d.methodParamTypes);
 			h = hN(h, d.methodBody); h = hB(h, d.methodIsStatic);
 			h = hS(h, d.methodFlags); h = hS(h, d.methodVisibility); h = hS(h, d.methodReturnType); h = hS(h, d.nativeName);
-			for (const dn of d.methodDefaults) { if (dn !== null) h = hN(h, dn); }
+			for (const dn of d.methodDefaults) { if (dn != null) h = hN(h, dn); }
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -509,41 +509,41 @@ export function transAmHashNode(node: Node): number {
 // ===== Tests =====
 test "empty string has known value" {
 	const h = taHashString("");
-	assert h === 5381;
+	assert h == 5381;
 }
 
-test "same string same hash" { assert taHashString("hello") === taHashString("hello"); }
+test "same string same hash" { assert taHashString("hello") == taHashString("hello"); }
 
-test "different strings different hashes" { assert taHashString("abc") !== taHashString("xyz"); }
+test "different strings different hashes" { assert taHashString("abc") != taHashString("xyz"); }
 
 test "single char" {
 	const h = taHashString("a");
-	assert h !== 5381;  // different from empty
-	assert h !== 0;
+	assert h != 5381;  // different from empty
+	assert h != 0;
 }
 
-test "combine is deterministic" { assert combine(1, 2) === combine(1, 2); }
+test "combine is deterministic" { assert combine(1, 2) == combine(1, 2); }
 
 test "chained order matters" {
 	const a = combine(combine(0, 1), 2);
 	const b = combine(combine(0, 2), 1);
-	assert a !== b;
+	assert a != b;
 }
 
 test "different kinds produce different hashes" {
 	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
 	const b: TaQueryKey = { queryKind: 1, fileId: 1 };
-	assert taHashKey(a) !== taHashKey(b);
+	assert taHashKey(a) != taHashKey(b);
 }
 
 test "different fileIds produce different hashes" {
 	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
 	const b: TaQueryKey = { queryKind: 0, fileId: 2 };
-	assert taHashKey(a) !== taHashKey(b);
+	assert taHashKey(a) != taHashKey(b);
 }
 
 test "null node hashes to zero" {
-	assert transAmHashNode(null as unknown as Node) === 0;
+	assert transAmHashNode(null as unknown as Node) == 0;
 }
 
 test "same AST same hash" {
@@ -552,7 +552,7 @@ test "same AST same hash" {
 	const r2 = parseSource("const x = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) === transAmHashNode(r2.value);
+	assert transAmHashNode(r1.value) == transAmHashNode(r2.value);
 }
 
 test "comment-only change same hash" {
@@ -561,7 +561,7 @@ test "comment-only change same hash" {
 	const r2 = parseSource("const x = 1; // comment");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) === transAmHashNode(r2.value);
+	assert transAmHashNode(r1.value) == transAmHashNode(r2.value);
 }
 
 test "different code different hash" {
@@ -570,7 +570,7 @@ test "different code different hash" {
 	const r2 = parseSource("const x = 2;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) !== transAmHashNode(r2.value);
+	assert transAmHashNode(r1.value) != transAmHashNode(r2.value);
 }
 
 test "different identifier different hash" {
@@ -579,5 +579,5 @@ test "different identifier different hash" {
 	const r2 = parseSource("const y = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert transAmHashNode(r1.value) !== transAmHashNode(r2.value);
+	assert transAmHashNode(r1.value) != transAmHashNode(r2.value);
 }
