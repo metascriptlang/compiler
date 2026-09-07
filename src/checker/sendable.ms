@@ -305,15 +305,17 @@ function reportThisFieldWrite(ctx: CheckerContext, target: Node, node: Node, rep
 	}
 }
 
+function isAsgnOperator(op: string): boolean {
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" ||
+		op == "%=" || op == "&&=" || op == "||=" || op == "??=";
+}
+
 function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
-				d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
-				d.operator == "&&=" || d.operator == "||=" || d.operator == "??=";
-			if (isAsgn) {
+			if (isAsgnOperator(d.operator)) {
 				reportThisFieldWrite(ctx, d.left, node, reportedKeys, "assignment");
 			}
 			walkActorSpawnRules(ctx, d.left, reportedKeys);
