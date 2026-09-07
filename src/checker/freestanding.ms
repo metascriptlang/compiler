@@ -26,53 +26,53 @@ export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under 
 // Mirrors checkExprPass's isAsync test (fnFlags is a free-form flag string,
 // "async" / "async_generator" / combinations).
 function flagsAreAsync(flags: string): boolean {
-	if (flags === "") return false;
+	if (flags == "") return false;
 	return flags.indexOf("async") >= 0;
 }
 
 // Function-like nodes own a scope for the one-diagnostic-per-body rule.
 function isFunctionLike(node: Node): boolean {
-	return node.kind === NodeKind.FunctionDecl
-		|| node.kind === NodeKind.FunctionExpr
-		|| node.kind === NodeKind.ArrowFunction
-		|| node.kind === NodeKind.MethodDecl;
+	return node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.FunctionExpr
+		|| node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.MethodDecl;
 }
 
 // `async` on the declaration itself.
 export function isAsyncFunctionNode(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.FunctionDecl) return flagsAreAsync((node.data as FunctionDeclData).fnFlags);
-	if (node.kind === NodeKind.FunctionExpr) return flagsAreAsync((node.data as FunctionExprData).funcExprFlags);
-	if (node.kind === NodeKind.ArrowFunction) return flagsAreAsync((node.data as ArrowFunctionData).arrowFlags);
-	if (node.kind === NodeKind.MethodDecl) return flagsAreAsync((node.data as MethodDeclData).methodFlags);
+	if (node == null) return false;
+	if (node.kind == NodeKind.FunctionDecl) return flagsAreAsync((node.data as FunctionDeclData).fnFlags);
+	if (node.kind == NodeKind.FunctionExpr) return flagsAreAsync((node.data as FunctionExprData).funcExprFlags);
+	if (node.kind == NodeKind.ArrowFunction) return flagsAreAsync((node.data as ArrowFunctionData).arrowFlags);
+	if (node.kind == NodeKind.MethodDecl) return flagsAreAsync((node.data as MethodDeclData).methodFlags);
 	return false;
 }
 
 // `spawn(thunk)` — recognised through the resolved builtin, same hook
 // detectSequentialAwaitSpawn uses. Actor spawn goes through the same thunk.
 export function isSpawnCall(node: Node): boolean {
-	if (node === null || node.kind !== NodeKind.CallExpr) return false;
-	if (node.resolvedSym === null) return false;
-	return node.resolvedSym.builtinKind === "PromiseSpawn";
+	if (node == null || node.kind != NodeKind.CallExpr) return false;
+	if (node.resolvedSym == null) return false;
+	return node.resolvedSym.builtinKind == "PromiseSpawn";
 }
 
 // Is this node an async surface the freestanding runtime cannot carry?
 export function isFreestandingAsyncNode(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.AwaitExpr) return true;
+	if (node == null) return false;
+	if (node.kind == NodeKind.AwaitExpr) return true;
 	if (isSpawnCall(node)) return true;
 	return isAsyncFunctionNode(node);
 }
 
 // Report position: declarations point at the name, expressions at themselves.
 export function freestandingAsyncLoc(node: Node): SourceLocation {
-	if (node.kind === NodeKind.FunctionDecl) {
+	if (node.kind == NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
-		if (d.nameLocation !== null) return d.nameLocation;
+		if (d.nameLocation != null) return d.nameLocation;
 	}
-	if (node.kind === NodeKind.MethodDecl) {
+	if (node.kind == NodeKind.MethodDecl) {
 		const m = node.data as MethodDeclData;
-		if (m.nameLocation !== null) return m.nameLocation;
+		if (m.nameLocation != null) return m.nameLocation;
 	}
 	return node.location;
 }
@@ -85,7 +85,7 @@ interface FsScope {
 }
 
 function fsWalk(node: Node, out: Node[], scope: FsScope): void {
-	if (node === null) return;
+	if (node == null) return;
 
 	if (isFunctionLike(node)) {
 		// A nested function starts its own report budget; the `async` keyword on
@@ -110,7 +110,7 @@ function fsWalk(node: Node, out: Node[], scope: FsScope): void {
 // Empty result = nothing in this module needs a dispatcher.
 export function collectFreestandingAsync(program: Node): Node[] {
 	const out: Node[] = [];
-	if (program === null) return out;
+	if (program == null) return out;
 	const root: FsScope = { reported: false };
 	fsWalk(program, out, root);
 	return out;
@@ -157,45 +157,45 @@ test "freestanding: async declaration is one report" {
 	const fn = fsFn("f", "async", body);
 	const prog = fsProgram([fn]);
 	const hits = collectFreestandingAsync(prog);
-	assert hits.length === 1;
-	assert hits[0].kind === NodeKind.FunctionDecl;
+	assert hits.length == 1;
+	assert hits[0].kind == NodeKind.FunctionDecl;
 }
 
 test "freestanding: await in a sync body is reported" {
 	const body = fsBlock([fsExprStmt(fsAwait())]);
 	const fn = fsFn("f", "", body);
 	const prog = fsProgram([fn]);
-	assert collectFreestandingAsync(prog).length === 1;
+	assert collectFreestandingAsync(prog).length == 1;
 }
 
 test "freestanding: many awaits in one body collapse to one report" {
 	const body = fsBlock([fsExprStmt(fsAwait()), fsExprStmt(fsAwait()), fsExprStmt(fsAwait())]);
 	const fn = fsFn("f", "async", body);
 	const prog = fsProgram([fn]);
-	assert collectFreestandingAsync(prog).length === 1;
+	assert collectFreestandingAsync(prog).length == 1;
 }
 
 test "freestanding: each function body gets its own report" {
 	const a = fsFn("a", "async", fsBlock([]));
 	const b = fsFn("b", "async", fsBlock([]));
 	const prog = fsProgram([a, b]);
-	assert collectFreestandingAsync(prog).length === 2;
+	assert collectFreestandingAsync(prog).length == 2;
 }
 
 test "freestanding: top-level await is reported outside any function" {
 	const prog = fsProgram([fsExprStmt(fsAwait())]);
-	assert collectFreestandingAsync(prog).length === 1;
+	assert collectFreestandingAsync(prog).length == 1;
 }
 
 test "freestanding: synchronous program reports nothing" {
 	const fn = fsFn("f", "", fsBlock([fsExprStmt(fsIdent("x"))]));
 	const prog = fsProgram([fn]);
-	assert collectFreestandingAsync(prog).length === 0;
+	assert collectFreestandingAsync(prog).length == 0;
 }
 
 test "freestanding: report position is the declaration name" {
 	const fn = fsFn("f", "async", fsBlock([]));
 	const loc = freestandingAsyncLoc(fn);
-	assert loc.line === 1;
-	assert loc.column === 1;
+	assert loc.line == 1;
+	assert loc.column == 1;
 }

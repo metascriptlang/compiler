@@ -806,7 +806,7 @@ function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx:
 	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
 	// symbol does not exist there - take the null slot like msBoxRefArray does.
-	const tiSlot = (g.checkerCtx !== null && g.checkerCtx.gcMode === GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
+	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
 	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${tiSlot}, 0 }, { 0, NULL } };`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);

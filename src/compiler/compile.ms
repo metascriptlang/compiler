@@ -317,19 +317,19 @@ function resetCompiledOFiles(): void {
 // force because its SBF runtime cannot host DRC/ORC at all.
 // Mutates opts so every later consumer reads one resolved value.
 export function resolveTargetGcMode(opts: CliOptions): void {
-	if (opts.targetOs === "solana") {
-		if (opts.gcMode === "" || opts.gcMode === "drc" || opts.gcMode === "orc") opts.gcMode = "manual";
+	if (opts.targetOs == "solana") {
+		if (opts.gcMode == "" || opts.gcMode == "drc" || opts.gcMode == "orc") opts.gcMode = "manual";
 		return;
 	}
-	if (opts.targetOs === "bare" && !opts.gcExplicit) opts.gcMode = "manual";
+	if (opts.targetOs == "bare" && !opts.gcExplicit) opts.gcMode = "manual";
 }
 
 // String gc mode → checker enum. Single spelling of the mapping that
 // applyGcMode and the per-module stamping in cmdBuildC/cmdTest repeat.
 export function gcModeOf(gc: string): GcMode {
-	if (gc === "none") return GcMode.None;
-	if (gc === "manual") return GcMode.Manual;
-	if (gc === "drc") return GcMode.Drc;
+	if (gc == "none") return GcMode.None;
+	if (gc == "manual") return GcMode.Manual;
+	if (gc == "drc") return GcMode.Drc;
 	return GcMode.Orc;
 }
 
@@ -1390,7 +1390,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		// so a post-transform scan finds nothing. Reporting is deferred to after
 		// DCE (below) so async the program never reaches stays silent, and std/ is
 		// skipped entirely — the prelude declares async surface for every build.
-		if (opts.gcMode === "manual" && !(config.stdPath !== "" && modPath.startsWith(config.stdPath))) {
+		if (opts.gcMode == "manual" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
 				const hitLoc = freestandingAsyncLoc(hitNode);
 				fsAsyncHits.push({ modPath, source: cm.source, line: hitLoc.line, column: hitLoc.column });

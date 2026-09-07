@@ -263,7 +263,7 @@ function lspPercentDecode(s: string): string {
 	let i = 0;
 	while (i < s.length) {
 		const ch = s.charAt(i);
-		if (ch !== "%" || i + 2 >= s.length) {
+		if (ch != "%" || i + 2 >= s.length) {
 			out = out + ch;
 			i = i + 1;
 			continue;
@@ -291,7 +291,7 @@ function lspPercentDecode(s: string): string {
 		let taken = 0;
 		let ok = true;
 		while (taken < need) {
-			if (i + 2 >= s.length || s.charAt(i) !== "%") { ok = false; break; }
+			if (i + 2 >= s.length || s.charAt(i) != "%") { ok = false; break; }
 			const chi = lspHexDigit(s.charCodeAt(i + 1));
 			const clo = lspHexDigit(s.charCodeAt(i + 2));
 			if (chi < 0 || clo < 0) { ok = false; break; }
@@ -544,27 +544,27 @@ test "resolve import non-relative returns empty" {
 
 test "uri to path decodes the escaped windows drive colon" {
 	// What the VS Code plugin actually sends on Windows (vscode-uri toString).
-	assert lspUriToPath("file:///c%3A/Users/foo/bar.ms") === "c:/Users/foo/bar.ms";
-	assert lspUriToPath("file:///C%3A/Users/foo/bar.ms") === "C:/Users/foo/bar.ms";
+	assert lspUriToPath("file:///c%3A/Users/foo/bar.ms") == "c:/Users/foo/bar.ms";
+	assert lspUriToPath("file:///C%3A/Users/foo/bar.ms") == "C:/Users/foo/bar.ms";
 }
 
 test "uri to path decodes escaped spaces" {
-	assert lspUriToPath("file:///Users/My%20Docs/a.ms") === "/Users/My Docs/a.ms";
+	assert lspUriToPath("file:///Users/My%20Docs/a.ms") == "/Users/My Docs/a.ms";
 }
 
 test "uri to path leaves an unescaped uri unchanged" {
-	assert lspUriToPath("file:///C:/x/y.ms") === "C:/x/y.ms";
-	assert lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms";
+	assert lspUriToPath("file:///C:/x/y.ms") == "C:/x/y.ms";
+	assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms";
 }
 
 test "uri to path folds multi-byte utf-8 escapes into one code point" {
 	// caf%C3%A9 is two escapes for ONE character; byte-wise decoding would
 	// yield mojibake and a path that opens nothing.
 	const p = lspUriToPath("file:///Users/caf%C3%A9/a.ms");
-	assert p === "/Users/caf" + fromCodePoint(233) + "/a.ms";
+	assert p == "/Users/caf" + fromCodePoint(233) + "/a.ms";
 }
 
 test "uri to path keeps a literal percent that is not an escape" {
-	assert lspUriToPath("file:///Users/100%pure/a.ms") === "/Users/100%pure/a.ms";
-	assert lspUriToPath("file:///Users/a%zz/b.ms") === "/Users/a%zz/b.ms";
+	assert lspUriToPath("file:///Users/100%pure/a.ms") == "/Users/100%pure/a.ms";
+	assert lspUriToPath("file:///Users/a%zz/b.ms") == "/Users/a%zz/b.ms";
 }

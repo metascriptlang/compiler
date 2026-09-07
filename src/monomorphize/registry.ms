@@ -66,14 +66,14 @@ function monoOwnerPath(t: Type): string {
 function monoGenericOwner(gi: Type): string {
 	let base: Type | null = gi.typeExtra;
 	let hops = 0;
-	while (base !== null && hops < 8
-			&& (base.kind === TypeKind.Ref || base.kind === TypeKind.Ptr || base.kind === TypeKind.GenericInstance)) {
-		base = base.kind === TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
+	while (base != null && hops < 8
+			&& (base.kind == TypeKind.Ref || base.kind == TypeKind.Ptr || base.kind == TypeKind.GenericInstance)) {
+		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
 		hops = hops + 1;
 	}
-	if (base !== null) {
+	if (base != null) {
 		const owner = monoOwnerPath(base);
-		if (owner !== "") return owner;
+		if (owner != "") return owner;
 	}
 	return getGlobalTypeOwner(gi.typeName);
 }
@@ -86,7 +86,7 @@ function monoGenericOwner(gi: Type): string {
 // the pending-instance dedup key. An unknown owner (test contexts, builtins
 // that are never declared) keeps the bare spelling.
 export function monoBaseName(baseName: string, ownerPath: string): string {
-	if (baseName === "" || ownerPath === "") return baseName;
+	if (baseName == "" || ownerPath == "") return baseName;
 	if (baseName.indexOf("__", 0) >= 0) return baseName;
 	return baseName + "_" + hashToBase36(ownerPath);
 }

@@ -280,7 +280,7 @@ function extractFmt(fmtNode: Node): FmtSection {
 // Extract LspSection from an ObjectLiteral node.
 function extractLsp(lspNode: Node): LspSection {
 	const lsp = defaultLspSection();
-	if (lspNode === null || lspNode.kind !== NodeKind.ObjectLiteral) return lsp;
+	if (lspNode == null || lspNode.kind != NodeKind.ObjectLiteral) return lsp;
 	const os = nodeString(findObjField(lspNode, "os"));
 	if (os.length > 0) lsp.os = os;
 	const gc = nodeString(findObjField(lspNode, "gc"));
@@ -491,18 +491,18 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 		}
 	}
 	const lspNode = findObjField(configObj, "lsp");
-	if (lspNode !== null && lspNode.kind === NodeKind.ObjectLiteral) {
+	if (lspNode != null && lspNode.kind == NodeKind.ObjectLiteral) {
 		const osNode = findObjField(lspNode, "os");
-		if (osNode !== null) {
+		if (osNode != null) {
 			const osVal = nodeString(osNode);
-			if (osVal !== "bare" && osVal !== "solana" && osVal !== "wasm" && osVal !== "emcc" && osVal !== "linux" && osVal !== "macos" && osVal !== "windows" && osVal !== "darwin" && osVal !== "freebsd" && osVal !== "ios" && osVal !== "android") {
+			if (osVal != "bare" && osVal != "solana" && osVal != "wasm" && osVal != "emcc" && osVal != "linux" && osVal != "macos" && osVal != "windows" && osVal != "darwin" && osVal != "freebsd" && osVal != "ios" && osVal != "android") {
 				warnings.push({ message: `lsp.os: unknown target '${osVal}' — valid: bare, solana, wasm, emcc, linux, macos, windows, darwin, freebsd, ios, android`, line: osNode.location.line });
 			}
 		}
 		const gcNode = findObjField(lspNode, "gc");
-		if (gcNode !== null) {
+		if (gcNode != null) {
 			const gcVal = nodeString(gcNode);
-			if (gcVal !== "none" && gcVal !== "manual" && gcVal !== "drc" && gcVal !== "orc") {
+			if (gcVal != "none" && gcVal != "manual" && gcVal != "drc" && gcVal != "orc") {
 				warnings.push({ message: `lsp.gc: unknown mode '${gcVal}' — valid: none, manual, drc, orc`, line: gcNode.location.line });
 			}
 		}
@@ -528,9 +528,9 @@ export function loadLspSection(dir: string): LspSection {
 	const buildPath = dir + "/build.ms";
 	if (!exists(buildPath)) return defaultLspSection();
 	const lspSource = try readFile(buildPath) catch "";
-	if (lspSource.length === 0) return defaultLspSection();
+	if (lspSource.length == 0) return defaultLspSection();
 	const configObj = parseBuildSource(lspSource);
-	if (configObj === null) return defaultLspSection();
+	if (configObj == null) return defaultLspSection();
 	return extractLsp(findObjField(configObj, "lsp"));
 }
 
@@ -629,32 +629,32 @@ test "extractGlobalImports absent yields empty" {
 
 test "extractLsp reads os and gc" {
 	const cfg = testExtractFromSource("const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;");
-	assert cfg.lsp.os === "bare";
-	assert cfg.lsp.gc === "manual";
+	assert cfg.lsp.os == "bare";
+	assert cfg.lsp.gc == "manual";
 }
 
 test "extractLsp absent yields defaults" {
 	const cfg = testExtractFromSource("const config = { entry: \"./src/index\" }; export default config;");
-	assert cfg.lsp.os === "";
-	assert cfg.lsp.gc === "";
+	assert cfg.lsp.os == "";
+	assert cfg.lsp.gc == "";
 }
 
 test "extractLsp partial fields" {
 	const cfg = testExtractFromSource("const config = { lsp: { os: \"solana\" } }; export default config;");
-	assert cfg.lsp.os === "solana";
-	assert cfg.lsp.gc === "";
+	assert cfg.lsp.os == "solana";
+	assert cfg.lsp.gc == "";
 }
 
 test "validateBuildConfig flags bad lsp.os and lsp.gc" {
 	const src = "const config = { lsp: { os: \"bar\", gc: \"arc\" } }; export default config;";
 	const warnings = validateBuildConfig(".", src);
-	assert warnings.length === 2;
+	assert warnings.length == 2;
 }
 
 test "validateBuildConfig accepts valid lsp values" {
 	const src = "const config = { lsp: { os: \"bare\", gc: \"manual\" } }; export default config;";
 	const warnings = validateBuildConfig(".", src);
-	assert warnings.length === 0;
+	assert warnings.length == 0;
 }
 
 test "extractDeps empty block" {

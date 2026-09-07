@@ -88,21 +88,21 @@ function b134ShadowWithoutCapture(): string {
 }
 
 test "bug134: a nested-block shadow keeps its own storage inside a loop" {
-	assert b134BlockShadowInLoop() === "900,901,901,902,902,903,|100,101,102,";
+	assert b134BlockShadowInLoop() == "900,901,901,902,902,903,|100,101,102,";
 }
 
 test "bug134: a nested-block shadow does not overwrite the captured slot" {
-	assert b134BlockShadowNoLoop() === "900,901,cap=100";
+	assert b134BlockShadowNoLoop() == "900,901,cap=100";
 }
 
 test "bug134: a local in a nested arrow body is that arrow's own binding" {
-	assert b134ShadowInNestedArrow() === "700,50";
+	assert b134ShadowInNestedArrow() == "700,50";
 }
 
 test "bug134: an if-block shadow keeps its own storage" {
-	assert b134ShadowInIfBlock() === "900,100";
+	assert b134ShadowInIfBlock() == "900,100";
 }
 
 test "bug134: shadowing without any capture is unchanged" {
-	assert b134ShadowWithoutCapture() === "900,100,901,101,";
+	assert b134ShadowWithoutCapture() == "900,100,901,101,";
 }

@@ -68,16 +68,16 @@ let _lspTargetCacheValues: LspTarget[] = [];
 export function getLspTarget(path: string): LspTarget {
 	const projectRoot = findProjectRoot(path);
 	for (let i = 0; i < _lspTargetCacheKeys.length; i = i + 1) {
-		if (_lspTargetCacheKeys[i] === projectRoot) return _lspTargetCacheValues[i];
+		if (_lspTargetCacheKeys[i] == projectRoot) return _lspTargetCacheValues[i];
 	}
 	let section: LspSection = { os: "", gc: "" };
-	if (projectRoot !== "") {
+	if (projectRoot != "") {
 		section = loadLspSection(projectRoot);
 	}
-	const os = section.os !== "" ? section.os : platform;
-	const gc = section.gc !== ""
+	const os = section.os != "" ? section.os : platform;
+	const gc = section.gc != ""
 		? section.gc
-		: ((os === "bare" || os === "solana") ? "manual" : "orc");
+		: ((os == "bare" || os == "solana") ? "manual" : "orc");
 	const target: LspTarget = { os, gc };
 	_lspTargetCacheKeys.push(projectRoot);
 	_lspTargetCacheValues.push(target);
@@ -261,13 +261,13 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	// error — the editor cannot know if the user will build with a different
 	// target. Silent unless the lsp section opts in (host default never manual).
 	const lspTarget = getLspTarget(path);
-	if (lspTarget.gc === "manual" && !(db.stdPath !== "" && path.startsWith(db.stdPath))) {
+	if (lspTarget.gc == "manual" && !(db.stdPath != "" && path.startsWith(db.stdPath))) {
 		const fsProgram = dbGetCheckedProgram(db, path);
-		if (fsProgram !== null) {
+		if (fsProgram != null) {
 			const fsHits = collectFreestandingAsync(fsProgram);
 			for (let fi = 0; fi < fsHits.length; fi = fi + 1) {
 				const loc = freestandingAsyncLoc(fsHits[fi]);
-				if (loc === null) continue;
+				if (loc == null) continue;
 				const fsLine = loc.line > 0 ? loc.line - 1 : 0;
 				const fsCol = loc.column > 0 ? loc.column - 1 : 0;
 				if (diagCount > 0) diagArray = diagArray + ",";
@@ -417,11 +417,11 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 
 function lspProbeTmpDir(): string {
 	const t = env.get("TMP");
-	if (t !== "") return t;
+	if (t != "") return t;
 	const t2 = env.get("TEMP");
-	if (t2 !== "") return t2;
+	if (t2 != "") return t2;
 	const t3 = env.get("TMPDIR");
-	if (t3 !== "") return t3;
+	if (t3 != "") return t3;
 	return "/tmp";
 }
 
@@ -431,8 +431,8 @@ test "getLspTarget infers manual for bare os" {
 	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\" } };\n\nexport default config;\n");
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
-	assert t.os === "bare";
-	assert t.gc === "manual";
+	assert t.os == "bare";
+	assert t.gc == "manual";
 }
 
 test "getLspTarget keeps explicit gc over inference" {
@@ -441,8 +441,8 @@ test "getLspTarget keeps explicit gc over inference" {
 	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\", gc: \"drc\" } };\n\nexport default config;\n");
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
-	assert t.os === "bare";
-	assert t.gc === "drc";
+	assert t.os == "bare";
+	assert t.gc == "drc";
 }
 
 test "getLspTarget defaults to host + orc without section" {
@@ -451,6 +451,6 @@ test "getLspTarget defaults to host + orc without section" {
 	writeFile(dir + "/build.ms", "const config = { entry: \"./src/index\" };\n\nexport default config;\n");
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
-	assert t.os === platform;
-	assert t.gc === "orc";
+	assert t.os == platform;
+	assert t.gc == "orc";
 }

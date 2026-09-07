@@ -89,19 +89,19 @@ function main(): void {
 	console.log("shadowInNestedArrow=" + c);
 	console.log("shadowInIfBlock=" + d);
 	console.log("shadowWithoutCapture=" + e);
-	if (a !== "900,901,901,902,902,903,|100,101,102,") {
+	if (a != "900,901,901,902,902,903,|100,101,102,") {
 		throw "GUARD RED: a nested-block shadow aliased the captured loop-local, got=" + a;
 	}
-	if (b !== "900,901,cap=100") {
+	if (b != "900,901,cap=100") {
 		throw "GUARD RED: a nested-block shadow overwrote the captured binding's env slot, got=" + b;
 	}
-	if (c !== "700,50") {
+	if (c != "700,50") {
 		throw "GUARD RED: a local inside a nested arrow resolved through the outer env, got=" + c;
 	}
-	if (d !== "900,100") {
+	if (d != "900,100") {
 		throw "GUARD RED: an if-block shadow aliased the captured binding, got=" + d;
 	}
-	if (e !== "900,100,901,101,") {
+	if (e != "900,100,901,101,") {
 		throw "GUARD RED: shadowing without any capture changed meaning, got=" + e;
 	}
 	console.log("GUARD-OK");
