@@ -1463,6 +1463,55 @@ export function createDistinct(inner: Type): Type {
 	return t;
 }
 
+// ===== BitSet<E> =====
+// The std declaration `distinct type BitSet<E> = int64` is registered here when
+// the checker resolves it, so operator inference can build an instance without a
+// symbol table. Same shape as the Locked/Var special cases in resolveAnnotation.
+let _bitSetBase: Type | null = null;
+
+export function registerBitSetBase(t: Type): void { _bitSetBase = t; }
+
+// BitSet numbers members by ORDINAL. An enum whose members carry hand-assigned
+// values (1, 2, 4, ...) is already a flag encoding, so combining it must keep the
+// existing numeric meaning — applying BitSet there would encode the bits twice.
+export function isOrdinalEnum(t: Type | null): boolean {
+	if (t == null || t.kind != TypeKind.Enum) return false;
+	if (t.typeChildren.length == 0) return false;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const v = t.typeChildren[i];
+		if (v == null) return false;
+		if ((v.typeFlags as int32) != (i as int32)) return false;
+	}
+	return true;
+}
+
+// A generic distinct/alias instance is nominal to the checker only; its
+// representation is the substituted body. Backends that switch on width need
+// that body, not the instance.
+export function distinctInstanceRepr(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind != TypeKind.GenericInstance) return null;
+	const base = t.typeExtra;
+	if (base == null || base.typeReturn == null) return null;
+	if (base.kind != TypeKind.Distinct && base.kind != TypeKind.Alias) return null;
+	return base.typeReturn;
+}
+
+export function bitSetElemType(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind != TypeKind.GenericInstance) return null;
+	if (t.typeName != "BitSet") return null;
+	if (t.typeChildren.length != 1) return null;
+	return t.typeChildren[0];
+}
+
+export function createBitSet(elem: Type): Type | null {
+	if (_bitSetBase == null) return null;
+	const gi = createGenericInstance(_bitSetBase, [elem]);
+	gi.typeName = "BitSet";
+	return gi;
+}
+
 export function createBrandDistinct(brandKey: string, inner: Type): Type {
 	const t = createDistinct(inner);
 	t.typeName = brandKey;
@@ -3032,6 +3081,18 @@ function typeDisplayNameInner(t: Type | null): string {
 	// Locked<T> is a Ref onto the generated cell struct, so typeNameOf would
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
+	// A generic instance over a distinct body erases to its base name, so two
+	// different instantiations render identically ("expected X, got X"). Spell
+	// the type arguments the user wrote.
+	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0
+		&& t.typeExtra != null && t.typeExtra.kind == TypeKind.Distinct) {
+		let argsText = "";
+		for (let ai = 0; ai < t.typeChildren.length; ai += 1) {
+			if (ai > 0) { argsText = argsText + ", "; }
+			argsText = argsText + typeDisplayName(t.typeChildren[ai]);
+		}
+		return t.typeName + "<" + argsText + ">";
+	}
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an

@@ -21,7 +21,7 @@ import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeIdent, makeMember, makeNumber } from "../util";
-import { createPrimitive, isIntegerType } from "../../checker/types";
+import { createPrimitive, isIntegerType, distinctInstanceRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
@@ -34,7 +34,10 @@ function is64Kind(kind: TypeKind): boolean {
 }
 
 function is64Type(t: Type | null): boolean {
-	return t != null && is64Kind(t.kind);
+	if (t == null) return false;
+	if (is64Kind(t.kind)) return true;
+	const repr = distinctInstanceRepr(t);
+	return repr != null && is64Kind(repr.kind);
 }
 
 function isNarrowIntType(t: Type | null): boolean {

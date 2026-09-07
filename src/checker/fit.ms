@@ -7,7 +7,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
+import { bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -113,7 +113,30 @@ export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	return synthCall;
 }
 
+// `Flag.A | Flag.B` is a set of enum members, not the numeric OR of their
+// ordinals — the values are ordinals, so the numeric result is meaningless.
+// Mirrors the reference's `set[T]`: membership is by ordinal bit position.
+function inferBitSetOp(op: string, leftType: Type, rightType: Type): Type | null {
+	if (leftType == null || rightType == null) return null;
+	if (op != "|" && op != "&" && op != "^") return null;
+	const leftElem = bitSetElemType(leftType);
+	if (leftElem != null) {
+		if (rightType.kind == TypeKind.Enum && rightType.typeName == leftElem.typeName) return leftType;
+		const rightElem = bitSetElemType(rightType);
+		if (rightElem != null && rightElem.typeName == leftElem.typeName) return leftType;
+		return null;
+	}
+	if (leftType.kind == TypeKind.Enum && rightType.kind == TypeKind.Enum
+		&& leftType.typeName != "" && leftType.typeName == rightType.typeName
+		&& isOrdinalEnum(leftType)) {
+		return createBitSet(leftType);
+	}
+	return null;
+}
+
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
+	const bitSetResult = inferBitSetOp(op, leftType, rightType);
+	if (bitSetResult != null) return bitSetResult;
 	if (leftType != null && rightType != null
 		&& leftType.kind == TypeKind.BigInt && rightType.kind == TypeKind.BigInt
 		&& (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
@@ -249,7 +272,29 @@ export function isBitwiseBinaryOp(op: string): boolean {
 
 export function isBitwiseAllowed(t: Type | null): boolean {
 	if (t == null) return false;
+	if (bitSetElemType(t) != null) return true;
 	return isIntegerType(t) || t.kind == TypeKind.Enum || t.kind == TypeKind.BigInt;
+}
+
+const BITSET_MAX_MEMBERS: int32 = 32;
+
+// A BitSet combines only with its own element enum or an identical BitSet;
+// anything else is a silently wrong mask, so it is rejected here rather than
+// falling through to the integer rule.
+function reportBitSetMismatch(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
+	const leftElem = bitSetElemType(leftType);
+	const rightElem = bitSetElemType(rightType);
+	if (leftElem == null && rightElem == null) return false;
+	const sizedElem = leftElem != null ? leftElem : rightElem;
+	if (sizedElem != null && sizedElem.typeNames.length > BITSET_MAX_MEMBERS) {
+		addError(ctx, "BitSet holds at most " + BITSET_MAX_MEMBERS.toString() + " members; enum '" + sizedElem.typeName + "' has " + sizedElem.typeNames.length.toString(), node.location.line, node.location.column);
+		return true;
+	}
+	const leftName = leftElem != null ? leftElem.typeName : (leftType != null && leftType.kind == TypeKind.Enum ? leftType.typeName : "");
+	const rightName = rightElem != null ? rightElem.typeName : (rightType != null && rightType.kind == TypeKind.Enum ? rightType.typeName : "");
+	if (leftName != "" && leftName == rightName) return false;
+	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
+	return true;
 }
 
 // TS parity: bigint never coerces to or from another numeric type, so a mixed
@@ -275,6 +320,7 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 }
 
 export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
+	if (reportBitSetMismatch(ctx, op, leftType, rightType, node)) return;
 	const leftInt = leftType != null && isBitwiseAllowed(leftType);
 	const rightInt = rightType != null && isBitwiseAllowed(rightType);
 	const leftNum = leftType != null && leftType.kind == TypeKind.Number;
