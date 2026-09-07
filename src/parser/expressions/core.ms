@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, stampEnd } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -67,7 +67,6 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			if (isGenericCallAhead(state)) {
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs != "") {
-					addExplicitTypeArg(token.line as int32, token.column as int32, typeArgs);
 					state.pendingTypeArg = typeArgs;
 				}
 				continue;
@@ -384,10 +383,8 @@ function parsePrimary(state: ParserState): ExprResult {
 		let newTypeArg = "";
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
 			if (isGenericCallAhead(state)) {
-				const ltToken = current(state);
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs != "") {
-					addExplicitTypeArg(ltToken.line as int32, ltToken.column as int32, typeArgs);
 					newTypeArg = typeArgs;
 				}
 			}

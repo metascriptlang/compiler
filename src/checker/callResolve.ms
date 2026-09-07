@@ -5,7 +5,7 @@ import { ArrayAccessData, ArrayLiteralData, BlockStmtData, BooleanLiteralData, C
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
-import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
+import { findCallTypeArg, getGenericDecl } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
@@ -64,10 +64,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	const genericParams = getGenericDecl(calleeName);
 	if (genericParams == "") return calleeType;
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
-	let typeArgStr = astTypeArg;
-	if (typeArgStr == "") {
-		typeArgStr = getExplicitTypeArg(callee.location.line, ltCol);
-	}
+	const typeArgStr = astTypeArg;
 	let args: string[] = [];
 	const paramNames = splitTopLevel(genericParams, ",");
 	const trimmedParamNames: string[] = [];
@@ -429,7 +426,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.
 		if (id.name == "Arc" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
-			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+			const typeArgStr = node.typeArg;
 			let pointee = null as unknown as Type;
 			if (typeArgStr != "") {
 				pointee = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
@@ -453,7 +450,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// already drives. nativeLower boxes it via msBoxLocked.
 		if (id.name == "Locked" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
-			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+			const typeArgStr = node.typeArg;
 			let payload = null as unknown as Type;
 			if (typeArgStr != "") {
 				payload = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
@@ -495,7 +492,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				sgRecordSym(ctx, d.newCallee.location.line, d.newCallee.location.column, d.newCallee.location.column + 5, arraySym, arraySym.symbolType, arraySym.symbolKind, "Array", "", false);
 			}
 			const ltCol = d.newCallee.location.column + id.name.length;
-			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+			const typeArgStr = node.typeArg;
 			if (typeArgStr != "") {
 				const trimmed = typeArgStr.trim();
 				const elemType = resolveAnnotation(trimmed, ctx, d.newCallee.location.line, ltCol + 1);
@@ -528,9 +525,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		const calleeName2 = (d.newCallee.data as IdentifierData).name;
 		const genericParams2 = getGenericDecl(calleeName2);
 		if (genericParams2 != "") {
-			const ltCol2 = d.newCallee.location.column + calleeName2.length;
-			const typeArgStr2 = getExplicitTypeArg(d.newCallee.location.line, ltCol2);
-			const noExplicit = typeArgStr2 == "" && (node.typeArg == null || node.typeArg == "");
+			const noExplicit = node.typeArg == "";
 			// Treat the contextual-inference path as "satisfied" iff the
 			// peeled expected type matched the callee's name. Without this
 			// guard a contextual mismatch (`const m: Map<K,V> = new Set()`)

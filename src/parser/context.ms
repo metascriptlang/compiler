@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/context.zig
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, CallExprData, IdentifierData, MemberExprData } from "../ast/node";
+import { Node } from "../ast/node";
 import { DefineTable, createDefineTable } from "../compiler/defines";
 // Local copy of util.ms:isIdentLike to avoid circular import with util.ms.
 // Must stay in sync with the canonical version in util.ms.
@@ -365,77 +365,10 @@ export function skipDestructurePattern(state: ParserState): void {
 	}
 }
 
-// ===== Explicit Type Args Side-Channel =====
-// Parser stores explicit type args (e.g., foo<number>(x)) keyed by call site location.
-// Monomorphize reads this. Checker is not involved — callee name stays clean.
-// Uses interface + factory function (same pattern as NodeCache / CtxCache).
+// ===== Explicit Type Args =====
 
-interface TypeArgEntry {
-	key: string;
-	val: string;
-}
-
-interface TypeArgStore {
-	items: TypeArgEntry[];
-}
-
-function createTypeArgStore(): TypeArgStore {
-	const items: TypeArgEntry[] = [];
-	return { items };
-}
-
-let _typeArgStore: TypeArgStore = createTypeArgStore();
-
-export function resetExplicitTypeArgs(): void {
-	_typeArgStore = createTypeArgStore();
-}
-
-export function addExplicitTypeArg(line: int32, col: int32, typeArgStr: string): void {
-	const key = `${line}:${col}`;
-	const entry: TypeArgEntry = { key, val: typeArgStr };
-	_typeArgStore.items.push(entry);
-}
-
-export function getExplicitTypeArg(line: int32, col: int32): string {
-	const key = `${line}:${col}`;
-	for (const item of _typeArgStore.items) {
-		if (item.key == key) return item.val;
-	}
-	return "";
-}
-
-// Find explicit type arg for a call node. The parser stores type args at the '<' token position,
-// but CallExpr node location is at '('. Compute '<' position from callee name.
 export function findCallTypeArg(node: Node): string {
-	// Primary: read from AST-resident field (set by parser, survives C compilation)
-	if (node.typeArg != null && node.typeArg != "") return node.typeArg;
-	// Fallback: legacy side-channel lookup (for nodes created without pendingTypeArg, e.g. NewExpr)
-	const cd = node.data as CallExprData;
-	let result = getExplicitTypeArg(node.location.line, node.location.column);
-	if (result != "") return result;
-	if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
-		const calleeName = (cd.callee.data as IdentifierData).name;
-		const ltCol = cd.callee.location.column + calleeName.length;
-		result = getExplicitTypeArg(cd.callee.location.line, ltCol);
-		if (result != "") return result;
-	}
-	if (cd.callee != null && cd.callee.kind == NodeKind.MemberExpr) {
-		const me = cd.callee.data as MemberExprData;
-		const propLen = me.property.length;
-		const ltCol1 = cd.callee.location.column + propLen;
-		result = getExplicitTypeArg(cd.callee.location.line, ltCol1);
-		if (result != "") return result;
-		result = getExplicitTypeArg(cd.callee.location.line, ltCol1 + 1);
-		if (result != "") return result;
-		if (me.object != null && me.object.kind == NodeKind.Identifier) {
-			const objName = (me.object.data as IdentifierData).name;
-			const propCol = me.object.location.column + objName.length + 1;
-			const ltCol2 = propCol + propLen;
-			result = getExplicitTypeArg(cd.callee.location.line, ltCol2);
-			if (result != "") return result;
-		}
-	}
-	return "";
+	return node.typeArg;
 }
 
 export function consumePendingTypeArg(state: ParserState): string {
@@ -447,7 +380,6 @@ export function consumePendingTypeArg(state: ParserState): string {
 // ===== Generic Declaration Side-Channel =====
 // Parser stores generic params for interface/class declarations (e.g., interface Box<T>).
 // Checker reads this to create GenericParam types for field resolution.
-// Same pattern as TypeArgStore above.
 
 interface GenericDeclEntry {
 	key: string;        // interface/class name
@@ -562,7 +494,6 @@ export function resetGenericTypeInsts(): void {
 
 // Centralized reset for all side-channel stores (prevents stale data across test runs)
 export function resetAllSideChannels(): void {
-	resetExplicitTypeArgs();
 	resetGenericDeclStore();
 	resetGenericTypeInsts();
 }
