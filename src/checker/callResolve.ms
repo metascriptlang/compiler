@@ -1757,6 +1757,36 @@ function getGenericDeclFlags(declNode: Node): string {
 	return "";
 }
 
+function bindingConflictSkipArg(arg: Node): boolean {
+	if (arg == null) return true;
+	if (arg.kind == NodeKind.ArrowFunction || arg.kind == NodeKind.FunctionExpr) return true;
+	const t = arg.nodeType;
+	if (t == null) return true;
+	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
+}
+
+function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32, calleeType: Type): void {
+	if (argIdx >= cd.arguments.length) return;
+	const arg = cd.arguments[argIdx];
+	if (bindingConflictSkipArg(arg)) return;
+	for (let i = 0; i < fb.names.length; i += 1) {
+		const newT = fb.types[i];
+		if (newT == null || hasGenericParams(newT)) continue;
+		for (let j = 0; j < eb.names.length; j += 1) {
+			if (eb.names[j] != fb.names[i]) continue;
+			const boundT = eb.types[j];
+			if (boundT == null || hasGenericParams(boundT)) break;
+			if (isAssignable(newT, boundT)) break;
+			const from = j < ebFrom.length ? ebFrom[j] : 0;
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
+				+ ": got " + typeDisplayName(newT) + ", expected " + typeDisplayName(boundT)
+				+ " — '" + eb.names[j] + "' was bound by argument " + String(from),
+				arg.location.line, arg.location.column);
+			return;
+		}
+	}
+}
+
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
@@ -1767,6 +1797,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 
 	// Pass 1: unify args against params to derive bindings.
 	const eb = createUnifyBindings();
+	const ebFrom: int32[] = [];
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] != null) {
@@ -1785,7 +1816,9 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 					fb.types.push(ab.types[bi]);
 				}
 			}
+			reportBindingConflict(ctx, eb, ebFrom, fb, cd, i, calleeType);
 			mergeUnifyBindings(eb, fb);
+			while (ebFrom.length < eb.names.length) ebFrom.push(i);
 		}
 	}
 	// Pass 2: merge explicit type args. Required when args don't bind T
