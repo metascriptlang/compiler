@@ -20,6 +20,7 @@ import "./unionNarrow";
 import "./toStringResolve";
 import "./bitwiseCheck";
 import "./relationalCheck";
+import "./genericArgFit";
 import "./typeAliasStruct";
 import "./literalCoercion";
 import "./discriminatedUnion";
