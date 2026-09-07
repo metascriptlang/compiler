@@ -33,8 +33,8 @@ import {
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
-import { walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
-import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeString, makeIf, makeBinary, unboxVoidPtrToTyped } from "../util";
+import { walkExpandBlocksHooked, containsExprKind, replaceInExpr, walkNode } from "../walker";
+import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -497,7 +497,22 @@ function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext
 
 // ===== Entry Point =====
 
+function blockifyAwaitingArrows(program: Node): void {
+	walkNode(program, (n: Node): Node => {
+		if (n.kind == NodeKind.ArrowFunction) {
+			const d = n.data as ArrowFunctionData;
+			const body = d.arrowBody;
+			if (body != null && body.kind != NodeKind.BlockStmt
+					&& containsExprKind(body, NodeKind.AwaitExpr)) {
+				d.arrowBody = makeBlock([makeReturn(body, body.location)], body.location);
+			}
+		}
+		return n;
+	});
+}
+
 export function lowerAwait(program: Node, ctx: TransformContext): Node {
+	blockifyAwaitingArrows(program);
 	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
 	walkExpandBlocksHooked(program, expandStmt, ctx,
 		(_fn: Node): void => { _spawnSlotMap = new HashMap<string, SpawnSlotEntry>(); },
