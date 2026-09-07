@@ -109,6 +109,7 @@ export enum SymbolFlag {
 	                       // SEND-class handoff — plain-ref args transfer ownership into the message
 	AwaitHandle = 268435456, // awaitLower's `$fut` hoist temp: the initializer call is PARKED on
 	                         // (msWaitForReady below) — its args pass as borrows; the scope outlives the flight
+	Cursor = 536870912, // binding does not own its referent — DRC skips incref and destroy
 }
 
 // Flag helpers
@@ -118,6 +119,10 @@ export function hasFlag(sym: Symbol, flag: SymbolFlag): boolean {
 
 export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags | flag;
+}
+
+export function isCursorSym(sym: Symbol | null): boolean {
+	return sym != null && (sym.symFlags & SymbolFlag.Cursor) != 0;
 }
 
 // Mark a symbol as used (referenced).
