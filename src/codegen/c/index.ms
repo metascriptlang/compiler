@@ -194,11 +194,14 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addNewline(b);
 
 	// Global variables (must precede function bodies that reference them)
-	addLine(b, "int cmdCount;");
-	addLine(b, "char** cmdLine;");
-	addLine(b, "char** gEnv;");
-	addLine(b, "int msProgramResult;");
-	addNewline(b);
+	const contractMode = targetOs == "solana";
+	if (!contractMode) {
+		addLine(b, "int cmdCount;");
+		addLine(b, "char** cmdLine;");
+		addLine(b, "char** gEnv;");
+		addLine(b, "int msProgramResult;");
+		addNewline(b);
+	}
 
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
 	addLine(b, "static void MsPreMainInner(void) {");
@@ -249,7 +252,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 			addLine(b, "uint64_t entrypoint(const uint8_t* input) {");
 			addLine(b, "  (void)input;");
 			addLine(b, "  MsMain();");
-			addLine(b, "  return (uint64_t)msProgramResult;");
+			addLine(b, "  return 0;");
 			addLine(b, "}");
 		},
 		"wasm" => {
