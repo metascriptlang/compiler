@@ -607,6 +607,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as NumberLiteralData;
 			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(d.value);
 			heapObjectSetField(objHeap, handle, "value", v);
+			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
+			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
 		},
 		NodeKind.StringLiteral => {
 			const d = node.data as StringLiteralData;
@@ -843,6 +845,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as WhileStmtData;
 			setNode(objHeap, arrHeap, handle, "whileCondition", d.whileCondition);
 			setNode(objHeap, arrHeap, handle, "whileBody", d.whileBody);
+			setStr(objHeap, handle, "whileLabel", d.whileLabel);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
@@ -904,6 +907,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "catchName", d.catchName);
 			setNode(objHeap, arrHeap, handle, "catchBody", d.catchBody);
 			setNode(objHeap, arrHeap, handle, "finallyBody", d.finallyBody);
+			setBool(objHeap, handle, "hasCatchClause", d.hasCatchClause);
 		},
 
 		// === Declarations ===
@@ -931,6 +935,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "aliasName", d.aliasName);
 			setStr(objHeap, handle, "aliasType", d.aliasType);
 			setBool(objHeap, handle, "aliasIsDistinct", d.aliasIsDistinct);
+			setStr(objHeap, handle, "aliasGenericParams", d.aliasGenericParams);
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
@@ -942,6 +947,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "interfaceName", d.interfaceName);
 			setStrs(objHeap, arrHeap, handle, "interfaceFields", d.interfaceFields);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
+			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
@@ -1348,7 +1354,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			// it was asked to carry.
 			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind === RaiserValueKind.Float, intVal: value as int64 }, loc);
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind === RaiserValueKind.Float, intVal: value as int64, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
 		},
 		NodeKind.StringLiteral => {
 			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
@@ -1601,7 +1607,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.WhileStmt => {
 			const whileCondition = readNode(objHeap, arrHeap, h, "whileCondition", loc);
 			const whileBody = readNode(objHeap, arrHeap, h, "whileBody", loc);
-			return createNodeAt(NodeKind.WhileStmt, { whileCondition, whileBody }, loc);
+			return createNodeAt(NodeKind.WhileStmt, { whileCondition, whileBody, whileLabel: readStr(objHeap, h, "whileLabel") }, loc);
 		},
 		NodeKind.DoWhileStmt => {
 			const doBody = readNode(objHeap, arrHeap, h, "doBody", loc);
@@ -1663,7 +1669,9 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const catchBody = readNode(objHeap, arrHeap, h, "catchBody", loc);
 			const finallyBody = readNode(objHeap, arrHeap, h, "finallyBody", loc);
 			return createNodeAt(NodeKind.TryCatchStmt, {
-				tryBody, catchName, catchBody, finallyBody, catchBindingLocation: loc,
+				tryBody, catchName, catchBody, finallyBody,
+				hasCatchClause: readBool(objHeap, h, "hasCatchClause"),
+				catchBindingLocation: loc,
 			}, loc);
 		},
 
@@ -1698,6 +1706,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const aliasIsDistinct = readBool(objHeap, h, "aliasIsDistinct");
 			return createNodeAt(NodeKind.TypeAliasDecl, {
 				aliasName, aliasType, aliasIsDistinct,
+				aliasGenericParams: readStr(objHeap, h, "aliasGenericParams"),
 				discriminantName: "", discriminantType: "",
 				variantKeys: [], variantTypes: [], nameLocation: loc,
 			}, loc);
@@ -1714,7 +1723,9 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
 			return createNodeAt(NodeKind.InterfaceDecl, {
-				interfaceName, interfaceFields, interfaceFieldTypes, nameLocation: loc,
+				interfaceName, interfaceFields, interfaceFieldTypes,
+				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
+				nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.StructDecl => {
@@ -1722,7 +1733,9 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
 			return createNodeAt(NodeKind.StructDecl, {
-				interfaceName, interfaceFields, interfaceFieldTypes, nameLocation: loc,
+				interfaceName, interfaceFields, interfaceFieldTypes,
+				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
+				nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ClassDecl => {
@@ -3276,4 +3289,72 @@ test "ObjectLiteral keyLocations survive the node→value→node round-trip" {
 	assert d.keyLocations[0].column === 2;
 	assert d.keyLocations[1].line === 5;
 	assert d.keyLocations[1].column === 2;
+}
+
+test "round-trip InterfaceDecl keeps interfaceExtends" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.InterfaceDecl, {
+		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
+		interfaceExtends: ["Base"], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceExtends.length === 1, "a dropped extends list is a null array the resolver walks";
+	assert d.interfaceExtends[0] === "Base";
+}
+
+test "round-trip StructDecl keeps interfaceExtends" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.StructDecl, {
+		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
+		interfaceExtends: ["Base"], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceExtends.length === 1;
+}
+
+test "round-trip TypeAliasDecl keeps aliasGenericParams" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.TypeAliasDecl, {
+		aliasName: "Box", aliasType: "T", aliasIsDistinct: false,
+		aliasGenericParams: "T", discriminantName: "", discriminantType: "",
+		variantKeys: [], variantTypes: [], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as TypeAliasDeclData;
+	assert d.aliasGenericParams === "T";
+}
+
+test "round-trip WhileStmt keeps whileLabel" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const body = createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc));
+	const orig = createNode(NodeKind.WhileStmt, {
+		whileCondition: mkNumber(1, loc), whileBody: body, whileLabel: "outer",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as WhileStmtData;
+	assert d.whileLabel === "outer";
+}
+
+test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.NumberLiteral, {
+		value: 7, isFloat: false, intVal: 7 as int64,
+		isBitPattern: true, outOfRangeText: "0xFF",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as NumberLiteralData;
+	assert d.isBitPattern, "bit-pattern-ness is not recomputable from the value";
+	assert d.outOfRangeText === "0xFF";
 }
