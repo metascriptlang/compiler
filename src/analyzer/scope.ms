@@ -11,7 +11,6 @@
 import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
@@ -68,7 +67,6 @@ export interface DrcContext {
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
 	finallyProtectedVars: NameSet;  // vars in enclosing finally blocks — never last-read (Phase A)
-	cursors: CursorSet;             // cursor variables — skip all RC ops (Phase B)
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node | null;   // current function body for CFG building — Phase C
 	currentFuncName: string;        // current function name — for DRC hook detection
@@ -98,7 +96,6 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		currentStmtIdx: 0,
 		currentStmtList: [],
 		finallyProtectedVars: createNameSet(),
-		cursors: createCursorSet(),
 		cfgCache: createCfgCache(),
 		currentFuncBody: null,
 		currentFuncName: "",

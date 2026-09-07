@@ -12,7 +12,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../checker/types";
-import { lookupSymbol, hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
@@ -30,7 +30,7 @@ import {
 } from "./scope";
 import { isLastReadInContext } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
-import { inferCursors, isCursorVar, createCursorSet } from "./cursors";
+import { inferCursors } from "./cursors";
 import { isLastReadCfgCached, isLastReadCfgNodeCached, clearCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 
@@ -1668,7 +1668,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
 	// Phase B: infer cursor (borrowed) variables for this function
-	dctx.cursors = inferCursors(body);
+	inferCursors(body);
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
@@ -1698,7 +1698,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
 	popOuterStmts(dctx);  // pop function boundary sentinel
-	dctx.cursors = createCursorSet();  // Phase B: clear cursors after function
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
@@ -1757,7 +1756,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		}
 	}
 	// Phase B: check cursor inference results (borrow-only variables skip all RC)
-	if (isCursorVar(dctx.cursors, d.declName)) {
+	if (isCursorSym(stmt.resolvedSym)) {
 		isCursor = true;
 	}
 
@@ -2034,7 +2033,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		// Returning a cursor creates a new reference — must incref.
 		// Reference parity: the reference incref's at the assignment site inside the function;
 		// we skip DRC on cursor init, so we incref at the return instead.
-		if (isCursorVar(dctx.cursors, name) || (name.startsWith("$") && name != "$result")) {
+		if (isCursorSym(expr.resolvedSym) || (name.startsWith("$") && name != "$result")) {
 			if (expr.nodeType != null) {
 				const rc = sinkClassify(expr.nodeType, dctx.ctx);
 				return rc.needsCleanup && rc.rcKind == RcKind.Ref;

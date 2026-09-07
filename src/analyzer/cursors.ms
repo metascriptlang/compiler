@@ -14,7 +14,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, Symbol, SymbolKind, Type,
 	VariableDeclData, IdentifierData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -27,6 +27,7 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { setFlag, isCursorSym, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { parseInput } from "../transform/testUtil";
 
 // ===== Constants =====
@@ -61,6 +62,7 @@ interface Connection {
 
 interface VarEntry {
 	name: string;
+	sym: Symbol | null;
 	con: Connection;
 	flags: int32;
 	reassignedTo: string; // single source name ("" = none or multiple)
@@ -103,10 +105,11 @@ function variableId(p: Partitions, name: string): int32 {
 	return -1;
 }
 
-function registerVariable(p: Partitions, name: string, isParam: boolean): void {
+function registerVariable(p: Partitions, name: string, isParam: boolean, sym: Symbol | null): void {
 	if (variableId(p, name) >= 0) return;
 	p.vars.push({
 		name,
+		sym,
 		con: { kind: CK_EMPTY_ROOT, target: 0 },
 		flags: isParam ? VF_IS_PARAM : (0 as int32),
 		reassignedTo: "",
@@ -343,7 +346,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
-			registerVariable(p, d.declName, false);
+			registerVariable(p, d.declName, false, node.resolvedSym);
 			// Declared in loop body → effectively reassigned each iteration
 			if (p.inLoop > 0 && d.initializer != null) {
 				const vid = variableId(p, d.declName);
@@ -381,7 +384,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 			// Auto-register referenced variables not yet seen (params, outer scope).
 			// Treat as "external" — alive for the full function, never a cursor candidate.
 			if (variableId(p, name) < 0) {
-				registerVariable(p, name, true);
+				registerVariable(p, name, true, node.resolvedSym);
 			}
 			const id = variableId(p, name);
 			if (id >= 0) {
@@ -763,7 +766,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 // ===== Cursor Decision =====
 
-function computeCursorDecisions(p: Partitions): CursorSet {
+function computeCursorDecisions(p: Partitions): string[] {
 	const result: string[] = [];
 	let i = 0;
 	while (i < p.vars.length) {
@@ -794,23 +797,31 @@ function computeCursorDecisions(p: Partitions): CursorSet {
 
 // ===== Public API =====
 
-export type CursorSet = string[];
-
-export function createCursorSet(): CursorSet {
-	return [];
-}
-
-export function isCursorVar(cs: CursorSet, varName: string): boolean {
-	for (const n of cs) {
-		if (n == varName) return true;
+function nameListHas(names: string[], name: string): boolean {
+	for (const n of names) {
+		if (n == name) return true;
 	}
 	return false;
 }
 
+// Stamp every declaration whose name was decided a cursor. Names — not symbols —
+// key the union-find, so one decision covers every same-named declaration in the
+// body; stamping them all keeps that merge exact.
+function stampCursorSyms(node: Node | null, names: string[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		if (nameListHas(names, d.declName) && node.resolvedSym != null) {
+			setFlag(node.resolvedSym, SymbolFlag.Cursor);
+		}
+	}
+	forEachChild(node, (child: Node): void => { stampCursorSyms(child, names); });
+}
+
 // Main entry point — called once per function body, before DRC injection.
-export function inferCursors(body: Node): CursorSet {
-	if (body == null) return createCursorSet();
-	if (body.kind != NodeKind.BlockStmt) return createCursorSet();
+export function inferCursors(body: Node): void {
+	if (body == null) return;
+	if (body.kind != NodeKind.BlockStmt) return;
 
 	const p = createPartitions();
 
@@ -824,7 +835,7 @@ export function inferCursors(body: Node): CursorSet {
 	trav(p, body);
 
 	// Decision: which variables can safely be cursors?
-	return computeCursorDecisions(p);
+	stampCursorSyms(body, computeCursorDecisions(p));
 }
 
 // ===== Tests =====
@@ -842,93 +853,117 @@ function getFuncBody(input: string): Node {
 	if (stmts.length == 0) return null as unknown as Node;
 	const stmt = stmts[0];
 	if (stmt.kind == NodeKind.FunctionDecl) {
-		return (stmt.data as FunctionDeclData).fnBody;
+		const body = (stmt.data as FunctionDeclData).fnBody;
+		stampFixtureSyms(body);
+		return body;
 	}
 	return null as unknown as Node;
+}
+
+// Fixtures come from parseInput — parsed, never type-checked — so declarations
+// carry no symbol. Mint one per declaration so the assertions can read the flag
+// the production path reads.
+function stampFixtureSyms(node: Node | null): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym == null) {
+		const d = node.data as VariableDeclData;
+		node.resolvedSym = makeSymbol(d.declName, SymbolKind.Variable, null as unknown as Type, true);
+	}
+	forEachChild(node, (child: Node): void => { stampFixtureSyms(child); });
+}
+
+function isCursorNamed(node: Node | null, name: string): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declName == name) {
+		return isCursorSym(node.resolvedSym);
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found && isCursorNamed(child, name)) found = true; });
+	return found;
 }
 
 // --- Retained tests (adapted for union-find) ---
 
 test "local read-only borrow is cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr.length; }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "returned variable is cursor (return copies, safe)" {
 	// With union-find: x borrows from arr, no ownership, no mutation.
 	// DRC handles return via copy (isLastReadSafe returns false for cursors).
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; return x; }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "call argument is cursor (call copies, safe)" {
 	// x borrows from arr[0]. Passing to call: inject.ms copies (incref).
 	// No mutation on arr's graph → cursor is safe.
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; process(x); }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "assigned to another var: source is cursor, dest connects" {
 	// x borrows from arr[0]. y = x → y connects to x's graph.
 	// Both can be cursors if neither owns data.
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const y = x; }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
-	assert isCursorVar(cs, "y");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
+	assert isCursorNamed(body, "y");
 }
 
 test "let variable without reassignment is cursor" {
 	// let is fine if never reassigned — union-find tracks reassignment, not declKind.
 	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "index-write through alias is not cursor even when alias is never read" {
 	const body = getFuncBody("function f() { const vn: Vec<number> = [1, 2]; const cn = vn; cn[0] = 7; console.log(vn[0]); }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "cn");
+	inferCursors(body);
+	assert !isCursorNamed(body, "cn");
 }
 
 test "call result is NOT cursor (owns data)" {
 	const body = getFuncBody("function f() { const x = getValue(); }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "member access with only read use is cursor" {
 	const body = getFuncBody("function f(obj: { name: string }) { const name = obj.name; if (name) {} }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "name");
+	inferCursors(body);
+	assert isCursorNamed(body, "name");
 }
 
 test "thrown variable is cursor (throw copies, safe)" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; throw x; }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "stored in object is NOT cursor (constructor context)" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const obj = { val: x }; }");
-	const cs = inferCursors(body);
+	inferCursors(body);
 	// x appears in ObjectLiteral — pretendOwnsData in inAsgnSource context
 	// obj owns data (ObjectLiteral constructor), x gets ownsData via constructor context
-	assert !isCursorVar(cs, "x");
+	assert !isCursorNamed(body, "x");
 }
 
 test "DRC temp is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const $result = arr[0]; }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "$result");
+	inferCursors(body);
+	assert !isCursorNamed(body, "$result");
 }
 
 test "nested block cursor" {
 	const body = getFuncBody("function f(obj: { name: string }) { if (true) { const x = obj.name; } }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 // --- New tests for union-find-specific features ---
@@ -936,52 +971,52 @@ test "nested block cursor" {
 test "source mutated during cursor lifetime: NOT cursor" {
 	// x borrows from arr[0]. arr.push() mutates arr while x is alive → dangerousMutation.
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; arr.push(\"new\"); process(x); }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "source mutated BEFORE cursor: IS cursor" {
 	// arr.push() happens before x borrows → mutation not in cursor lifetime.
 	const body = getFuncBody("function f(arr: string[]) { arr.push(\"new\"); const x = arr[0]; process(x); }");
-	const cs = inferCursors(body);
-	assert isCursorVar(cs, "x");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
 }
 
 test "let reassigned variable is NOT cursor" {
 	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; x = arr[1]; }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "new expression result is NOT cursor" {
 	const body = getFuncBody("function f() { const x = new Foo(); }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "object literal result is NOT cursor" {
 	const body = getFuncBody("function f() { const x = { a: 1, b: 2 }; }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "array literal result is NOT cursor" {
 	const body = getFuncBody("function f() { const x = [1, 2, 3]; }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "move expression prevents cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const y = move x; }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "x");
+	inferCursors(body);
+	assert !isCursorNamed(body, "x");
 }
 
 test "connected variables share mutation graph" {
 	// a borrows from arr. b borrows from a (connected).
 	// arr.push mutates arr's graph → both a and b see it while they're alive.
 	const body = getFuncBody("function f(arr: string[]) { const a = arr[0]; const b = a; arr.push(\"x\"); process(a); process(b); }");
-	const cs = inferCursors(body);
-	assert !isCursorVar(cs, "a");
-	assert !isCursorVar(cs, "b");
+	inferCursors(body);
+	assert !isCursorNamed(body, "a");
+	assert !isCursorNamed(body, "b");
 }
