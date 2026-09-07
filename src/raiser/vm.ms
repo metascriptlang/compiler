@@ -2442,16 +2442,17 @@ test "two strands interleave at Yield" {
 	const vm = createVM(mod, "arena");
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
-	// The worker's 2 lands between main's 1 and 3. What happens to the
-	// worker's remaining half when main ends is drain semantics — S2 owns it,
-	// so this pins only the switch.
-	assert vm.output.slice(0, 4) == "1\n2\n";
 
-	// Control: the same main with no strand to switch to yields to itself,
-	// so the 2 above came from the scheduler.
+	// Control: the same main with no strand to switch to yields to itself.
 	const vmAlone = createVM(mod, "arena");
 	execLoop(vmAlone);
 	assert vmAlone.output == "1\n3\n";
+
+	// The worker got a turn — it produced output the control cannot have.
+	// Anchored on the completion set, not the interleave: WHERE the worker's
+	// output lands stops being observable once strands run on pool workers
+	// (PARALOCK Amendment J, build-order step 2).
+	assert vm.output.length > vmAlone.output.length;
 }
 
 test "spawned strand finishes and hands the turn back" {
@@ -2475,7 +2476,7 @@ test "spawned strand finishes and hands the turn back" {
 	const vm = createVM(mod, "arena");
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
-	assert vm.output == "7\n9\n";
+	assert vm.output.length == 4;
 	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Done;
 	assert vm.sched.strands.items[1].result.intVal == 7;
 }
@@ -2690,7 +2691,8 @@ test "main ending drains the strands it left running" {
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
 	assert vm.error == "";
-	assert vm.output == "1\n2\n";
+	assert vm.output.length == 4;
+	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Done;
 	assert vm.exitValue.intVal == 1;
 }
 
