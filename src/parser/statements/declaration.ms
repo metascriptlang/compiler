@@ -543,9 +543,26 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	advance(state);
 
+	// syntax: 'type' ID ('<' params '>')? '=' 'distinct'? type ';'
+	let aliasIsDistinct = false;
+	if (current(state).kind == TokenKind.Distinct) {
+		advance(state);
+		aliasIsDistinct = true;
+	}
+
 	// Discriminated union: type X = match (disc: EnumOrBool) { Key => { fields }, ... }
 	if (current(state).kind == TokenKind.Match) {
+		if (aliasIsDistinct) {
+			return Result.err(`A discriminated union cannot be distinct at line ${current(state).line}`);
+		}
 		return parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, typeToken, nameToken);
+	}
+
+	if (aliasIsDistinct) {
+		const afterDistinct = current(state).kind;
+		if (afterDistinct == TokenKind.Semicolon || afterDistinct == TokenKind.RBrace || afterDistinct == TokenKind.Eof) {
+			return Result.err(`Expected a type after 'distinct' at line ${current(state).line}`);
+		}
 	}
 
 	const typeStart = state.position;
@@ -562,7 +579,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	const aliasNode = createNode(NodeKind.TypeAliasDecl, {
 		aliasName: nameToken.value,
 		aliasType,
-		aliasIsDistinct: false,
+		aliasIsDistinct,
 		aliasGenericParams: genericNames,
 		discriminantName: "",
 		discriminantType: "",
@@ -2102,6 +2119,51 @@ test "distinct name field" {
 	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
 	assert d.aliasName == "Email";
 }
+
+test "distinct on the right-hand side" {
+	const d = stmtAt("type Meters = distinct int32;", 0).data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasName == "Meters";
+	assert d.aliasType == "int32";
+}
+
+test "right-hand distinct keeps a generic alias type intact" {
+	const d = stmtAt("type Rows = distinct Ref<int32>;", 0).data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasType == "Ref<int32>";
+}
+
+test "right-hand distinct carries generic params" {
+	const d = stmtAt("type Bits<E> = distinct uint32;", 0).data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasGenericParams == "E";
+	assert d.aliasType == "uint32";
+}
+
+test "exported right-hand distinct" {
+	const e = stmtAt("export type Bits<E> = distinct uint32;", 0).data as ExportDeclData;
+	const d = e.exportedDecl.data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasType == "uint32";
+}
+
+test "right-hand distinct spans the whole union" {
+	const d = stmtAt("type M = distinct int32 | null;", 0).data as TypeAliasDeclData;
+	assert d.aliasIsDistinct;
+	assert d.aliasType == "int32 | null";
+}
+
+test "distinct rejected on a variable annotation" { assert !programOk("const x: distinct int32 = 1;"); }
+
+test "distinct rejected on a parameter" { assert !programOk("function f(x: distinct int32): void {}"); }
+
+test "distinct rejected on an interface field" { assert !programOk("interface R { id: distinct int32; }"); }
+
+test "distinct rejected before a discriminated union" { assert !programOk("type X = distinct match (k: E) { A => { a: int32 } };"); }
+
+test "distinct rejected with no type after it" { assert !programOk("type X = distinct;"); }
+
+test "distinct rejected twice over" { assert !programOk("type X = distinct distinct int32;"); }
 
 test "type alias not distinct" {
 	const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;

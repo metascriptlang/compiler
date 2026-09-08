@@ -10,11 +10,15 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, collectTokenText } from "./context";
+import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, collectTokenText, addError } from "./context";
 import { lex } from "../lexer/lexer";
 
 
 type NodeResult = Result<Node, string>;
+
+export function distinctMisplacedMessage(line: int32): string {
+	return `'distinct' is only allowed at the start of a type alias right-hand side (type X = distinct Y) at line ${line}`;
+}
 
 // ===== Type Annotation Skipping =====
 
@@ -130,6 +134,11 @@ export function parseTypeExpr(state: ParserState): Node {
 
 function parseTypeAtom(state: ParserState): Node {
 	const token = current(state);
+
+	if (token.kind == TokenKind.Distinct) {
+		advance(state);
+		return parseTypeAtom(state);
+	}
 
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
@@ -398,6 +407,12 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 // where '?' is the ternary operator, not the optional marker).
 function skipTypeAtomNoOptional(state: ParserState): void {
 	const token = current(state);
+	if (token.kind == TokenKind.Distinct) {
+		addError(state, distinctMisplacedMessage(token.line));
+		advance(state);
+		skipTypeAtomNoOptional(state);
+		return;
+	}
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
@@ -442,6 +457,13 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 
 function skipTypeAtom(state: ParserState): void {
 	const token = current(state);
+
+	if (token.kind == TokenKind.Distinct) {
+		addError(state, distinctMisplacedMessage(token.line));
+		advance(state);
+		skipTypeAtom(state);
+		return;
+	}
 
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {

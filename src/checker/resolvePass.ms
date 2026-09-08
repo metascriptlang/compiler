@@ -239,6 +239,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		trimmed = trimmed.slice(1, trimmed.length - 1).trim();
 	}
 
+	// Balance-skipped positions (generic arguments, object-type fields) never reach
+	// skipTypeAtom, so this is where a misplaced `distinct` surfaces for them.
+	if (trimmed.length > 9 && trimmed.slice(0, 9) == "distinct ") {
+		addError(ctx, "'distinct' is only allowed at the start of a type alias right-hand side (type X = distinct Y)", line, col);
+		return errorType();
+	}
+
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
 	if (trimmed.length > 6 && trimmed.slice(0, 6) == "infer ") {
 		const inferName = trimmed.slice(6, trimmed.length).trim();
