@@ -1793,6 +1793,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// Pass 1: unify args against params to derive bindings.
 	const eb = createUnifyBindings();
 	const ebFrom: int32[] = [];
+	const explicitTypeArgs = findCallTypeArg(node) != "";
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] != null) {
@@ -1811,7 +1812,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 					fb.types.push(ab.types[bi]);
 				}
 			}
-			reportBindingConflict(ctx, eb, ebFrom, fb, cd, i, calleeType);
+			if (!explicitTypeArgs) reportBindingConflict(ctx, eb, ebFrom, fb, cd, i, calleeType);
 			mergeUnifyBindings(eb, fb);
 			while (ebFrom.length < eb.names.length) ebFrom.push(i);
 		}
