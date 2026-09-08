@@ -898,7 +898,7 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // Value type, so it has no mutating methods — `|` adds, `& ~` removes, `.has()`
 // asks. The checker gives `E.A | E.B` the type `BitSet<E>`.
 // See docs/LANG-PRIMITIVE.md for the design record.
-export distinct type BitSet<E> = uint32;
+export type BitSet<E> = distinct uint32;
 
 export function has<E>(this self: BitSet<E>, member: E): boolean {
 	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;

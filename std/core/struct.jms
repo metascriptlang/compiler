@@ -73,7 +73,7 @@ export extern function toItems<T>(this s: Set<T>): T[] from "Array.from(#.values
 // Same source as the native prelude: a set of enum members in one word, bit
 // position = member ordinal. uint32 keeps this a plain Number on this backend —
 // no BigInt, so the operators are the machine's own.
-export distinct type BitSet<E> = uint32;
+export type BitSet<E> = distinct uint32;
 
 export function has<E>(this self: BitSet<E>, member: E): boolean {
 	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;
