@@ -3358,3 +3358,71 @@ test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
 	assert d.isBitPattern, "bit-pattern-ness is not recomputable from the value";
 	assert d.outOfRangeText == "0xFF";
 }
+
+test "round-trip InterfaceDecl keeps interfaceExtends" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.InterfaceDecl, {
+		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
+		interfaceExtends: ["Base"], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceExtends.length === 1, "a dropped extends list is a null array the resolver walks";
+	assert d.interfaceExtends[0] === "Base";
+}
+
+test "round-trip StructDecl keeps interfaceExtends" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.StructDecl, {
+		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
+		interfaceExtends: ["Base"], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceExtends.length === 1;
+}
+
+test "round-trip TypeAliasDecl keeps aliasGenericParams" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.TypeAliasDecl, {
+		aliasName: "Box", aliasType: "T", aliasIsDistinct: false,
+		aliasGenericParams: "T", discriminantName: "", discriminantType: "",
+		variantKeys: [], variantTypes: [], nameLocation: loc,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as TypeAliasDeclData;
+	assert d.aliasGenericParams === "T";
+}
+
+test "round-trip WhileStmt keeps whileLabel" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const body = createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc));
+	const orig = createNode(NodeKind.WhileStmt, {
+		whileCondition: mkNumber(1, loc), whileBody: body, whileLabel: "outer",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as WhileStmtData;
+	assert d.whileLabel === "outer";
+}
+
+test "round-trip NumberLiteral keeps isBitPattern and outOfRangeText" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.NumberLiteral, {
+		value: 7, isFloat: false, intVal: 7 as int64,
+		isBitPattern: true, outOfRangeText: "0xFF",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as NumberLiteralData;
+	assert d.isBitPattern, "bit-pattern-ness is not recomputable from the value";
+	assert d.outOfRangeText === "0xFF";
+}
