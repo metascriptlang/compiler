@@ -3446,6 +3446,24 @@ test "distinct type creates Distinct wrapper" {
 	assert sym.symbolType.kind == TypeKind.Distinct;
 }
 
+test "right-hand distinct creates Distinct wrapper" {
+	const ctx = checkSource("type UserId = distinct number;");
+	assert !hasErrors(ctx);
+	const sym = lookupSymbol(ctx.table, "UserId");
+	assert sym != null;
+	assert sym.symbolType.kind == TypeKind.Distinct;
+}
+
+test "distinct rejected inside a generic argument" {
+	const ctx = checkSource("type Rows = Array<distinct int32>;");
+	assert hasErrors(ctx);
+}
+
+test "distinct rejected inside an object type" {
+	const ctx = checkSource("type R = { id: distinct int32 };");
+	assert hasErrors(ctx);
+}
+
 test "variable annotation overrides inference" {
 	const ctx = checkSource("const x: string = \"hello\";");
 	assert !hasErrors(ctx);
