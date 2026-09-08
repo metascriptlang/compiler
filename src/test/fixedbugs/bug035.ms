@@ -1,7 +1,7 @@
 // bug035 — array of distinct type crashed with SIGSEGV at cleanup under stress
 //
 // Symptom:    Code like
-//                 distinct type UserId = int32;
+//                 type UserId = distinct int32;
 //                 const ids: UserId[] = [];
 //                 ids.push(1 as int32 as UserId);
 //             At small N: silently corrupted but no crash (lucky alignment).
@@ -39,7 +39,7 @@ import { compileToC } from "../helpers";
 
 test "bug035: distinct int32 array routes to msArrayDestroy (NOT msArrayRefDestroy)" {
 	const src = `
-distinct type Bug035UserId = int32;
+type Bug035UserId = distinct int32;
 function main(): void {
 	const ids: Bug035UserId[] = [];
 	ids.push(1 as int32 as Bug035UserId);
@@ -59,7 +59,7 @@ main();
 
 test "bug035: distinct string array routes to msArrayStringDestroy" {
 	const src = `
-distinct type Bug035Email = string;
+type Bug035Email = distinct string;
 function main(): void {
 	const emails: Bug035Email[] = [];
 	emails.push("a@b.c" as Bug035Email);
