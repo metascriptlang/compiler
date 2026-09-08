@@ -22,6 +22,7 @@ import {
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
 import { isAssignable } from "./compat";
+import { widensToBase } from "./fit";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
 import { mapChildren } from "../transform/walker";
@@ -171,6 +172,10 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 				boundTypes.push(argT);
 				boundFrom.push(i);
 			} else if (!isAssignable(argT, boundTypes[bidx])) {
+				if (widensToBase(ctx, boundTypes[bidx], argT)) {
+					boundTypes[bidx] = argT;
+					continue;
+				}
 				addError(ctx, `Argument type mismatch in '${sym.name}' arg ${i}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(boundTypes[bidx])} — '${dn}' was bound by argument ${boundFrom[bidx]}`,
 					args[i].location.line, args[i].location.column);
 				return false;

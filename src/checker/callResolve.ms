@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
@@ -1760,7 +1760,7 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
 }
 
-function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32, calleeType: Type): void {
+function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32): void {
 	if (argIdx >= cd.arguments.length) return;
 	const arg = cd.arguments[argIdx];
 	if (bindingConflictSkipArg(arg)) return;
@@ -1772,6 +1772,7 @@ function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: i
 			const boundT = eb.types[j];
 			if (boundT == null || hasGenericParams(boundT)) break;
 			if (isAssignable(newT, boundT)) break;
+			if (widensToBase(ctx, boundT, newT)) { eb.types[j] = newT; break; }
 			const from = j < ebFrom.length ? ebFrom[j] : 0;
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
 				+ ": got " + typeDisplayName(newT) + ", expected " + typeDisplayName(boundT)
@@ -1812,7 +1813,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 					fb.types.push(ab.types[bi]);
 				}
 			}
-			if (!explicitTypeArgs) reportBindingConflict(ctx, eb, ebFrom, fb, cd, i, calleeType);
+			if (!explicitTypeArgs) reportBindingConflict(ctx, eb, ebFrom, fb, cd, i);
 			mergeUnifyBindings(eb, fb);
 			while (ebFrom.length < eb.names.length) ebFrom.push(i);
 		}
