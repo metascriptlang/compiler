@@ -37,8 +37,13 @@ test "narrowing float64 into an int32 binding is rejected" {
 	assert hasError(src, "Argument type mismatch in 'pick' arg 1: got float64, expected int32");
 }
 
-test "a supertype argument does not fit a subtype binding" {
-	assert hasError(CLASSES + "const c = pair(dog, animal);", "Argument type mismatch in 'pair' arg 1: got Animal, expected Dog");
+test "sibling classes with no common binding are rejected" {
+	const src = CLASSES + "class Cat extends Animal { lives: int32 = 9; }\nconst cat = new Cat();\nconst c = pair(dog, cat);";
+	assert hasError(src, "Argument type mismatch in 'pair' arg 1: got Cat, expected Dog");
+}
+
+test "an explicit type arg the arguments contradict is still rejected" {
+	assert hasError(CLASSES + "const c = pair<Dog>(dog, animal);", "Argument type mismatch in 'pair' arg 1: got Animal, expected Dog");
 }
 
 // ===== Rejected: the same rule inside template expansion =====
@@ -68,6 +73,19 @@ test "widening int32 into a float64 binding is accepted" {
 
 test "a subtype argument fits a supertype binding" {
 	assert strictErrorCount(CLASSES + "const c = pair(animal, dog);") == 0;
+}
+
+test "a base-class argument widens the binding instead of failing" {
+	assert strictErrorCount(CLASSES + "const c = pair(dog, animal);") == 0;
+}
+
+test "an explicit base type arg is not second-guessed" {
+	assert strictErrorCount(CLASSES + "const c = pair<Animal>(dog, animal);") == 0;
+}
+
+test "a template widens to the base class too" {
+	const src = "class Animal { name: string = \"\"; }\nclass Dog extends Animal { breed: string = \"\"; }\ntemplate tpair<T>(a: T, b: T): T { return a; }\nconst dog = new Dog();\nconst animal = new Animal();\nconst c = tpair(dog, animal);";
+	assert strictErrorCount(src) == 0;
 }
 
 test "a lambda typed from the formal does not report a conflict" {
