@@ -870,7 +870,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		return getTypeDesc(g, t.typeReturn);
 	}
 	// Distinct types are nominal in the checker only — at the C ABI level they
-	// share the underlying type's representation (e.g. `distinct type UserId =
+	// share the underlying type's representation (e.g. `type UserId = distinct
 	// number` compiles to `double`).
 	if (t.kind == TypeKind.Distinct) {
 		return getTypeDesc(g, t.typeReturn);
@@ -978,7 +978,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			if (transparent != t) return getTypeDesc(g, transparent);
 			// A generic distinct/alias instance is nominal to the checker only —
 			// at the C ABI it is the underlying type, exactly like the non-generic
-			// `distinct type UserId = number` case handled above.
+			// `type UserId = distinct number` case handled above.
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
 			// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).

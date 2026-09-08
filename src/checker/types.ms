@@ -1464,7 +1464,7 @@ export function createDistinct(inner: Type): Type {
 }
 
 // ===== BitSet<E> =====
-// The std declaration `distinct type BitSet<E> = int64` is registered here when
+// The std declaration `type BitSet<E> = distinct uint32` is registered here when
 // the checker resolves it, so operator inference can build an instance without a
 // symbol table. Same shape as the Locked/Var special cases in resolveAnnotation.
 let _bitSetBase: Type | null = null;
