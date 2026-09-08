@@ -5,7 +5,8 @@
 import { CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -413,6 +414,18 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
+}
+
+export function widensToBase(ctx: CheckerContext, from: Type | null, to: Type | null): boolean {
+	if (from == null || to == null) return false;
+	const src = unwrapRef(from);
+	const target = unwrapRef(to);
+	if (src == null || target == null) return false;
+	if (!classDescendsFrom(src.typeName, target.typeName)) return false;
+	const srcSym = lookupSymbol(ctx.table, src.typeName);
+	if (srcSym == null || srcSym.symbolKind != SymbolKind.Class) return false;
+	const targetSym = lookupSymbol(ctx.table, target.typeName);
+	return targetSym != null && targetSym.symbolKind == SymbolKind.Class;
 }
 
 export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
