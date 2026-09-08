@@ -837,6 +837,11 @@ function dispDepthBelow(className: string, root: string): int32 {
 	return -1;
 }
 
+export function classDescendsFrom(className: string, baseName: string): boolean {
+	if (className == "" || baseName == "" || className == baseName) return false;
+	return dispDepthBelow(className, baseName) > 0;
+}
+
 export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
