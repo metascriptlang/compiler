@@ -113,10 +113,14 @@ export function formatCNumberLit(d: NumberLiteralData, ty: Type | null = null): 
 	const wantsFloat = ty != null
 		&& (ty.kind == TypeKind.Number || ty.kind == TypeKind.Float32 || ty.kind == TypeKind.Float64);
 	const wantsUint64 = ty != null && ty.kind == TypeKind.Uint64;
+	const wantsUint32 = ty != null && ty.kind == TypeKind.Uint32;
 	const wantsInt64 = ty != null && ty.kind == TypeKind.Int64;
 	if (d.isFloat || wantsFloat) return formatCNumber(d.value, ty);
 	if (wantsUint64) {
 		return formatCUint64(d.intVal as uint64);
+	}
+	if (wantsUint32 && d.intVal >= 0) {
+		return formatCUint32(d.intVal as number);
 	}
 	if (wantsInt64) {
 		return formatCInt64(d.intVal);
