@@ -1,7 +1,6 @@
 // Parity program — `BitSet<E>` holds a set of enum members in one machine word,
 // with a member's bit position taken from its ordinal. `A | B` builds the set,
-// `.incl` / `.excl` add and remove, `.has` asks. Mixing two different enums is a
-// type error, so this program only exercises the well-typed shape.
+// `.incl` / `.excl` add and remove, `.has` asks.
 //
 // @stdout: 10,11,9,true,false,true,false,0,true
 // @exit: 0
