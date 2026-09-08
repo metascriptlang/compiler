@@ -893,24 +893,25 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // causing typeInfo conflicts).
 // ===== BitSet<E> =====
 // A set of enum members in one 32-bit word: bit position = member ordinal.
-// Enums with more than 32 members are rejected by the checker.
+// Enums with more than 32 members are rejected by the checker. Unsigned so that
+// the ordinal-31 shift is defined.
 // Value type, so it has no mutating methods — `|` adds, `& ~` removes, `.has()`
-// asks. The checker gives `E.A | E.B` the type `BitSet<E>`, so two different
-// enums never mix. See docs/LANG-PRIMITIVE.md for the design record.
-export distinct type BitSet<E> = int32;
+// asks. The checker gives `E.A | E.B` the type `BitSet<E>`.
+// See docs/LANG-PRIMITIVE.md for the design record.
+export distinct type BitSet<E> = uint32;
 
 export function has<E>(this self: BitSet<E>, member: E): boolean {
-	return (((self as int32) >> (member as int32)) & 1) != 0;
+	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;
 }
 
 export function incl<E>(this self: BitSet<E>, member: E): BitSet<E> {
-	return ((self as int32) | ((1 as int32) << (member as int32))) as BitSet<E>;
+	return ((self as uint32) | ((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
 export function excl<E>(this self: BitSet<E>, member: E): BitSet<E> {
-	return ((self as int32) & ~((1 as int32) << (member as int32))) as BitSet<E>;
+	return ((self as uint32) & ~((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
 export function isEmpty<E>(this self: BitSet<E>): boolean {
-	return (self as int32) == 0;
+	return (self as uint32) == 0;
 }
