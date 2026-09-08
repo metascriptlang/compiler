@@ -158,7 +158,7 @@ function printReExport(inner: Node, options: FormatOptions): Doc {
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
-	const head = distinct + "type " + d.aliasName + wrapGenerics(d.aliasGenericParams);
+	const head = "type " + d.aliasName + wrapGenerics(d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {
 		// Discriminated union: type X<...> = match (disc: Enum) { ... }
 		// Use docIndent so the layout engine respects useTabs/tabWidth.
@@ -180,7 +180,7 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 		if (options.semi) parts.push(docText(";"));
 		return docGroup(parts);
 	}
-	const parts: Doc[] = [docText(head + " = " + d.aliasType)];
+	const parts: Doc[] = [docText(head + " = " + distinct + d.aliasType)];
 	if (options.semi) {
 		parts.push(docText(";"));
 	}
