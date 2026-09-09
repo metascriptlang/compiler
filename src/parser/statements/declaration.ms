@@ -376,7 +376,19 @@ export function parseImportDecl(state: ParserState): NodeResult {
 export function parseExportDecl(state: ParserState): NodeResult {
 	const exportToken = current(state);
 	advance(state);
+	if (!isAtEnd(state) && current(state).kind == TokenKind.At) {
+		const decorators: Node[] = [];
+		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
+			const dec = try parseMacroInvocation(state);
+			decorators.push(dec);
+		}
+		const exported = try parseExportBody(state, exportToken);
+		return Result.ok(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: exported }, exportToken));
+	}
+	return parseExportBody(state, exportToken);
+}
 
+function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
 	const nextKind = current(state).kind;
 	// Star re-export: export * from "module";
@@ -1504,8 +1516,13 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 	advance(state); // consume '@'
 	const nameToken = current(state);
 	// Accept identifiers and keywords as macro names (e.g., @export, @inline)
-	const macroName = nameToken.value;
+	let macroName = nameToken.value;
 	advance(state);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
+		advance(state);
+		macroName = macroName + "." + current(state).value;
+		advance(state);
+	}
 
 	// @comptime { ... } — produce ComptimeBlock instead of MacroInvocation
 	if (macroName == "comptime" && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
