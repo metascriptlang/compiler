@@ -25,7 +25,7 @@ const KNOWN_GAPS: string[] = [
 	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
 	"bridge:arrowDefaults", "bridge:ctorDefaults",
 	"bridge:fnDefaults", "bridge:forOfPattern", "bridge:methodDefaults",
-	"bridge:patternDefaults", "bridge:propInitializer",
+	"bridge:patternDefaults",
 ];
 
 function endsWith(s: string, suffix: string): boolean {
