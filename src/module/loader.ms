@@ -663,7 +663,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		}
 
 		if (resolved == "") {
-			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
+			mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
 
@@ -694,7 +694,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		if (resolved == "") {
 			// std/ with empty stdPath: silently skip (handled externally)
 			if (isStdImport(specifier) && config.stdPath.length == 0) return;
-			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
+			mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
 

@@ -1016,7 +1016,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					&& ctx.currentModule != null
 					&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
 				if (!isCircular) {
-					addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'", node.location.line, node.location.column);
+					addError(ctx, "Module '" + d.importSource + "' has no export '" + importName + "'", node.location.line, node.location.column);
 				}
 				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, inferredType(), false), node);
 			}
@@ -1025,7 +1025,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			// Variable<Unknown> previously caused Unknown to leak into generic
 			// instantiations like Result<MyNode, X>, surfacing later as misleading
 			// "Property does not exist" errors. Fail loud at the import site.
-			addError(ctx, "Cannot resolve module '" + d.importSource + "' to import '" + importName + "'", node.location.line, node.location.column);
+			addError(ctx, "Cannot resolve module '" + d.importSource + "'", node.location.line, node.location.column);
 			defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, inferredType(), false), node);
 		}
 	}
@@ -1196,7 +1196,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 								&& ctx.currentModule != null
 								&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
 							if (!isCirc) {
-								addError(ctx, "'" + importName + "' is not exported from '" + imp.importSource + "'", node.location.line, node.location.column);
+								addError(ctx, "Module '" + imp.importSource + "' has no export '" + importName + "'", node.location.line, node.location.column);
 							}
 							defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, inferredType(), false), node);
 						}
