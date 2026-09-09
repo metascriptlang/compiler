@@ -5,14 +5,14 @@ import {
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
 	ConstructorDeclData, ExprStmtData,
 } from "../../ast/node";
-import { CheckerContext, Severity, addError } from "../../checker/context";
-import { lookupSymbol, makeSymbol } from "../../checker/symbol";
+import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
+import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers } from "../../checker/checkerCallbacks";
-import { collectOneStatement } from "../../checker/collectPass";
-import { ensureShaped } from "../../checker/resolvePass";
+import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
+import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { parseSource } from "../../parser/statements/validation";
@@ -112,12 +112,70 @@ export function applyDecorators(ctx: CheckerContext, program: Node): void {
 	for (const stmt of pd.programStmts) {
 		const after: Node[] = [];
 		const deferred = decoratorRewritesStmt(stmt);
+		const originalName = deferred ? deferredDeclName(stmt) : "";
 		const rewritten = applyToStatement(ctx, stmt, after);
-		if (deferred) collectOneStatement(ctx, rewritten);
+		if (deferred) finishDeferredStatement(ctx, originalName, rewritten);
 		out.push(rewritten);
 		for (const s of after) out.push(s);
 	}
 	pd.programStmts = out;
+}
+
+function deferredDeclOf(stmt: Node): Node {
+	let node = stmt;
+	if (node != null && node.kind == NodeKind.DecoratedDecl) {
+		node = (node.data as DecoratedDeclData).decoratedNode;
+	}
+	const decl = unwrapExport(node);
+	if (decl == null) return null as unknown as Node;
+	if (decl.kind != NodeKind.ClassDecl && decl.kind != NodeKind.ActorDecl) return null as unknown as Node;
+	return decl;
+}
+
+function deferredDeclName(stmt: Node): string {
+	const decl = deferredDeclOf(stmt);
+	if (decl == null) return "";
+	return getDeclName(decl);
+}
+
+function finishDeferredStatement(ctx: CheckerContext, originalName: string, rewritten: Node): void {
+	const decl = deferredDeclOf(rewritten);
+	if (decl == null) {
+		collectOneStatement(ctx, rewritten);
+		return;
+	}
+	const name = getDeclName(decl);
+	if (originalName != "" && name != originalName) {
+		addError(ctx, `decorator replacement must keep the name '${originalName}'`, decl.location.line, decl.location.column);
+		return;
+	}
+	const sym = decl.resolvedSym;
+	if (sym == null) {
+		collectOneStatement(ctx, rewritten);
+		return;
+	}
+	if (!hasFlag(sym, SymbolFlag.Forward)) return;
+	sym.declNode = decl;
+	fillForwardSymbol(ctx, sym);
+}
+
+function intrinsicOnly(decorators: Node[]): Node[] {
+	const kept: Node[] = [];
+	for (const d of decorators) {
+		if (d.kind == NodeKind.MacroInvocation && !isIntrinsicDecorator((d.data as MacroInvocationData).macroName)) continue;
+		kept.push(d);
+	}
+	return kept;
+}
+
+function rewrapStatement(wrapper: Node, node: Node): Node {
+	if (wrapper == null) return node;
+	const dd = wrapper.data as DecoratedDeclData;
+	const kept = intrinsicOnly(dd.decorators);
+	if (kept.length == 0) return node;
+	dd.decorators = kept;
+	dd.decoratedNode = node;
+	return wrapper;
 }
 
 function unwrapExport(node: Node): Node {
@@ -145,7 +203,7 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 		if (wrapper != null) {
 			runDecorators(ctx, (wrapper.data as DecoratedDeclData).decorators, decl, null as unknown as ClassPlan);
 		}
-		return node;
+		return rewrapStatement(wrapper, node);
 	}
 	const plan = newPlan(ctx, decl, isActor);
 	applyToMembers(ctx, plan);
@@ -155,12 +213,14 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 	}
 	if (finalDecl != decl) plan.classNode = finalDecl;
 	finishPlan(ctx, plan, after);
-	if (finalDecl == decl) return node;
-	if (node.kind == NodeKind.ExportDecl) {
-		(node.data as ExportDeclData).exportedDecl = finalDecl;
-		return node;
+	if (finalDecl != decl) {
+		if (node.kind == NodeKind.ExportDecl) {
+			(node.data as ExportDeclData).exportedDecl = finalDecl;
+		} else {
+			node = finalDecl;
+		}
 	}
-	return finalDecl;
+	return rewrapStatement(wrapper, node);
 }
 
 function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
@@ -204,7 +264,14 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
-			body[i] = runDecorators(ctx, dd.decorators, inner, plan);
+			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
+			const kept = intrinsicOnly(dd.decorators);
+			if (kept.length == 0) {
+				body[i] = rewritten;
+			} else {
+				dd.decorators = kept;
+				dd.decoratedNode = rewritten;
+			}
 		}
 	}
 }
@@ -432,7 +499,7 @@ function buildWrapper(ctx: CheckerContext, regCtx: CheckerContext, sym: Symbol, 
 		}
 		const rt = macroReturnText(decl, false);
 		if (rt != "") returnAnnotation = ": " + rt;
-		macroBody = cloneNodeForCheck(callMacroBodyPreparer(registered, ctx, regCtx, dn));
+		macroBody = callMacroBodyPreparer(cloneNodeForCheck(registered), ctx, regCtx, dn);
 	}
 	const arity = decoratorArity(sym, decl, isMacro, isFactory, regCtx);
 	const pr = parseSource(wrapperSource(isMacro, paramList, returnAnnotation, shape, arity));
@@ -647,3 +714,55 @@ function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 
 registerApplyDecorators(applyDecorators);
 registerDecoratorDefers(decoratorRewritesStmt);
+
+test "member wrappers with intrinsic decorators survive the apply pass" {
+	const pr = parseSource("class Calc {\n\t@pure loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	applyDecorators(ctx, pr.value);
+	const cls = (pr.value.data as ProgramData).programStmts[0];
+	assert cls.kind == NodeKind.ClassDecl;
+	const body = (cls.data as ClassDeclData).classBody;
+	assert body[0].kind == NodeKind.DecoratedDecl;
+}
+
+test "collect mints a decorated class in place" {
+	const pr = parseSource("@x\nclass A {\n\tm(): void { }\n}\n\nfunction f(): void { }\n");
+	assert pr.ok;
+	const ctx = createContext();
+	collectTopLevel(ctx, pr.value);
+	const sym = lookupSymbol(ctx.table, "A");
+	assert sym != null;
+	assert sym.symbolKind == SymbolKind.Class;
+	let classIdx = -1;
+	let fnIdx = -1;
+	let idx = 0;
+	for (const s of ctx.table.current.symbols.values()) {
+		if (s.name == "A") classIdx = idx;
+		if (s.name == "f") fnIdx = idx;
+		idx += 1;
+	}
+	assert classIdx >= 0;
+	assert fnIdx >= 0;
+	assert classIdx < fnIdx;
+}
+
+test "apply fills the minted class symbol exactly once" {
+	const pr = parseSource("@x\nclass B {\n\tm(v: int32): void { }\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	collectTopLevel(ctx, pr.value);
+	const before = lookupSymbol(ctx.table, "B");
+	assert before != null;
+	applyDecorators(ctx, pr.value);
+	const after = lookupSymbol(ctx.table, "B");
+	assert after == before;
+	const cls = (pr.value.data as ProgramData).programStmts[0];
+	assert cls.kind == NodeKind.ClassDecl;
+	const md = (cls.data as ClassDeclData).classBody[0].data as MethodDeclData;
+	let thisCount = 0;
+	for (const p of md.methodParams) {
+		if (p == "this") thisCount += 1;
+	}
+	assert thisCount == 1;
+}

@@ -16,9 +16,42 @@ import { callDecoratorDefers } from "./checkerCallbacks";
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
-		if (callDecoratorDefers(stmt)) continue;
+		if (callDecoratorDefers(stmt)) {
+			collectDeclMint(ctx, stmt);
+			continue;
+		}
 		collectDecl(ctx, stmt);
 	}
+}
+
+function collectDeclMint(ctx: CheckerContext, stmt: Node): void {
+	let node = stmt;
+	if (node.kind == NodeKind.DecoratedDecl) {
+		const dd = node.data as DecoratedDeclData;
+		if (dd.decoratedNode == null) return;
+		node = dd.decoratedNode;
+	}
+	let exported = false;
+	let decl = node;
+	if (node.kind == NodeKind.ExportDecl) {
+		const ed = node.data as ExportDeclData;
+		if (ed.exportedDecl == null) return;
+		exported = true;
+		decl = ed.exportedDecl;
+	}
+	if (decl.kind == NodeKind.ClassDecl) {
+		mintClass(ctx, decl);
+	} else if (decl.kind == NodeKind.ActorDecl) {
+		mintActor(ctx, decl);
+	} else {
+		return;
+	}
+	const sym = decl.resolvedSym;
+	if (sym == null) return;
+	if (sym.symbolKind != SymbolKind.Class && sym.symbolKind != SymbolKind.Actor) return;
+	setFlag(sym, SymbolFlag.Forward);
+	if (exported) setFlag(sym, SymbolFlag.Exported);
+	if (stmt.kind == NodeKind.DecoratedDecl) applyDecoratedInfo(ctx, stmt);
 }
 
 export function collectOneStatement(ctx: CheckerContext, node: Node): void {
@@ -94,6 +127,21 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 		},
 		_ => {},
 	};
+}
+
+export function markDeclMethodsExported(ctx: CheckerContext, decl: Node): void {
+	if (decl.kind == NodeKind.ClassDecl) {
+		markClassMethodsExported(ctx, decl);
+		return;
+	}
+	if (decl.kind != NodeKind.ActorDecl) return;
+	const ad = decl.data as ActorDeclData;
+	for (let ai = 0; ai < ad.actorBody.length; ai += 1) {
+		const mSym = ad.actorBody[ai].resolvedSym;
+		if (mSym != null) {
+			setFlag(mSym, SymbolFlag.Exported);
+		}
+	}
 }
 
 // Mark class method symbols as exported so they're injected cross-module via injectPrelude.
@@ -180,6 +228,11 @@ function classMemberDecl(member: Node): Node {
 export function collectDecorated(ctx: CheckerContext, node: Node): void {
 	const dd = node.data as DecoratedDeclData;
 	collectDecl(ctx, dd.decoratedNode);
+	applyDecoratedInfo(ctx, node);
+}
+
+export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
+	const dd = node.data as DecoratedDeclData;
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
 	const sym = lookupSymbol(ctx.table, declName);
@@ -295,6 +348,11 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 }
 
 export function collectClass(ctx: CheckerContext, node: Node): void {
+	mintClass(ctx, node);
+	fillClass(ctx, node);
+}
+
+export function mintClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	// Callable-namespace statics attachment (Number.MAX_SAFE_INTEGER): a
 	// statics-only class sharing a prelude module (.cms/.jms) with a
@@ -357,13 +415,18 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 		sym.nativeName = d.className;
 	}
 	defineOrError(ctx, sym, node);
-	// Check for constructor → set HasConstructor flag for codegen
+	node.resolvedSym = sym;
+}
+
+export function fillClass(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ClassDeclData;
+	const sym = node.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Class) return;
 	for (const member of d.classBody) {
 		if (member.kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);
 		}
 	}
-	// Collect static properties into sym.staticFields
 	for (const raw of d.classBody) {
 		const member = classMemberDecl(raw);
 		if (member.kind == NodeKind.PropertyDecl) {
@@ -388,6 +451,11 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 }
 
 export function collectActor(ctx: CheckerContext, node: Node): void {
+	mintActor(ctx, node);
+	fillActor(ctx, node);
+}
+
+export function mintActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
@@ -416,6 +484,13 @@ export function collectActor(ctx: CheckerContext, node: Node): void {
 	actorType.sym = sym;
 	innerType.sym = sym;
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
+}
+
+export function fillActor(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ActorDeclData;
+	const sym = node.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Actor) return;
 	for (const member of d.actorBody) {
 		if (member.kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);

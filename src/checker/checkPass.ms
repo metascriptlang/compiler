@@ -34,7 +34,7 @@ import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
 import { parseSource } from "../parser/statements/validation";
@@ -496,6 +496,9 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
+			if (callDecoratorDefers(node)) {
+				addError(ctx, "Decorators on a nested declaration are not applied - move it to the module top level", node.location.line, node.location.column);
+			}
 			if (d.decoratedNode != null) checkStmt(ctx, d.decoratedNode);
 		},
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),

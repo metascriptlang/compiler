@@ -8,11 +8,11 @@
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { inferredType, errorType, noneType, isUnresolvedType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, registerBitSetBase } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
-import { getDeclName } from "./collectPass";
+import { getDeclName, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
 import { monoTypeKey } from "../monomorphize/registry";
 
@@ -873,6 +873,17 @@ export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerCont
 
 // ===== Demand-Driven Shaping (Implementation parity) =====
 
+export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
+	if (!hasFlag(sym, SymbolFlag.Forward)) return;
+	sym.symFlags = sym.symFlags & ~(SymbolFlag.Forward as int32);
+	const decl = sym.declNode;
+	if (decl == null) return;
+	if (decl.kind == NodeKind.ClassDecl) fillClass(ctx, decl);
+	else if (decl.kind == NodeKind.ActorDecl) fillActor(ctx, decl);
+	else return;
+	if (hasFlag(sym, SymbolFlag.Exported)) markDeclMethodsExported(ctx, decl);
+}
+
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checked) {
 		// A primary can reach Shaped BEFORE later overloads are appended to it:
@@ -897,6 +908,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		return;
 	}
 
+	fillForwardSymbol(ctx, sym);
 	sym.state = SymbolState.Shaping;
 	const node = sym.declNode;
 	if (node != null) {
