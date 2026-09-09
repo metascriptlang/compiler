@@ -249,6 +249,10 @@ test "E2E: macro reads typExprFieldDecorators[0][0].kind on @-decorated class fi
 	const src = `
 import { Node, NodeKind } from "std/meta";
 
+function rename(name: string): (value: Node) => void {
+	return (value: Node): void => {};
+}
+
 class Doc {
 	@rename("_id") id: string;
 	name: string;
