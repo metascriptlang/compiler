@@ -235,11 +235,20 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 }
 
 // Report per-module errors without exiting (for non-fatal type errors).
+let _renderErrorMax: int32 = 0;
+
+function overErrorMax(rendered: int32): boolean {
+	return _renderErrorMax > 0 && rendered >= _renderErrorMax;
+}
+
 function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
+	let rendered: int32 = 0;
 	for (const mod of graph.modules) {
 		if (mod.errors.length > 0) {
 			for (const e of mod.errors) {
+				if (overErrorMax(rendered)) return;
 				renderModuleError(mod.path, mod.source, e);
+				rendered = rendered + 1;
 			}
 		}
 	}
@@ -284,11 +293,14 @@ function exitOnCheckerErrors(ctx: CheckerContext, modPath: string, source: strin
 // them would turn every warning fatal.
 function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	let hasErr = false;
+	let rendered: int32 = 0;
 	for (const mod of graph.modules) {
 		for (const e of mod.errors) {
 			if (e.severity != ErrorSeverity.Error) continue;
 			hasErr = true;
+			if (overErrorMax(rendered)) continue;
 			renderModuleError(mod.path, mod.source, e);
+			rendered = rendered + 1;
 		}
 	}
 	if (hasErr) exit(1);
@@ -1144,6 +1156,25 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 
 	if (rtFiles == "") return "";
 	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+}
+
+// ===== Check =====
+// Stop-after-check variant of the build driver: same module graph, same
+// resolver config, same cross-module check pass — it simply returns instead of
+// continuing into transform/analyze/codegen. loadAndCheckGraph reports and
+// exits on any module or type error.
+
+export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	entryPath = canonicalModulePath(entryPath);
+	registerCoreParsers();
+	setTargetSizes(8, 8);
+	_renderErrorMax = opts.errorMax;
+	resolveTargetGcMode(opts);
+	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
+	setGraphCheckTiming(opts.showTime);
+	setGraphLoadTiming(opts.showTime);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
+	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
 }
 
 // ===== C Build =====

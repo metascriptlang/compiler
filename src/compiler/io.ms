@@ -2,8 +2,7 @@
 
 import { exit, platform } from "std/process";
 import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove } from "std/fs";
-import { CheckerContext } from "../checker/context";
-import { error, red, green, bold, dim } from "../utils/color";
+import { error, green, bold, dim } from "../utils/color";
 
 
 // -- Shared timing + verbose helpers --
@@ -116,25 +115,6 @@ export function writeOutput(filePath: string, content: string): void {
 		console.log(error("error") + ": " + result.error.message);
 		exit(1);
 	}
-}
-
-// Print checker errors and exit. Used by compile, run, check commands.
-// maxErrors=0 means show all.
-export function printErrorsAndExit(ctx: CheckerContext, prefix: string, maxErrors: int32): void {
-	let limit = ctx.errors.length;
-	if (maxErrors > 0 && maxErrors < limit) {
-		limit = maxErrors;
-	}
-	for (let i = 0; i < limit; i += 1) {
-		const err = ctx.errors[i];
-		const loc = err.line > 0 ? ":" + err.line + ":" + err.column + " " : " ";
-		console.log(red(prefix) + loc + err.message);
-	}
-	if (limit < ctx.errors.length) {
-		const remaining = ctx.errors.length - limit;
-		console.log(dim("... and " + remaining + " more error(s)"));
-	}
-	exit(1);
 }
 
 // Write generated code to outputPath or derive from filePath.

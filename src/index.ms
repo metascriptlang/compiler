@@ -84,7 +84,10 @@ export function main(): number {
 		"lsp" => lspRunServer(),
 		"init" => cmdInit(opts.inputFile),
 		"version" => console.log(`${bold("Metascript")} ${green(`v${VERSION}`)}`),
-		"check" => { requireFile(opts); cmdCheck(opts.inputFile, opts); },
+		"check" => {
+			requireFile(opts);
+			cmdCheck(opts.inputFile, opts, loadBuildConfig(buildMsPath, opts.showTime).resolve);
+		},
 		"dump-tokens" => { requireFile(opts); cmdDumpTokens(opts.inputFile); },
 		"dump-ast" => { requireFile(opts); cmdDumpAst(opts.inputFile); },
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },

@@ -14,8 +14,8 @@ import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { CliOptions } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, printTiming, replaceExt, ensureDir, exeSuffix } from "./io";
-import { cmdBuildC } from "./compile";
+import { readSource, writeOutput, printTiming, replaceExt, ensureDir, exeSuffix } from "./io";
+import { cmdBuildC, cmdCheckC } from "./compile";
 import { maybeShowUpdateNotice } from "./upgrade";
 import { error, success, bold, cyan, dim, green, red, path } from "../utils/color";
 
@@ -23,7 +23,7 @@ import { error, success, bold, cyan, dim, green, red, path } from "../utils/colo
 import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
 import { formatDoc } from "./fmt/layout";
 import { printNode as printFormattedNode } from "./fmt/printer/index";
-import { FmtSection } from "./buildConfig";
+import { FmtSection, ResolveSection, defaultResolveSection } from "./buildConfig";
 
 // -- dump-tokens --
 
@@ -59,23 +59,9 @@ export function cmdDumpAst(filePath: string): void {
 
 // -- check --
 
-export function cmdCheck(filePath: string, opts: CliOptions): void {
+export function cmdCheck(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	const t0 = performance.now();
-	const source = readSource(filePath);
-	const parseResult = parseSource(source);
-	if (!parseResult.ok) {
-		console.log(error("parse error") + ": " + parseResult.error);
-		exit(1);
-	}
-	const program = parseResult.value;
-	const ctx = checkProgram(program);
-	if (!hasErrors(ctx)) {
-		console.log(success("OK") + " " + dim("no type errors"));
-	} else {
-		const count = errorCount(ctx);
-		console.log(error("Found " + count + " type error(s)") + ":");
-		printErrorsAndExit(ctx, "  ", opts.errorMax);
-	}
+	cmdCheckC(filePath, opts, resolveSection);
 	if (opts.showTime) printTiming("checked", t0);
 }
 
