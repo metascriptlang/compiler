@@ -463,8 +463,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	}
 
 	if (nextKind == TokenKind.Distinct) {
-		const decl = try parseDistinctTypeDecl(state);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		return distinctModifierRemoved(state);
 	}
 
 	if (nextKind == TokenKind.Class || nextKind == TokenKind.Abstract) {
@@ -532,6 +531,10 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 
 // ===== Type Alias Declaration =====
 // syntax: 'type' ID '=' type ';'
+
+export function distinctModifierRemoved(state: ParserState): NodeResult {
+	return Result.err(`'distinct type X = Y' was replaced by 'type X = distinct Y' at line ${current(state).line}`);
+}
 
 export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	const typeToken = current(state);
@@ -1793,59 +1796,6 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	return Result.ok(externNode);
 }
 
-// ===== Distinct Type Declaration =====
-// syntax: 'distinct' 'type' ID ('<' params '>')? '=' type ';'
-
-export function parseDistinctTypeDecl(state: ParserState): NodeResult {
-	const distinctToken = current(state);
-	advance(state); // consume 'distinct'
-
-	if (current(state).kind != TokenKind.Type) {
-		return Result.err(`Expected 'type' after 'distinct' at line ${current(state).line}`);
-	}
-	advance(state); // consume 'type'
-
-	const nameToken = current(state);
-	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'distinct type' at line ${nameToken.line}`);
-	}
-	advance(state);
-
-	const distinctGenericNames = captureGenericParams(state);
-	if (distinctGenericNames != "") {
-		addGenericDecl(nameToken.value, distinctGenericNames);
-	}
-
-	if (current(state).kind != TokenKind.Assign) {
-		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line}`);
-	}
-	advance(state);
-	const dTypeStart = state.position;
-	skipTypeAnnotation(state);
-	const dTypeEnd = state.position;
-	const distinctAliasType = collectTokenText(state, dTypeStart, dTypeEnd);
-	// Build positioned TypeExpr by re-parsing
-	const dSavedPos = state.position;
-	state.position = dTypeStart;
-	const distinctTypeExpr = parseTypeExpr(state);
-	state.position = dSavedPos;
-	consumeSemicolon(state);
-
-	const distinctNode = createNode(NodeKind.TypeAliasDecl, {
-		aliasName: nameToken.value,
-		aliasType: distinctAliasType,
-		aliasIsDistinct: true,
-		aliasGenericParams: distinctGenericNames,
-		discriminantName: "",
-		discriminantType: "",
-		variantKeys: [] as string[],
-		variantTypes: [] as string[],
-		nameLocation: makeLocFromToken(nameToken),
-	}, distinctToken);
-	distinctNode.typeExpr = distinctTypeExpr;
-	return Result.ok(distinctNode);
-}
-
 // ===== Macro Declaration =====
 // syntax: 'macro' ID '(' params ')' (':' type)? block
 
@@ -1996,16 +1946,7 @@ test "struct generic" { assert programOk("struct Box<T> { value: T; }"); }
 
 test "export struct" { assert programOk("export struct Vec2 { x: number; y: number; }"); }
 
-test "export distinct type" { assert programOk("export distinct type EntityId = number;"); }
-
-test "export distinct is ExportDecl" { assert stmtKind("export distinct type EntityId = number;") == NodeKind.ExportDecl; }
-
-test "export distinct wraps distinct alias" {
-	const ex = stmtAt("export distinct type EntityId = number;", 0).data as ExportDeclData;
-	const d = ex.exportedDecl.data as TypeAliasDeclData;
-	assert d.aliasIsDistinct;
-	assert d.aliasName == "EntityId";
-}
+test "exported distinct modifier rejected" { assert !programOk("export distinct type EntityId = number;"); }
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
 
@@ -2124,21 +2065,11 @@ test "extern function without from" {
 }
 
 // Distinct type
-test "distinct type" { assert programOk("distinct type UserId = number;"); }
+test "distinct modifier rejected" { assert !programOk("distinct type UserId = number;"); }
 
-test "distinct type string" { assert programOk("distinct type Email = string;"); }
+test "distinct modifier rejected on a string alias" { assert !programOk("distinct type Email = string;"); }
 
-test "distinct is TypeAliasDecl" { assert stmtKind("distinct type X = number;") == NodeKind.TypeAliasDecl; }
-
-test "distinct flag true" {
-	const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
-	assert d.aliasIsDistinct;
-}
-
-test "distinct name field" {
-	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
-	assert d.aliasName == "Email";
-}
+test "distinct modifier rejected inside a block" { assert !programOk("function f(): void { distinct type Email = string; }"); }
 
 test "distinct on the right-hand side" {
 	const d = stmtAt("type Meters = distinct int32;", 0).data as TypeAliasDeclData;

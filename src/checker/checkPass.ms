@@ -3442,10 +3442,10 @@ test "type alias Result resolved" {
 	assert isResult(sym.symbolType);
 }
 
-test "distinct type creates Distinct wrapper" {
-	const ctx = checkSource("distinct type UserId = number;");
+test "generic right-hand distinct creates Distinct wrapper" {
+	const ctx = checkSource("type Bits<E> = distinct uint32;");
 	assert !hasErrors(ctx);
-	const sym = lookupSymbol(ctx.table, "UserId");
+	const sym = lookupSymbol(ctx.table, "Bits");
 	assert sym != null;
 	assert sym.symbolType.kind == TypeKind.Distinct;
 }
