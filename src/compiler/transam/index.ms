@@ -1081,3 +1081,11 @@ test "cross-module interface field resolution" {
 	assert inner.typeChildren != null;
 	assert inner.typeChildren.length == 2;
 }
+
+test "module exports keep a decorated exported class" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "decmod.ms", "macro noop(value: int32): int32 {\n\treturn value;\n}\n\n@noop\nexport class Widget { v: int32 = 1; }\n");
+	dbEnsureModuleExports(db, "decmod.ms");
+	const info = findExportedSymbol(db.exportRegistry, "decmod.ms", "Widget");
+	assert info != null;
+}
