@@ -8,6 +8,7 @@
 //   import * as ast from "std/meta";
 
 export * from "./node";
+export * from "./decorator";
 
 // Compile-time builtins (injected by the Raiser VM, macro bodies only)
 extern function currentFile(): string;
