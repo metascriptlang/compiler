@@ -736,7 +736,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				? d.callee.resolvedSym
 				: null as unknown as Symbol;
 			node.kind = NodeKind.MacroInvocation;
-			node.data = { macroName: calleeName, macroArgs: macroArgsRef };
+			node.data = { macroName: calleeName, macroArgs: macroArgsRef, macroHasParens: true };
 			if (boundCalleeSym != null) {
 				node.resolvedSym = boundCalleeSym;
 				node.flags = node.flags | NodeFlag.BoundSym;

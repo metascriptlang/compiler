@@ -1515,7 +1515,9 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 
 	// Optional arguments: @name(arg1, arg2)
 	const args: Node[] = [];
+	let hasParens = false;
 	if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
+		hasParens = true;
 		advance(state); // consume '('
 		while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 			const arg = try callExprParser(state);
@@ -1534,6 +1536,7 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.MacroInvocation, {
 		macroName,
 		macroArgs: args,
+		macroHasParens: hasParens,
 	}, atToken));
 }
 

@@ -822,6 +822,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		const d = node.data as MacroInvocationData;
 		addStrField(keys, values, "macroName", d.macroName, loc);
 		addNodeArrayField(keys, values, "macroArgs", d.macroArgs, loc);
+		addBoolField(keys, values, "macroHasParens", d.macroHasParens, loc);
 		return;
 	}
 	if (k == NodeKind.TestDecl) {
@@ -1414,7 +1415,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 				// callee) is destroyed by the assignment.
 				const boundSym = calleeBound ? cd.callee.resolvedSym : null;
 				node.kind = NodeKind.MacroInvocation;
-				node.data = { macroName: calleeName, macroArgs: cd.arguments };
+				node.data = { macroName: calleeName, macroArgs: cd.arguments, macroHasParens: true };
 				if (boundSym != null) {
 					node.resolvedSym = boundSym;
 					node.flags = node.flags | NodeFlag.BoundSym;
@@ -2143,7 +2144,7 @@ test "expand pass is no-op when no user macros" {
 test "expand pass is no-op when only built-in directives present" {
 	const loc = makeLoc(1, 0);
 	const inc = createNode(NodeKind.MacroInvocation, {
-		macroName: "include", macroArgs: [mkString("foo.h", loc)],
+		macroName: "include", macroArgs: [mkString("foo.h", loc)], macroHasParens: true,
 	}, synthToken(loc));
 	const stmt = createNode(NodeKind.ExprStmt, { expr: inc }, synthToken(loc));
 	const prog = createNode(NodeKind.Program, { programStmts: [stmt] }, synthToken(loc));
@@ -2332,7 +2333,7 @@ test "hasUserMacroInvocation detects macro in IfStmt condition" {
 	const ctx = createContext();
 	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
 	ctx.macroParamsRegistry.set("foo", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [] }, synthToken(loc));
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const ifNode = createNode(NodeKind.IfStmt, {
 		condition: inv,
 		consequent: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
@@ -2346,7 +2347,7 @@ test "hasUserMacroInvocation detects macro in WhileStmt condition" {
 	const ctx = createContext();
 	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
 	ctx.macroParamsRegistry.set("foo", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [] }, synthToken(loc));
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const whileNode = createNode(NodeKind.WhileStmt, {
 		whileCondition: inv,
 		whileBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
@@ -2360,7 +2361,7 @@ test "hasUserMacroInvocation detects macro in ForStmt body" {
 	const ctx = createContext();
 	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
 	ctx.macroParamsRegistry.set("foo", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [] }, synthToken(loc));
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const stmt = createNode(NodeKind.ExprStmt, { expr: inv }, synthToken(loc));
 	const body = createNode(NodeKind.BlockStmt, { statements: [stmt] }, synthToken(loc));
 	const forNode = createNode(NodeKind.ForStmt, {
@@ -2378,7 +2379,7 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 	const ctx = createContext();
 	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
 	ctx.macroParamsRegistry.set("foo", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [] }, synthToken(loc));
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const stmt = createNode(NodeKind.ExprStmt, { expr: inv }, synthToken(loc));
 	const method = createNode(NodeKind.MethodDecl, {
 		methodName: "m", methodParams: [], methodParamTypes: [],
@@ -2397,7 +2398,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	const ctx = createContext();
 	ctx.macroBodyRegistry.set("derive", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
 	ctx.macroParamsRegistry.set("derive", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "derive", macroArgs: [] }, synthToken(loc));
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "derive", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc,
 	}, synthToken(loc));

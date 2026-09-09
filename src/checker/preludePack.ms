@@ -1070,7 +1070,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.ConstructorDecl) return { ctorParams: splitCsv(f[0]), ctorParamTypes: splitCsv(f[1]), ctorBody: nd(f[2].parseInt() as int32, nodes) as Node, ctorDefaults: parseNodeArr(f[3], nodes) } as NodeData;
 	if (kind == NodeKind.ThrowStmt) return { throwArg: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TryCatchStmt) return { tryBody: nd(f[0].parseInt() as int32, nodes) as Node, catchName: unescapeP(f[1]), catchBody: nd(f[2].parseInt() as int32, nodes) as Node, finallyBody: nd(f[3].parseInt() as int32, nodes) as Node, catchBindingLocation: parseLoc(f[4]), hasCatchClause: f[5] == "1" } as NodeData;
-	if (kind == NodeKind.MacroInvocation) return { macroName: unescapeP(f[0]), macroArgs: parseNodeArr(f[1], nodes) } as NodeData;
+	if (kind == NodeKind.MacroInvocation) return { macroName: unescapeP(f[0]), macroArgs: parseNodeArr(f[1], nodes), macroHasParens: f.length > 2 && f[2] == "1" } as NodeData;
 	if (kind == NodeKind.DecoratedDecl) return { decorators: parseNodeArr(f[0], nodes), decoratedNode: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.DeferStmt) return { deferExpr: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TestDecl) return { testName: unescapeP(f[0]), testBody: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;

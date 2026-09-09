@@ -1006,6 +1006,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as MacroInvocationData;
 			setStr(objHeap, handle, "macroName", d.macroName);
 			setNodes(objHeap, arrHeap, handle, "macroArgs", d.macroArgs);
+			setBool(objHeap, handle, "macroHasParens", d.macroHasParens);
 		},
 
 		// === Testing ===
@@ -1808,7 +1809,8 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.MacroInvocation => {
 			const macroName = readStr(objHeap, h, "macroName");
 			const macroArgs = readNodes(objHeap, arrHeap, h, "macroArgs", loc);
-			return createNodeAt(NodeKind.MacroInvocation, { macroName, macroArgs }, loc);
+			const macroHasParens = readBool(objHeap, h, "macroHasParens");
+			return createNodeAt(NodeKind.MacroInvocation, { macroName, macroArgs, macroHasParens }, loc);
 		},
 
 		// === Testing ===

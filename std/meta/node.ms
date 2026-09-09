@@ -382,7 +382,7 @@ export type NodeData =
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
 	// Decorator variants
-	| { macroName: string, macroArgs: Node[] }                     // MacroInvocation
+	| { macroName: string, macroArgs: Node[], macroHasParens: boolean }  // MacroInvocation
 	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
 	| { deferExpr: Node }                                          // DeferStmt
 	// Testing variants
@@ -611,7 +611,7 @@ export type SpliceManyData = { spliceNodes: Node[] };
 export type DeferStmtData = { deferExpr: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean };
-export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
+export type MacroInvocationData = { macroName: string, macroArgs: Node[], macroHasParens: boolean };
 export type HiddenDerefData = { expr: Node };
 export type TestDeclData = { testName: string, testBody: Node };
 export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null };

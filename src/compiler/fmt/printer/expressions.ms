@@ -478,7 +478,7 @@ export function printObjectPatternProp(node: Node, options: FormatOptions): Doc 
 export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MacroInvocationData;
 	const parts: Doc[] = [docText("@" + d.macroName)];
-	if (d.macroArgs.length > 0) {
+	if (d.macroHasParens || d.macroArgs.length > 0) {
 		const args: Doc[] = [];
 		for (let i = 0; i < d.macroArgs.length; i += 1) {
 			if (i > 0) args.push(docText(", "));

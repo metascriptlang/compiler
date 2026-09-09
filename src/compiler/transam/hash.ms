@@ -411,7 +411,7 @@ export function transAmHashNode(node: Node): number {
 		// === Decorators ===
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
-			h = hS(h, d.macroName); h = hNodes(h, d.macroArgs);
+			h = hS(h, d.macroName); h = hNodes(h, d.macroArgs); h = hB(h, d.macroHasParens);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;

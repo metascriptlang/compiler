@@ -202,7 +202,7 @@ function isGlobalName(name: string, globalNames: string[]): boolean {
 
 function makeEmitStmt(code: string, loc: SourceLocation): Node {
 	const strNode = createNode(NodeKind.StringLiteral, { value: code }, syntheticToken(loc));
-	const macroNode = createNode(NodeKind.MacroInvocation, { macroName: "emit", macroArgs: [strNode] }, syntheticToken(loc));
+	const macroNode = createNode(NodeKind.MacroInvocation, { macroName: "emit", macroArgs: [strNode], macroHasParens: true }, syntheticToken(loc));
 	return createNode(NodeKind.ExprStmt, { expr: macroNode }, syntheticToken(loc));
 }
 

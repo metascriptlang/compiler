@@ -131,7 +131,7 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	const jsxArg = createNodeAt(node.kind, node.data, node.location);
 	jsxArg.typeExpr = node.typeExpr;
 	node.kind = NodeKind.MacroInvocation;
-	node.data = { macroName: convName, macroArgs: [jsxArg] };
+	node.data = { macroName: convName, macroArgs: [jsxArg], macroHasParens: true };
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
 	node.flags = 0;

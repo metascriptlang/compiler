@@ -174,7 +174,7 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind == NodeKind.ConstructorDecl) { const d = n.data as ConstructorDeclData; return { ctorParams: X.strArr(d.ctorParams), ctorParamTypes: X.strArr(d.ctorParamTypes), ctorBody: X.node(d.ctorBody) as Node, ctorDefaults: X.nodes(d.ctorDefaults) as Node[] } as NodeData; }
 	if (kind == NodeKind.ThrowStmt) { const d = n.data as ThrowStmtData; return { throwArg: X.node(d.throwArg) as Node } as NodeData; }
 	if (kind == NodeKind.TryCatchStmt) { const d = n.data as TryCatchStmtData; return { tryBody: X.node(d.tryBody) as Node, catchName: X.str(d.catchName), catchBody: X.node(d.catchBody) as Node, finallyBody: X.node(d.finallyBody) as Node, catchBindingLocation: X.loc(d.catchBindingLocation) as SourceLocation, hasCatchClause: X.bool(d.hasCatchClause) } as NodeData; }
-	if (kind == NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; return { macroName: X.str(d.macroName), macroArgs: X.nodes(d.macroArgs) as Node[] } as NodeData; }
+	if (kind == NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; return { macroName: X.str(d.macroName), macroArgs: X.nodes(d.macroArgs) as Node[], macroHasParens: X.bool(d.macroHasParens) } as NodeData; }
 	if (kind == NodeKind.DecoratedDecl) { const d = n.data as DecoratedDeclData; return { decorators: X.nodes(d.decorators) as Node[], decoratedNode: X.node(d.decoratedNode) as Node } as NodeData; }
 	if (kind == NodeKind.DeferStmt) { const d = n.data as DeferStmtData; return { deferExpr: X.node(d.deferExpr) as Node } as NodeData; }
 	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; return { testName: X.str(d.testName), testBody: X.node(d.testBody) as Node } as NodeData; }
@@ -269,7 +269,7 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind == NodeKind.ConstructorDecl) { const d = n.data as ConstructorDeclData; V.strArr("ctorParams", d.ctorParams); V.strArr("ctorParamTypes", d.ctorParamTypes); V.node("ctorBody", d.ctorBody); V.nodes("ctorDefaults", d.ctorDefaults); return; }
 	if (kind == NodeKind.ThrowStmt) { const d = n.data as ThrowStmtData; V.node("throwArg", d.throwArg); return; }
 	if (kind == NodeKind.TryCatchStmt) { const d = n.data as TryCatchStmtData; V.node("tryBody", d.tryBody); V.str("catchName", d.catchName); V.node("catchBody", d.catchBody); V.node("finallyBody", d.finallyBody); V.loc("catchBindingLocation", d.catchBindingLocation); V.bool("hasCatchClause", d.hasCatchClause); return; }
-	if (kind == NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; V.str("macroName", d.macroName); V.nodes("macroArgs", d.macroArgs); return; }
+	if (kind == NodeKind.MacroInvocation) { const d = n.data as MacroInvocationData; V.str("macroName", d.macroName); V.nodes("macroArgs", d.macroArgs); V.bool("macroHasParens", d.macroHasParens); return; }
 	if (kind == NodeKind.DecoratedDecl) { const d = n.data as DecoratedDeclData; V.nodes("decorators", d.decorators); V.node("decoratedNode", d.decoratedNode); return; }
 	if (kind == NodeKind.DeferStmt) { const d = n.data as DeferStmtData; V.node("deferExpr", d.deferExpr); return; }
 	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; V.str("testName", d.testName); V.node("testBody", d.testBody); return; }
@@ -412,7 +412,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.ConstructorDecl, { ctorParams: ["c"], ctorParamTypes: ["int32"], ctorBody: block, ctorDefaults: [a] } as NodeData, makeLoc(17, 64)));
 	out.push(createNodeAt(NodeKind.ThrowStmt, { throwArg: a } as NodeData, makeLoc(17, 65)));
 	out.push(createNodeAt(NodeKind.TryCatchStmt, { tryBody: block, catchName: "e", catchBody: block, finallyBody: block, catchBindingLocation: pkLoc(14), hasCatchClause: true } as NodeData, makeLoc(17, 66)));
-	out.push(createNodeAt(NodeKind.MacroInvocation, { macroName: "mac", macroArgs: [a, n1] } as NodeData, makeLoc(17, 67)));
+	out.push(createNodeAt(NodeKind.MacroInvocation, { macroName: "mac", macroArgs: [a, n1], macroHasParens: true } as NodeData, makeLoc(17, 67)));
 	out.push(createNodeAt(NodeKind.DecoratedDecl, { decorators: [a], decoratedNode: fnDecl } as NodeData, makeLoc(17, 68)));
 	out.push(createNodeAt(NodeKind.DeferStmt, { deferExpr: a } as NodeData, makeLoc(17, 69)));
 	out.push(createNodeAt(NodeKind.TestDecl, { testName: "t", testBody: block } as NodeData, makeLoc(17, 70)));
