@@ -59,7 +59,8 @@ import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind } from "../../ast/node";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer } from "./callbacks";
+import { isBuiltinDirective } from "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
@@ -70,21 +71,6 @@ import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
-// ===== Built-in directives that pass through unchanged =====
-
-function isBuiltinDirective(name: string): boolean {
-	return name == "emit"
-		|| name == "include"
-		|| name == "compile"
-		|| name == "link"
-		|| name == "passC"
-		|| name == "passL"
-		|| name == "import"
-		|| name == "comptime"
-		|| name == "runtime"
-		|| name == "builtin"
-		|| name == "cImport";
-}
 
 // ===== Quote lowering: quote { code } → ObjectLiteral AST =====
 //
@@ -775,6 +761,9 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "propName", d.propName, loc);
 		addStrField(keys, values, "propType", d.propType, loc);
 		addBoolField(keys, values, "propIsStatic", d.propIsStatic, loc);
+		addBoolField(keys, values, "propIsReadonly", d.propIsReadonly, loc);
+		addStrField(keys, values, "propVisibility", d.propVisibility, loc);
+		addNodeField(keys, values, "propInitializer", d.propInitializer, loc);
 		return;
 	}
 	if (k == NodeKind.MethodDecl) {
@@ -2125,6 +2114,10 @@ export function expandMacros(program: Node, ctx: CheckerContext): Node {
 // without importing this module directly (breaks the checker ↔ compiler/meta cycle).
 import { registerExpandMacroInvocation } from "../../checker/checkerCallbacks";
 registerExpandMacroInvocation(expandMacroInvocation);
+registerMacroBodyPreparer((body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
+	preprocessMacroBody(body);
+	return bakeTypeIntrinsics(body, ctx, regCtx, macroName, "");
+});
 
 // ===== Tests =====
 

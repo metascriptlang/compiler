@@ -976,6 +976,9 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "propName", d.propName);
 			setStr(objHeap, handle, "propType", d.propType);
 			setBool(objHeap, handle, "propIsStatic", d.propIsStatic);
+			setBool(objHeap, handle, "propIsReadonly", d.propIsReadonly);
+			setStr(objHeap, handle, "propVisibility", d.propVisibility);
+			setNode(objHeap, arrHeap, handle, "propInitializer", d.propInitializer);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
@@ -1769,9 +1772,9 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const propIsStatic = readBool(objHeap, h, "propIsStatic");
 			const propIsReadonly = readBool(objHeap, h, "propIsReadonly");
 			const propVisibility = readStr(objHeap, h, "propVisibility");
+			const propInitializer = readNode(objHeap, arrHeap, h, "propInitializer", loc);
 			return createNodeAt(NodeKind.PropertyDecl, {
-				propName, propType, propIsStatic, propIsReadonly, propVisibility,
-				propInitializer: null as unknown as Node,
+				propName, propType, propIsStatic, propIsReadonly, propVisibility, propInitializer,
 			}, loc);
 		},
 		NodeKind.MethodDecl => {

@@ -59,6 +59,17 @@ export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
 }
 
+type MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string) => Node;
+let macroBodyPreparerFn: MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
+	return body;
+};
+export function callMacroBodyPreparer(body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node {
+	return macroBodyPreparerFn(body, ctx, regCtx, macroName);
+}
+export function registerMacroBodyPreparer(fn: MacroBodyPreparerFn): void {
+	macroBodyPreparerFn = fn;
+}
+
 let _macroDeclModulePath = "";
 
 export function setMacroDeclModulePath(path: string): void {

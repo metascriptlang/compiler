@@ -34,7 +34,7 @@ import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import { callApplyDecorators, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
 import { parseSource } from "../parser/statements/validation";
@@ -1972,6 +1972,7 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	}
 	const _c0 = performance.now();
 	collectTopLevel(ctx, program);
+	callApplyDecorators(ctx, program);
 	const _c1 = performance.now();
 	resolveDeclarations(ctx, program);
 	const _c2 = performance.now();
@@ -2150,7 +2151,7 @@ function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
 }
 
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
-function collectOneDirective(ctx: CheckerContext, mi: Node): void {
+export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (mi.kind != NodeKind.MacroInvocation) return;
 	const md = mi.data as MacroInvocationData;
 	if (md.macroArgs.length == 0) return;

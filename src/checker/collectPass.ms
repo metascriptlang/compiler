@@ -9,14 +9,20 @@ import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { normalize } from "std/fs/path";
 import { getGenericDecl } from "../parser/context";
+import { callDecoratorDefers } from "./checkerCallbacks";
 
 // ===== Top-Level Collector =====
 
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
+		if (callDecoratorDefers(stmt)) continue;
 		collectDecl(ctx, stmt);
 	}
+}
+
+export function collectOneStatement(ctx: CheckerContext, node: Node): void {
+	collectDecl(ctx, node);
 }
 
 function collectDecl(ctx: CheckerContext, node: Node): void {

@@ -11,6 +11,8 @@ type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: 
 type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
+type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
+type DecoratorDefersFn = (stmt: Node) => boolean;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -31,6 +33,11 @@ let evalComptimeBlockFn: EvalComptimeBlockFn = (node: Node, ctx: CheckerContext)
 
 let expandMacroInvocationFn: ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32): Node => {
 	return node;
+};
+let applyDecoratorsFn: ApplyDecoratorsFn = (ctx: CheckerContext, program: Node): void => {
+};
+let decoratorDefersFn: DecoratorDefersFn = (stmt: Node): boolean => {
+	return false;
 };
 
 
@@ -80,5 +87,21 @@ export function registerEvalComptimeBlock(fn: EvalComptimeBlockFn): void {
 
 export function registerExpandMacroInvocation(fn: ExpandMacroInvocationFn): void {
 	expandMacroInvocationFn = fn;
+}
+
+export function callApplyDecorators(ctx: CheckerContext, program: Node): void {
+	applyDecoratorsFn(ctx, program);
+}
+
+export function registerApplyDecorators(fn: ApplyDecoratorsFn): void {
+	applyDecoratorsFn = fn;
+}
+
+export function callDecoratorDefers(stmt: Node): boolean {
+	return decoratorDefersFn(stmt);
+}
+
+export function registerDecoratorDefers(fn: DecoratorDefersFn): void {
+	decoratorDefersFn = fn;
 }
 
