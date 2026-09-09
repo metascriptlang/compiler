@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
-import { extractDecoratorInfo } from "./decoratorHelpers";
+import { extractDecoratorInfo, hasDecoratorNamed } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
@@ -163,6 +163,14 @@ export function collectVariable(ctx: CheckerContext, node: Node): void {
 
 // ===== Decorator Handling =====
 
+function classMemberDecl(member: Node): Node {
+	if (member.kind == NodeKind.DecoratedDecl) {
+		const dd = member.data as DecoratedDeclData;
+		if (dd.decoratedNode != null) return dd.decoratedNode;
+	}
+	return member;
+}
+
 export function collectDecorated(ctx: CheckerContext, node: Node): void {
 	const dd = node.data as DecoratedDeclData;
 	collectDecl(ctx, dd.decoratedNode);
@@ -288,7 +296,8 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 	// the name must stay callable AND carry statics. User modules keep the
 	// duplicate-symbol error so a JS name collision stays loud.
 	let allStatic = true;
-	for (const member of d.classBody) {
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
 		if (member.kind != NodeKind.PropertyDecl || !(member.data as PropertyDeclData).propIsStatic) {
 			allStatic = false;
 			break;
@@ -301,7 +310,8 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 		// would let any user file silently extend a global name.
 		if (existing != null && existing.symbolKind == SymbolKind.Function
 				&& (ctx.modulePath.endsWith(".cms") || ctx.modulePath.endsWith(".jms"))) {
-			for (const member of d.classBody) {
+			for (const raw of d.classBody) {
+				const member = classMemberDecl(raw);
 				const pdm = member.data as PropertyDeclData;
 				const staticSym = makeSymbol(d.className + "." + pdm.propName, SymbolKind.Variable, inferredType(), true);
 				setFlag(staticSym, SymbolFlag.Static);
@@ -348,7 +358,8 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	// Collect static properties into sym.staticFields
-	for (const member of d.classBody) {
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
@@ -374,10 +385,13 @@ export function collectActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
+	const nonisolatedFields: string[] = [];
 	for (const raw of d.actorBody) {
 		let member = raw;
+		let nonisolated = false;
 		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
+			nonisolated = hasDecoratorNamed(dd.decorators, "nonisolated");
 			if (dd.decoratedNode != null) member = dd.decoratedNode;
 		}
 		if (member.kind == NodeKind.PropertyDecl) {
@@ -385,12 +399,14 @@ export function collectActor(ctx: CheckerContext, node: Node): void {
 			if (!pd.propIsStatic) {
 				memberNames.push(pd.propName);
 				memberTypes.push(inferredType());
+				if (nonisolated) nonisolatedFields.push(pd.propName);
 			}
 		}
 	}
 	const innerType = createStruct(d.actorName, memberNames, memberTypes, true);
 	const actorType = createRef(innerType);
 	const sym = makeSymbol(d.actorName, SymbolKind.Actor, actorType, false);
+	sym.nonisolatedFields = nonisolatedFields;
 	actorType.sym = sym;
 	innerType.sym = sym;
 	defineOrError(ctx, sym, node);

@@ -17,6 +17,13 @@ export interface DecoratorInfo {
 }
 
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
+export function hasDecoratorNamed(decorators: Node[], name: string): boolean {
+	for (const dec of decorators) {
+		if (dec.kind == NodeKind.MacroInvocation && (dec.data as MacroInvocationData).macroName == name) return true;
+	}
+	return false;
+}
+
 export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
 	let btKind = "";

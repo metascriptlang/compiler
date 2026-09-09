@@ -1817,14 +1817,18 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Build Object type — collect members inline
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
+	const fieldDecoratorNames: string[] = [];
+	const fieldDecorators: Node[][] = [];
 	for (let mi = 0; mi < d.classBody.length; mi += 1) {
 		let member = d.classBody[mi];
+		let memberDecorators: Node[] = [];
 		// Unwrap DecoratedDecl to get the inner declaration
 		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
 			if (dd.decoratedNode == null) {
 				continue;
 			}
+			memberDecorators = dd.decorators;
 			member = dd.decoratedNode;
 		}
 		if (member.kind == NodeKind.MethodDecl) {
@@ -1880,6 +1884,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			} else {
 				memberNames.push(pd.propName);
+				fieldDecoratorNames.push(pd.propName);
+				fieldDecorators.push(memberDecorators);
 				if (pd.propType != "") {
 					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
@@ -1905,6 +1911,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 
 	// Update inner struct in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while inner still references them)
+	sym.fieldDecoratorNames = fieldDecoratorNames;
+	sym.fieldDecorators = fieldDecorators;
 	const inner = unwrapRef(sym.symbolType);
 	inner.kind = TypeKind.Struct;
 	inner.typeName = d.className;

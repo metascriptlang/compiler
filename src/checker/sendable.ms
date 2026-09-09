@@ -7,17 +7,8 @@ import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
-	if (actorSym.declNode == null || actorSym.declNode.kind != NodeKind.ActorDecl) return false;
-	const actorBody = (actorSym.declNode.data as ActorDeclData).actorBody;
-	for (const m of actorBody) {
-		if (m.kind != NodeKind.DecoratedDecl) continue;
-		const dd = m.data as DecoratedDeclData;
-		if (dd.decoratedNode == null || dd.decoratedNode.kind != NodeKind.PropertyDecl) continue;
-		if ((dd.decoratedNode.data as PropertyDeclData).propName != fieldName) continue;
-		for (const dec of dd.decorators) {
-			if (dec.kind == NodeKind.MacroInvocation
-				&& (dec.data as MacroInvocationData).macroName == "nonisolated") return true;
-		}
+	for (const n of actorSym.nonisolatedFields) {
+		if (n == fieldName) return true;
 	}
 	return false;
 }

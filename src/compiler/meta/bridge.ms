@@ -194,6 +194,17 @@ function isVisiting(visited: Type[], t: Type): boolean {
 function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
+	if (t.sym != null && t.sym.fieldDecoratorNames.length > 0) {
+		for (let j = 0; j < t.typeNames.length; j = j + 1) {
+			for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
+				if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
+					out[j] = t.sym.fieldDecorators[k];
+					break;
+				}
+			}
+		}
+		return out;
+	}
 
 	if (t.sym == null || t.sym.declNode == null) return out;
 	let decl = t.sym.declNode;
@@ -3181,6 +3192,9 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		disamb: 0 as int32,
 		mutatedParams: 0 as int32,
 		staticFields: [],
+		fieldDecoratorNames: [],
+		fieldDecorators: [],
+		nonisolatedFields: [],
 		duVariantSlot: 0 as int32,
 	};
 }

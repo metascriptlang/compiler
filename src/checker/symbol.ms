@@ -291,6 +291,9 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.overloadIdx = 0;
 	sym.disamb = 0;
 	sym.staticFields = [];
+	sym.fieldDecoratorNames = [];
+	sym.fieldDecorators = [];
+	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
 	return sym;
 }

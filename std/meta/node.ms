@@ -182,6 +182,9 @@ export class Symbol {
 	disamb: int32;         // Per-(module, name) ordinal minted at declaration; the C name's _u suffix. Distinct from overloadIdx: a name that never joins an overload set still needs one, and it must travel with the symbol across module boundaries rather than be recomputed from position.
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
 	staticFields: Symbol[];  // Static properties (only for class symbols)
+	fieldDecoratorNames: string[];
+	fieldDecorators: Node[][];
+	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 }
 
