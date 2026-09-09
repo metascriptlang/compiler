@@ -24,6 +24,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -n "${MSC:-}" ] || { [ -x ./msc ] && MSC=./msc; }
 MSC="${MSC:-msc}"
 case "$MSC" in */*) MSC="$(cd "$(dirname "$MSC")" && pwd)/$(basename "$MSC")";; esac
+export MSC
 echo "nim-guard: compiler under test = $MSC"
 MODES="${GUARD_GC:-drc orc}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
