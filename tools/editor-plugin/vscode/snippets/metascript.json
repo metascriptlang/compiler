@@ -239,7 +239,7 @@
   "Distinct Type": {
     "prefix": "distinct",
     "body": [
-      "distinct type ${1:Name} = ${0:type};"
+      "type ${1:Name} = distinct ${0:type};"
     ],
     "description": "Distinct (nominal) type declaration"
   },
