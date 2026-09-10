@@ -19,7 +19,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { globalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
+import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -1655,6 +1655,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& finalRetType != null
 		&& !isUnresolvedType(finalRetType)
 		&& finalRetType.kind != TypeKind.Error
+		&& !isNominalMismatch(finalRetType, returnExpected)
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);
 		const expected = formatTypeBrief(returnExpected);

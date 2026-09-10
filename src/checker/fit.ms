@@ -4,7 +4,7 @@
 
 import { CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
@@ -874,6 +874,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
+	}
+	if (isNominalMismatch(exprType, formal)) {
+		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
+		return expr;
 	}
 	if (formal.kind == exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
 	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
