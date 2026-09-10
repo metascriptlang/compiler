@@ -197,14 +197,19 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 
 export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: Node): void {
 	if (closureNode == null) return;
+	let closure = closureNode;
+	if (closure.kind == NodeKind.CallExpr) {
+		const iifeCallee = (closure.data as CallExprData).callee;
+		if (iifeCallee.kind == NodeKind.ArrowFunction) closure = (iifeCallee.data as ArrowFunctionData).arrowBody;
+	}
 	let params: string[] = [];
 	let body: Node | null = null;
-	if (closureNode.kind == NodeKind.ArrowFunction) {
-		const ad = closureNode.data as ArrowFunctionData;
+	if (closure.kind == NodeKind.ArrowFunction) {
+		const ad = closure.data as ArrowFunctionData;
 		params = ad.arrowParams;
 		body = ad.arrowBody;
-	} else if (closureNode.kind == NodeKind.FunctionExpr) {
-		const fd = closureNode.data as FunctionExprData;
+	} else if (closure.kind == NodeKind.FunctionExpr) {
+		const fd = closure.data as FunctionExprData;
 		params = fd.funcExprParams;
 		body = fd.funcExprBody;
 	}

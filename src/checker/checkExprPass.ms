@@ -17,7 +17,7 @@ import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
 import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { findCallTypeArg, getGenericDecl } from "../parser/context";
-import { markConsumedName, isConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import {
 	markInitialized, isInitialized, getDeclBlock,
@@ -391,6 +391,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx,
 					"affine Promise '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
 					node.location.line, node.location.column);
+			}
+			if (isConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym))) {
+				if (ctx.initTracker.leftPartOfAsgn > 0) removeConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
+				else addError(ctx, "'" + d.name + "' was moved into a spawn thunk and cannot be used afterwards — spawn(fn, { move: [" + d.name + "] }) transferred it (PARALOCK E24)", node.location.line, node.location.column);
 			}
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
 			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.

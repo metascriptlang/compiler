@@ -952,7 +952,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// bindings into the formal type — bindings accumulate left-to-right as
 	// concrete args feed forward inference (Source 3).
 	const argTypes: Type[] = [];
-				for (let ai = 0; ai < d.arguments.length; ai += 1) {
+		const spawnCalleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+		let spawnMoveKeys: string[] = [];
+		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") spawnMoveKeys = desugarSpawnMoveList(ctx, d);
+	for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type | null = null;
 		const _formal: Type | null = (calleeType != null
 			&& calleeType.kind == TypeKind.Function
@@ -1135,6 +1138,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// structurally identical (typeChildren[0] = inner type), so downstream transforms
 	// that call isAwaitable() still recognize it, and compat.ms upcasts it to Promise<T>
 	// for assignability so existing code (Promise.all, explicit Promise<T> annotations) works.
+	for (const mk of spawnMoveKeys) markConsumedName(ctx.affineTracker, "mv:" + mk);
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn"
 		&& argTypes.length >= 1 && argTypes[0] != null && argTypes[0].kind == TypeKind.Function) {
 		const spawnInner = argTypes[0].typeReturn != null ? argTypes[0].typeReturn : voidType();
@@ -2750,6 +2754,68 @@ function isLockedSectionCallee(callee: Node): boolean {
 	if (callee == null || callee.kind != NodeKind.Identifier) return false;
 	const name = (callee.data as IdentifierData).name;
 	return name == "lockedUpdate" || name == "lockedRead";
+}
+
+function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
+	const movedKeys: string[] = [];
+	const args: Node[] = d.arguments;
+	if (args.length < 2) return movedKeys;
+	const optsNode = args[1];
+	if (optsNode.kind != NodeKind.ObjectLiteral) {
+		addError(ctx, "spawn options must be an object literal, e.g. spawn(fn, { timeout: 500, move: [x] })", optsNode.location.line, optsNode.location.column);
+		return movedKeys;
+	}
+	const opts = optsNode.data as ObjectLiteralData;
+	let moveIdx = -1;
+	for (let ki = 0; ki < opts.keys.length; ki += 1) {
+		if (opts.keys[ki] == "move") moveIdx = ki;
+		else if (opts.keys[ki] != "timeout") addError(ctx, "unknown spawn option '" + opts.keys[ki] + "' — spawn accepts { timeout, move }", opts.keyLocations[ki].line, opts.keyLocations[ki].column);
+	}
+	if (moveIdx < 0) return movedKeys;
+	const moveList = opts.properties[moveIdx];
+	opts.keys.splice(moveIdx, 1);
+	opts.properties.splice(moveIdx, 1);
+	opts.keyLocations.splice(moveIdx, 1);
+	if (opts.keys.length == 0) args.pop();
+	if (moveList.kind != NodeKind.ArrayLiteral) {
+		addError(ctx, "spawn { move } takes an array of local names, e.g. { move: [buf, tbl] }", moveList.location.line, moveList.location.column);
+		return movedKeys;
+	}
+	const names: string[] = [];
+	const paramTypes: Type[] = [];
+	const paramAnnots: string[] = [];
+	const paramDefaults: (Node | null)[] = [];
+	const moveArgs: Node[] = [];
+	for (const el of (moveList.data as ArrayLiteralData).elements) {
+		if (el.kind != NodeKind.Identifier) {
+			addError(ctx, "spawn { move } entries must be plain local names — bind a field first (const part = obj.part) and move that", el.location.line, el.location.column);
+			continue;
+		}
+		const name = (el.data as IdentifierData).name;
+		const sym = lookupSymbol(ctx.table, name);
+		if (sym == null) {
+			addError(ctx, "cannot move '" + name + "': no such binding in scope", el.location.line, el.location.column);
+			continue;
+		}
+		ensureShaped(sym, ctx);
+		if (sym.symbolType == null) continue;
+		names.push(name);
+		paramTypes.push(sym.symbolType);
+		paramAnnots.push("");
+		paramDefaults.push(null);
+		moveArgs.push(createNodeAt(NodeKind.MoveExpr, { moveArg: el }, el.location));
+		movedKeys.push(symbolConsumeKey(sym));
+	}
+	if (names.length == 0) return movedKeys;
+	const thunk = args[0];
+	const outer = createNodeAt(NodeKind.ArrowFunction, {
+		arrowParams: names, arrowParamTypes: paramAnnots, arrowBody: thunk,
+		arrowFlags: "", arrowReturnType: "", arrowDefaults: paramDefaults,
+	}, thunk.location);
+	ctx.pendingSpawnThunk = true;
+	callCheckExpr(ctx, outer, createFunction(paramTypes, names, inferredType()));
+	args[0] = createNodeAt(NodeKind.CallExpr, { callee: outer, arguments: moveArgs, isDirectCall: false, resolvedOverloadIdx: -1 }, thunk.location);
+	return movedKeys;
 }
 
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {

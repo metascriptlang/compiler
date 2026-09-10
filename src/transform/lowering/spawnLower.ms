@@ -122,6 +122,14 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureArg = pair;
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
+		let boxTarget = closureArg;
+		if (closureArg.kind == NodeKind.CallExpr) {
+			const iife = (closureArg.data as CallExprData).callee;
+			if (iife.kind == NodeKind.ArrowFunction) {
+				const inner = (iife.data as ArrowFunctionData).arrowBody;
+				if (inner != null && (inner.kind == NodeKind.ArrowFunction || inner.kind == NodeKind.FunctionExpr)) boxTarget = inner;
+			}
+		}
 		let closureRetType: Type | null = null;
 		if (node.nodeType != null && isAwaitable(node.nodeType)) {
 			closureRetType = awaitedType(node.nodeType);
@@ -151,8 +159,8 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				return node;
 			}
 			// Box return values inside the closure body
-			if (closureArg.kind == NodeKind.ArrowFunction) {
-				const ad = closureArg.data as ArrowFunctionData;
+			if (boxTarget.kind == NodeKind.ArrowFunction) {
+				const ad = boxTarget.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
 						boxReturns(ad.arrowBody, closureRetType);
@@ -160,13 +168,16 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 						ad.arrowBody = boxForType(ad.arrowBody, closureRetType, ad.arrowBody.location);
 					}
 				}
-			} else if (closureArg.kind == NodeKind.FunctionExpr) {
-				const fd = closureArg.data as FunctionExprData;
+			} else if (boxTarget.kind == NodeKind.FunctionExpr) {
+				const fd = boxTarget.data as FunctionExprData;
 				if (fd.funcExprBody != null) {
 					boxReturns(fd.funcExprBody, closureRetType);
 				}
 			}
 			// Update closure return type to void* (boxed) so codegen emits correct signature
+			if (boxTarget != closureArg && boxTarget.nodeType != null && boxTarget.nodeType.kind == TypeKind.Function) {
+				boxTarget.nodeType.typeReturn = createPtr(voidType());
+			}
 			if (closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function) {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
