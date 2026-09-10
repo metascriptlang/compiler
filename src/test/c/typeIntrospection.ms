@@ -5,7 +5,7 @@
 // field path; if any layer is broken (Type→AST mapping, heap serialization,
 // Raiser compileMemberExpr), the macro body crashes and compileToC fails.
 
-import { compileToC } from "../helpers";
+import { compileToCWithStd } from "../helpers";
 
 test "E2E: macro reads nodeType.kind on int32 argument (atomic primitive)" {
 	const src = `
@@ -26,7 +26,7 @@ function main(): void {
 	const k = typeKindOf(n);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -51,7 +51,7 @@ function main(): void {
 	const n = fieldCountOf(u);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -76,7 +76,7 @@ function main(): void {
 	const k = baseKindOf(c);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -101,7 +101,7 @@ function main(): void {
 	const k = typeKindOfTree(t);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -130,7 +130,7 @@ function main(): void {
 	const n = variantCountOf(v);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -162,7 +162,7 @@ function main(): void {
 	save<int32>(42);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -195,7 +195,7 @@ function main(): void {
 	describe<User>(u);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -218,7 +218,7 @@ function main(): void {
 	const k = peek(n);  // concrete type — eager expansion fires immediately
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -241,7 +241,7 @@ function main(): void {
 	const s = symKindOf(myVar);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -273,6 +273,6 @@ function main(): void {
 	const k = firstDecoratorKind(d);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
