@@ -10,7 +10,7 @@ import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "../../checker/sym
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
-import { registerApplyDecorators, registerDecoratorDefers } from "../../checker/checkerCallbacks";
+import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
@@ -138,17 +138,27 @@ function deferredDeclName(stmt: Node): string {
 	return getDeclName(decl);
 }
 
+function replacementKeepsName(ctx: CheckerContext, originalName: string, decl: Node): boolean {
+	if (originalName == "" || getDeclName(decl) == originalName) return true;
+	addError(ctx, `decorator replacement must keep the name '${originalName}'`, decl.location.line, decl.location.column);
+	return false;
+}
+
+export function applyDecoratedStmt(ctx: CheckerContext, stmt: Node, after: Node[]): Node {
+	const originalName = deferredDeclName(stmt);
+	const rewritten = applyToStatement(ctx, stmt, after);
+	const decl = deferredDeclOf(rewritten);
+	if (decl != null && !replacementKeepsName(ctx, originalName, decl)) return stmt;
+	return rewritten;
+}
+
 function finishDeferredStatement(ctx: CheckerContext, originalName: string, rewritten: Node): void {
 	const decl = deferredDeclOf(rewritten);
 	if (decl == null) {
 		collectOneStatement(ctx, rewritten);
 		return;
 	}
-	const name = getDeclName(decl);
-	if (originalName != "" && name != originalName) {
-		addError(ctx, `decorator replacement must keep the name '${originalName}'`, decl.location.line, decl.location.column);
-		return;
-	}
+	if (!replacementKeepsName(ctx, originalName, decl)) return;
 	const sym = decl.resolvedSym;
 	if (sym == null) {
 		collectOneStatement(ctx, rewritten);
@@ -728,6 +738,7 @@ function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 
 registerApplyDecorators(applyDecorators);
 registerDecoratorDefers(decoratorRewritesStmt);
+registerApplyDecoratedStmt(applyDecoratedStmt);
 
 test "member wrappers with intrinsic decorators survive the apply pass" {
 	const pr = parseSource("class Calc {\n\t@pure loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");

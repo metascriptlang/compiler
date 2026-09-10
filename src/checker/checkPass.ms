@@ -34,7 +34,7 @@ import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
 import { parseSource } from "../parser/statements/validation";
@@ -278,10 +278,13 @@ function checkClassStmt(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 	if (!claimLocalTypeName(ctx, node, "class")) return;
+	let after: Node[] = [];
+	if (callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
 	collectClass(ctx, node);
 	resolveClass(ctx, node);
 	checkClassDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
+	hoistNestedInits(ctx, after);
 }
 
 // Enums need no resolve step — collectEnumDecl builds the member list and values
@@ -318,10 +321,48 @@ function checkActorStmt(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 	if (!claimLocalTypeName(ctx, node, "actor")) return;
+	let after: Node[] = [];
+	if (callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
 	collectActor(ctx, node);
 	resolveActor(ctx, node);
 	checkActorDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
+	hoistNestedInits(ctx, after);
+}
+
+function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
+	const after: Node[] = [];
+	const rewritten = callApplyDecoratedStmt(ctx, node, after);
+	if (rewritten != node) {
+		node.kind = rewritten.kind;
+		node.data = rewritten.data;
+		if (rewritten.location != null) node.location = rewritten.location;
+		node.nodeType = null as unknown as Type;
+		node.resolvedSym = null;
+		node.flags = rewritten.flags;
+	}
+	return after;
+}
+
+function hoistNestedInits(ctx: CheckerContext, inits: Node[]): void {
+	for (const s of inits) {
+		checkStmt(ctx, s);
+		ctx.pendingHoisted.push(s);
+	}
+}
+
+function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
+	const k = ctx.table.current.scopeKind;
+	const local = k != ScopeKind.Module && k != ScopeKind.Global;
+	let after: Node[] = [];
+	if (local && callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
+	if (node.kind == NodeKind.DecoratedDecl) {
+		const inner = (node.data as DecoratedDeclData).decoratedNode;
+		if (inner != null) checkStmt(ctx, inner);
+	} else {
+		checkStmt(ctx, node);
+	}
+	hoistNestedInits(ctx, after);
 }
 
 // An extern binds a bare C name — nativeName defaults to the identifier itself —
@@ -494,13 +535,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			const d = node.data as DeferStmtData;
 			checkExpr(ctx, d.deferExpr, null);
 		},
-		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			if (callDecoratorDefers(node)) {
-				addError(ctx, "Decorators on a nested declaration are not applied - move it to the module top level", node.location.line, node.location.column);
-			}
-			if (d.decoratedNode != null) checkStmt(ctx, d.decoratedNode);
-		},
+		NodeKind.DecoratedDecl => checkDecoratedStmt(ctx, node),
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
