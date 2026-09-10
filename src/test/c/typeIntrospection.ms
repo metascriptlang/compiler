@@ -598,3 +598,48 @@ outer();
 	assert !c.ok;
 	if (!c.ok) assert c.error.contains("Decorators are not valid here");
 }
+
+test "E2E: a static bindSym result can be held in a const and queried" {
+	const src = `
+import { Node, NodeKind, bindSym, getType } from "std/meta";
+
+class Later { a: int32 = 1; }
+
+macro heldSym(x: Node): Node {
+	const s = bindSym("Later");
+	if (s == null) error("static bindSym missed Later", x);
+	else {
+		const t = getType(s);
+		if (t == null) error("getType on a held static bindSym returned null", x);
+	}
+	return x;
+}
+
+function main(): void {
+	const k = heldSym(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: a static bindSym does not see the expansion site's locals" {
+	const src = `
+import { Node, bindSym } from "std/meta";
+
+macro staticLookup(x: Node): Node {
+	const s = bindSym("local");
+	return x;
+}
+
+function main(): void {
+	const local: int32 = 1;
+	const k = staticLookup(local);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+	if (!c.ok) assert c.error.contains("bindSym cannot resolve 'local'");
+}

@@ -57,7 +57,7 @@ import { CheckerContext, Severity, addError, addErrorFullRange, createContext } 
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
@@ -1448,7 +1448,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				const mc = lookupModuleCtx(bindDeclPath);
 				if (mc != null) bindCtx = mc;
 			}
-			const boundSym = lookupSymbol(bindCtx.table, symName);
+			const boundSym = lookupSymbolInDefiningScope(bindCtx.table, macroName, symName);
 			if (boundSym == null) {
 				addError(ctx, `Macro '${macroName}': bindSym cannot resolve '${symName}' in the macro's module scope`, node.location.line, node.location.column);
 				return node;
@@ -1477,7 +1477,10 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				mkString(symName, bloc),
 				mkNumber(registerBoundSym(boundSym), bloc),
 			];
-			return createNodeAt(NodeKind.ObjectLiteral, { properties: bvalues, keys: bkeys, keyLocations: [] }, bloc);
+			return createNodeAt(NodeKind.TypeAssertion, {
+				asExpr: createNodeAt(NodeKind.ObjectLiteral, { properties: bvalues, keys: bkeys, keyLocations: [] }, bloc),
+				asType: "Node",
+			}, bloc);
 		}
 		if (cd.callee.kind == NodeKind.Identifier
 				&& (cd.callee.data as IdentifierData).name == "getTypeImpl"
@@ -1490,7 +1493,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				const mc = lookupModuleCtx(declPath);
 				if (mc != null) declCtx = mc;
 			}
-			const sym = lookupSymbol(declCtx.table, typeName);
+			const sym = lookupSymbolInDefiningScope(declCtx.table, macroName, typeName);
 			if (sym != null) {
 				if (hasFlag(sym, SymbolFlag.Forward)) {
 					addError(ctx, `Macro '${macroName}': ${stillDecoratedMessage(typeName)}`, node.location.line, node.location.column);
