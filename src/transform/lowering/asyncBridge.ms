@@ -318,7 +318,7 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 
 // Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
 // Per-type smart read function — handles both boxed (spawn) and typed (async) via isBoxed flag
-function readFnForAwait(t: Type): string {
+function readFnForAwait(t: Type | null): string {
 	if (t == null) return "";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",

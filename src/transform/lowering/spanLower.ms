@@ -34,7 +34,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 
 			// Unwrap Var/out modifier — reference parity: var openArray → openArray
 			let spanTarget = targetType;
-			if (spanTarget.kind == TypeKind.Var || spanTarget.kind == TypeKind.Sink || spanTarget.kind == TypeKind.Lent) {
+			if ((spanTarget.kind == TypeKind.Var || spanTarget.kind == TypeKind.Sink || spanTarget.kind == TypeKind.Lent) && spanTarget.typeReturn != null) {
 				spanTarget = spanTarget.typeReturn;
 			}
 			if (spanTarget.kind == TypeKind.Span) {

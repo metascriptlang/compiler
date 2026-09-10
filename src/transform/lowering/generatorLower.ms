@@ -51,7 +51,7 @@ export interface GenState {
 	nextState: number;
 	stmts: Node[];
 	yieldVarName: string;   // variable assigned from yield (for async resume)
-	yieldVarType: Type;     // type of the variable (for unboxing msFutureRead)
+	yieldVarType: Type | null;     // type of the variable (for unboxing msFutureRead)
 	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
 }
 
@@ -200,7 +200,7 @@ function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation, state
 
 export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
-	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null as unknown as Type, excLanding: -1 };
+	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null, excLanding: -1 };
 	sc.items.push(st);
 	return idx;
 }

@@ -42,8 +42,8 @@ function makeResultMember(sym: Symbol, resType: Type | null, propName: string, l
 	if (resType != null && isResult(resType)) {
 		let propType: Type = noneType();
 		if (propName == "ok") { propType = booleanType(); }
-		else if (propName == "value") { propType = getResultOkType(resType) != null ? getResultOkType(resType) : noneType(); }
-		else if (propName == "error") { propType = getResultErrType(resType) != null ? getResultErrType(resType) : noneType(); }
+		else if (propName == "value") { const okType = getResultOkType(resType); propType = okType != null ? okType : noneType(); }
+		else if (propName == "error") { const errType = getResultErrType(resType); propType = errType != null ? errType : noneType(); }
 		mem.nodeType = propType;
 		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
 		propSym.state = SymbolState.Shaped;

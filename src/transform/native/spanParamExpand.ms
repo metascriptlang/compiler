@@ -94,7 +94,7 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 		if (i < fnType.typeChildren.length) {
 			let pType = fnType.typeChildren[i];
 			// Unwrap Var/out modifier — reference parity: var openArray → openArray
-			if (pType != null && (pType.kind == TypeKind.Var || pType.kind == TypeKind.Sink || pType.kind == TypeKind.Lent)) {
+			if (pType != null && (pType.kind == TypeKind.Var || pType.kind == TypeKind.Sink || pType.kind == TypeKind.Lent) && pType.typeReturn != null) {
 				pType = pType.typeReturn;
 			}
 			if (pType != null && pType.kind == TypeKind.Span && pType.typeReturn != null) {

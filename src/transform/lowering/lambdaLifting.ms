@@ -662,7 +662,8 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 function applyActiveRewrites(node: Node, rewrites: PendingEnvRewrite[]): Node {
 	let result = node;
 	for (const rw of rewrites) {
-		result = rewriteOuterRef(result, rw);
+		const rewritten = rewriteOuterRef(result, rw);
+		if (rewritten != null) { result = rewritten; }
 	}
 	return result;
 }
@@ -746,7 +747,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 			}
 		}
 		const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);
-		envStructType = envDecl.nodeType;
+		if (envDecl.nodeType != null) { envStructType = envDecl.nodeType; }
 		state.envStructs.push(envDecl);
 	}
 
@@ -1100,7 +1101,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		}
 	}
 	const envDecl = makeInterfaceDeclFromTypes(state.sharedEnvName, envFields, envFieldTypes, envResolvedTypes, loc);
-	state.sharedEnvStructType = envDecl.nodeType;
+	if (envDecl.nodeType != null) { state.sharedEnvStructType = envDecl.nodeType; }
 	state.envStructs.push(envDecl);
 
 	// Reference parity (rawClosureCreation): allocate env at function entry.
