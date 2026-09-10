@@ -27,6 +27,7 @@
 // GREEN POST-FIX: exit 0, and the two failure modes carry distinct messages.
 
 import { execFile, execFileCapture, cwd, exit, env } from "std/process";
+import { isFile } from "std/fs";
 
 const root = cwd();
 const mscEnv = env.get("MSC");
@@ -38,6 +39,18 @@ let failed = 0;
 function report(msg: string): void {
 	console.log(`GUARD-FAIL ${msg}`);
 	failed = failed + 1;
+}
+
+function requireFile(path: string, what: string): void {
+	if (isFile(path)) return;
+	console.log(`GUARD-FAIL ${what} not found: ${path}`);
+	console.log("GUARD-FAIL run this probe from the recompiler root — it resolves fixtures against cwd()");
+	exit(1);
+}
+
+requireFile(msc, "compiler under test");
+for (const f of ["checkImportDep", "checkImportMain", "checkImportMissingModule", "checkImportMissingExport"]) {
+	requireFile(`${fixtures}/${f}.ms`, "fixture");
 }
 
 function checkOutput(fixture: string): string {
