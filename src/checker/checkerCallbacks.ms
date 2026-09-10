@@ -13,6 +13,7 @@ type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (stmt: Node) => boolean;
+type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -38,6 +39,9 @@ let applyDecoratorsFn: ApplyDecoratorsFn = (ctx: CheckerContext, program: Node):
 };
 let decoratorDefersFn: DecoratorDefersFn = (stmt: Node): boolean => {
 	return false;
+};
+let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]): Node => {
+	return stmt;
 };
 
 
@@ -103,5 +107,13 @@ export function callDecoratorDefers(stmt: Node): boolean {
 
 export function registerDecoratorDefers(fn: DecoratorDefersFn): void {
 	decoratorDefersFn = fn;
+}
+
+export function callApplyDecoratedStmt(ctx: CheckerContext, stmt: Node, after: Node[]): Node {
+	return applyDecoratedStmtFn(ctx, stmt, after);
+}
+
+export function registerApplyDecoratedStmt(fn: ApplyDecoratedStmtFn): void {
+	applyDecoratedStmtFn = fn;
 }
 
