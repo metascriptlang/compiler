@@ -1551,6 +1551,24 @@ test "trap: unsupported node kind errors at runtime" {
 	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
 }
 
+test "update on an index target: postfix yields the old value and stores the new one" {
+	const ctx = evalRaiser("const a = [4, 7]; const old = a[1]++; return old * 10 + a[1];");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 78;
+}
+
+test "update on an index target: prefix yields the stored value" {
+	const ctx = evalRaiser("const a = [4, 7]; const v = --a[0]; return v * 10 + a[0];");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 33;
+}
+
+test "update on a member target stores through the object" {
+	const ctx = evalRaiser("interface C { n: int32; } const o: C = { n: 4 }; o.n++; ++o.n; return o.n;");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.intVal == 6;
+}
+
 test "trap: new without constructor errors at runtime" {
 	const ctx = evalRaiser("return new Mystery(1);");
 	assert ctx.lastError.indexOf("no matching constructor") >= 0;

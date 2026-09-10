@@ -864,6 +864,14 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): number {
 
 // --- Update (i++, ++i, i--, --i) ---
 
+function emitStepped(s: RaiserCompState, fromReg: number, updateOp: string): number {
+	const oneReg = allocReg(s);
+	emitLoadConst(s, oneReg, raiserInt(1));
+	const outReg = allocReg(s);
+	emitInst(s, raiserABC(compoundBaseOpcode(updateOp == "++" ? "+=" : "-="), outReg, fromReg, oneReg));
+	return outReg;
+}
+
 function compileUpdateExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as UpdateExprData;
 
@@ -894,6 +902,28 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): number {
 				return oldReg;
 			}
 		}
+	}
+
+	if (d.updateArg.kind == NodeKind.MemberExpr) {
+		const md = d.updateArg.data as MemberExprData;
+		const objReg = compileExpr(s, md.object);
+		const nameIdx = addConst(s, raiserString(md.property));
+		const oldReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadField, oldReg, objReg, nameIdx));
+		const newReg = emitStepped(s, oldReg, d.updateOp);
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, newReg));
+		return d.isPrefix ? newReg : oldReg;
+	}
+
+	if (d.updateArg.kind == NodeKind.ArrayAccess) {
+		const ad = d.updateArg.data as ArrayAccessData;
+		const arrReg = compileExpr(s, ad.array);
+		const idxReg = compileExpr(s, ad.index);
+		const oldReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
+		const newReg = emitStepped(s, oldReg, d.updateOp);
+		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, newReg));
+		return d.isPrefix ? newReg : oldReg;
 	}
 
 	// Fallback: unsupported update target
