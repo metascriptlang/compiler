@@ -1422,6 +1422,10 @@ function structCarriesRef(t: Type, depth: int32): boolean {
 	return false;
 }
 
+export function typeCarriesRef(t: Type | null): boolean {
+	return !isPodFieldType(t, 0);
+}
+
 export function createReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (isReadonlyView(t)) return t;

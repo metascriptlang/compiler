@@ -1967,7 +1967,7 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 
 // ===== Anonymous Functions =====
 
-export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string): Type {
+export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
 	const isAsync = fnFlags == "async" || fnFlags == "async_generator" || (fnFlags != "" && fnFlags.indexOf("async") >= 0);
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = inferredType();
@@ -2040,6 +2040,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// statements can use it as expectedType (semProcAux parity: annotation propagates)
 	const fnSymType = explicitReturnType != null ? createFunction([], [], explicitReturnType) : inferredType();
 	const sym = makeSymbol(name, SymbolKind.Function, fnSymType, false);
+	sym.declNode = fnNode;
 	if (isAsync) setFlag(sym, SymbolFlag.Async);
 	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
@@ -2191,7 +2192,7 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
 	padLiteralParams(d.arrowParams, d.arrowParamTypes, node, expectedType);
-	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags);
+	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags, node);
 	// The implicit return of an expression body is a fit position like any
 	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
 	// no coercion (Maybe wrap, closure wrap) is forgotten.
@@ -2221,7 +2222,7 @@ function checkFuncExpr(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
 	padLiteralParams(d.funcExprParams, d.funcExprParamTypes, node, expectedType);
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations!, d.funcExprReturnType, expectedType, d.funcExprFlags);
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations!, d.funcExprReturnType, expectedType, d.funcExprFlags, node);
 }
 
 // ===== @emit Backtick Interpolation (reference emit processing parity) =====

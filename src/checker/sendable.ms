@@ -1,10 +1,10 @@
 // Actor sendability + this-write isolation rules. Leaf module: no calls out.
 
-import { ActorDeclData, ArrayAccessData, ArrowFunctionData, BinaryExprData, CallExprData, DecoratedDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MemberExprData, MethodDeclData, MoveExprData, Node, NodeKind, OutExprData, PropertyDeclData, Symbol, Type, TypeKind, UpdateExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
-import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeDisplayName } from "./types";
+import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -345,3 +345,321 @@ test "a generic param passes the Locked payload rule, not the Arc pointee rule" 
 	assert !isArcPointeeSendable(createGenericParam("T"));
 }
 
+
+const SOLE_OWNER_TAG = " (PARALOCK E148)";
+
+interface OwnerWalk {
+	ctx: CheckerContext;
+	sym: Symbol;
+	name: string;
+	moveNames: string[];
+	thunk: Node;
+	site: SourceLocation;
+	at: SourceLocation;
+	declared: boolean;
+	reported: boolean;
+}
+
+function enclosingBody(ctx: CheckerContext): Node | null {
+	const fn = ctx.currentFunction;
+	if (fn == null || fn.declNode == null) return null;
+	let dn = fn.declNode;
+	if (dn.kind == NodeKind.DecoratedDecl) {
+		const inner = (dn.data as DecoratedDeclData).decoratedNode;
+		if (inner == null) return null;
+		dn = inner;
+	}
+	if (dn.kind == NodeKind.FunctionDecl) return (dn.data as FunctionDeclData).fnBody;
+	if (dn.kind == NodeKind.MethodDecl) return (dn.data as MethodDeclData).methodBody;
+	if (dn.kind == NodeKind.ConstructorDecl) return (dn.data as ConstructorDeclData).ctorBody;
+	if (dn.kind == NodeKind.ArrowFunction) return (dn.data as ArrowFunctionData).arrowBody;
+	if (dn.kind == NodeKind.FunctionExpr) return (dn.data as FunctionExprData).funcExprBody;
+	if (dn.kind == NodeKind.TestDecl) return (dn.data as TestDeclData).testBody;
+	return null;
+}
+
+function peelView(n: Node): Node {
+	let cur = peelHidden(n);
+	while (cur != null) {
+		if (cur.kind == NodeKind.TypeAssertion) { cur = peelHidden((cur.data as TypeAssertionData).asExpr); continue; }
+		if (cur.kind == NodeKind.HiddenSubConv) { cur = peelHidden((cur.data as HiddenStdConvData).convExpr); continue; }
+		break;
+	}
+	return cur;
+}
+
+function refersToOwner(n: Node, w: OwnerWalk): boolean {
+	const p = peelView(n);
+	if (p == null || p.kind != NodeKind.Identifier) return false;
+	if ((p.data as IdentifierData).name != w.name) return false;
+	return p.resolvedSym == null || p.resolvedSym == w.sym;
+}
+
+function rootedAtOwner(n: Node, w: OwnerWalk): boolean {
+	let cur = peelView(n);
+	while (cur != null) {
+		if (cur.kind == NodeKind.MemberExpr) { cur = peelView((cur.data as MemberExprData).object); continue; }
+		if (cur.kind == NodeKind.ArrayAccess) { cur = peelView((cur.data as ArrayAccessData).array); continue; }
+		if (cur.kind == NodeKind.CallExpr) {
+			const callee = peelView((cur.data as CallExprData).callee);
+			if (callee == null || callee.kind != NodeKind.MemberExpr) return false;
+			cur = peelView((callee.data as MemberExprData).object);
+			continue;
+		}
+		break;
+	}
+	return cur != null && refersToOwner(cur, w);
+}
+
+function escapesOwner(n: Node | null, w: OwnerWalk): boolean {
+	if (n == null) return false;
+	const p = peelView(n);
+	if (p == null) return false;
+	if (p.kind == NodeKind.ConditionalExpr) {
+		const d = p.data as ConditionalExprData;
+		return escapesOwner(d.ternaryConsequent, w) || escapesOwner(d.ternaryAlternate, w);
+	}
+	if (p.kind == NodeKind.MatchExpr) {
+		for (const c of (p.data as MatchExprData).matchCases) {
+			if (escapesOwner((c.data as MatchCaseData).caseBody, w)) return true;
+		}
+		return false;
+	}
+	if (!rootedAtOwner(p, w)) return false;
+	return p.nodeType == null || typeCarriesRef(p.nodeType);
+}
+
+function isMovedName(name: string, w: OwnerWalk): boolean {
+	for (const m of w.moveNames) { if (m == name) return true; }
+	return false;
+}
+
+function rootName(n: Node): string {
+	const p = peelView(n);
+	if (p == null) return "";
+	if (p.kind == NodeKind.Identifier) return (p.data as IdentifierData).name;
+	if (p.kind == NodeKind.MemberExpr) return rootName((p.data as MemberExprData).object);
+	if (p.kind == NodeKind.ArrayAccess) return rootName((p.data as ArrayAccessData).array);
+	return "";
+}
+
+function locBefore(a: SourceLocation, b: SourceLocation): boolean {
+	return a.line < b.line || (a.line == b.line && a.column < b.column);
+}
+
+function describeExpr(n: Node): string {
+	const p = peelView(n);
+	if (p == null) return "an expression";
+	if (p.kind == NodeKind.Identifier) return (p.data as IdentifierData).name;
+	if (p.kind == NodeKind.MemberExpr) {
+		const d = p.data as MemberExprData;
+		return describeExpr(d.object) + "." + d.property;
+	}
+	if (p.kind == NodeKind.ArrayAccess) return describeExpr((p.data as ArrayAccessData).array) + "[]";
+	return "an expression";
+}
+
+function reportNotSoleOwner(w: OwnerWalk, why: string): void {
+	if (w.reported) return;
+	w.reported = true;
+	addError(w.ctx, "cannot move '" + w.name + "': it is not the sole owner — " + why + "; only a binding nothing else can reach may cross into the thunk" + SOLE_OWNER_TAG, w.at.line, w.at.column);
+}
+
+function reportEscape(n: Node, how: string, w: OwnerWalk): void {
+	if (!locBefore(n.location, w.site)) return;
+	reportNotSoleOwner(w, how + " at " + n.location.line + ":" + n.location.column);
+}
+
+function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
+	if (rhs == null || w.reported || isFreshValue(rhs, w)) return;
+	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
+}
+
+function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
+	if (n == null) return true;
+	if (n.nodeType != null && !typeCarriesRef(n.nodeType)) return true;
+	const p = peelView(n);
+	if (p == null) return true;
+	if (p != n) return isFreshValue(p, w);
+	return match (p.kind) {
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.MoveExpr | NodeKind.UnaryExpr
+			| NodeKind.UpdateExpr | NodeKind.SizeofExpr => true,
+		NodeKind.Identifier => {
+			const name = (p.data as IdentifierData).name;
+			for (const m of w.moveNames) { if (m == name) return true; }
+			const sym = p.resolvedSym != null ? p.resolvedSym : lookupSymbol(w.ctx.table, name);
+			if (sym == null) return true;
+			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return true;
+			return !typeCarriesRef(sym.symbolType);
+		},
+		NodeKind.ObjectLiteral => {
+			for (const v of (p.data as ObjectLiteralData).properties) { if (!isFreshValue(v, w)) return false; }
+			return true;
+		},
+		NodeKind.ArrayLiteral => {
+			for (const e of (p.data as ArrayLiteralData).elements) { if (!isFreshValue(e, w)) return false; }
+			return true;
+		},
+		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, w),
+		NodeKind.NewExpr => {
+			for (const a of (p.data as NewExprData).newArguments) { if (!isFreshValue(a, w)) return false; }
+			return true;
+		},
+		NodeKind.CallExpr => {
+			const d = p.data as CallExprData;
+			const callee = peelView(d.callee);
+			if (callee != null && callee.kind == NodeKind.MemberExpr && !isFreshValue((callee.data as MemberExprData).object, w)) return false;
+			for (const a of d.arguments) { if (!isFreshValue(a, w)) return false; }
+			return true;
+		},
+		NodeKind.AwaitExpr => isFreshValue((p.data as AwaitExprData).awaitArg, w),
+		NodeKind.ConditionalExpr => {
+			const d = p.data as ConditionalExprData;
+			return isFreshValue(d.ternaryConsequent, w) && isFreshValue(d.ternaryAlternate, w);
+		},
+		NodeKind.MatchExpr => {
+			for (const c of (p.data as MatchExprData).matchCases) {
+				const b = (c.data as MatchCaseData).caseBody;
+				if (b.kind == NodeKind.BlockStmt || !isFreshValue(b, w)) return false;
+			}
+			return true;
+		},
+		NodeKind.TryExpr => {
+			const d = p.data as TryExprData;
+			return isFreshValue(d.tryArg, w) && (!d.hasCatch || isFreshValue(d.catchVal, w));
+		},
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return isFreshValue(d.left, w) && isFreshValue(d.right, w);
+			return true;
+		},
+		_ => false,
+	};
+}
+
+function capturesOwner(node: Node | null, w: OwnerWalk): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) return refersToOwner(node, w);
+	if (node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern || node.kind == NodeKind.ObjectPatternProp) return false;
+	if (node.kind == NodeKind.MatchCase) {
+		const d = node.data as MatchCaseData;
+		return capturesOwner(d.caseGuard, w) || capturesOwner(d.caseBody, w);
+	}
+	const hit: boolean[] = [false];
+	forEachChild(node, (child: Node): void => { if (!hit[0] && capturesOwner(child, w)) hit[0] = true; });
+	return hit[0];
+}
+
+function walkOwner(node: Node | null, w: OwnerWalk): void {
+	if (node == null || w.reported || node == w.thunk) return;
+	match (node.kind) {
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			if (node == w.sym.declNode) {
+				w.declared = true;
+				requireFresh(d.initializer, "the value bound to '" + w.name + "'", w);
+			} else if (!isMovedName(d.declName, w) && escapesOwner(d.initializer, w)) {
+				reportEscape(node, "it is bound to '" + d.declName + "'", w);
+			}
+			walkOwner(d.initializer, w);
+		},
+		NodeKind.DestructuringDecl => {
+			const d = node.data as DestructuringDeclData;
+			if (escapesOwner(d.destrInit, w)) reportEscape(node, "it is destructured", w);
+			walkOwner(d.destrInit, w);
+		},
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			if (d.forOfBinding == w.name && node.resolvedSym == w.sym) {
+				w.declared = true;
+				reportNotSoleOwner(w, "for..of binds it to an element of '" + describeExpr(d.forOfIterable) + "', which still holds it");
+			}
+			walkOwner(d.forOfIterable, w);
+			walkOwner(d.forOfBody, w);
+		},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			if (d.operator == "=") {
+				if (rootedAtOwner(d.left, w)) requireFresh(d.right, "the value assigned into '" + describeExpr(d.left) + "'", w);
+				else if (!isMovedName(rootName(d.left), w) && escapesOwner(d.right, w)) reportEscape(node, "it is assigned to '" + describeExpr(d.left) + "'", w);
+			}
+			walkOwner(d.left, w);
+			walkOwner(d.right, w);
+		},
+		NodeKind.ObjectLiteral => {
+			for (const v of (node.data as ObjectLiteralData).properties) {
+				if (escapesOwner(v, w)) reportEscape(v, "it is stored in an object literal", w);
+				walkOwner(v, w);
+			}
+		},
+		NodeKind.ArrayLiteral => {
+			for (const e of (node.data as ArrayLiteralData).elements) {
+				if (escapesOwner(e, w)) reportEscape(e, "it is stored in an array literal", w);
+				walkOwner(e, w);
+			}
+		},
+		NodeKind.SpreadExpr => {
+			const a = (node.data as SpreadExprData).spreadArg;
+			if (escapesOwner(a, w)) reportEscape(a, "it is spread", w);
+			walkOwner(a, w);
+		},
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			const callee = peelView(d.callee);
+			const ownerIsReceiver = callee != null && callee.kind == NodeKind.MemberExpr && rootedAtOwner((callee.data as MemberExprData).object, w);
+			for (const a of d.arguments) {
+				if (ownerIsReceiver) requireFresh(a, "the argument passed into '" + describeExpr(callee) + "'", w);
+				else if (escapesOwner(a, w)) reportEscape(a, "it is passed to '" + describeExpr(callee) + "'", w);
+			}
+			walkOwner(d.callee, w);
+			for (const a of d.arguments) walkOwner(a, w);
+		},
+		NodeKind.NewExpr => {
+			for (const a of (node.data as NewExprData).newArguments) {
+				if (escapesOwner(a, w)) reportEscape(a, "it is passed to a constructor", w);
+				walkOwner(a, w);
+			}
+		},
+		NodeKind.YieldExpr => {
+			const a = (node.data as YieldExprData).yieldArg;
+			if (escapesOwner(a, w)) reportEscape(a, "it is yielded", w);
+			walkOwner(a, w);
+		},
+		NodeKind.OutExpr => {
+			const a = (node.data as OutExprData).outArg;
+			if (rootedAtOwner(a, w)) reportEscape(a, "it is passed as an out argument", w);
+		},
+		NodeKind.DeferStmt => {
+			if (capturesOwner(node, w)) reportEscape(node, "a defer that runs after the move uses it", w);
+		},
+		NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.FunctionDecl => {
+			if (capturesOwner(node, w)) reportEscape(node, "a closure captures it", w);
+		},
+		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => {},
+		NodeKind.MatchCase => {
+			const d = node.data as MatchCaseData;
+			walkOwner(d.caseGuard, w);
+			walkOwner(d.caseBody, w);
+		},
+		_ => { forEachChild(node, (child: Node): void => { walkOwner(child, w); }); },
+	};
+}
+
+export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
+	if (!typeCarriesRef(sym.symbolType)) return;
+	if (sym.symbolKind == SymbolKind.Parameter) {
+		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
+		return;
+	}
+	if (hasFlag(sym, SymbolFlag.Global)) {
+		addError(ctx, "cannot move '" + sym.name + "': it is a module-level binding that every function in the module can reach — move a binding local to one function" + SOLE_OWNER_TAG, at.line, at.column);
+		return;
+	}
+	const body = enclosingBody(ctx);
+	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: false, reported: false };
+	if (body != null) walkOwner(body, w);
+	if (!w.declared && !w.reported) {
+		addError(ctx, "cannot move '" + sym.name + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);
+	}
+}

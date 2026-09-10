@@ -21,7 +21,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
 import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
+import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -2786,7 +2786,13 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 	const paramAnnots: string[] = [];
 	const paramDefaults: (Node | null)[] = [];
 	const moveArgs: Node[] = [];
-	for (const el of (moveList.data as ArrayLiteralData).elements) {
+	const thunk = args[0];
+	const listNodes: Node[] = (moveList.data as ArrayLiteralData).elements;
+	const moveNames: string[] = [];
+	for (const el of listNodes) {
+		if (el.kind == NodeKind.Identifier) moveNames.push((el.data as IdentifierData).name);
+	}
+	for (const el of listNodes) {
 		if (el.kind != NodeKind.Identifier) {
 			addError(ctx, "spawn { move } entries must be plain local names — bind a field first (const part = obj.part) and move that", el.location.line, el.location.column);
 			continue;
@@ -2799,6 +2805,7 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 		}
 		ensureShaped(sym, ctx);
 		if (sym.symbolType == null) continue;
+		checkMoveSoleOwner(ctx, sym, moveNames, thunk, el.location);
 		names.push(name);
 		paramTypes.push(sym.symbolType);
 		paramAnnots.push("");
@@ -2807,7 +2814,6 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 		movedKeys.push(symbolConsumeKey(sym));
 	}
 	if (names.length == 0) return movedKeys;
-	const thunk = args[0];
 	const outer = createNodeAt(NodeKind.ArrowFunction, {
 		arrowParams: names, arrowParamTypes: paramAnnots, arrowBody: thunk,
 		arrowFlags: "", arrowReturnType: "", arrowDefaults: paramDefaults,

@@ -542,7 +542,9 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			// Test blocks compile to functions — allow return statements inside
 			const savedFunction = ctx.currentFunction;
 			const savedInTest = ctx.inTestBlock;
-			ctx.currentFunction = makeSymbol("__test__", SymbolKind.Function, inferredType(), false);
+			const testSym = makeSymbol("__test__", SymbolKind.Function, inferredType(), false);
+			testSym.declNode = node;
+			ctx.currentFunction = testSym;
 			ctx.inTestBlock = true;
 			checkBlock(ctx, d.testBody);
 			ctx.inTestBlock = savedInTest;
