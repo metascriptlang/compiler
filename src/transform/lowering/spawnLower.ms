@@ -6,7 +6,7 @@
 // C runtime can store them as void* in msFuture.value.
 
 import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
+import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
@@ -144,11 +144,9 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 					arrowBody: boxed,
 					arrowFlags: "",
 					arrowReturnType: "",
+					arrowDefaults: [] as Node[],
 				}, syntheticToken(loc));
-				wrapper.nodeType = closureArg.nodeType;
-				if (wrapper.nodeType != null && wrapper.nodeType.kind == TypeKind.Function) {
-					wrapper.nodeType.typeReturn = createPtr(voidType());
-				}
+				wrapper.nodeType = createFunction([], [], createPtr(voidType()));
 				cd.arguments[0] = wrapper;
 				return node;
 			}
