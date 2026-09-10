@@ -109,7 +109,7 @@ actor W {
 	}
 }
 
-test "E2E C: S3/E62 — field assignment in spawn thunk fails" {
+test "E2E C: E24 — field assignment in spawn thunk fails" {
 	const src = `
 actor W {
 	n: number = 0;
@@ -122,12 +122,12 @@ actor W {
 	const c = compileToC(src);
 	assert !c.ok;
 	if (!c.ok) {
-		assert c.error.contains("PARALOCK S3/E62");
-		assert c.error.contains("'n'");
+		assert c.error.contains("PARALOCK E24");
+		assert c.error.contains("Readonly<");
 	}
 }
 
-test "E2E C: S3/E62 — compound assignment in spawn thunk fails" {
+test "E2E C: E24 — compound assignment in spawn thunk fails" {
 	const src = `
 actor W {
 	n: number = 0;
@@ -139,10 +139,10 @@ actor W {
 `;
 	const c = compileToC(src);
 	assert !c.ok;
-	if (!c.ok) { assert c.error.contains("PARALOCK S3/E62"); }
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
 }
 
-test "E2E C: S3/E62 — increment of captured field fails" {
+test "E2E C: E24 — increment of captured field fails" {
 	const src = `
 actor W {
 	n: number = 0;
@@ -154,10 +154,10 @@ actor W {
 `;
 	const c = compileToC(src);
 	assert !c.ok;
-	if (!c.ok) { assert c.error.contains("PARALOCK S3/E62"); }
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
 }
 
-test "E2E C: S3/E62 — deep write through captured field fails" {
+test "E2E C: E24 — deep write through captured field fails" {
 	const src = `
 actor W {
 	xs: number[] = [1, 2];
@@ -170,8 +170,8 @@ actor W {
 	const c = compileToC(src);
 	assert !c.ok;
 	if (!c.ok) {
-		assert c.error.contains("PARALOCK S3/E62");
-		assert c.error.contains("'xs'");
+		assert c.error.contains("PARALOCK E24");
+		assert c.error.contains("Readonly<");
 	}
 }
 
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
 	}
 }
 
-test "E2E C: S3/E62 — move out of captured field fails" {
+test "E2E C: E24 — move out of captured field fails" {
 	const src = `
 actor W {
 	entries: string[] = ["a"];
@@ -255,7 +255,7 @@ actor W {
 `;
 	const c = compileToC(src);
 	assert !c.ok;
-	if (!c.ok) { assert c.error.contains("PARALOCK S3/E62"); }
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
 }
 
 test "E2E C: S3 — captured field as out argument is rejected (parser today; S3 walker if out-member ever parses)" {
@@ -273,7 +273,7 @@ actor W {
 	assert !c.ok;
 }
 
-test "E2E C: S3/E62 — write through a nested closure inside the thunk fails" {
+test "E2E C: E24 — write through a nested closure inside the thunk fails" {
 	const src = `
 actor W {
 	n: number = 0;
@@ -289,7 +289,7 @@ actor W {
 `;
 	const c = compileToC(src);
 	assert !c.ok;
-	if (!c.ok) { assert c.error.contains("PARALOCK S3/E62"); }
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
 }
 
 test "E2E C: S1/S3 — read through a nested closure inside the thunk compiles" {
@@ -309,7 +309,7 @@ actor W {
 	assert c.ok;
 }
 
-test "E2E C: S3/E62 — chained deep member write fails, names the root field" {
+test "E2E C: E24 — chained deep member write fails, names the root field" {
 	const src = `
 interface Cfg { depth: number; }
 actor W {
@@ -323,8 +323,8 @@ actor W {
 	const c = compileToC(src);
 	assert !c.ok;
 	if (!c.ok) {
-		assert c.error.contains("PARALOCK S3/E62");
-		assert c.error.contains("'cfg'");
+		assert c.error.contains("PARALOCK E24");
+		assert c.error.contains("Readonly<");
 	}
 }
 

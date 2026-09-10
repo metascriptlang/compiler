@@ -2,7 +2,7 @@
 //
 // INVARIANT (PARALOCK I4/I5 + E40, Amendment I4/I5 §7.3): inside an actor
 //   method a spawn thunk cannot capture `this` (S1/E61) and cannot write a
-//   captured field — deep, through member/index chains (S3/E62); a direct
+//   captured field — deep, through member/index chains (E24); a direct
 //   `await spawn(...)` in a loop body warns (E40/E41). Swift @Sendable +
 //   Pony box precedents. Enforcement: walkActorSpawnRules (checkExprPass,
 //   hooked from checkSpawnCaptures) + detectSequentialAwaitSpawn (checkPass
@@ -24,7 +24,7 @@
 //   older msc predates the rules and shows red by design.
 //
 // GUARD-CHECK-FAIL PARALOCK S1/E61
-// GUARD-CHECK-FAIL PARALOCK S3/E62
+// GUARD-CHECK-FAIL cannot write through Readonly<GuardActor>
 // GUARD-CHECK-FAIL PARALOCK E40/E41
 
 actor GuardActor {

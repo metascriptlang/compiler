@@ -21,7 +21,7 @@ interface Counter { n: int32; }
 
 interface Table { items: int32[]; }
 
-function readOnly(c: Counter): int32 {
+function readOnly(c: Readonly<Counter>): int32 {
 	return c.n;
 }
 
@@ -51,13 +51,36 @@ function writeUnderLock(): int32 {
 	return t.items.length + done;
 }
 
+// 4 — a POD struct copy is the thunk's own value: writing it touches nothing shared.
+struct Pt { x: int32; y: int32; }
+interface Holder { pos: Pt; }
+function podCopyWrite(): int32 {
+	const h: Holder = { pos: { x: 1, y: 2 } };
+	const f = spawn(() => { const p = h.pos; p.x = 5; return p.x; });
+	return await f;
+}
+
+// 5 — an extension declared on the read-only view is callable through it.
+class Tally { n: int32 = 3; }
+function peek(this t: Readonly<Tally>): int32 { return t.n; }
+function readonlyExtCall(): int32 {
+	const t = new Tally();
+	const direct = t.peek();
+	const f = spawn(() => { return t.peek(); });
+	return await f + direct;
+}
+
 function main(): int32 {
 	const a = borrowRead();
 	const b = borrowThroughCallee();
 	const c = writeUnderLock();
+	const d = podCopyWrite();
+	const e = readonlyExtCall();
 	if (a != 5) { throw "GUARD RED: borrowRead"; }
 	if (b != 6) { throw "GUARD RED: borrowThroughCallee"; }
 	if (c != 1) { throw "GUARD RED: writeUnderLock"; }
+	if (d != 5) { throw "GUARD RED: podCopyWrite"; }
+	if (e != 6) { throw "GUARD RED: readonlyExtCall"; }
 	console.log("GUARD-OK");
 	return 0;
 }
