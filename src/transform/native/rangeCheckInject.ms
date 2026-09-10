@@ -134,6 +134,7 @@ function destCovers(src: Type | null, dest: Type): boolean {
 function checkedConv(ctx: TransformContext, expr: Node, src: Type | null, dest: Type, node: Node): Node {
 	const fnName = getRangeCheckForTypeKind(dest.kind);
 	if (fnName == "") return node;
+	if (!ctx.rangeChecks) return node;
 	if (isUnsignedKind(dest.kind)) return node;
 	if (destCovers(src, dest)) return node;
 	return makeRangeCheck(expr, fnName, getRangeMinForKind(dest.kind), getRangeMaxForKind(dest.kind), node.location);
@@ -146,7 +147,7 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 		if (node.nodeType != null) return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
 		const fnName = getRangeCheckFn(d.asType);
 		if (fnName == "") return node;
-		if (isUnsignedName(d.asType)) return node;
+		if (!ctx.rangeChecks || isUnsignedName(d.asType)) return node;
 		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
@@ -168,10 +169,11 @@ export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVa
 
 // ===== Test Helpers =====
 
-function castExprKind(input: string): NodeKind {
+function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 	const result = parseInput(input);
 	if (!result.ok) return NodeKind.Program;
 	const ctx = createTransformContext();
+	ctx.rangeChecks = rangeChecks;
 	injectRangeChecks(result.value, ctx);
 	const stmts = getStmts(result.value);
 	if (stmts.length == 0) return NodeKind.Program;
@@ -216,6 +218,8 @@ test "cast to uint16 stays a plain cast" { assert castExprKind("x as uint16;") =
 test "cast to uint8 stays a plain cast" { assert castExprKind("x as uint8;") == NodeKind.TypeAssertion; }
 
 test "cast to uint32 stays a plain cast" { assert castExprKind("x as uint32;") == NodeKind.TypeAssertion; }
+
+test "cast to int8 stays a plain cast when range checks are off" { assert castExprKind("x as int8;", false) == NodeKind.TypeAssertion; }
 
 test "cast to int32 becomes range check" { assert castExprKind("x as int32;") == NodeKind.CallExpr; }
 
