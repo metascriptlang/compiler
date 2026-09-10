@@ -27,6 +27,20 @@ function sameElementRepr(a: Type | null, b: Type | null): boolean {
 //    union(number|string) → union(float32|string) reinterprets both; numeric
 //    fields must share C width. Fields present on only one side are ignored —
 //    this must not become a general assignability gate (terminal fitNode scope).
+export function isNominalType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Enum || s.kind == TypeKind.EnumLiteral || s.kind == TypeKind.Distinct) return true;
+	return s.kind == TypeKind.GenericInstance && s.typeExtra != null && s.typeExtra.kind == TypeKind.Distinct;
+}
+
+export function isNominalMismatch(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null) return false;
+	if (source.kind == TypeKind.Null) return false;
+	if (!isNominalType(source) && !isNominalType(target)) return false;
+	return !isAssignable(source, target);
+}
+
 let _reprDepth = 0;
 export function isReinterpretUnsafe(source: Type | null, target: Type | null): boolean {
 	if (_reprDepth > 12) return false;
@@ -443,8 +457,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return true;
 	}
 	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
-	// EnumLiteral → Number/Int32 (enums are ints at runtime)
-	if (source.kind == TypeKind.EnumLiteral && (target.kind == TypeKind.Int32 || target.kind == TypeKind.Number)) {
+	// Enum/EnumLiteral → Number/Int32 (enums are ints at runtime)
+	if ((source.kind == TypeKind.Enum || source.kind == TypeKind.EnumLiteral)
+		&& (target.kind == TypeKind.Int32 || target.kind == TypeKind.Number)) {
 		return true;
 	}
 

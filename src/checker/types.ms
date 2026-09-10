@@ -1088,6 +1088,7 @@ export function peelTransparentInstance(t: Type): Type {
 	while (_g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
 		if (cur.kind != TypeKind.GenericInstance || cur.typeReturn == null) return cur;
+		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
 		const nominal = peelToStructOrUnion(cur.typeExtra);
 		if (nominal != null
 			&& (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union)) return cur;
