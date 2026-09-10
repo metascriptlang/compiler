@@ -1446,7 +1446,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			const bindDeclPath = regCtx.macroDeclModuleRegistry.get(macroName);
-			if (bindDeclPath != null && bindDeclPath != "") {
+			if (bindDeclPath != null && bindDeclPath != "" && bindDeclPath != ctx.modulePath) {
 				const mc = lookupModuleCtx(bindDeclPath);
 				if (mc != null) bindCtx = mc;
 			}
@@ -1488,7 +1488,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
 			let declCtx = ctx;
 			const declPath = regCtx.macroDeclModuleRegistry.get(macroName);
-			if (declPath != null && declPath != "") {
+			if (declPath != null && declPath != "" && declPath != ctx.modulePath) {
 				const mc = lookupModuleCtx(declPath);
 				if (mc != null) declCtx = mc;
 			}
