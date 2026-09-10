@@ -3,13 +3,20 @@
 // import of a healthy multi-file program as an error — a cheap gate that is
 // wrong on every real program is worse than no gate.
 //
-// INVARIANT: check and build share one module-resolution driver.
-//   Reference: main.nim routes every command that type-checks through
-//   `compileProject` — the module graph is built before semantic analysis, and
-//   `check` is a stop-after-sem variant of the same run, never a second driver.
-// NIM-REF: §"Command routing" — DIVERGE-UNINTENTIONAL -> SAME. `cmdCheck`
-//   called `checkProgram` on a lone parse result with no ModuleGraph, so
-//   collectImport took the unresolved-source branch for every import.
+// INVARIANT: check and build share one driver; the command chooses how far the
+//   pipeline runs, never whether imports resolve.
+//   Reference (read 2026-09-10): `commandCheck` (main.nim:90) installs the sem
+//   pass then calls `compilePipelineProject`; `commandCompileToC` (main.nim:148)
+//   installs the codegen pass and calls the SAME proc. The check command is
+//   declared "semantic checking for whole project" (options.nim:184).
+//   Not parity, and not claimed here: the reference resolves imports lazily
+//   from inside sem (importPipelineModule, pipelines.nim:499 — "this is called
+//   by the semantic checking phase"), while we load an eager module graph first
+//   — NIM-REF §1 "Import resolution", DIVERGE-INTENTIONAL. This guard pins the
+//   one-driver rule, not the eager/lazy shape.
+// VERDICT: was DIVERGE-UNINTENTIONAL -> SAME. `cmdCheck` called `checkProgram`
+//   on a lone parse result with no ModuleGraph, so collectImport took the
+//   unresolved-source branch for every import.
 //
 // WHY A SUBPROCESS: the observable is the CLI command's verdict, which the
 //   in-process checker cannot express about itself. The compiler under test is
