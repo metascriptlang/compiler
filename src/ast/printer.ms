@@ -36,7 +36,7 @@ function printFieldNode(name: string, n: Node | null): void {
 
 const printSink: FieldSink = {
 	node: (name: string, n: Node | null): void => { printFieldNode(name, n); },
-	nodes: (name: string, a: (Node | null)[] | null): void => {
+	nodes: (name: string, a: Node[] | null): void => {
 		if (a == null || a.length == 0) {
 			console.log(`${pad()}${name}: []`);
 			return;
@@ -53,7 +53,7 @@ const printSink: FieldSink = {
 		}
 		_level = saved;
 	},
-	nodesNested: (name: string, a: (Node | null)[][] | null): void => {
+	nodesNested: (name: string, a: Node[][] | null): void => {
 		if (a == null || a.length == 0) {
 			console.log(`${pad()}${name}: []`);
 			return;

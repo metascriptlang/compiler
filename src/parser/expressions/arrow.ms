@@ -133,7 +133,7 @@ export function parseArrowFunction(
 	const arrowParamTypes = extractParamTypes(raw);
 	// Pad defaults to match arrowParams length (parser only pushes when default present)
 	const rawDefaults = getLastParsedDefaults();
-	const arrowDefaults: (Node | null)[] = [];
+	const arrowDefaults: Node[] = [];
 	let di = 0;
 	while (di < arrowParams.length) {
 		arrowDefaults.push(di < rawDefaults.length ? rawDefaults[di] : null);

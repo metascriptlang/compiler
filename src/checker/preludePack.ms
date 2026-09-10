@@ -436,7 +436,7 @@ function idxTypeP(t: Type | null): int32 {
 	return v == null ? -1 : v;
 }
 
-function idxsP(arr: (Node | null)[] | null): string {
+function idxsP(arr: Node[] | null): string {
 	if (arr == null) return "-";
 	if (arr.length == 0) return "";
 	let out = "";
@@ -449,7 +449,7 @@ function idxsP(arr: (Node | null)[] | null): string {
 	return out;
 }
 
-function nestedIdxsP(arrs: (Node | null)[][] | null): string {
+function nestedIdxsP(arrs: Node[][] | null): string {
 	if (arrs == null) return "-";
 	if (arrs.length == 0) return "";
 	let out = "";
@@ -609,7 +609,7 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		return v == null ? -1 : v;
 	}
 
-	function idxs(arr: (Node | null)[] | null): string {
+	function idxs(arr: Node[] | null): string {
 		if (arr == null) return "-";
 		if (arr.length == 0) return "";
 		let out = "";
@@ -629,8 +629,8 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 	// value fields are ignored.
 	const walkSink: FieldSink = {
 		node: (name: string, x: Node | null): void => { enqNode(x); },
-		nodes: (name: string, a: (Node | null)[] | null): void => { if (a != null) { for (const c of a) enqNode(c); } },
-		nodesNested: (name: string, a: (Node | null)[][] | null): void => { if (a != null) { for (const row of a) { if (row != null) { for (const c of row) enqNode(c); } } } },
+		nodes: (name: string, a: Node[] | null): void => { if (a != null) { for (const c of a) enqNode(c); } },
+		nodesNested: (name: string, a: Node[][] | null): void => { if (a != null) { for (const row of a) { if (row != null) { for (const c of row) enqNode(c); } } } },
 		typ: (name: string, t: Type | null): void => { enqType(t); },
 		str: (name: string, s: string): void => {},
 		strArr: (name: string, a: string[] | null): void => {},
@@ -785,8 +785,8 @@ let _payloadCols: string[] = [];
 
 const emitSink: FieldSink = {
 	node: (name: string, x: Node | null): void => { _payloadCols.push(`${idxNodeP(x)}`); },
-	nodes: (name: string, a: (Node | null)[] | null): void => { _payloadCols.push(idxsP(a)); },
-	nodesNested: (name: string, a: (Node | null)[][] | null): void => { _payloadCols.push(nestedIdxsP(a)); },
+	nodes: (name: string, a: Node[] | null): void => { _payloadCols.push(idxsP(a)); },
+	nodesNested: (name: string, a: Node[][] | null): void => { _payloadCols.push(nestedIdxsP(a)); },
 	typ: (name: string, t: Type | null): void => { _payloadCols.push(`${idxTypeP(t)}`); },
 	str: (name: string, s: string): void => { _payloadCols.push(escapeP(s)); },
 	strArr: (name: string, a: string[] | null): void => { _payloadCols.push(joinCsv(a != null ? a : [])); },
@@ -1021,7 +1021,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.ArrayAccess) return { array: nd(f[0].parseInt() as int32, nodes) as Node, index: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.ObjectLiteral) return { properties: parseNodeArr(f[0], nodes), keys: splitCsv(f[1]), keyLocations: parseLocs(f[2]) } as NodeData;
 	if (kind == NodeKind.ArrayLiteral) return { elements: parseNodeArr(f[0], nodes) } as NodeData;
-	if (kind == NodeKind.ArrowFunction) return { arrowParams: splitCsv(f[0]), arrowParamTypes: splitCsv(f[1]), arrowBody: nd(f[2].parseInt() as int32, nodes) as Node, arrowFlags: unescapeP(f[3]), arrowReturnType: unescapeP(f[4]), arrowDefaults: parseNodeIdxList(f[5], nodes) } as NodeData;
+	if (kind == NodeKind.ArrowFunction) return { arrowParams: splitCsv(f[0]), arrowParamTypes: splitCsv(f[1]), arrowBody: nd(f[2].parseInt() as int32, nodes) as Node, arrowFlags: unescapeP(f[3]), arrowReturnType: unescapeP(f[4]), arrowDefaults: parseNodeArr(f[5], nodes) } as NodeData;
 	if (kind == NodeKind.FunctionExpr) return { funcExprParams: splitCsv(f[0]), funcExprParamTypes: splitCsv(f[1]), funcExprBody: nd(f[2].parseInt() as int32, nodes) as Node, funcExprFlags: unescapeP(f[3]), funcExprReturnType: unescapeP(f[4]) } as NodeData;
 	if (kind == NodeKind.TypeAssertion) return { asExpr: nd(f[0].parseInt() as int32, nodes) as Node, asType: unescapeP(f[1]) } as NodeData;
 	if (kind == NodeKind.ConditionalExpr) return { ternaryCondition: nd(f[0].parseInt() as int32, nodes) as Node, ternaryConsequent: nd(f[1].parseInt() as int32, nodes) as Node, ternaryAlternate: nd(f[2].parseInt() as int32, nodes) as Node } as NodeData;
@@ -1255,7 +1255,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		n.nodeType = nodeTypeRef[i] >= 0 && nodeTypeRef[i] < types.length ? types[nodeTypeRef[i]] : null as unknown as Type;
 		n.resolvedSym = nodeSymRef[i] >= 0 && nodeSymRef[i] < syms.length ? syms[nodeSymRef[i]] : null as unknown as Symbol;
 		n.typeExpr = nd(nodeTeRef[i], nodes) as Node;
-		n.typeExprs = nodeTesRaw[i] == "-" ? null as unknown as (Node | null)[] : parseNodeIdxList(nodeTesRaw[i], nodes);
+		n.typeExprs = nodeTesRaw[i] == "-" ? null as unknown as Node[] : parseNodeArr(nodeTesRaw[i], nodes);
 		n.paramLocations = nodePlsRaw[i] == "-" ? null as unknown as SourceLocation[] : parseLocs(nodePlsRaw[i]);
 		n.data = buildNodeData(n.kind, nodePayload[i], nodes, types);
 	}

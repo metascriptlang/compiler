@@ -39,8 +39,8 @@ import { Node, NodeKind, NodeData, SourceLocation, Type, Symbol, DeclKind, Exter
 // ===== Read-only sink =====
 
 export type SinkNodeFn = (name: string, n: Node | null) => void;
-export type SinkNodeArrFn = (name: string, arr: (Node | null)[] | null) => void;
-export type SinkNestedFn = (name: string, arrs: (Node | null)[][] | null) => void;
+export type SinkNodeArrFn = (name: string, arr: Node[] | null) => void;
+export type SinkNestedFn = (name: string, arrs: Node[][] | null) => void;
 export type SinkTypeFn = (name: string, t: Type | null) => void;
 export type SinkStrFn = (name: string, s: string) => void;
 export type SinkStrArrFn = (name: string, arr: string[] | null) => void;
@@ -81,8 +81,8 @@ export interface FieldSink {
 // dumps built from the same samples against both.
 
 export type XfNodeFn = (n: Node | null) => Node | null;
-export type XfNodeArrFn = (arr: (Node | null)[] | null) => (Node | null)[];
-export type XfNestedFn = (arrs: (Node | null)[][] | null) => (Node | null)[][];
+export type XfNodeArrFn = (arr: Node[] | null) => Node[];
+export type XfNestedFn = (arrs: Node[][] | null) => Node[][];
 export type XfTypeFn = (t: Type | null) => Type | null;
 export type XfStrFn = (s: string) => string;
 export type XfStrArrFn = (arr: string[] | null) => string[];
