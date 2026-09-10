@@ -144,7 +144,7 @@ Looks like TypeScript, differs semantically. Full reference with examples: [`doc
 
 **TypeScript pitfalls**: `interface` is a data struct, not a contract · `type` is a reserved keyword (use `tokenType`, `nodeType`) · no `indexOf`/`includes` on strings — use `slice`/`length`/`findChar`/`charAt` from `utils/string.ms` · arrays pass by pointer, strings are value types · narrow discriminated unions with `as`.
 
-**Other syntax**: `move` (ownership transfer) · `defer` (LIFO scope-exit) · `unreachable` · `out` parameters · `distinct type` · `extern function` (C FFI) · decorators `@derive`, `@comptime`, `@emit` (backend-conditional code is `when (c) { … }`) · sized integers `int8`…`uint64`, `float32`, `float64`.
+**Other syntax**: `move` (ownership transfer) · `defer` (LIFO scope-exit) · `unreachable` · `out` parameters · `distinct` (right-hand: `type M = distinct int32`) · `extern function` (C FFI) · decorators `@derive`, `@comptime`, `@emit` (backend-conditional code is `when (c) { … }`) · sized integers `int8`…`uint64`, `float32`, `float64`.
 
 ## Standard Reference Implementation
 
