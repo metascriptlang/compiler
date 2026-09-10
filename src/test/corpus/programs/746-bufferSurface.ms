@@ -17,7 +17,7 @@ function main(): void {
 	let zero = true;
 	let i = 0;
 	while (i < 4) { if (z.byteAt(i) != 0) { zero = false; } i += 1; }
-	ok = check("allocZero", zero && z.byteLength == 4) && ok;
+	ok = check("allocZero", zero && z.byteLength() == 4) && ok;
 
 	// set / byteAt round-trip.
 	const b = Buffer.alloc(4);
@@ -26,23 +26,23 @@ function main(): void {
 
 	// fromArray copies every element.
 	const fa = Buffer.fromArray([1, 2, 255]);
-	ok = check("fromArray", fa.byteLength == 3 && fa.byteAt(2) == 255) && ok;
+	ok = check("fromArray", fa.byteLength() == 3 && fa.byteAt(2) == 255) && ok;
 
 	// hex round-trip.
 	const fh = Buffer.fromString("deadbeef", "hex");
-	ok = check("fromHex", fh.byteLength == 4 && fh.byteAt(0) == 0xde && fh.byteAt(3) == 0xef) && ok;
+	ok = check("fromHex", fh.byteLength() == 4 && fh.byteAt(0) == 0xde && fh.byteAt(3) == 0xef) && ok;
 	ok = check("toHex", fh.toHex() == "deadbeef") && ok;
 
 	// base64 round-trip.
 	const fb = Buffer.fromArray([1, 2, 3]);
 	ok = check("toBase64", fb.toBase64() == "AQID") && ok;
 	const fb2 = Buffer.fromString("AQID", "base64");
-	ok = check("fromBase64", fb2.byteLength == 3 && fb2.byteAt(0) == 1) && ok;
+	ok = check("fromBase64", fb2.byteLength() == 3 && fb2.byteAt(0) == 1) && ok;
 
 	// utf8 multibyte encode/decode.
 	const fu = Buffer.fromString("é", "utf8");
-	ok = check("utf8Bytes", fu.byteLength == 2 && fu.byteAt(0) == 0xc3 && fu.byteAt(1) == 0xa9) && ok;
-	ok = check("utf8Decode", fu.toStringEncoded("utf8", 0, fu.byteLength) == "é") && ok;
+	ok = check("utf8Bytes", fu.byteLength() == 2 && fu.byteAt(0) == 0xc3 && fu.byteAt(1) == 0xa9) && ok;
+	ok = check("utf8Decode", fu.toStringEncoded("utf8", 0, fu.byteLength()) == "é") && ok;
 
 	// endian reads over known bytes.
 	const e = Buffer.alloc(4);
@@ -118,10 +118,10 @@ function main(): void {
 	const c1 = Buffer.fromArray([1, 2]);
 	const c2 = Buffer.fromArray([3]);
 	const cc = Buffer.concat(c1, c2);
-	ok = check("concat", cc.byteLength == 3 && cc.byteAt(2) == 3) && ok;
+	ok = check("concat", cc.byteLength() == 3 && cc.byteAt(2) == 3) && ok;
 	const parts: Buffer[] = [c1, c2, c1];
 	const cl = Buffer.concatList(parts);
-	ok = check("concatList", cl.byteLength == 5 && cl.byteAt(4) == 2) && ok;
+	ok = check("concatList", cl.byteLength() == 5 && cl.byteAt(4) == 2) && ok;
 
 	// copyTo(src -> dst at targetStart from [sourceStart, sourceEnd)).
 	const src = Buffer.fromArray([1, 2, 3, 4]);

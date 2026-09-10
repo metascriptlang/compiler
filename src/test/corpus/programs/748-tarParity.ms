@@ -48,7 +48,7 @@ function main(): void {
 	let ok = true;
 
 	// 2 headers + 2 data blocks (both padded to 512) + 2 zero end blocks.
-	ok = check("totalSize", s.byteLength == 3072) && ok;
+	ok = check("totalSize", s.byteLength() == 3072) && ok;
 
 	// Header 1: name at 0, magic "ustar" at 257, typeflag '0' at 156.
 	ok = check("name", s.byteAt(0) == 97 && s.byteAt(1) == 46) && ok;
