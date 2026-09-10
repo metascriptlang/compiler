@@ -3492,6 +3492,58 @@ test "generic right-hand distinct creates Distinct wrapper" {
 	assert sym.symbolType.kind == TypeKind.Distinct;
 }
 
+test "int32 into a generic distinct slot is rejected" {
+	assert checkErrors("type Bits<E> = distinct uint32; enum F { A, B } function i(): int32 { return 1; } const b: Bits<F> = i();") == 1;
+}
+
+test "enum member into a generic distinct slot is rejected" {
+	assert !checkOk("type Bits<E> = distinct uint32; enum F { A, B } const b: Bits<F> = F.A;");
+}
+
+test "generic distinct instances of different enums do not interconvert" {
+	assert !checkOk("type Bits<E> = distinct uint32; enum F { A } enum G { X } function f(x: Bits<F>): void { const y: Bits<G> = x; }");
+}
+
+test "int32 into a distinct slot is rejected" {
+	assert !checkOk("type M = distinct int32; function i(): int32 { return 1; } const m: M = i();");
+}
+
+test "distinct into its base slot is rejected" {
+	assert !checkOk("type M = distinct int32; function f(m: M): void { const n: int32 = m; }");
+}
+
+test "distinct into a sibling distinct slot is rejected" {
+	assert !checkOk("type M = distinct int32; type Ft = distinct int32; function f(m: M): void { const n: Ft = m; }");
+}
+
+test "enum member into another enum's slot is rejected" {
+	assert !checkOk("enum F { A } enum G { X } const e: F = G.X;");
+}
+
+test "enum value into another enum's slot is rejected" {
+	assert !checkOk("enum F { A } enum G { X } function f(g: G): void { const e: F = g; }");
+}
+
+test "assignment into a distinct slot is rejected" {
+	assert !checkOk("type M = distinct int32; function f(m: M, i: int32): void { let n: M = m; n = i; }");
+}
+
+test "return into a distinct slot reports once" {
+	assert checkErrors("type M = distinct int32; function r(i: int32): M { return i; }") == 1;
+}
+
+test "explicit distinct cast still flows into a distinct slot" {
+	assert checkOk("type M = distinct int32; const m: M = 5 as M;");
+}
+
+test "enum member still flows into its own enum slot" {
+	assert checkOk("enum F { A, B } const e: F = F.B;");
+}
+
+test "enum value still flows into an int32 slot" {
+	assert checkOk("enum F { A, B } function f(x: F): void { const n: int32 = x; }");
+}
+
 test "right-hand distinct creates Distinct wrapper" {
 	const ctx = checkSource("type UserId = distinct number;");
 	assert !hasErrors(ctx);
