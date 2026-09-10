@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, TypeAssertionData } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
@@ -240,6 +240,20 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 //                 | ('typeof' | 'void' | 'delete') expr | ('++' | '--') expr
 //                 | ('-' | '!' | '~') expr | 'async' (funcExpr | arrow) | '...' expr
 
+// The postfix pass consumes `as` unconditionally, but TS binds it outside a
+// prefix op: `typeof x as T` = `(typeof x) as T`, `++x as T` = `(++x) as T`.
+// Rewraps the innermost assertion's expression with the prefix op.
+function rewrapUnderAssertion(operand: Node, wrap: (inner: Node) => Node): Node {
+	let cur = operand;
+	while (true) {
+		const ad = cur.data as TypeAssertionData;
+		if (ad.asExpr != null && ad.asExpr.kind == NodeKind.TypeAssertion) { cur = ad.asExpr; continue; }
+		ad.asExpr = wrap(ad.asExpr);
+		break;
+	}
+	return operand;
+}
+
 function parsePrimary(state: ParserState): ExprResult {
 	const token = current(state);
 
@@ -353,14 +367,9 @@ function parsePrimary(state: ParserState): ExprResult {
 		// the prefix op: `typeof x as T` = `(typeof x) as T`. Rewrap the innermost
 		// assertion's expression with the prefix op.
 		if (operand.kind == NodeKind.TypeAssertion) {
-			let cur = operand;
-			while (true) {
-				const ad = cur.data as TypeAssertionData;
-				if (ad.asExpr != null && ad.asExpr.kind == NodeKind.TypeAssertion) { cur = ad.asExpr; continue; }
-				ad.asExpr = createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: ad.asExpr }, token);
-				break;
-			}
-			return Result.ok(operand);
+			return Result.ok(rewrapUnderAssertion(operand, (inner: Node): Node => {
+				return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+			}));
 		}
 		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
 	}
@@ -451,11 +460,18 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.OutExpr, { outArg: outOperand }, token));
 	}
 
-	// Prefix increment/decrement: ++x, --x
+	// Prefix increment/decrement: ++x, --x. Operand = postfix chain, no binary
+	// op, same as typeof: `++a[i]` and `--o.n` reach the element / member.
 	if (token.kind == TokenKind.PlusPlus || token.kind == TokenKind.MinusMinus) {
 		advance(state);
-		const updateTarget = try parsePrimary(state);
-		return Result.ok(createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: updateTarget, isPrefix: true }, token));
+		const updateTarget = try parseExprWithPrec(state, 99);
+		const wrapUpdate = (inner: Node): Node => {
+			return createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: inner, isPrefix: true }, token);
+		};
+		if (updateTarget.kind == NodeKind.TypeAssertion) {
+			return Result.ok(rewrapUnderAssertion(updateTarget, wrapUpdate));
+		}
+		return Result.ok(wrapUpdate(updateTarget));
 	}
 
 	// Async: async function expr or async arrow
@@ -668,6 +684,20 @@ test "unary - op" { assert exprOp("-x") == "-"; }
 test "unary ! op" { assert exprOp("!x") == "!"; }
 
 test "pre++ op" { assert exprOp("++x") == "++"; }
+test "prefix update reaches the element" {
+	const d = exprNode("++a[1]").data as UpdateExprData;
+	assert d.isPrefix;
+	assert d.updateArg.kind == NodeKind.ArrayAccess;
+}
+test "prefix update reaches the member" {
+	const d = exprNode("--o.n").data as UpdateExprData;
+	assert d.updateArg.kind == NodeKind.MemberExpr;
+}
+test "prefix update binds inside as" {
+	const n = exprNode("++x as int32");
+	assert n.kind == NodeKind.TypeAssertion;
+	assert (n.data as TypeAssertionData).asExpr.kind == NodeKind.UpdateExpr;
+}
 
 test "typeof op" { assert exprOp("typeof x") == "typeof"; }
 
