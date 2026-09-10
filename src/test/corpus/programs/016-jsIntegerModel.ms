@@ -119,6 +119,7 @@ function main(): number {
 	check("convI8", (opaqueF64(3.9) as int8) == 3);
 	check("convU8", (opaqueF64(3.9) as uint8) == 3);
 	check("convU32", (opaqueF64(3.9) as uint32) == 3);
+	check("convNegI32ToU32", (opaqueI32(-1) as uint32).toString() == "4294967295");
 
 	// (the four implicit-path checks moved to guard/jsIntegerModelImplicitPaths.ms —
 	// the checker rejects those shapes before codegen now)
