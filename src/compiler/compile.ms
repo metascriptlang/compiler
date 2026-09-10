@@ -51,7 +51,7 @@ import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } f
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
-import { CliOptions, Target } from "./options";
+import { CliOptions, Target, MODE_DANGER } from "./options";
 import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
@@ -1431,6 +1431,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		tXform = tXform + (performance.now() - _tx0);
 		const nativeCtx = createTransformContextWithChecker(ctx);
+		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const _tr0 = performance.now();
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		tRefine = tRefine + (performance.now() - _tr0);
@@ -1883,6 +1884,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
+		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
@@ -2406,6 +2408,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		exitOnCheckerErrors(modCtx, modPath, mod.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
+		txCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
 		const transformed = transformForRaiser(refined, modCtx);
 
