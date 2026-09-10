@@ -604,7 +604,7 @@ const SWEEP_INTERVAL_TICKS: int32 = 100;
 // peer-close shape; msNetClose triggers engine cleanup on uring/IOCP.
 // Opt-out via keepAliveTimeout <= 0 (e.g. WS servers that drive their
 // own ping/pong).
-function idleSweep(clients: ClientState[], server: HttpServer): void {
+function idleSweep(clients: ClientState[], server: Readonly<HttpServer>): void {
 	if (server.keepAliveTimeout <= 0) return;
 	const now = msMonoTimeMs();
 	const threshold = now - (server.keepAliveTimeout as int64);
@@ -632,7 +632,7 @@ function wireDispatcherWake(): void {
 	if (wakeFd >= 0) msIoEngineAddWakeFd_ms(wakeFd);
 }
 
-function driveWithSweep(server: HttpServer, clients: ClientState[]): void {
+function driveWithSweep(server: Readonly<HttpServer>, clients: ClientState[]): void {
 	wireDispatcherWake();
 	let sweepTick: int32 = 0;
 	while (server.running) {
@@ -701,7 +701,7 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	msNetClose(fd);
 }
 
-async function listenAsyncLoop(server: HttpServer, listenFd: int32, handler: RequestHandler, clients: ClientState[]): Promise<void> {
+async function listenAsyncLoop(server: Readonly<HttpServer>, listenFd: int32, handler: RequestHandler, clients: ClientState[]): Promise<void> {
 	while (server.running) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
@@ -717,7 +717,7 @@ async function listenAsyncLoop(server: HttpServer, listenFd: int32, handler: Req
 	}
 }
 
-async function handleConnSync(server: HttpServer, client: ClientState, fd: int32, handler: RequestHandler): Promise<void> {
+async function handleConnSync(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: RequestHandler): Promise<void> {
 	let alive: boolean = true;
 	let requestCount: int32 = 0;
 	while (alive && server.running) {
@@ -925,7 +925,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 // frame body, dispatch handler. Submits the next uring op (recv / send / close)
 // based on framer state. Mirrors `dispatch()` (selector path) but with uring
 // submission instead of msSelectorModify.
-function dispatchUringRecv(server: HttpServer, client: ClientState, fd: int32, handler: RequestHandler): void {
+function dispatchUringRecv(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: RequestHandler): void {
 	// Find header end if not yet known. client.data is the accumulated buffer
 	// across multiple recvs — required for split headers/body or large headers.
 	if (client.headersEndPos < 0) {
@@ -998,7 +998,7 @@ function dispatchUringRecv(server: HttpServer, client: ClientState, fd: int32, h
 	}
 }
 
-function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHandler): void {
+function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: RequestHandler): void {
 	if (msUringEvtInit() < 0) {
 		// Fallback to engine-based async event loop (kqueue / epoll / poll)
 		const clients = allocClients();
@@ -1087,7 +1087,7 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 }
 
 
-async function listenAsyncLoopA(server: HttpServer, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[]): Promise<void> {
+async function listenAsyncLoopA(server: Readonly<HttpServer>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[]): Promise<void> {
 	while (server.running) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
@@ -1102,7 +1102,7 @@ async function listenAsyncLoopA(server: HttpServer, listenFd: int32, handler: As
 	}
 }
 
-async function handleConnAsync(server: HttpServer, client: ClientState, fd: int32, handler: AsyncRequestHandler): Promise<void> {
+async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: AsyncRequestHandler): Promise<void> {
 	let alive: boolean = true;
 	let requestCount: int32 = 0;
 	while (alive && server.running) {
