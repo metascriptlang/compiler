@@ -515,3 +515,86 @@ main();
 	const c = compileToCWithStd(src);
 	assert c.ok;
 }
+
+test "E2E: decorators on a class inside a function body are applied in the enclosing scope" {
+	const src = `
+import { Node, NodeKind, ClassDecoratorContext, ClassFieldDecoratorContext, bindSym, getType } from "std/meta";
+
+macro withExtra(value: Node, context: ClassDecoratorContext): Node {
+	const s = bindSym("local" + "Count");
+	if (s == null) error("the enclosing local is not visible", value);
+	else {
+		const t = getType(s);
+		if (t == null || t.kind != NodeKind.Identifier || t.name != "int32") error("localCount is not int32", value);
+	}
+	value.classBody.push({
+		kind: NodeKind.PropertyDecl, line: value.line, column: value.column,
+		propName: "extra", propType: "int32", propIsStatic: false, propIsReadonly: false,
+		propVisibility: "public",
+		propInitializer: { kind: NodeKind.NumberLiteral, line: value.line, column: value.column, value: 42, isFloat: false },
+	});
+	return value;
+}
+
+macro twice(value: Node, context: ClassFieldDecoratorContext): Node {
+	const init = value.propInitializer;
+	value.propInitializer = { kind: NodeKind.BinaryExpr, line: value.line, column: value.column, operator: "*", left: init, right: { kind: NodeKind.NumberLiteral, line: value.line, column: value.column, value: 2, isFloat: false } };
+	return value;
+}
+
+function make(): int32 {
+	const localCount: int32 = 3;
+	@withExtra
+	class Local {
+		@twice base: int32 = 21;
+	}
+	const l = new Local();
+	return l.base + l.extra + localCount;
+}
+make();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: a decorator on a nested class must keep the class name" {
+	const src = `
+import { Node, NodeKind, ClassDecoratorContext } from "std/meta";
+
+macro rename(value: Node, context: ClassDecoratorContext): Node {
+	value.className = "Other";
+	return value;
+}
+
+function make(): void {
+	@rename
+	class Local {
+		base: int32 = 1;
+	}
+}
+make();
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+	if (!c.ok) assert c.error.contains("must keep the name 'Local'");
+}
+
+test "E2E: a decorator on a nested function is rejected like at the top level" {
+	const src = `
+import { Node, NodeKind, ClassDecoratorContext } from "std/meta";
+
+macro noop(value: Node, context: ClassDecoratorContext): Node {
+	return value;
+}
+
+function outer(): void {
+	@noop
+	function inner(): void { }
+	inner();
+}
+outer();
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+	if (!c.ok) assert c.error.contains("Decorators are not valid here");
+}
