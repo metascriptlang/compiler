@@ -1069,6 +1069,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).
+			if (d.ctorParams.length > 0 && d.ctorParams[0] == "this") addError(ctx, "a constructor has no 'this' parameter", node.location.line, node.location.column);
 			const ctorParams: string[] = ["this"];
 			for (let cpi = 0; cpi < d.ctorParams.length; cpi += 1) {
 				ctorParams.push(d.ctorParams[cpi]);

@@ -1969,6 +1969,10 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
 	const isAsync = fnFlags == "async" || fnFlags == "async_generator" || (fnFlags != "" && fnFlags.indexOf("async") >= 0);
+	if (params.length > 0 && params[0] == "this") {
+		const thisLoc = paramLocs != null && paramLocs.length > 0 && paramLocs[0] != null ? paramLocs[0] : fnNode.location;
+		addError(ctx, "a 'this' parameter is only valid as the receiver of a class method", thisLoc.line, thisLoc.column);
+	}
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = inferredType();
 	const savedReturnStmts = ctx.inferredReturnStmts;

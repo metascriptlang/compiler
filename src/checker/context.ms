@@ -926,7 +926,11 @@ export function getExtReceiverType(flags: string): string {
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	let fullType = rest.slice(colonPos + 1, rest.length).trim();
+	return receiverBaseName(rest.slice(colonPos + 1, rest.length));
+}
+
+export function receiverBaseName(typeText: string): string {
+	let fullType = typeText.trim();
 	if (fullType.length > 10 && fullType.slice(0, 9) == "Readonly<" && fullType.slice(fullType.length - 1, fullType.length) == ">") {
 		fullType = fullType.slice(9, fullType.length - 1).trim();
 	}

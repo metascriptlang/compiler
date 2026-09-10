@@ -3367,7 +3367,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (!ext.isStatic && isReadonlyView(objType)
 					&& resolvedObjType.kind != TypeKind.Array && resolvedObjType.kind != TypeKind.SizedArray && resolvedObjType.kind != TypeKind.Span
 					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
-				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver 'this x: Readonly<" + ext.receiverTypeName + ">' (PARALOCK E24)", node.location.line, node.location.column);
+				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + d.property + "(this: Readonly<" + ext.receiverTypeName + ">)' on the class, or 'function " + d.property + "(this x: Readonly<" + ext.receiverTypeName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
 			}
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;

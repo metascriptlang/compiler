@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasDecoratorNamed } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -297,6 +297,9 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
+	if (d.params.length > 0 && d.params[0] == "this") {
+		addError(ctx, "a 'this' parameter is only valid as the receiver of a class method — an extension names its receiver: function " + d.fnName + "(this x: T)", node.location.line, node.location.column);
+	}
 	// 3-pass idempotency contract — Pass 1 (collect) parity with Pass 2/3.
 	// If this FunctionDecl was already collected in another context (macro
 	// helper injection — RAISER-CALLHOST.md Phase 8a caveat #2), reuse the
@@ -553,7 +556,19 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	// Instance methods: prepend receiver as first param — same as standalone extensions.
 	// For generic classes (e.g. Promise<T>), the receiver carries the generic params so
 	// resolution creates GenericParam("T") and unification at the call site substitutes concrete types.
-	if (!md.methodIsStatic) {
+	const writesThis = md.methodParams.length > 0 && md.methodParams[0] == "this";
+	const thisLoc = methodNode.paramLocations != null && methodNode.paramLocations.length > 0 && methodNode.paramLocations[0] != null ? methodNode.paramLocations[0] : methodNode.location;
+	if (md.methodIsStatic && writesThis) {
+		addError(ctx, "static method '" + className + "." + md.methodName + "' has no receiver — remove the 'this' parameter", thisLoc.line, thisLoc.column);
+	}
+	if (!md.methodIsStatic && writesThis) {
+		const receiverType = classGenerics != "" ? className + "<" + classGenerics + ">" : className;
+		const written = md.methodParamTypes[0];
+		if (written == "") md.methodParamTypes[0] = receiverType;
+		else if (receiverBaseName(written) != className) {
+			addError(ctx, "the receiver of '" + className + "." + md.methodName + "' is typed '" + written + "' — a method's 'this' must be " + className + " or Readonly<" + className + ">", thisLoc.line, thisLoc.column);
+		}
+	} else if (!md.methodIsStatic) {
 		const receiverType = classGenerics != "" ? className + "<" + classGenerics + ">" : className;
 		const newParams: string[] = ["this"];
 		const newTypes: string[] = [receiverType];
