@@ -63,7 +63,7 @@ export function length(this v: CborValue): number {
 	return match (v.kind) {
 		CborKind.Array => v.items.length,
 		CborKind.Map   => v.keys.length,
-		CborKind.Bytes => v.bytesVal.byteLength,
+		CborKind.Bytes => v.bytesVal.byteLength(),
 		CborKind.Text  => v.textVal.byteLength,
 		_ => 0,
 	};

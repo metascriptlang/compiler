@@ -107,7 +107,7 @@ export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
 // extension-method paths through the test-harness loader.
 
 export function decode(buf: Buffer): Result<CborValue, string> {
-	const len = buf.byteLength;
+	const len = buf.byteLength();
 	const bytes: uint8[] = [];
 	let i = 0;
 	while (i < len) {
