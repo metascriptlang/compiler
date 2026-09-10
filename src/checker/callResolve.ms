@@ -1771,9 +1771,10 @@ function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: i
 			if (eb.names[j] != fb.names[i]) continue;
 			const boundT = eb.types[j];
 			if (boundT == null || hasGenericParams(boundT)) break;
+			const from = j < ebFrom.length ? ebFrom[j] : 0;
+			if (from < 0) break;
 			if (isAssignable(newT, boundT)) break;
 			if (widensToBase(ctx, boundT, newT)) { eb.types[j] = newT; break; }
-			const from = j < ebFrom.length ? ebFrom[j] : 0;
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
 				+ ": got " + typeDisplayName(newT) + ", expected " + typeDisplayName(boundT)
 				+ " — '" + eb.names[j] + "' was bound by argument " + String(from),
@@ -1791,10 +1792,12 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	}
 	const cd = node.data as CallExprData;
 
-	// Pass 1: unify args against params to derive bindings.
+	const genericNames = extractGenericNames(flags);
 	const eb = createUnifyBindings();
 	const ebFrom: int32[] = [];
-	const explicitTypeArgs = findCallTypeArg(node) != "";
+	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
+	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
+	// Pass 1: unify args against params to derive bindings.
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] != null) {
@@ -1813,27 +1816,22 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 					fb.types.push(ab.types[bi]);
 				}
 			}
-			if (!explicitTypeArgs) reportBindingConflict(ctx, eb, ebFrom, fb, cd, i);
+			reportBindingConflict(ctx, eb, ebFrom, fb, cd, i);
 			mergeUnifyBindings(eb, fb);
 			while (ebFrom.length < eb.names.length) ebFrom.push(i);
 		}
 	}
-	// Pass 2: merge explicit type args. Required when args don't bind T
-	// (e.g., `parseAs<T>(input: string): Result<T, …>` — `string` doesn't
-	// constrain T, only the explicit `<Person>` does).
-	const genericNames = extractGenericNames(flags);
-	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
-	// Pass 3: contextual return-type binding (Nim parity — `inheritBindings` in
+	// Pass 2: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
 	// caller context. Mirrors local pattern in `inferGenericReturn`:
 	// gated on !isNakedGenericReturn to preserve TS-flavored naked-T rule.
-	// `mergeUnifyBindings` preserves earlier bindings so Pass 3
+	// `mergeUnifyBindings` preserves earlier bindings so Pass 2
 	// only fills gaps — no overwrite risk.
 	//
 	// Fixes Bug 3 V2: macro emit `_jsonToIntArray(jv, null)` with caller-side
 	// `const colors: Color[] = ...` context. Args alone don't bind T (null is
-	// weak), explicit <T> not present in macro emit. Pass 3 binds T=Color from
+	// weak), explicit <T> not present in macro emit. Pass 2 binds T=Color from
 	// return Array<T> vs expected Array<Color>.
 	if (expectedType != null && calleeType.typeReturn != null
 			&& calleeType.typeReturn.kind != TypeKind.GenericParam) {
