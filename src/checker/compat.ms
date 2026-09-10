@@ -1,8 +1,26 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
 
+
+function isOpenElement(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.Never | TypeKind.Null
+			| TypeKind.GenericParam | TypeKind.TypeReference
+			| TypeKind.StringLiteral | TypeKind.BooleanLiteral | TypeKind.EnumLiteral => true,
+		_ => hasGenericParams(t),
+	};
+}
+
+function sameElement(a: Type | null, b: Type | null): boolean {
+	if (a == null || b == null) return true;
+	if (sameType(a, b)) return true;
+	if (isOpenElement(a) || isOpenElement(b)) return isAssignable(a, b);
+	const aDouble = a.kind == TypeKind.Number || a.kind == TypeKind.Float64;
+	const bDouble = b.kind == TypeKind.Number || b.kind == TypeKind.Float64;
+	return aDouble && bDouble;
+}
 
 // ===== Assignability =====
 
@@ -77,6 +95,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	if (source.kind == TypeKind.Array || source.kind == TypeKind.Span
 		|| source.kind == TypeKind.Ptr || source.kind == TypeKind.SizedArray) {
 		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
+		if (!sameElement(source.typeReturn, target.typeReturn)) return true;
 		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
 	}
 	// Closures are raw-copied msClosure structs and the call site casts fn to the
@@ -261,8 +280,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
 		return match (source.kind) {
-			TypeKind.SizedArray => source.typeFlags == target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
-			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.SizedArray => source.typeFlags == target.typeFlags && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
 				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
 				// mixing atomic + non-atomic rc ops on one object is UB.
@@ -321,7 +340,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>
 	if (target.kind == TypeKind.Span) {
 		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) {
-			return isAssignable(source.typeReturn, target.typeReturn);
+			return sameElement(source.typeReturn, target.typeReturn);
 		}
 		if (source.kind == TypeKind.String && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) {
 			return true;
