@@ -1376,6 +1376,76 @@ export function isLockedRef(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Ref && (t.typeFlags & TypeFlag.IsLocked) != 0;
 }
 
+const READONLY_VIEW_BIT: int32 = TypeFlag.IsReadonly as int32;
+
+export function isReadonlyView(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct) return false;
+	return (t.typeFlags & READONLY_VIEW_BIT) != 0;
+}
+
+function copyTypeShallow(t: Type): Type {
+	const c = emptyType();
+	c.kind = t.kind;
+	c.typeName = t.typeName;
+	c.typeNames = t.typeNames;
+	c.typeChildren = t.typeChildren;
+	c.typeReturn = t.typeReturn;
+	c.typeExtra = t.typeExtra;
+	c.typeFlags = t.typeFlags;
+	c.callConv = t.callConv;
+	c.attachedOps = t.attachedOps;
+	c.sym = t.sym;
+	return c;
+}
+
+function isPodFieldType(t: Type | null, depth: int32): boolean {
+	if (t == null) return true;
+	if (isNumeric(t)) return true;
+	return match (t.kind) {
+		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char
+			| TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
+			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
+		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
+		TypeKind.Ref => isAtomicRef(t),
+		TypeKind.Struct => !structCarriesRef(t, depth + 1),
+		_ => false,
+	};
+}
+
+function structCarriesRef(t: Type, depth: int32): boolean {
+	if (depth > 8 || t.typeChildren == null) return false;
+	for (const ft of t.typeChildren) {
+		if (!isPodFieldType(ft, depth)) return true;
+	}
+	return false;
+}
+
+export function createReadonlyView(t: Type | null): Type {
+	if (t == null) return null as unknown as Type;
+	if (isReadonlyView(t)) return t;
+	if (t.readonlyView != null) return t.readonlyView;
+	const viewable = t.kind == TypeKind.Array || (t.kind == TypeKind.Ref && !isAtomicRef(t))
+		|| (t.kind == TypeKind.Struct && structCarriesRef(t, 0));
+	if (!viewable) return t;
+	const c = copyTypeShallow(t);
+	c.typeFlags = (c.typeFlags | READONLY_VIEW_BIT) as int32;
+	c.mutableView = t;
+	t.readonlyView = c;
+	return c;
+}
+
+export function withoutReadonlyView(t: Type | null): Type {
+	if (t == null) return null as unknown as Type;
+	if (!isReadonlyView(t)) return t;
+	if (t.mutableView != null) return t.mutableView;
+	const c = copyTypeShallow(t);
+	c.typeFlags = (c.typeFlags ^ READONLY_VIEW_BIT) as int32;
+	c.readonlyView = t;
+	t.mutableView = c;
+	return c;
+}
+
 // The T of a Locked<T> — the cell's third field. Null for anything else.
 export function lockedPayloadType(t: Type | null): Type {
 	if (!isLockedRef(t) || t.typeReturn == null) return null as unknown as Type;
@@ -2569,7 +2639,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
-		bindings.types.push(concrete);
+		bindings.types.push(withoutReadonlyView(concrete));
 		return;
 	}
 	// Array/Span/Ref/Ptr: unify element types
@@ -3081,6 +3151,7 @@ function typeDisplayNameInner(t: Type | null): string {
 	// Locked<T> is a Ref onto the generated cell struct, so typeNameOf would
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
+	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
 	// A generic instance over a distinct body erases to its base name, so two
 	// different instantiations render identically ("expected X, got X"). Spell
 	// the type arguments the user wrote.

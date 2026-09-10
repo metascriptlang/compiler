@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
-import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, lookupSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, lookupSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
@@ -926,7 +926,10 @@ export function getExtReceiverType(flags: string): string {
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	const fullType = rest.slice(colonPos + 1, rest.length);
+	let fullType = rest.slice(colonPos + 1, rest.length).trim();
+	if (fullType.length > 10 && fullType.slice(0, 9) == "Readonly<" && fullType.slice(fullType.length - 1, fullType.length) == ">") {
+		fullType = fullType.slice(9, fullType.length - 1).trim();
+	}
 	// Strip generic params: "HashMap<K, V>" or "Map < K , V >" → "Map" for receiver matching
 	const ltPos = findChar(fullType, "<");
 	if (ltPos > 0) return fullType.slice(0, ltPos).trim();
@@ -1126,6 +1129,8 @@ export class CheckerContext {
 	                               // Cross-compile detected via `targetOs !== platform`.
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
+	readonlyBoundary: Cursor<Scope>;
+	pendingSpawnThunk: boolean;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
 	decoratorsPending: boolean;
@@ -1185,6 +1190,8 @@ export function createContext(): CheckerContext {
 		targetOs: platform,
 		currentFunction: null,
 		currentActorName: "",
+		readonlyBoundary: null as unknown as Cursor<Scope>,
+		pendingSpawnThunk: false,
 		inLoop: false,
 		inSwitch: false,
 		decoratorsPending: false,

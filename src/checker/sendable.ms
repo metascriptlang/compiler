@@ -211,8 +211,6 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 	const reported: string[] = [];
 	if (body != null) {
 		walkForMutableCaptures(body, params, reported, ctx);
-		const writeReported: string[] = [];
-		walkSpawnWrites(ctx, body, params, writeReported);
 		if (ctx.currentActorName != "") {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
@@ -242,30 +240,6 @@ function isThisIdent(n: Node): boolean {
 	return (p.data as IdentifierData).name == "this";
 }
 
-function writeChainRoot(n: Node): Node {
-	let cur = peelHidden(n);
-	while (cur != null) {
-		if (cur.kind == NodeKind.MemberExpr) { cur = peelHidden((cur.data as MemberExprData).object); continue; }
-		if (cur.kind == NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
-		break;
-	}
-	return cur;
-}
-
-function thisWriteFieldName(n: Node): string {
-	let cur = peelHidden(n);
-	while (cur != null) {
-		if (cur.kind == NodeKind.MemberExpr) {
-			const d = cur.data as MemberExprData;
-			if (isThisIdent(d.object)) return d.property;
-			cur = peelHidden(d.object); continue;
-		}
-		if (cur.kind == NodeKind.ArrayAccess) { cur = peelHidden((cur.data as ArrayAccessData).array); continue; }
-		break;
-	}
-	return "";
-}
-
 function pushIfNew(list: string[], key: string): boolean {
 	for (const k of list) { if (k == key) return false; }
 	list.push(key);
@@ -288,86 +262,24 @@ function actorDeclaresMethod(ctx: CheckerContext, methodName: string): boolean {
 	return false;
 }
 
-function reportThisFieldWrite(ctx: CheckerContext, target: Node, node: Node, reportedKeys: string[], verb: string): void {
-	if (!isThisIdent(writeChainRoot(target))) return;
-	if (isThisIdent(target)) return;
-	const f = thisWriteFieldName(target);
-	const label = f != "" ? "'" + f + "'" : "state";
-	if (pushIfNew(reportedKeys, "w:" + f)) {
-		addError(ctx, "captured actor field " + label + " is read-only inside a spawn thunk — " + verb + " is not allowed; compute into a local and apply after await (PARALOCK S3/E62)", node.location.line, node.location.column);
-	}
-}
-
-function isAsgnOperator(op: string): boolean {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" ||
-		op == "%=" || op == "&&=" || op == "||=" || op == "??=";
-}
-
-function isLockedSectionCall(node: Node): boolean {
-	const d = node.data as CallExprData;
-	const callee = peelHidden(d.callee);
-	if (callee == null || callee.kind != NodeKind.Identifier) return false;
-	const name = (callee.data as IdentifierData).name;
-	return name == "lockedUpdate" || name == "lockedRead";
-}
-
-function reportCapturedWrite(ctx: CheckerContext, target: Node, node: Node, params: string[], reported: string[]): void {
-	const root = writeChainRoot(target);
-	if (root == null || root.kind != NodeKind.Identifier) return;
-	const name = (root.data as IdentifierData).name;
-	if (name == "this") return;
-	for (const p of params) { if (p == name) return; }
-	for (const r of reported) { if (r == name) return; }
-	const sym = lookupSymbol(ctx.table, name);
-	if (sym == null) return;
-	if (root.resolvedSym != null && root.resolvedSym != sym) return;
-	addError(ctx, "captured '" + name + "' is read-only inside a spawn thunk — assignment is not allowed; use `move`, or write through a Locked<T> critical section (PARALOCK E24/E147)", node.location.line, node.location.column);
-	reported.push(name);
-}
-
-function walkSpawnWrites(ctx: CheckerContext, node: Node, params: string[], reported: string[]): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.CallExpr && isLockedSectionCall(node)) return;
-	match (node.kind) {
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			if (isAsgnOperator(d.operator)) { reportCapturedWrite(ctx, d.left, node, params, reported); }
-			walkSpawnWrites(ctx, d.left, params, reported);
-			walkSpawnWrites(ctx, d.right, params, reported);
-		},
-		NodeKind.UpdateExpr => {
-			const d = node.data as UpdateExprData;
-			reportCapturedWrite(ctx, d.updateArg, node, params, reported);
-			walkSpawnWrites(ctx, d.updateArg, params, reported);
-		},
-		_ => { forEachChild(node, (child: Node): void => { walkSpawnWrites(ctx, child, params, reported); }); },
-	};
-}
-
 function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			if (isAsgnOperator(d.operator)) {
-				reportThisFieldWrite(ctx, d.left, node, reportedKeys, "assignment");
-			}
 			walkActorSpawnRules(ctx, d.left, reportedKeys);
 			walkActorSpawnRules(ctx, d.right, reportedKeys);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			reportThisFieldWrite(ctx, d.updateArg, node, reportedKeys, "increment/decrement");
 			walkActorSpawnRules(ctx, d.updateArg, reportedKeys);
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
-			reportThisFieldWrite(ctx, d.moveArg, node, reportedKeys, "'move'");
 			walkActorSpawnRules(ctx, d.moveArg, reportedKeys);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
-			reportThisFieldWrite(ctx, d.outArg, node, reportedKeys, "'out' argument");
 			walkActorSpawnRules(ctx, d.outArg, reportedKeys);
 		},
 		NodeKind.MemberExpr => {

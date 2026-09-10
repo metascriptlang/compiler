@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance } from "./types";
 
 
 // ===== Assignability =====
@@ -198,6 +198,7 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 }
 
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
+	if (dropsReadonlyView(source, target)) return false;
 	// allowsNil (sigmatch.nim:730): a cursor link is nilable by design — null is
 	// the end-of-chain state. Checked BEFORE skipModifier because it peels Cursor.
 	// Ref/Ptr stay TS-strict (`T | null` opt-in; see the Null-source arm below).
@@ -227,6 +228,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	source = peelTransparentInstance(source);
 	target = peelTransparentInstance(target);
+	if (isReadonlyView(source) && !isReadonlyView(target)
+			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array)) return false;
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
@@ -705,6 +708,12 @@ export enum TypeRelation {
 // merge is to treat the pair as identical rather than to recurse forever.
 
 let _sameTypeDepth = 0;
+
+export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null) return false;
+	if (!isReadonlyView(source) || isReadonlyView(target)) return false;
+	return target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Struct;
+}
 
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;

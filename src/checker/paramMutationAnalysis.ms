@@ -28,7 +28,7 @@ import { splitTopLevel, parseIntStr } from "../utils/string";
 
 // ===== Public Entry Point =====
 
-function isMutatingArrayMethod(method: string): boolean {
+export function isMutatingArrayMethod(method: string): boolean {
 	return method == "push" || method == "pop" || method == "shift" || method == "unshift"
 		|| method == "splice" || method == "reverse" || method == "sort" || method == "fill"
 		|| method == "copyWithin" || method == "append" || method == "setLength"

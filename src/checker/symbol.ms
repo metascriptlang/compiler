@@ -245,6 +245,33 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, boundary: Cursor<Scope>): boolean {
+	const nameId = getIdentId(table.identCache, name);
+	let scope = table.current;
+	while (scope != null) {
+		if (scope.symbols.get(nameId) == sym) return false;
+		if (scope == boundary) return true;
+		scope = scope.parent;
+	}
+	return true;
+}
+
+export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string, name: string): Symbol {
+	const definerId = getIdentId(table.identCache, definer);
+	let scope = table.current;
+	while (scope != null && !scope.symbols.has(definerId)) {
+		scope = scope.parent;
+	}
+	if (scope == null) return lookupSymbol(table, name);
+	const nameId = getIdentId(table.identCache, name);
+	while (scope != null) {
+		const sym = scope.symbols.get(nameId);
+		if (sym != null) return sym;
+		scope = scope.parent;
+	}
+	return null as unknown as Symbol;
+}
+
 export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	let scope = table.current;
 	while (scope != null && scope.scopeKind != ScopeKind.Module) {

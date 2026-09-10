@@ -17,9 +17,10 @@ import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./
 import { ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
-import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
+import { isMutatingArrayMethod } from "./paramMutationAnalysis";
+import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -951,7 +952,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// bindings into the formal type — bindings accumulate left-to-right as
 	// concrete args feed forward inference (Source 3).
 	const argTypes: Type[] = [];
-	for (let ai = 0; ai < d.arguments.length; ai += 1) {
+				for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type | null = null;
 		const _formal: Type | null = (calleeType != null
 			&& calleeType.kind == TypeKind.Function
@@ -1007,7 +1008,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 			}
 		}
+		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
+		const lockedSection = ai == 1 && isLockedSectionCallee(d.callee);
+		const savedBoundary = ctx.readonlyBoundary;
+		if (lockedSection) ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
+		ctx.pendingSpawnThunk = false;
+		if (lockedSection) ctx.readonlyBoundary = savedBoundary;
 		let argType = d.arguments[ai].nodeType;
 		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
 		if (argType != null && argType.kind == TypeKind.Enum) {
@@ -2738,6 +2746,12 @@ function hasThisParam(sym: Symbol): boolean {
 		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] == "this";
 }
 
+function isLockedSectionCallee(callee: Node): boolean {
+	if (callee == null || callee.kind != NodeKind.Identifier) return false;
+	const name = (callee.data as IdentifierData).name;
+	return name == "lockedUpdate" || name == "lockedRead";
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	callCheckExpr(ctx, d.object, null);
@@ -3181,6 +3195,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// Generic class method substitution: unify receiver (e.g. Promise<T>) with
 				// actual object type (e.g. Promise<string>) to discover T → string,
 				// then substitute in parameter/return types.
+				if (isReadonlyView(objType) || isReadonlyView(resolvedObjType)) {
+					addError(ctx, "cannot call method '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; class methods need a mutable receiver (PARALOCK E24)", node.location.line, node.location.column);
+				}
 				const receiverType = methType.typeChildren[0];
 				const eb = createUnifyBindings();
 				if (hasGenericParams(receiverType)) {
@@ -3220,8 +3237,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry != null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
-		let ext = findFirstMatchingExt(allByName, objType);
-		let extObjType = objType;
+		if (isReadonlyView(objType) && isMutatingArrayMethod(d.property)) {
+			addError(ctx, "'" + d.property + "' mutates its receiver, and " + typeDisplayName(objType) + " is a read-only view (PARALOCK E24)", node.location.line, node.location.column);
+		}
+		const recvLookupType = withoutReadonlyView(objType);
+		let ext = findFirstMatchingExt(allByName, recvLookupType);
+		let extObjType = recvLookupType;
 		// reference array: UFCS methods (push/slice/...) are declared on the value
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
@@ -3271,6 +3292,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.
 			const extFnT = getExtFnType(ext);
+			if (!ext.isStatic && isReadonlyView(objType)
+					&& resolvedObjType.kind != TypeKind.Array && resolvedObjType.kind != TypeKind.SizedArray && resolvedObjType.kind != TypeKind.Span
+					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
+				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver 'this x: Readonly<" + ext.receiverTypeName + ">' (PARALOCK E24)", node.location.line, node.location.column);
+			}
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;
 				// Check for generics: either type-level (hasGenericParams) or flag-level (gen: in fnFlags)
