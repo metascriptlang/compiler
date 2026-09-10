@@ -1772,10 +1772,10 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
 }
 
-function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32): void {
-	if (argIdx >= cd.arguments.length) return;
+function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32): boolean {
+	if (argIdx >= cd.arguments.length) return false;
 	const arg = cd.arguments[argIdx];
-	if (bindingConflictSkipArg(arg)) return;
+	if (bindingConflictSkipArg(arg)) return false;
 	for (let i = 0; i < fb.names.length; i += 1) {
 		const newT = fb.types[i];
 		if (newT == null || hasGenericParams(newT)) continue;
@@ -1791,9 +1791,10 @@ function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: i
 				+ ": got " + typeDisplayName(newT) + ", expected " + typeDisplayName(boundT)
 				+ " — '" + eb.names[j] + "' was bound by argument " + String(from),
 				arg.location.line, arg.location.column);
-			return;
+			return true;
 		}
 	}
+	return false;
 }
 
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type): Type {
@@ -1807,6 +1808,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const genericNames = extractGenericNames(flags);
 	const eb = createUnifyBindings();
 	const ebFrom: int32[] = [];
+	const conflicted: int32[] = [];
 	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
 	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
 	// Pass 1: unify args against params to derive bindings.
@@ -1828,7 +1830,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 					fb.types.push(ab.types[bi]);
 				}
 			}
-			reportBindingConflict(ctx, eb, ebFrom, fb, cd, i);
+			if (reportBindingConflict(ctx, eb, ebFrom, fb, cd, i)) conflicted.push(i);
 			mergeUnifyBindings(eb, fb);
 			while (ebFrom.length < eb.names.length) ebFrom.push(i);
 		}
@@ -1942,6 +1944,22 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 				&& isAssignable(arg.nodeType, substituted.typeReturn)) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
 		}
+	}
+
+	for (let ai = 0; ai < reconcileLimit; ai += 1) {
+		const argT = argTypes[ai];
+		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error) continue;
+		if (bindingConflictSkipArg(cd.arguments[ai])) continue;
+		let reported = false;
+		for (const c of conflicted) { if (c == ai) reported = true; }
+		if (reported) continue;
+		if (!hasGenericParams(calleeType.typeChildren[ai])) continue;
+		const formalT = applySubstitutions(calleeType.typeChildren[ai], eb);
+		if (formalT == null || hasGenericParams(formalT) || isUnresolvedType(formalT)) continue;
+		if (isAssignable(argT, formalT)) continue;
+		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
+			+ ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(formalT),
+			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
 	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx, node.location);
@@ -2784,7 +2802,7 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 	const names: string[] = [];
 	const paramTypes: Type[] = [];
 	const paramAnnots: string[] = [];
-	const paramDefaults: (Node | null)[] = [];
+	const paramDefaults: Node[] = [];
 	const moveArgs: Node[] = [];
 	const thunk = args[0];
 	const listNodes: Node[] = (moveList.data as ArrayLiteralData).elements;
