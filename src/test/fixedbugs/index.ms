@@ -154,3 +154,4 @@ import "./bug135CrossModuleTypeArgLeak";
 import "./bug137IfaceExtendsWire";
 import "./bug136PrefixUpdateOperand";
 import "./bug138ExplicitTypeArgSeed";
+import "./bug139ArrayElementInvariance";
