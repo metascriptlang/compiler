@@ -546,6 +546,11 @@ export function registerBoundSym(sym: Symbol): number {
 	return _boundSyms.length - 1;
 }
 
+export function boundSymAt(index: int32): Symbol | null {
+	if (index < 0 || index >= _boundSyms.length) return null;
+	return _boundSyms[index];
+}
+
 // Day 9 — minimal Symbol → RaiserValue. Surfaces name + kind only.
 // `declNode` skipped to avoid Symbol↔Node cycle; V2 if codecs need decl site.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {

@@ -43,3 +43,14 @@ export function isFloatLiteral(n: Node): boolean { return msNodeIsFloatLiteral(n
 export function intValue(n: Node): int64 { return msNodeIntValue(n); }
 export function floatValue(n: Node): float64 { return msNodeFloatValue(n); }
 export function stringValue(n: Node): string { return msNodeStringValue(n); }
+
+extern function msMetaBindSym(name: string): Node | null;
+extern function msMetaGetType(n: Node, impl: boolean): Node | null;
+extern function msMetaGetImpl(n: Node): Node | null;
+extern function msMetaResolveType(text: string): Node | null;
+
+export function bindSym(name: string): Node | null { return msMetaBindSym(name); }
+export function getType(n: Node): Node | null { return msMetaGetType(n, false); }
+export function getTypeImpl(n: Node): Node | null { return msMetaGetType(n, true); }
+export function getImpl(n: Node): Node | null { return msMetaGetImpl(n); }
+export function resolveType(text: string): Node | null { return msMetaResolveType(text); }

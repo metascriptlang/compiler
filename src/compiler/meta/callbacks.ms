@@ -80,6 +80,37 @@ export function getMacroDeclModulePath(): string {
 	return _macroDeclModulePath;
 }
 
+interface ActiveMetaFrame {
+	ctx: CheckerContext;
+	line: int32;
+	column: int32;
+}
+
+let _activeMetaFrames: ActiveMetaFrame[] = [];
+
+export function pushActiveMetaCtx(ctx: CheckerContext, line: int32, column: int32): void {
+	_activeMetaFrames.push({ ctx, line, column });
+}
+
+export function popActiveMetaCtx(): void {
+	if (_activeMetaFrames.length > 0) _activeMetaFrames.pop();
+}
+
+export function activeMetaCtx(): CheckerContext | null {
+	if (_activeMetaFrames.length == 0) return null;
+	return _activeMetaFrames[_activeMetaFrames.length - 1].ctx;
+}
+
+export function activeMetaLine(): int32 {
+	if (_activeMetaFrames.length == 0) return 0;
+	return _activeMetaFrames[_activeMetaFrames.length - 1].line;
+}
+
+export function activeMetaColumn(): int32 {
+	if (_activeMetaFrames.length == 0) return 0;
+	return _activeMetaFrames[_activeMetaFrames.length - 1].column;
+}
+
 // ===== Comptime outer context =====
 // When the checker enters a module, it captures references to the outer
 // compile state (the surrounding Program AST plus, in multi-module mode,

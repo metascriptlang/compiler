@@ -25,6 +25,7 @@ import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from ".
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
+import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 
 // --- Full Pipeline API ---
 
@@ -70,6 +71,7 @@ function transformForEngine(program: Node): Node {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
+	registerTypeQueryHostFns();
 	const outer = getComptimeOuterCtx();
 	const savedOuterProgram = outer != null ? outer.program : null;
 	const savedOuterPrelude = outer != null ? outer.preludeCtx : null as unknown as CheckerContext;

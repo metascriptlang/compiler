@@ -16,7 +16,7 @@ import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { parseSource } from "../../parser/statements/validation";
-import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath } from "./callbacks";
+import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
 	raiserString, raiserBool, raiserNil, raiserArray,
@@ -622,7 +622,9 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		raiserString(info.kind), raiserString(info.name), raiserBool(info.isStatic), raiserBool(false),
 		raiserArray(keysHandle), raiserArray(valuesHandle), initVal,
 	];
+	pushActiveMetaCtx(ctx, loc.line, loc.column);
 	const res = vmCallFunction(vm, result.funcIdx, args);
+	popActiveMetaCtx();
 	if (vm.error != "") {
 		addError(ctx, `decorator '${name}' failed: ${vm.error}`, loc.line, loc.column);
 		clearObjectHeap(objHeap);

@@ -59,7 +59,7 @@ import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind } from "../../ast/node";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
@@ -1438,11 +1438,8 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 		// the Symbol on the way out; the checker sees NodeFlag.BoundSym and skips
 		// the user-scope lookup — no imports needed, no user-local name capture.
 		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "bindSym") {
-			if (cd.arguments.length != 1 || cd.arguments[0].kind != NodeKind.StringLiteral) {
-				addError(ctx, `Macro '${macroName}': bindSym expects a single string literal`, node.location.line, node.location.column);
-				return node;
-			}
+				&& (cd.callee.data as IdentifierData).name == "bindSym"
+				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			const bindDeclPath = regCtx.macroDeclModuleRegistry.get(macroName);
@@ -1493,28 +1490,31 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				if (mc != null) declCtx = mc;
 			}
 			const sym = lookupSymbol(declCtx.table, typeName);
-			if (sym == null || sym.symbolType == null) {
-				addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);
-				return node;
+			if (sym != null) {
+				if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, declCtx);
+				if (sym.symbolType == null) {
+					addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);
+					return node;
+				}
+				// Peel the Ref/Alias wrapper: the caller asked about a TYPE, so hand back
+				// its implementation (TypeObject) rather than the Ref<T> that a VALUE of
+				// that type would carry. `nodeType` is the opposite case and keeps Ref.
+				let t = sym.symbolType;
+				let guard = 0;
+				while (t != null && guard < 4
+						&& (t.kind == TypeKind.Ref || t.kind == TypeKind.Alias)
+						&& t.typeReturn != null) {
+					t = t.typeReturn;
+					guard = guard + 1;
+				}
+				// Assert to Node so flat reads on the spliced literal resolve through the
+				// NodeData unique-field-name rule; a bare literal would type as its own
+				// anonymous struct and expose only the keys it happens to carry.
+				return createNodeAt(NodeKind.TypeAssertion, {
+					asExpr: nodeToASTLiteral(mapTypeToAst(t, node.location), node.location),
+					asType: "Node",
+				}, node.location);
 			}
-			// Peel the Ref/Alias wrapper: the caller asked about a TYPE, so hand back
-			// its implementation (TypeObject) rather than the Ref<T> that a VALUE of
-			// that type would carry. `nodeType` is the opposite case and keeps Ref.
-			let t = sym.symbolType;
-			let guard = 0;
-			while (t != null && guard < 4
-					&& (t.kind == TypeKind.Ref || t.kind == TypeKind.Alias)
-					&& t.typeReturn != null) {
-				t = t.typeReturn;
-				guard = guard + 1;
-			}
-			// Assert to Node so flat reads on the spliced literal resolve through the
-			// NodeData unique-field-name rule; a bare literal would type as its own
-			// anonymous struct and expose only the keys it happens to carry.
-			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: nodeToASTLiteral(mapTypeToAst(t, node.location), node.location),
-				asType: "Node",
-			}, node.location);
 		}
 		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the
 		// CALL SITE scope (that is where the user spelled the name), unlike
@@ -1718,7 +1718,9 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
 		marshalArgs.push(av);
 	}
+	pushActiveMetaCtx(ctx, node.location.line, node.location.column);
 	const resultVal = vmCallFunction(vm, cm.funcIdx, marshalArgs);
+	popActiveMetaCtx();
 
 	let vmCtx: RaiserContext | null = {
 		mod: vm.mod,
