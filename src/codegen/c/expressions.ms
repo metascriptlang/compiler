@@ -107,7 +107,7 @@ function duDeclaredUnionOfObject(objNode: Node): Type | null {
 	}
 	if (walk == null || walk.resolvedSym == null) return null;
 	if (walk.kind != NodeKind.Identifier && walk.kind != NodeKind.MemberExpr) return null;
-	let declTy = walk.resolvedSym.symbolType;
+	let declTy: Type | null = walk.resolvedSym.symbolType;
 	while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
 		declTy = declTy.typeReturn;
 	}
@@ -384,7 +384,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 		// Try 2: paramType (pointer type → strip * to get pointee)
 		if ((cType == "" || cType == "void" || cType == "void*") && paramType != null) {
 			// Unwrap pointer/ownership modifiers to get inner type
-			let innerType = paramType;
+			let innerType: Type | null = paramType;
 			if (paramType.kind == TypeKind.Ptr || paramType.kind == TypeKind.Ref
 				|| paramType.kind == TypeKind.Sink || paramType.kind == TypeKind.Lent) {
 				innerType = paramType.typeReturn;
@@ -1562,7 +1562,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (walkObj != null && walkObj.resolvedSym != null
 				&& (walkObj.kind == NodeKind.Identifier || walkObj.kind == NodeKind.MemberExpr)) {
-			let declTy = walkObj.resolvedSym.symbolType;
+			let declTy: Type | null = walkObj.resolvedSym.symbolType;
 			while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
 				declTy = declTy.typeReturn;
 			}
@@ -1625,7 +1625,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// locals emit `->` on a union struct ("member reference type ... is
 				// not a pointer"). Field resolution uses the narrowed type above;
 				// access syntax uses where the value lives.
-				const ptrType = isPointerType(idSym != null ? idSym.symbolType : null);
+				const ptrType = idSym != null && isPointerType(idSym.symbolType);
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
 					const identTail = discSuffix != "" ? discSuffix : `v${declVarIdx}.${field}`;
