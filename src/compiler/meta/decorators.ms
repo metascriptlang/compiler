@@ -437,7 +437,7 @@ function classifyType(t: Type | null): int32 {
 	return shapeNode;
 }
 
-function wrapperSource(isMacro: boolean, paramList: string, returnAnnotation: string, shape: int32, arity: int32): string {
+function wrapperSource(isMacro: boolean, paramList: string, shape: int32, arity: int32): string {
 	const memberExprKind = NodeKind.MemberExpr as int32;
 	const binaryExprKind = NodeKind.BinaryExpr as int32;
 	const boolLitKind = NodeKind.BooleanLiteral as int32;
@@ -446,7 +446,7 @@ function wrapperSource(isMacro: boolean, paramList: string, returnAnnotation: st
 	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind}, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
 	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind}, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
 	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind}, line: recv.line, column: recv.column, boolValue: true });\n`;
-	if (isMacro) s = s + `\tconst __dec = (${paramList})${returnAnnotation} => {};\n`;
+	if (isMacro) s = s + `\tconst __dec = (${paramList}) => {};\n`;
 	const contextArg = arity >= 2
 		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
 		: "";
@@ -482,7 +482,6 @@ function buildWrapper(ctx: CheckerContext, regCtx: CheckerContext, sym: Symbol, 
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	const dn = declaringName(sym);
 	let paramList = "";
-	let returnAnnotation = "";
 	let macroBody: Node = null as unknown as Node;
 	if (isMacro) {
 		const params = regCtx.macroParamsRegistry.get(dn);
@@ -497,12 +496,10 @@ function buildWrapper(ctx: CheckerContext, regCtx: CheckerContext, sym: Symbol, 
 			paramList = paramList + params[i];
 			if (types != null && i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
 		}
-		const rt = macroReturnText(decl, false);
-		if (rt != "") returnAnnotation = ": " + rt;
 		macroBody = callMacroBodyPreparer(cloneNodeForCheck(registered), ctx, regCtx, dn);
 	}
 	const arity = decoratorArity(sym, decl, isMacro, isFactory, regCtx);
-	const pr = parseSource(wrapperSource(isMacro, paramList, returnAnnotation, shape, arity));
+	const pr = parseSource(wrapperSource(isMacro, paramList, shape, arity));
 	if (!pr.ok) {
 		addError(ctx, `decorator '${sym.name}': wrapper parse failed: ${pr.error}`, loc.line, loc.column);
 		return null as unknown as Node;
@@ -647,6 +644,21 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		else plan.instanceInits.push(s);
 	}
 	const rv = heapObjectGetField(objHeap, h, "result");
+	if (rv.kind == RaiserValueKind.Object) {
+		const errFlag = heapObjectGetField(objHeap, rv.intVal, "__compileError");
+		if (errFlag.kind == RaiserValueKind.Int && errFlag.intVal == 1) {
+			const errMsg = heapObjectGetField(objHeap, rv.intVal, "message");
+			const msg = errMsg.kind == RaiserValueKind.String ? errMsg.strVal : "compile error in decorator";
+			const el = heapObjectGetField(objHeap, rv.intVal, "line");
+			const ec = heapObjectGetField(objHeap, rv.intVal, "column");
+			const line = el.kind == RaiserValueKind.Int ? el.intVal as int32 : (el.kind == RaiserValueKind.Float ? el.floatVal as int32 : loc.line);
+			const column = ec.kind == RaiserValueKind.Int ? ec.intVal as int32 : (ec.kind == RaiserValueKind.Float ? ec.floatVal as int32 : loc.column);
+			addError(ctx, `decorator '${name}': ${msg}`, line, column);
+			clearObjectHeap(objHeap);
+			clearArrayHeap(arrHeap);
+			return target;
+		}
+	}
 	let outNode = target;
 	if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
