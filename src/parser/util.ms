@@ -215,6 +215,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		}
 		// Extension method receiver (must be first param)
 		if (params.length == 0 && current(state).kind == TokenKind.This) {
+			const thisToken = current(state);
 			advance(state);
 			// Static extension: this typeof TypeName
 			if (current(state).kind == TokenKind.Typeof) {
@@ -231,7 +232,14 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			}
 			// Instance extension: this name: Type
 			const receiverName = current(state);
-			if (!isIdentLike(receiverName)) { break; }
+			if (!isIdentLike(receiverName)) {
+				params.push("this");
+				_lastParamLocations.push(makeLoc(thisToken.line, thisToken.column));
+				params.push(captureOptionalType(state));
+				_lastParamTypeExprs.push(_lastTypeExpr);
+				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
+				continue;
+			}
 			params.push(`this:${receiverName.value}`);
 			_lastParamLocations.push(makeLoc(receiverName.line, receiverName.column));
 			advance(state);
