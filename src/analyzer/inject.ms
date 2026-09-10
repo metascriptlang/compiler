@@ -868,7 +868,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 	// 2-arg copy: Named types and String (=copy(&dest, src))
 	if (isBinaryCopy(rcInfo)) {
 		const actualSrc = srcName != "" ? srcName : destName;
-		const actualSrcSym: Symbol = srcName != "" ? srcSym : destSym;
+		const actualSrcSym: Symbol | null = srcName != "" ? srcSym : destSym;
 		// Self-copy (srcName="") is a no-op for strings: msStringCopy(&x,x) checks
 		// dest->p == src.p and returns immediately, skipping the incref.
 		// Use msStringIncref(x) directly for proper refcount bump.
