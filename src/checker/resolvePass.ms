@@ -908,6 +908,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		return;
 	}
 
+	if (ctx.decoratorsPending && hasFlag(sym, SymbolFlag.Forward)) return;
 	fillForwardSymbol(ctx, sym);
 	sym.state = SymbolState.Shaping;
 	const node = sym.declNode;

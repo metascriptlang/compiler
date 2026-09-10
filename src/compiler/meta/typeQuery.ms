@@ -1,11 +1,15 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
 import { CheckerContext, addError } from "../../checker/context";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { RaiserValue, RaiserValueKind, raiserNil, heapObjectGetField } from "../../raiser/value";
 import { registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, boundSymAt } from "./bridge";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
+
+export function stillDecoratedMessage(name: string): string {
+	return `'${name}' is still being decorated - its type is not available until its decorators finish`;
+}
 
 function queryError(ctx: CheckerContext, msg: string): RaiserValue {
 	addError(ctx, msg, activeMetaLine(), activeMetaColumn());
@@ -65,6 +69,7 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 		}
 		return queryError(ctx, "node has no type");
 	}
+	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, ctx);
 	const t = sym.symbolType;
 	if (t == null) return queryError(ctx, "node has no type");
@@ -77,6 +82,7 @@ function hostGetImpl(args: RaiserValue[]): RaiserValue {
 	if (ctx == null || args.length < 1) return raiserNil();
 	const sym = boundSymOf(args[0]);
 	if (sym == null) return queryError(ctx, "node is not a symbol");
+	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.declNode == null) return raiserNil();
 	return emitNode(sym.declNode);
 }

@@ -1975,7 +1975,9 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	}
 	const _c0 = performance.now();
 	collectTopLevel(ctx, program);
+	ctx.decoratorsPending = true;
 	callApplyDecorators(ctx, program);
+	ctx.decoratorsPending = false;
 	const _c1 = performance.now();
 	resolveDeclarations(ctx, program);
 	const _c2 = performance.now();

@@ -57,7 +57,8 @@ import { CheckerContext, Severity, addError, addErrorFullRange, createContext } 
 import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "./decorators";
@@ -1491,6 +1492,10 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 			}
 			const sym = lookupSymbol(declCtx.table, typeName);
 			if (sym != null) {
+				if (hasFlag(sym, SymbolFlag.Forward)) {
+					addError(ctx, `Macro '${macroName}': ${stillDecoratedMessage(typeName)}`, node.location.line, node.location.column);
+					return node;
+				}
 				if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, declCtx);
 				if (sym.symbolType == null) {
 					addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);

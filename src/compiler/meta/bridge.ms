@@ -65,6 +65,7 @@ import { Token, TokenKind, createToken } from "../../lexer/token";
 // V3 — peel Union-backed generics (Result<T,E>, Option<T>) so codec macros see
 // substituted variants + disc info. Lazy-instantiate pattern from destructorLifting.
 import { instantiateGenericBody, isMaybeType } from "../../checker/types";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { getGenericDecl } from "../../parser/context";
 import {
 	RaiserValueKind, RaiserValue,
@@ -246,6 +247,7 @@ function collectFieldDecorators(t: Type): Node[][] {
 // per-field decorator nodes. Other Type sources (interface, anon struct,
 // generic instantiation) get empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
 	return createNodeAt(NodeKind.TypeObject, {
 		typExprFieldNames: t.typeNames,
 		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited),
