@@ -935,7 +935,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 			// false branch: !(a && b) = !a || !b → union of negations.
 			const withoutLeft = narrowType(t, d.left, refNode, false);
 			const withoutRight = narrowType(t, d.right, refNode, false);
-			if (withoutLeft == t || withoutRight == t) return t;
+			if (withoutLeft == null || withoutRight == null || withoutLeft == t || withoutRight == t) return t;
 			if (withoutLeft == withoutRight) return withoutLeft;
 			return createUnion([withoutLeft, withoutRight]);
 		}
@@ -947,7 +947,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 			// true branch: a || b → union of positives.
 			const withLeft = narrowType(t, d.left, refNode, true);
 			const withRight = narrowType(t, d.right, refNode, true);
-			if (withLeft == t || withRight == t) return t;
+			if (withLeft == null || withRight == null || withLeft == t || withRight == t) return t;
 			if (withLeft == withRight) return withLeft;
 			return createUnion([withLeft, withRight]);
 		}

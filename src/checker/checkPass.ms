@@ -849,7 +849,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	// Save/restore inferredReturn for nested functions
 	const savedReturn = ctx.inferredReturn;
-	ctx.inferredReturn = fnType.typeReturn;
+	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
 
@@ -1308,11 +1308,12 @@ function iterableElemType(t: Type | null): Type {
 			&& (it.typeReturn.kind == TypeKind.Array || it.typeReturn.kind == TypeKind.SizedArray || it.typeReturn.kind == TypeKind.Span)) {
 		it = it.typeReturn;
 	}
+	const iteratorYield = isIterator(it) ? getIteratorYieldType(it) : null;
 	return match (it.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span =>
 			it.typeReturn != null ? it.typeReturn : inferredType(),
 		TypeKind.String => charType(),
-		_ => isIterator(it) ? getIteratorYieldType(it) : inferredType(),
+		_ => iteratorYield != null ? iteratorYield : inferredType(),
 	};
 }
 
@@ -1644,7 +1645,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const finalRetType = d.argument != null ? d.argument.nodeType : retType;
 	if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
 		if (ctx.inferredReturn.kind == TypeKind.Inferred) {
-			ctx.inferredReturn = finalRetType;
+			if (finalRetType != null) { ctx.inferredReturn = finalRetType; }
 		} else if (returnExpected == null && finalRetType != null && ctx.inferredReturn != finalRetType) {
 			const joinedRet = joinBranchTypes([ctx.inferredReturn, finalRetType]);
 			if (!isUnresolvedType(joinedRet)) ctx.inferredReturn = joinedRet;
@@ -1924,7 +1925,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
 		const exprType = body.nodeType;
-		if (ctx.inferredReturn.kind == TypeKind.Inferred) {
+		if (ctx.inferredReturn.kind == TypeKind.Inferred && exprType != null) {
 			ctx.inferredReturn = exprType;
 		}
 	}

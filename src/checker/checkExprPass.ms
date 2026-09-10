@@ -1586,7 +1586,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 				retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
-				const joined = joinBranchTypes([d.ternaryConsequent.nodeType, d.ternaryAlternate.nodeType]);
+				const branchTypes: Type[] = [];
+				if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
+				if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
+				const joined = joinBranchTypes(branchTypes);
 				if (!isUnresolvedType(joined)) {
 					d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
 					d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
@@ -2084,7 +2087,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		}
 		checkExpr(ctx, body, bodyExpected);
 		const exprType = body.nodeType;
-		if (ctx.inferredReturn.kind == TypeKind.Inferred) {
+		if (ctx.inferredReturn.kind == TypeKind.Inferred && exprType != null) {
 			ctx.inferredReturn = exprType;
 		}
 	}

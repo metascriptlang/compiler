@@ -262,18 +262,21 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	let mConverterTarget = "";
 	let mConverterTargetType: Type = null as unknown as Type;
 	if (sym.symbolKind == SymbolKind.Macro && ctx != null) {
-		if (ctx.macroBodyRegistry.has(sym.name)) {
-			mBody = ctx.macroBodyRegistry.get(sym.name);
+		const registeredBody = ctx.macroBodyRegistry.get(sym.name);
+		if (registeredBody != null) {
+			mBody = registeredBody;
 		}
 		const ct = ctx.converterTargetByName.get(sym.name);
 		if (ct != null) { mConverterTarget = ct; }
 		const ctt = ctx.converterTargetTypes.get(sym.name);
 		if (ctt != null) { mConverterTargetType = ctt; }
-		if (ctx.macroParamsRegistry.has(sym.name)) {
-			mParams = ctx.macroParamsRegistry.get(sym.name);
+		const registeredParams = ctx.macroParamsRegistry.get(sym.name);
+		if (registeredParams != null) {
+			mParams = registeredParams;
 		}
-		if (ctx.macroParamTypesRegistry.has(sym.name)) {
-			mParamTypes = ctx.macroParamTypesRegistry.get(sym.name);
+		const registeredParamTypes = ctx.macroParamTypesRegistry.get(sym.name);
+		if (registeredParamTypes != null) {
+			mParamTypes = registeredParamTypes;
 		}
 	}
 

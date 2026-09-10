@@ -435,7 +435,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				pointee = expected.typeReturn;
 			}
 		callCheckExpr(ctx, d.newArguments[0], pointee);
-		if (pointee == null) { pointee = d.newArguments[0].nodeType; }
+		const pointeeArgType = d.newArguments[0].nodeType;
+		if (pointee == null && pointeeArgType != null) { pointee = pointeeArgType; }
 		// SHARE pointee rule (PARALOCK Amendment I): the pointee is aliased
 		// across threads, so it must be deep-immutable data.
 		if (pointee != null && pointee.kind != TypeKind.Error) {
@@ -459,7 +460,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				payload = lockedPayloadType(expected);
 			}
 			callCheckExpr(ctx, d.newArguments[0], payload);
-			if (payload == null) { payload = d.newArguments[0].nodeType; }
+			const payloadArgType = d.newArguments[0].nodeType;
+			if (payload == null && payloadArgType != null) { payload = payloadArgType; }
 			if (payload != null && payload.kind != TypeKind.Error) {
 				checkLockedPayloadSendable(ctx, payload, d.newCallee.location.line, d.newCallee.location.column);
 			}
@@ -637,7 +639,7 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	}
 	if (argType != null && isResult(argType) && getResultOkType(argType) != null) {
 		const okT = getResultOkType(argType);
-		if (d.hasCatch && d.catchVal != null && okT != null) {
+		if (d.hasCatch && d.catchVal != null && okT != null && d.catchVal.nodeType != null) {
 			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
 			if (!isUnresolvedType(joined) && isNullableWideningOf(joined, okT)) {
 				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
@@ -1301,7 +1303,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						const coerced = trySynthesizeAsCoercion(ctx, d.arguments[pi], argTypes[pi], paramType);
 						if (coerced != null as unknown as Node) {
 							d.arguments[pi] = coerced;
-							argTypes[pi] = coerced.nodeType;
+							if (coerced.nodeType != null) { argTypes[pi] = coerced.nodeType; }
 						} else {
 							const calleeName = getCalleeName(d.callee);
 							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
@@ -1377,7 +1379,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						const argT = argTypes[pi];
 						let paramT: Type = null as unknown as Type;
 						if (bHasRest && pi >= bLastIdx) {
-							paramT = bRestElem;
+							if (bRestElem != null) { paramT = bRestElem; }
 						} else if (pi < boundFnType.typeChildren.length) {
 							paramT = boundFnType.typeChildren[pi];
 						} else {
@@ -2239,7 +2241,8 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 			if (ai >= winnerType.typeChildren.length) break;
 			if (!isContextSensitive(args[ai])) continue;
 			callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
-			argTypes[ai] = args[ai].nodeType;
+			const refinedArgType = args[ai].nodeType;
+			if (refinedArgType != null) { argTypes[ai] = refinedArgType; }
 		}
 	}
 
@@ -2972,7 +2975,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 		}
 	}
-	resolvedObjType = peelToStructOrUnion(resolvedObjType);
+	const peeledObjType = peelToStructOrUnion(resolvedObjType);
+	if (peeledObjType != null) { resolvedObjType = peeledObjType; }
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
 	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
@@ -3795,12 +3799,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				if (last.kind == NodeKind.ReturnStmt) {
 					const rd = last.data as ReturnStmtData;
 					if (rd.argument != null) {
-						callCheckExpr(ctx, rd.argument, expectedType); bodyType = rd.argument.nodeType;
+						callCheckExpr(ctx, rd.argument, expectedType); if (rd.argument.nodeType != null) { bodyType = rd.argument.nodeType; }
 					}
 				}
 			}
 		} else {
-			callCheckExpr(ctx, cd.caseBody, expectedType); bodyType = cd.caseBody.nodeType;
+			callCheckExpr(ctx, cd.caseBody, expectedType); if (cd.caseBody.nodeType != null) { bodyType = cd.caseBody.nodeType; }
 		}
 
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));

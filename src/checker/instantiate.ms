@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
+import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, addError } from "./context";
@@ -559,7 +559,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// stays Inferred into codegen (C: internal error kind=48, JS: <object>).
 		const savedReturn = bodyCtx.inferredReturn;
 		const savedReturnStmts = bodyCtx.inferredReturnStmts;
-		bodyCtx.inferredReturn = instType.typeReturn;
+		bodyCtx.inferredReturn = instType.typeReturn != null ? instType.typeReturn : inferredType();
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
