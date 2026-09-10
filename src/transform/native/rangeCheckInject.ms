@@ -1,5 +1,4 @@
 // Range Check Injection — inserts runtime range checks for narrowing integer casts
-// Follows reference range_check_inject.zig
 //
 // const x: i8 = bigNum as i8;
 //   → const x: i8 = msCheckRangeI8(bigNum, -128, 127);
@@ -7,7 +6,8 @@
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
 
-import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
+import { integerRank, isIntegerType, distinctInstanceRepr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
@@ -57,7 +57,7 @@ function getRangeMax(typeName: string): number {
 // ===== Main Entry Point =====
 
 export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
-	walkNode(program, rangeCheckVisitor);
+	walkNode(program, (n: Node): Node => { return rangeCheckVisitor(n, ctx); });
 	return program;
 }
 
@@ -98,25 +98,65 @@ function getRangeMaxForKind(kind: TypeKind): number {
 	};
 }
 
-function rangeCheckVisitor(node: Node): Node {
-	// Explicit casts: x as int8 → msCheckRangeI8(x, -128, 127)
+function isUnsignedKind(kind: TypeKind): boolean {
+	return kind == TypeKind.Uint8 || kind == TypeKind.Uint16 || kind == TypeKind.Uint32;
+}
+
+function isUnsignedName(typeName: string): boolean {
+	return typeName == "uint8" || typeName == "uint16" || typeName == "uint32";
+}
+
+function peelToRepr(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
+	const repr = distinctInstanceRepr(t);
+	if (repr != null) return peelToRepr(repr);
+	return t;
+}
+
+function destCovers(src: Type | null, dest: Type): boolean {
+	const s = peelToRepr(src);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Enum) {
+		const lo = getRangeMinForKind(dest.kind);
+		const hi = getRangeMaxForKind(dest.kind);
+		for (const member of s.typeChildren) {
+			if (member == null) return false;
+			const v = member.typeFlags as int32;
+			if (v < lo || v > hi) return false;
+		}
+		return true;
+	}
+	if (!isIntegerType(s)) return false;
+	return integerRank(s) <= integerRank(dest);
+}
+
+function checkedConv(ctx: TransformContext, expr: Node, src: Type | null, dest: Type, node: Node): Node {
+	const fnName = getRangeCheckForTypeKind(dest.kind);
+	if (fnName == "") return node;
+	if (isUnsignedKind(dest.kind)) return node;
+	if (destCovers(src, dest)) return node;
+	return makeRangeCheck(expr, fnName, getRangeMinForKind(dest.kind), getRangeMaxForKind(dest.kind), node.location);
+}
+
+function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
+		const src = d.asExpr != null ? d.asExpr.nodeType : null;
+		if (node.nodeType != null) return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
 		const fnName = getRangeCheckFn(d.asType);
 		if (fnName == "") return node;
+		if (isUnsignedName(d.asType)) return node;
 		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
 	}
-	// Parity: standard reference's implicit narrowing transformation
 	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
 		if (d.convType == null) return node;
-		const fnName = getRangeCheckForTypeKind(d.convType.kind);
-		if (fnName == "") return node;
-		return makeRangeCheck(d.convExpr, fnName, getRangeMinForKind(d.convType.kind), getRangeMaxForKind(d.convType.kind), node.location);
+		const src = d.convExpr != null ? d.convExpr.nodeType : null;
+		return checkedConv(ctx, d.convExpr, src, d.convType, node);
 	}
 	return node;
 }
-
 // Helper: build a range check call (exported for C codegen use)
 export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVal: number, loc: SourceLocation): Node {
 	const args: Node[] = [];
@@ -171,7 +211,11 @@ test "parser stores asType union" { assert parsedAsType("x as string | null;") =
 
 test "cast to int8 becomes range check" { assert castExprKind("x as int8;") == NodeKind.CallExpr; }
 
-test "cast to uint16 becomes range check" { assert castExprKind("x as uint16;") == NodeKind.CallExpr; }
+test "cast to uint16 stays a plain cast" { assert castExprKind("x as uint16;") == NodeKind.TypeAssertion; }
+
+test "cast to uint8 stays a plain cast" { assert castExprKind("x as uint8;") == NodeKind.TypeAssertion; }
+
+test "cast to uint32 stays a plain cast" { assert castExprKind("x as uint32;") == NodeKind.TypeAssertion; }
 
 test "cast to int32 becomes range check" { assert castExprKind("x as int32;") == NodeKind.CallExpr; }
 
