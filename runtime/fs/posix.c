@@ -69,6 +69,14 @@ double msFsExists(msString path) {
 	return (stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
 }
 
+msString msFsRealPath(msString path) {
+	char* resolved = realpath(msStringToCString(path), NULL);
+	if (!resolved) return MS_EMPTY_STRING;
+	msString result = msStringFromCStr(resolved);
+	free(resolved);
+	return result;
+}
+
 double msFsIsFile(msString path) {
 	struct stat st;
 	if (stat(msStringToCString(path), &st) != 0) return 0.0;

@@ -76,6 +76,16 @@ double msFsExists(msString path) {
 	return (_stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
 }
 
+msString msFsRealPath(msString path) {
+	char* full = _fullpath(NULL, msStringToCString(path), 0);
+	if (!full) return MS_EMPTY_STRING;
+	struct _stat st;
+	if (_stat(full, &st) != 0) { free(full); return MS_EMPTY_STRING; }
+	msString result = msStringFromCStr(full);
+	free(full);
+	return result;
+}
+
 double msFsIsFile(msString path) {
 	struct _stat st;
 	if (_stat(msStringToCString(path), &st) != 0) return 0.0;

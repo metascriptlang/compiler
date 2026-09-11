@@ -50,6 +50,8 @@ double msFsIsDir(msString path);
  * findOnPath to match shutil.which / exec.LookPath / Bun.which semantics. */
 double msFsIsExecutable(msString path);
 
+msString msFsRealPath(msString path);
+
 /* File size in bytes. Returns -1.0 on error. */
 double msFsFileSize(msString path);
 
