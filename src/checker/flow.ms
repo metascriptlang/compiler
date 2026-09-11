@@ -19,9 +19,9 @@ import {
 	createUnion, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType, isNumeric, isDiscriminatedUnion,
+	isMaybeType, unwrapMaybeType, isDiscriminatedUnion,
 	createMaybeType, isMaybeWrappable, isPrimitiveUnionMember,
-	isAtomicRef, peelToStructOrUnion,
+	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
 
@@ -1324,8 +1324,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	if (t == null || literalExpr == null) return t;
 	if (literalExpr.kind != NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
-	const targetKind = typeKindOfTypeofString(d.value);
-	if (targetKind == TypeKind.None) return t;  // unknown typeof string, no narrow
+	if (!isTypeofTag(d.value)) return t;
 	// For union types, filter variants by whether their kind matches.
 	if (t.kind == TypeKind.Union) {
 		const remaining: Type[] = [];
@@ -1338,7 +1337,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 				if (isMatch == assumeTrue) remaining.push(v);
 			}
 		}
-		if (remaining.length == 0) return t;  // no narrowing possible
+		if (remaining.length == 0 || remaining.length == t.typeChildren.length) return t;
 		if (remaining.length == 1) return remaining[0];
 		return createUnion(remaining);
 	}
@@ -1350,22 +1349,8 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	return matches ? inferredType() : t;
 }
 
-// Family match for `typeof` narrowing: "number" covers every numeric kind —
-// float32/int32/... are all "number" at runtime; same for string/boolean literals.
 function typeofStringMatches(v: Type, s: string): boolean {
-	if (s == "string") return v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral;
-	if (s == "number") return isNumeric(v);
-	if (s == "boolean") return v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral;
-	return false;
-}
-
-// Map a `typeof` result string to the corresponding TypeKind. Phase 2 handles
-// primitives; Phase 6 will add "object"/"function".
-function typeKindOfTypeofString(s: string): TypeKind {
-	if (s == "string") return TypeKind.String;
-	if (s == "number") return TypeKind.Number;
-	if (s == "boolean") return TypeKind.Boolean;
-	return TypeKind.None;
+	return typeofTagOf(v) == s;
 }
 
 // Narrow a discriminated-union type by a discriminant property equality.

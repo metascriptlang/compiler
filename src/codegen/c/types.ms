@@ -1205,7 +1205,8 @@ function genUnionType(g: CGen, t: Type): string {
 		// Primitive/string variants (float32 | string) carry the raw C type as
 		// payload — no per-variant struct typedef. Null is tag-only ("").
 		const rawVariant = t.typeChildren[vi];
-		if (isPrimitiveUnionMember(rawVariant)) {
+		const structVariant = peelToStruct(rawVariant);
+		if (isPrimitiveUnionMember(rawVariant) || structVariant == null || structVariant.kind != TypeKind.Struct) {
 			canonicalNames.push(rawVariant.kind == TypeKind.Null ? "" : getTypeDesc(g, rawVariant));
 			allFieldTypes.push([]);
 			vi += 1;
@@ -1214,7 +1215,7 @@ function genUnionType(g: CGen, t: Type): string {
 		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
 		// Without peel, variant.typeNames is empty and the variant struct emits
 		// no fields, breaking discriminated unions of named interfaces.
-		const variant = peelToStruct(t.typeChildren[vi]);
+		const variant = structVariant;
 		const varName = `${name}_v${vi}`;
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name.

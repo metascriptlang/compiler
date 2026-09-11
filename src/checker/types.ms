@@ -1988,6 +1988,29 @@ export function isTagCarriedUnion(t: Type | null): boolean {
 	return !isStringLike(t);
 }
 
+export function typeofTagOf(t: Type | null): string {
+	if (t == null) return "object";
+	const v = peelTransparentInstance(t);
+	if (isNumeric(v)) return "number";
+	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
+	if (v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral) return "boolean";
+	if (v.kind == TypeKind.Function) return "function";
+	if (v.kind == TypeKind.BigInt) return "bigint";
+	return "object";
+}
+
+export function unionHasMemberOfKind(t: Type | null, kind: TypeKind): boolean {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return false;
+	for (const m of t.typeChildren) {
+		if (m != null && m.kind == kind) return true;
+	}
+	return false;
+}
+
+export function isTypeofTag(s: string): boolean {
+	return s == "string" || s == "number" || s == "boolean" || s == "function" || s == "bigint" || s == "object";
+}
+
 // ===== Min Arity (Default Parameters) =====
 // Encoded in typeFlags bits 8-15. Zero = not set = all params required.
 // Stores minArity + 1 so that 0 means "not set" (backward compatible).

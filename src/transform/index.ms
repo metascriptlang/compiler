@@ -86,6 +86,7 @@ import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
+import { projectNarrowedUnions } from "./native/unionProjectLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -168,6 +169,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerNewExpr(result, ctx);
 	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	if (!jsBackend) { result = lowerNullable(result, ctx); }
+	if (!jsBackend) { result = projectNarrowedUnions(result, ctx); }
 	// C materializes the Maybe struct (above); JS de-materializes it — the two
 	// backends are inverse directions of the same T|null lowering. Keeps JS on
 	// native null (platform interop) and codegen dumb.
