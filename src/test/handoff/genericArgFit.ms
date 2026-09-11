@@ -96,3 +96,72 @@ test "a lambda typed from the formal does not report a conflict" {
 test "a template with matching arguments expands cleanly" {
 	assert strictErrorCount(TPL_ID2 + "const c = id2(\"s\", \"t\");") == 0;
 }
+
+// ===== Explicit type arguments: arity is checked before binding =====
+
+const TPL_CLASSES = "class Animal { name: string = \"\"; }\nclass Dog extends Animal { breed: string = \"\"; }\ntemplate tp<T>(a: T, b: T): T { return a; }\nconst dog = new Dog();\nconst animal = new Animal();\n";
+
+test "too few explicit type arguments on a function are rejected" {
+	assert hasError("function f2<A, B>(a: A, b: B): A { return a; }\nconst r = f2<string>(\"s\", 1);", "Wrong number of type arguments to 'f2': expected 2, got 1");
+}
+
+test "too many explicit type arguments on a function are rejected" {
+	assert hasError("function f1<T>(a: T): T { return a; }\nconst r = f1<string, int32>(\"s\");", "Wrong number of type arguments to 'f1': expected 1, got 2");
+}
+
+test "explicit type arguments on a non-generic function are rejected" {
+	assert hasError("function g(a: string): string { return a; }\nconst r = g<string>(\"s\");", "Wrong number of type arguments to 'g': expected 0, got 1");
+}
+
+test "a static method checks explicit type argument arity" {
+	assert hasError("class K { static m<A, B>(a: A, b: B): A { return a; } }\nconst r = K.m<string>(\"s\", 1);", "Wrong number of type arguments to 'm': expected 2, got 1");
+}
+
+test "a template checks explicit type argument arity" {
+	assert hasError("template t2<A, B>(a: A, b: B): A { return a; }\nconst r = t2<string>(\"s\", 1);", "Wrong number of type arguments to 't2': expected 2, got 1");
+}
+
+test "a class constructor checks explicit type argument arity" {
+	assert hasError("class Box<T> { v: T; constructor(v: T) { this.v = v; } }\nconst b = new Box<string, int32>(\"s\");", "Wrong number of type arguments to 'Box': expected 1, got 2");
+}
+
+test "matching explicit type argument counts are accepted" {
+	assert strictErrorCount("function f2<A, B>(a: A, b: B): A { return a; }\nconst r = f2<string, int32>(\"s\", 1);") == 0;
+	assert strictErrorCount("class Pair<A, B> { a: A; b: B; constructor(a: A, b: B) { this.a = a; this.b = b; } }\nconst p = new Pair<string, int32>(\"s\", 1);") == 0;
+}
+
+// ===== Explicit type arguments seed the template binding =====
+
+test "a template argument contradicting an explicit type argument is rejected" {
+	assert hasError(TPL_ID2 + "const c = id2<string>(3, 4);", "Argument type mismatch in 'id2' arg 0: got int32, expected string");
+}
+
+test "an explicit template binding is not widened by a later argument" {
+	assert hasError(TPL_CLASSES + "const c = tp<Dog>(animal, dog);", "Argument type mismatch in 'tp' arg 0: got Animal, expected Dog");
+}
+
+test "an explicit template binding accepts subclass arguments in any order" {
+	assert strictErrorCount(TPL_CLASSES + "const c = tp<Animal>(dog, animal);") == 0;
+}
+
+// ===== One diagnostic per explicit mismatch; rest params check their element =====
+
+test "an explicit mismatch on a function is reported exactly once" {
+	assert strictErrorCount("function pair<T>(a: T, b: T): T { return a; }\nconst c = pair<string>(\"s\", 3);") == 1;
+}
+
+test "a generic rest parameter accepts matching trailing arguments" {
+	assert strictErrorCount("function all<T>(...xs: T[]): T { return xs[0]; }\nconst c = all<string>(\"a\", \"b\");") == 0;
+	assert strictErrorCount("function f<T>(a: T, ...rest: T[]): T { return a; }\nconst c = f(\"a\", \"b\", \"c\");") == 0;
+}
+
+test "a generic rest parameter rejects a contradicting trailing argument by element type" {
+	assert hasError("function f<T>(a: T, ...rest: T[]): T { return a; }\nconst c = f(\"a\", 3);", "Argument type mismatch in 'f' arg 1: got int32, expected string");
+}
+
+test "a type-parameter default is not read as another parameter" {
+	const src = "function f<T, E = Map<string, int32>>(a: T): T { return a; }\n";
+	assert strictErrorCount(src + "const r = f<int32, Map<string, int32>>(1);") == 0;
+	assert strictErrorCount(src + "const r = f(\"s\");") == 0;
+	assert hasError(src + "const r = f<int32>(1);", "Wrong number of type arguments to 'f': expected 2, got 1");
+}
