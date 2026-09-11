@@ -892,9 +892,10 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // constructors can't be tested inline — they emit in the defining module,
 // causing typeInfo conflicts).
 // ===== BitSet<E> =====
-// A set of enum members in one 32-bit word: bit position = member ordinal.
-// Enums with more than 32 members are rejected by the checker. Unsigned so that
-// the ordinal-31 shift is defined.
+// A set of enum members: bit position = member ordinal. The representation is
+// sized by the member count (one 32-bit word up to 32, a 64-bit word up to 64, a
+// word array up to 65536); the `uint32` here is the smallest band. Unsigned so
+// that the ordinal-31 shift is defined.
 // Value type, so it has no mutating methods — `|` adds, `& ~` removes, `.has()`
 // asks. The checker gives `E.A | E.B` the type `BitSet<E>`.
 // See docs/LANG-PRIMITIVE.md for the design record.
