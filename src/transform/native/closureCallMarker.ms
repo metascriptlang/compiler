@@ -15,7 +15,7 @@
 // and Sink/Lent are never built for a callee — probed, not assumed.
 
 import { Node, NodeKind, SymbolKind, Symbol, CallExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
-import { createFunction, voidType } from "../../checker/types";
+import { createFunction, voidType, peelTransparentInstance } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -83,13 +83,15 @@ function wrapFuncArgsAsThunks(node: Node): void {
 
 function isClosureTypedCallee(callee: Node): boolean {
 	if (callee.nodeType == null) return false;
-	if (callee.nodeType.kind != TypeKind.Function) return false;
-	return callee.nodeType.callConv == CallingConvention.CcClosure;
+	const calleeType = peelTransparentInstance(callee.nodeType);
+	if (calleeType.kind != TypeKind.Function) return false;
+	return calleeType.callConv == CallingConvention.CcClosure;
 }
 
 function getCalleeType(cd: CallExprData): Type | null {
-	if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		return cd.callee.nodeType;
+	if (cd.callee.nodeType != null) {
+		const calleeType = peelTransparentInstance(cd.callee.nodeType);
+		if (calleeType.kind == TypeKind.Function) return calleeType;
 	}
 	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.symbolType != null) {
 		return cd.callee.resolvedSym.symbolType;

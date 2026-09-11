@@ -13,7 +13,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, ArrayAccessData, CallExprData, IdentifierData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -25,7 +25,7 @@ import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken } from "../
 // codegen emits `(*arr)`. A receiver already dereferenced by the checker is a value Array
 // here, so this is a no-op for it (guards against double-deref).
 function unwrapRefArrayRecv(recv: Node): Node {
-	const t = recv.nodeType;
+	const t = recv.nodeType != null ? peelTransparentInstance(recv.nodeType) : null;
 	if (t != null && t.kind == TypeKind.Ref && t.typeReturn != null
 			&& t.typeReturn.kind == TypeKind.Array) {
 		const deref = createNode(NodeKind.HiddenDeref, { expr: recv }, syntheticToken(recv.location));
@@ -158,7 +158,7 @@ function rewriteNewExpr(node: Node): Node {
 function rewriteArrayAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
 	d.array = unwrapRefArrayRecv(d.array);
-	const arrType = d.array.nodeType;
+	const arrType = d.array.nodeType != null ? peelTransparentInstance(d.array.nodeType) : null;
 	if (arrType == null) return node;
 
 	const loc = node.location;

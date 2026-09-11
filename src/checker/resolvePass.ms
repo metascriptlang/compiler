@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, registerBitSetBase } from "./types";
+import { peelToStructOrUnion, UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, registerBitSetBase } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -239,6 +239,11 @@ export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, param
 	if (given == paramNames.length) return true;
 	addError(ctx, `Wrong number of type arguments to '${calleeName}': expected ${paramNames.length}, got ${given}`, node.location.line, node.location.column);
 	return false;
+}
+
+function refWrapsNominal(refType: Type): boolean {
+	const nominal = peelToStructOrUnion(refType.typeReturn);
+	return nominal != null && (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union);
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
@@ -621,7 +626,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				if (baseSym != null) {
 					markUsed(baseSym);
 					ensureShaped(baseSym, ctx);
-					const isRefBase = baseSym.symbolType.kind == TypeKind.Ref;
+					const isRefBase = baseSym.symbolType.kind == TypeKind.Ref && refWrapsNominal(baseSym.symbolType);
 					let baseType = baseSym.symbolType;
 					if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
@@ -641,7 +646,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (baseSym2 != null) {
 				markUsed(baseSym2);
 				ensureShaped(baseSym2, ctx);
-				const isRefBase2 = baseSym2.symbolType.kind == TypeKind.Ref;
+				const isRefBase2 = baseSym2.symbolType.kind == TypeKind.Ref && refWrapsNominal(baseSym2.symbolType);
 				let baseType2 = baseSym2.symbolType;
 				if (isRefBase2 && baseType2.typeReturn != null) baseType2 = baseType2.typeReturn;
 				const resolvedArgs: Type[] = [];

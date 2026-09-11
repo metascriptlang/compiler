@@ -643,8 +643,9 @@ export function getCalleeReturnType(callNode: Node): Type | null {
 
 export function getCalleeFuncType(callNode: Node): Type | null {
 	const cd = callNode.data as CallExprData;
-	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		return cd.callee.nodeType;
+	if (cd.callee != null && cd.callee.nodeType != null) {
+		const calleeType = peelTransparentInstance(cd.callee.nodeType);
+		if (calleeType.kind == TypeKind.Function) return calleeType;
 	}
 	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null) {
 		const st = callNode.resolvedSym.symbolType;
