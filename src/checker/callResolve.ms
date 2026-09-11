@@ -1286,7 +1286,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
 					argTypes[pi] = paramType;
 				}
-				if (!isAssignable(argTypes[pi], paramType)) {
+				const literalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
+					&& d.arguments[pi].kind == NodeKind.ObjectLiteral && hasGenericParams(paramType);
+				if (!literalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
 					if (needsStdConv(argTypes[pi], paramType)) {
 						// float/number → integer: the fractional part would be cut
 						// with no annotation beside the value to warn the reader —
@@ -1756,6 +1758,30 @@ function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: i
 	return false;
 }
 
+function fillArgBindings(ctx: CheckerContext, raw: UnifyBindings, into: UnifyBindings, cd: CallExprData, argIdx: int32): boolean {
+	let boundTwice = false;
+	for (let bi = 0; bi < raw.names.length; bi += 1) {
+		const candidate = raw.types[bi];
+		if (hasGenericParams(candidate)) continue;
+		const prevIdx = findBindingIndex(into, raw.names[bi]);
+		if (prevIdx == -1) {
+			into.names.push(raw.names[bi]);
+			into.types.push(candidate);
+			continue;
+		}
+		const prev = into.types[prevIdx];
+		if (isUnresolvedType(prev) || isUnresolvedType(candidate) || isAssignable(candidate, prev)) continue;
+		if (widensToBase(ctx, prev, candidate)) { into.types[prevIdx] = candidate; continue; }
+		if (!boundTwice && !bindingConflictSkipArg(cd.arguments[argIdx])) {
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
+				+ ": '" + raw.names[bi] + "' is bound to both " + typeDisplayName(prev) + " and " + typeDisplayName(candidate),
+				cd.arguments[argIdx].location.line, cd.arguments[argIdx].location.column);
+			boundTwice = true;
+		}
+	}
+	return boundTwice;
+}
+
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
@@ -1784,12 +1810,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			const ab = createUnifyBindings();
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
 			const fb = createUnifyBindings();
-			for (let bi = 0; bi < ab.names.length; bi += 1) {
-				if (!hasGenericParams(ab.types[bi])) {
-					fb.names.push(ab.names[bi]);
-					fb.types.push(ab.types[bi]);
-				}
-			}
+			if (fillArgBindings(ctx, ab, fb, cd, i)) conflicted.push(i);
 			if (reportBindingConflict(ctx, eb, ebFrom, fb, cd, i)) conflicted.push(i);
 			mergeUnifyBindings(eb, fb);
 			while (ebFrom.length < eb.names.length) ebFrom.push(i);
@@ -1849,12 +1870,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		if (argSym.symbolType == null) continue;
 		const substFormal = applySubstitutions(calleeType.typeChildren[ai], eb);
 		if (substFormal == null || substFormal.kind != TypeKind.Function || hasGenericParams(substFormal)) continue;
-		const gb = createUnifyBindings();
+		const gbRaw = createUnifyBindings();
 		const gLimit = argSym.symbolType.typeChildren.length < substFormal.typeChildren.length ? argSym.symbolType.typeChildren.length : substFormal.typeChildren.length;
 		for (let gi = 0; gi < gLimit; gi += 1) {
-			unifyType(argSym.symbolType.typeChildren[gi], substFormal.typeChildren[gi], gb);
+			unifyType(argSym.symbolType.typeChildren[gi], substFormal.typeChildren[gi], gbRaw);
 		}
-		unifyType(argSym.symbolType.typeReturn, substFormal.typeReturn, gb);
+		unifyType(argSym.symbolType.typeReturn, substFormal.typeReturn, gbRaw);
+		const gb = createUnifyBindings();
+		if (fillArgBindings(ctx, gbRaw, gb, cd, ai)) { conflicted.push(ai); continue; }
 		if (gb.names.length == 0) continue;
 		const argInst = callInstantiateGeneric(argSym, gb.names, gb.types, ctx, argN.location);
 		if (argInst == null) continue;
@@ -1890,7 +1913,16 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		// identity the instance's parameter uses, not the literal's own anon name.
 		if (arg.kind == NodeKind.ObjectLiteral && substituted.kind == TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
-			arg.nodeType = substituted;
+			let skipConstruct = false;
+			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
+			if (!skipConstruct) {
+				arg.flags = arg.flags & ~NodeFlag.Sem;
+				arg.nodeType = null;
+				callCheckExpr(ctx, arg, substituted);
+			}
+			if (arg.nodeType == null) arg.nodeType = substituted;
+			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
+			continue;
 		}
 		if (substituted.kind == TypeKind.Union && arg.nodeType != null) {
 			const uw = widenVariantToUnion(arg, substituted, arg.nodeType);
