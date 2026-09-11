@@ -1,9 +1,9 @@
 // Statement Parser Core - Dispatch, block/expr/program parsing
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
-import { TokenKind } from "../../lexer/token";
+import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, FunctionDeclData, BlockStmtData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments } from "../context";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
@@ -26,6 +26,16 @@ type NodesResult = Result<Node[], string>;
 //              | doWhile | switchStmt | deferStmt | unreachableStmt | matchStmt | exprStmt
 
 export function parseStatement(state: ParserState): NodeResult {
+	const leading: Token[] = takePendingComments(state);
+	const node = try parseStatementCore(state);
+	if (leading.length > 0) {
+		for (const c of node.comments) leading.push(c);
+		node.comments = leading;
+	}
+	return Result.ok(node);
+}
+
+function parseStatementCore(state: ParserState): NodeResult {
 	const token = current(state);
 
 	// Async function declaration — before match to avoid try-in-match-arm limitation

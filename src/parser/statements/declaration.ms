@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
@@ -1009,7 +1009,9 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	const members: Node[] = [];
+	const bodyComments: Token[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		for (const c of takePendingComments(state)) bodyComments.push(c);
 		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
@@ -1037,12 +1039,14 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
 
-	return Result.ok(createNode(NodeKind.ClassDecl, {
+	const classNode = createNode(NodeKind.ClassDecl, {
 		className: nameToken.value,
 		classExtends: extendsName,
 		classBody: members,
 		nameLocation: makeLocFromToken(nameToken),
-	}, classToken));
+	}, classToken);
+	classNode.comments = bodyComments;
+	return Result.ok(classNode);
 }
 
 // ===== Actor Declaration =====
@@ -1075,7 +1079,9 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	const members: Node[] = [];
+	const bodyComments: Token[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		for (const c of takePendingComments(state)) bodyComments.push(c);
 		if (current(state).kind == TokenKind.Semicolon) {
 			advance(state);
 			continue;
@@ -1088,11 +1094,13 @@ export function parseActorDecl(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	return Result.ok(createNode(NodeKind.ActorDecl, {
+	const actorNode = createNode(NodeKind.ActorDecl, {
 		actorName: nameToken.value,
 		actorBody: members,
 		nameLocation: makeLocFromToken(nameToken),
-	}, actorToken));
+	}, actorToken);
+	actorNode.comments = bodyComments;
+	return Result.ok(actorNode);
 }
 
 function parseClassMember(state: ParserState): NodeResult {
