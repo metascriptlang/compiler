@@ -11,7 +11,7 @@
 import { parseSource } from "../parser/statements/validation";
 import {
 	Node, NodeKind, createNodeAt,
-	FlowNode, FlowFlags, FlowList,
+	FlowNode, FlowFlag, FlowList,
 	FlowSwitchClauseData, FlowReduceLabelData,
 	// NodeData variants
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, DoWhileStmtData,
@@ -35,9 +35,9 @@ import {
 
 // ===== FlowNode Constructors =====
 
-function createFlowNode(flags: int32): FlowNode {
+function createFlowNode(flag: FlowFlag): FlowNode {
 	const f = new FlowNode();
-	f.flags = flags;
+	f.flags = (0 as BitSet<FlowFlag>).incl(flag);
 	f.node = null;
 	f.antecedent = null;
 	f.antecedents = null;
@@ -47,41 +47,41 @@ function createFlowNode(flags: int32): FlowNode {
 }
 
 function createUnreachableFlow(): FlowNode {
-	return createFlowNode(FlowFlags.Unreachable);
+	return createFlowNode(FlowFlag.Unreachable);
 }
 
 function createStartFlow(container: Node): FlowNode {
-	const f = createFlowNode(FlowFlags.Start);
+	const f = createFlowNode(FlowFlag.Start);
 	f.node = container;
 	return f;
 }
 
 function createBranchLabel(): FlowNode {
-	return createFlowNode(FlowFlags.BranchLabel);
+	return createFlowNode(FlowFlag.BranchLabel);
 }
 
 function createLoopLabel(): FlowNode {
-	return createFlowNode(FlowFlags.LoopLabel);
+	return createFlowNode(FlowFlag.LoopLabel);
 }
 
-function createFlowCondition(flags: int32, antecedent: FlowNode, expr: Node): FlowNode {
-	// flags must be TrueCondition or FalseCondition
-	if (antecedent == null || (antecedent.flags & FlowFlags.Unreachable) != 0) {
+function createFlowCondition(flag: FlowFlag, antecedent: FlowNode, expr: Node): FlowNode {
+	// flag must be TrueCondition or FalseCondition
+	if (antecedent == null || antecedent.flags.has(FlowFlag.Unreachable)) {
 		return antecedent;
 	}
-	const f = createFlowNode(flags);
+	const f = createFlowNode(flag);
 	f.antecedent = antecedent;
 	f.node = expr;
 	setFlowNodeReferenced(antecedent);
 	return f;
 }
 
-function createFlowMutation(flags: int32, antecedent: FlowNode, node: Node): FlowNode {
-	// flags = Assignment or ArrayMutation
+function createFlowMutation(flag: FlowFlag, antecedent: FlowNode, node: Node): FlowNode {
+	// flag = Assignment or ArrayMutation
 	if (antecedent == null) return antecedent;
 	// Short-circuit on unreachable — no point recording a mutation in dead code.
-	if ((antecedent.flags & FlowFlags.Unreachable) != 0) return antecedent;
-	const f = createFlowNode(flags);
+	if (antecedent.flags.has(FlowFlag.Unreachable)) return antecedent;
+	const f = createFlowNode(flag);
 	f.antecedent = antecedent;
 	f.node = node;
 	setFlowNodeReferenced(antecedent);
@@ -90,7 +90,7 @@ function createFlowMutation(flags: int32, antecedent: FlowNode, node: Node): Flo
 
 function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseStart: int32, clauseEnd: int32): FlowNode {
 	if (antecedent == null) return antecedent;
-	const f = createFlowNode(FlowFlags.SwitchClause);
+	const f = createFlowNode(FlowFlag.SwitchClause);
 	f.antecedent = antecedent;
 	const data = new FlowSwitchClauseData();
 	data.switchStatement = switchStmt;
@@ -104,7 +104,7 @@ function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseSt
 function addAntecedent(label: FlowNode | null, ante: FlowNode | null): void {
 	if (label == null) return;
 	if (ante == null) return;
-	if ((ante.flags & FlowFlags.Unreachable) != 0) return;
+	if (ante.flags.has(FlowFlag.Unreachable)) return;
 	// Dedup by pointer equality
 	let cur = label.antecedents;
 	while (cur != null) {
@@ -126,16 +126,16 @@ function finishFlowLabel(label: FlowNode): FlowNode {
 
 function setFlowNodeReferenced(flow: FlowNode | null): void {
 	if (flow == null) return;
-	if ((flow.flags & FlowFlags.Referenced) == 0) {
-		flow.flags = flow.flags | FlowFlags.Referenced;
+	if (!flow.flags.has(FlowFlag.Referenced)) {
+		flow.flags = flow.flags.incl(FlowFlag.Referenced);
 	} else {
-		flow.flags = flow.flags | FlowFlags.Shared;
+		flow.flags = flow.flags.incl(FlowFlag.Shared);
 	}
 }
 
 function isReachable(flow: FlowNode | null): boolean {
 	if (flow == null) return false;
-	return (flow.flags & FlowFlags.Unreachable) == 0;
+	return !flow.flags.has(FlowFlag.Unreachable);
 }
 
 // ===== Binder State =====
@@ -376,7 +376,7 @@ function bindForOfStmt(state: BinderState, node: Node): void {
 	addAntecedent(preLoop, state.currentFlow);
 	state.currentFlow = preLoop;
 	// Loop var is implicitly assigned each iteration
-	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 	const savedBreak = state.currentBreakTarget;
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
@@ -396,7 +396,7 @@ function bindForInStmt(state: BinderState, node: Node): void {
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
 	state.currentFlow = preLoop;
-	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 	const savedBreak = state.currentBreakTarget;
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
@@ -505,7 +505,7 @@ function synthesizeMatchArmFlow(preMatch: FlowNode, disc: Node, cd: MatchCaseDat
 		left: disc,
 		right: pat,
 	}, pat.location);
-	return createFlowCondition(FlowFlags.TrueCondition, preMatch, syntheticEq);
+	return createFlowCondition(FlowFlag.TrueCondition, preMatch, syntheticEq);
 }
 
 function bindReturnStmt(state: BinderState, node: Node): void {
@@ -565,13 +565,13 @@ function bindTryStmt(state: BinderState, node: Node): void {
 function bindVariableDecl(state: BinderState, node: Node): void {
 	const d = node.data as VariableDeclData;
 	if (d.initializer != null) bindExpression(state, d.initializer);
-	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 }
 
 function bindDestructuringDecl(state: BinderState, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	if (d.destrInit != null) bindExpression(state, d.destrInit);
-	state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 }
 
 function bindExprStmt(state: BinderState, node: Node): void {
@@ -687,7 +687,7 @@ function bindExpression(state: BinderState, node: Node): void {
 			const d = node.data as UpdateExprData;
 			if (d.updateArg != null) bindExpression(state, d.updateArg);
 			// x++ and --x are assignments to x
-			state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+			state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 		},
 		NodeKind.CallExpr => bindCallExpr(state, node),
 		NodeKind.NewExpr => bindNewExpr(state, node),
@@ -783,7 +783,7 @@ function bindBinaryExpr(state: BinderState, node: Node): void {
 		|| d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") {
 		if (d.left != null) bindExpression(state, d.left);
 		if (d.right != null) bindExpression(state, d.right);
-		state.currentFlow = createFlowMutation(FlowFlags.Assignment, state.currentFlow, node);
+		state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
 		return;
 	}
 	// Default: walk both sides
@@ -953,8 +953,8 @@ function bindCondition(state: BinderState, expr: Node, trueTarget: FlowNode, fal
 	}
 	// Leaf condition: bind the expression, then split on True/False edges
 	bindExpression(state, expr);
-	addAntecedent(trueTarget, createFlowCondition(FlowFlags.TrueCondition, state.currentFlow, expr));
-	addAntecedent(falseTarget, createFlowCondition(FlowFlags.FalseCondition, state.currentFlow, expr));
+	addAntecedent(trueTarget, createFlowCondition(FlowFlag.TrueCondition, state.currentFlow, expr));
+	addAntecedent(falseTarget, createFlowCondition(FlowFlag.FalseCondition, state.currentFlow, expr));
 }
 
 // ===== Tests =====
@@ -1073,7 +1073,7 @@ test "binder marks code after return as unreachable" {
 	// the unreachable flow (non-null, Unreachable flag set).
 	assert yRef != null;
 	assert yRef.flowNode != null;
-	assert (yRef.flowNode.flags & FlowFlags.Unreachable) != 0;
+	assert yRef.flowNode.flags.has(FlowFlag.Unreachable);
 }
 
 test "binder splits flow on if condition" {

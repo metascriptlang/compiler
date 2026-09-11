@@ -469,7 +469,7 @@ export type NodeData =
 // pointing into this graph. The checker walks antecedents backward from the
 // reference to compute a narrowed type at that program point.
 //
-// Single FlowNode struct with a FlowFlags bitset tag (NOT a sum type) —
+// Single FlowNode struct with a FlowFlag set tag (NOT a sum type) —
 // keeps memory layout simple. Per-variant meaning:
 //
 // - Start            -> owning function/container (Node=container or null)
@@ -485,20 +485,20 @@ export type NodeData =
 // - Unreachable      -> singleton after return/throw/break/continue
 // - Referenced/Shared -> set by setFlowNodeReferenced; cache metadata, not semantic
 
-export enum FlowFlags {
-	Unreachable    = 1,       // 1 << 0
-	Start          = 2,       // 1 << 1
-	BranchLabel    = 4,       // 1 << 2
-	LoopLabel      = 8,       // 1 << 3
-	Assignment     = 16,      // 1 << 4
-	TrueCondition  = 32,      // 1 << 5
-	FalseCondition = 64,      // 1 << 6
-	SwitchClause   = 128,     // 1 << 7
-	ArrayMutation  = 256,     // 1 << 8
-	Call           = 512,     // 1 << 9
-	ReduceLabel    = 1024,    // 1 << 10
-	Referenced     = 2048,    // 1 << 11
-	Shared         = 4096,    // 1 << 12
+export enum FlowFlag {
+	Unreachable,
+	Start,
+	BranchLabel,
+	LoopLabel,
+	Assignment,
+	TrueCondition,
+	FalseCondition,
+	SwitchClause,
+	ArrayMutation,
+	Call,
+	ReduceLabel,
+	Referenced,
+	Shared,
 }
 
 // FlowList — singly-linked list of FlowNode antecedents for join labels.
@@ -526,7 +526,7 @@ export class FlowReduceLabelData {
 }
 
 export class FlowNode {
-	flags: int32;            // FlowFlags bitset
+	flags: BitSet<FlowFlag>;
 	node: Node | null;       // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
 	antecedent: FlowNode | null;    // single parent (non-Label variants)
 	antecedents: FlowList | null;   // list of parents (BranchLabel / LoopLabel only)

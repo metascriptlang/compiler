@@ -9,7 +9,7 @@
 
 import {
 	Node, NodeKind, DeclKind,
-	FlowNode, FlowFlags, FlowList,
+	FlowNode, FlowFlag, FlowList,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, HiddenStdConvData,
@@ -308,10 +308,10 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 	while (true) {
 		if (current == null) { result = false; break; }
 		const flags = current.flags;
-		if ((flags & FlowFlags.Unreachable) != 0) { result = false; break; }
-		if ((flags & FlowFlags.Start) != 0) { result = false; break; }
-		if ((flags & (FlowFlags.TrueCondition | FlowFlags.FalseCondition)) != 0) {
-			const assumeTrue = (flags & FlowFlags.TrueCondition) != 0;
+		if (flags.has(FlowFlag.Unreachable)) { result = false; break; }
+		if (flags.has(FlowFlag.Start)) { result = false; break; }
+		if ((flags.has(FlowFlag.TrueCondition) || flags.has(FlowFlag.FalseCondition))) {
+			const assumeTrue = flags.has(FlowFlag.TrueCondition);
 			if (isNonNullCheckForRef(current.node, refNode, assumeTrue)) {
 				result = true;
 				break;
@@ -319,7 +319,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			current = current.antecedent;
 			continue;
 		}
-		if ((flags & FlowFlags.BranchLabel) != 0) {
+		if (flags.has(FlowFlag.BranchLabel)) {
 			// All antecedents must prove non-null for the join to be non-null.
 			let list: FlowList | null = current.antecedents;
 			let allNonNull = list != null;
@@ -333,7 +333,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			result = allNonNull;
 			break;
 		}
-		if ((flags & FlowFlags.LoopLabel) != 0) {
+		if (flags.has(FlowFlag.LoopLabel)) {
 			// Conservative: loop narrowing for Ref null is Phase 6+.
 			result = false;
 			break;
@@ -408,7 +408,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 		// Per-query Shared-flow cache check. Only the FIRST shared flow we
 		// encounter on this walk becomes the cache key; nested shared flows
 		// within the same walk fall through to normal processing.
-		if ((flags & FlowFlags.Shared) != 0 && sharedFlow == null) {
+		if (flags.has(FlowFlag.Shared) && sharedFlow == null) {
 			const cached = lookupSharedFlow(state, current);
 			if (cached != null) {
 				result = cached;
@@ -419,16 +419,16 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// include narrowings that belong above the shared node.
 			if (pending.length == 0) sharedFlow = current;
 		}
-		if ((flags & FlowFlags.Unreachable) != 0) {
+		if (flags.has(FlowFlag.Unreachable)) {
 			// Dead code — no narrowing, return declared type.
 			result = flowType(state.declaredType, false);
 			break;
 		}
-		if ((flags & FlowFlags.Start) != 0) {
+		if (flags.has(FlowFlag.Start)) {
 			result = flowType(state.declaredType, false);
 			break;
 		}
-		if ((flags & FlowFlags.Assignment) != 0) {
+		if (flags.has(FlowFlag.Assignment)) {
 			// Phase 6: narrow to the RHS type when the assignment's target
 			// matches our reference. Variable declarations with initializers
 			// count (the declNode IS the assignment source).
@@ -441,17 +441,17 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			current = current.antecedent;
 			continue;
 		}
-		if ((flags & FlowFlags.ArrayMutation) != 0) {
+		if (flags.has(FlowFlag.ArrayMutation)) {
 			// Evolving arrays (Phase 6+). Phase 2: tail-recurse.
 			current = current.antecedent;
 			continue;
 		}
-		if ((flags & FlowFlags.Call) != 0) {
+		if (flags.has(FlowFlag.Call)) {
 			// Assertion functions (Phase 6+). Phase 2: tail-recurse.
 			current = current.antecedent;
 			continue;
 		}
-		if ((flags & (FlowFlags.TrueCondition | FlowFlags.FalseCondition)) != 0) {
+		if ((flags.has(FlowFlag.TrueCondition) || flags.has(FlowFlag.FalseCondition))) {
 			// Linear (single-antecedent) narrowing — collect and keep walking
 			// iteratively instead of recursing, so deep condition chains don't
 			// grow the call stack. Drained post-loop below.
@@ -459,11 +459,11 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			current = current.antecedent;
 			continue;
 		}
-		if ((flags & FlowFlags.SwitchClause) != 0) {
+		if (flags.has(FlowFlag.SwitchClause)) {
 			result = getTypeAtSwitchClause(state, current);
 			break;
 		}
-		if ((flags & FlowFlags.BranchLabel) != 0) {
+		if (flags.has(FlowFlag.BranchLabel)) {
 			// Single-antecedent branch label is not a real merge — walk through
 			// it iteratively (mirrors TS getTypeAtFlowNode) so a long chain of
 			// sequential `if`s doesn't grow the call stack. Real merges (2+
@@ -487,7 +487,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			cacheSharedFlow(state, current, result);
 			break;
 		}
-		if ((flags & FlowFlags.LoopLabel) != 0) {
+		if (flags.has(FlowFlag.LoopLabel)) {
 			// Single-antecedent loop label (no back-edge) is likewise a
 			// pass-through — iterate instead of entering the fixed-point.
 			const ants = current.antecedents;
@@ -499,7 +499,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			result = getTypeAtFlowLoopLabel(state, current);
 			break;
 		}
-		if ((flags & FlowFlags.ReduceLabel) != 0) {
+		if (flags.has(FlowFlag.ReduceLabel)) {
 			// Try/finally ReduceLabel (Phase 6). Phase 2: pass through.
 			current = current.antecedent;
 			continue;
@@ -513,7 +513,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	let pi = pending.length - 1;
 	while (pi >= 0) {
 		const cnode = pending[pi];
-		const assumeTrue = (cnode.flags & FlowFlags.TrueCondition) != 0;
+		const assumeTrue = cnode.flags.has(FlowFlag.TrueCondition);
 		const narrowed = narrowType(result.t, cnode.node, state.reference, assumeTrue);
 		result = flowType(narrowed, result.incomplete);
 		pi = pi - 1;
@@ -633,7 +633,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		// no information to the join. Including them broke the fast-path below:
 		// Unreachable returns declaredType, which short-circuited the join and
 		// erased real narrowing from sibling branches.
-		if ((list.flow.flags & FlowFlags.Unreachable) != 0) {
+		if (list.flow.flags.has(FlowFlag.Unreachable)) {
 			list = list.next;
 			continue;
 		}
@@ -1158,7 +1158,7 @@ function extractNullFromType(t: Type | null): Type | null {
 	return t;
 }
 
-// narrowByAssignment — called when walking a FlowFlags.Assignment node.
+// narrowByAssignment — called when walking a FlowFlag.Assignment node.
 // Returns the RHS type if the assignment's target matches `refNode`, else
 // null. Constrains the result to a subtype of `declared` (assignment
 // narrowing is always bounded by the declared type). Handles:
