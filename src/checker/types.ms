@@ -1570,7 +1570,28 @@ export function distinctInstanceRepr(t: Type | null): Type | null {
 	const base = t.typeExtra;
 	if (base == null || base.typeReturn == null) return null;
 	if (base.kind != TypeKind.Distinct && base.kind != TypeKind.Alias) return null;
+	const setRepr = bitSetRepr(bitSetElemType(t));
+	if (setRepr != null) return setRepr;
 	return base.typeReturn;
+}
+
+export const BITSET_MAX_MEMBERS: int32 = 65536;
+
+export function bitSetRepr(elem: Type | null): Type | null {
+	if (elem == null) return null;
+	const members = elem.typeNames.length;
+	if (members <= 32) return createPrimitive(TypeKind.Uint32);
+	if (members <= 64) return createPrimitive(TypeKind.Uint64);
+	if (members <= BITSET_MAX_MEMBERS) return createSizedArray(createPrimitive(TypeKind.Uint32), (members + 31) >> 5);
+	return null;
+}
+
+export function peelToRepr(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
+	const repr = distinctInstanceRepr(t);
+	if (repr != null) return peelToRepr(repr);
+	return t;
 }
 
 export function bitSetElemType(t: Type | null): Type | null {

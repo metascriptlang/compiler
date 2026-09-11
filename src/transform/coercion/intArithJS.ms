@@ -31,6 +31,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, SourceLocation, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
+import { peelToRepr } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeIdent, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
@@ -61,7 +62,7 @@ function divideAsInteger(node: Node): Node {
 
 function binaryAsUnsigned(node: Node): Node {
 	const d = node.data as BinaryExprData;
-	const t = node.nodeType;
+	const t = peelToRepr(node.nodeType);
 	if (t == null || t.kind != TypeKind.Uint32) return node;
 	if (d.operator == ">>") {
 		d.operator = ">>>";
@@ -73,7 +74,7 @@ function binaryAsUnsigned(node: Node): Node {
 }
 
 function unaryAsUnsigned(node: Node): Node {
-	const t = node.nodeType;
+	const t = peelToRepr(node.nodeType);
 	if (t == null || t.kind != TypeKind.Uint32) return node;
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
@@ -113,7 +114,7 @@ function compoundBaseOf(op: string): string {
 // rewritten; anything else would silently keep C's value and JS's, so it is
 // refused by name instead.
 function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
-	const t = d.left.nodeType;
+	const t = peelToRepr(d.left.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return node;
 	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
 	const unsigned = t.kind == TypeKind.Uint32;
@@ -136,7 +137,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 // A second read of the lvalue is only safe when re-evaluating it cannot call
 // anything or move anything — identifiers, field chains over them, and indexes
 // that are themselves identifiers or literals.
-function cloneIfPure(node: Node): Node | null {
+export function cloneIfPure(node: Node): Node | null {
 	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		const c = makeIdent(d.name, node.location);

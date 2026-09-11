@@ -21,7 +21,7 @@ import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeIdent, makeMember, makeNumber } from "../util";
-import { createPrimitive, isIntegerType, distinctInstanceRepr } from "../../checker/types";
+import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
@@ -33,11 +33,13 @@ function is64Kind(kind: TypeKind): boolean {
 	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
 }
 
+function reprKind(t: Type | null): TypeKind {
+	const r = peelToRepr(t);
+	return r == null ? TypeKind.Unknown : r.kind;
+}
+
 function is64Type(t: Type | null): boolean {
-	if (t == null) return false;
-	if (is64Kind(t.kind)) return true;
-	const repr = distinctInstanceRepr(t);
-	return repr != null && is64Kind(repr.kind);
+	return is64Kind(reprKind(t));
 }
 
 function isNarrowIntType(t: Type | null): boolean {
@@ -59,19 +61,22 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 		if (srcT == null) return node;
 		// Conversions clear of the 64-bit space belong to lowerIntConvJS, which
 		// runs next and needs the node still standing.
-		if (!is64Kind(d.convType.kind) && !is64Kind(srcT.kind)) return node;
-		return bigConvert(d.convExpr, srcT.kind, d.convType.kind, node.location);
+		const convK = reprKind(d.convType);
+		const convSrcK = reprKind(srcT);
+		if (!is64Kind(convK) && !is64Kind(convSrcK)) return node;
+		return bigConvert(d.convExpr, convSrcK, convK, node.location);
 	}
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const bigCast = bigintCast(node, d);
 		if (bigCast != null) return bigCast;
-		const dstK = intKindOfName(d.asType);
+		let dstK = intKindOfName(d.asType);
+		if (dstK == TypeKind.Unknown) dstK = reprKind(node.nodeType);
 		if (dstK == TypeKind.Unknown || d.asExpr == null) return node;
-		const srcT = d.asExpr.nodeType;
-		if (srcT == null) return node;
-		if (!is64Kind(dstK) && !is64Type(srcT)) return node;
-		return bigConvert(d.asExpr, srcT.kind, dstK, node.location);
+		const srcK = reprKind(d.asExpr.nodeType);
+		if (srcK == TypeKind.Unknown) return node;
+		if (!is64Kind(dstK) && !is64Kind(srcK)) return node;
+		return bigConvert(d.asExpr, srcK, dstK, node.location);
 	}
 	if (node.kind == NodeKind.BinaryExpr) return binaryAsBigInt(node, ctx);
 	if (node.kind == NodeKind.UnaryExpr) return unaryAsBigInt(node);
@@ -81,14 +86,14 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 // ===== Literals =====
 
 function literalAsBigInt(node: Node): Node {
-	const t = node.nodeType;
-	if (!is64Type(t)) return node;
+	const k = reprKind(node.nodeType);
+	if (!is64Kind(k)) return node;
 	const d = node.data as NumberLiteralData;
 	if (d.isFloat) return node;
-	const text = t.kind == TypeKind.Uint64
+	const text = k == TypeKind.Uint64
 		? uint64ToDecimal(d.intVal as uint64)
 		: int64ToDecimal(d.intVal);
-	return bigLit(text + "n", t.kind, node.location);
+	return bigLit(text + "n", k, node.location);
 }
 
 function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
@@ -175,8 +180,9 @@ function binaryAsBigInt(node: Node, ctx: TransformContext): Node {
 		return node;
 	}
 	if (isShiftOp(d.operator)) {
-		if (leftT == null || !is64Kind(leftT.kind)) return node;
-		return shiftAsBigInt(node, leftT);
+		const leftRepr = peelToRepr(leftT);
+		if (leftRepr == null || !is64Kind(leftRepr.kind)) return node;
+		return shiftAsBigInt(node, leftRepr);
 	}
 	// Float-typed result with a 64-bit operand: C promotes the integer to double.
 	if (isFloatLikeType(node.nodeType)) {
@@ -187,7 +193,7 @@ function binaryAsBigInt(node: Node, ctx: TransformContext): Node {
 	if (!is64Type(node.nodeType)) return node;
 	if (is64Type(leftT) && isNarrowIntType(rightT)) d.right = bigIntOf(d.right, node.location);
 	if (is64Type(rightT) && isNarrowIntType(leftT)) d.left = bigIntOf(d.left, node.location);
-	if (node.nodeType.kind == TypeKind.Uint64 && wrapsOnUint64(d.operator)) {
+	if (reprKind(node.nodeType) == TypeKind.Uint64 && wrapsOnUint64(d.operator)) {
 		return asTyped(asN(true, 64, node, node.location), TypeKind.Uint64);
 	}
 	return node;
@@ -256,8 +262,7 @@ function assignAsBigInt(node: Node, ctx: TransformContext): Node {
 }
 
 function unaryAsBigInt(node: Node): Node {
-	const t = node.nodeType;
-	if (t == null || t.kind != TypeKind.Uint64) return node;
+	if (reprKind(node.nodeType) != TypeKind.Uint64) return node;
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
 	return asTyped(asN(true, 64, node, node.location), TypeKind.Uint64);

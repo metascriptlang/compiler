@@ -7,7 +7,7 @@
 // get wrapped with a runtime range check call.
 
 import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
-import { integerRank, isIntegerType, distinctInstanceRepr } from "../../checker/types";
+import { integerRank, isIntegerType, peelToRepr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
@@ -104,14 +104,6 @@ function isUnsignedKind(kind: TypeKind): boolean {
 
 function isUnsignedName(typeName: string): boolean {
 	return typeName == "uint8" || typeName == "uint16" || typeName == "uint32";
-}
-
-function peelToRepr(t: Type | null): Type | null {
-	if (t == null) return null;
-	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
-	const repr = distinctInstanceRepr(t);
-	if (repr != null) return peelToRepr(repr);
-	return t;
 }
 
 function destCovers(src: Type | null, dest: Type): boolean {
