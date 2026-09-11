@@ -156,3 +156,4 @@ import "./bug136PrefixUpdateOperand";
 import "./bug138ExplicitTypeArgSeed";
 import "./bug139ArrayElementInvariance";
 import "./bug140GenericLiteralOptional";
+import "./bug141DistinctFnCallee";

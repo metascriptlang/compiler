@@ -55,3 +55,4 @@ import "./userDestructor";
 import "./typeIdentityExact";
 import "./unknownKindReaders";
 import "./genericLiteralFit";
+import "./distinctFnAlias";
