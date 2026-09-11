@@ -278,13 +278,24 @@ export function isBitwiseAllowed(t: Type | null): boolean {
 }
 
 
+function reportOrdinalEnumMix(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
+	if (op != "|" && op != "&" && op != "^") return false;
+	if (leftType == null || rightType == null) return false;
+	if (leftType.kind != TypeKind.Enum || rightType.kind != TypeKind.Enum) return false;
+	if (!isOrdinalEnum(leftType) && !isOrdinalEnum(rightType)) return false;
+	if (leftType.typeName == "" || rightType.typeName == "") return false;
+	if (leftType.typeName == rightType.typeName) return false;
+	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
+	return true;
+}
+
 // A BitSet combines only with its own element enum or an identical BitSet;
 // anything else is a silently wrong mask, so it is rejected here rather than
 // falling through to the integer rule.
 function reportBitSetMismatch(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
 	const leftElem = bitSetElemType(leftType);
 	const rightElem = bitSetElemType(rightType);
-	if (leftElem == null && rightElem == null) return false;
+	if (leftElem == null && rightElem == null) return reportOrdinalEnumMix(ctx, op, leftType, rightType, node);
 	const sizedElem = leftElem != null ? leftElem : rightElem;
 	if (sizedElem != null && sizedElem.typeNames.length > BITSET_MAX_MEMBERS) {
 		addError(ctx, "BitSet holds at most " + BITSET_MAX_MEMBERS.toString() + " members; enum '" + sizedElem.typeName + "' has " + sizedElem.typeNames.length.toString(), node.location.line, node.location.column);

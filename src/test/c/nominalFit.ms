@@ -3,6 +3,8 @@ import { compileToC } from "../helpers";
 const PRELUDE = `
 enum Flag { A, B, C }
 enum Kind { X, Y }
+enum Mask { P = 1, Q = 2 }
+enum Other { R = 4, S = 8 }
 type Meters = distinct int32;
 type Feet = distinct int32;
 function opaqueI32(x: int32): int32 { return x; }
@@ -50,4 +52,28 @@ test "an explicit distinct cast flows into a distinct slot" {
 
 test "an enum value flows into an int32 slot" {
 	assert compiles("function f(k: Kind): void { const n: int32 = k; }");
+}
+
+test "members of different ordinal enums do not combine" {
+	assert !compiles("const n = Flag.A | Kind.X;");
+	assert !compiles("const n = Flag.A & Kind.X;");
+	assert !compiles("const n = Flag.A ^ Kind.X;");
+}
+
+test "an ordinal enum member does not combine with another enum's hand-numbered member" {
+	assert !compiles("const n = Flag.A | Mask.P;");
+}
+
+test "members of the same ordinal enum combine" {
+	assert compiles("const n = Flag.A | Flag.B;");
+}
+
+test "an ordinal enum member combines with an integer" {
+	assert compiles("const n = Flag.A | 4;");
+	assert compiles("const n = Flag.B << 2;");
+}
+
+test "hand-numbered members keep the integer rule across enums" {
+	assert compiles("const n = Mask.P | Other.R;");
+	assert compiles("const n = Mask.P | Mask.Q;");
 }
