@@ -23,6 +23,7 @@ import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
 import { isAssignable } from "./compat";
 import { widensToBase } from "./fit";
+import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
 import { mapChildren } from "../transform/walker";
@@ -157,9 +158,16 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 		return true;
 	}
 	const genNames = extractGenericNames(fd.fnFlags);
+	if (!checkExplicitTypeArgArity(ctx, callNode, genNames, sym.name)) return false;
 	const boundNames: string[] = [];
 	const boundTypes: Type[] = [];
 	const boundFrom: int32[] = [];
+	const explicit = bindFromExplicitTypeArgs(callNode, genNames, ctx);
+	for (let ei = 0; ei < explicit.names.length; ei += 1) {
+		boundNames.push(explicit.names[ei]);
+		boundTypes.push(explicit.types[ei]);
+		boundFrom.push(-1);
+	}
 	for (let i: int32 = 0; i < args.length; i++) {
 		const declared = symType.typeChildren[i + offset];
 		const argT = args[i].nodeType;
@@ -172,11 +180,12 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 				boundTypes.push(argT);
 				boundFrom.push(i);
 			} else if (!isAssignable(argT, boundTypes[bidx])) {
-				if (widensToBase(ctx, boundTypes[bidx], argT)) {
+				if (boundFrom[bidx] >= 0 && widensToBase(ctx, boundTypes[bidx], argT)) {
 					boundTypes[bidx] = argT;
 					continue;
 				}
-				addError(ctx, `Argument type mismatch in '${sym.name}' arg ${i}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(boundTypes[bidx])} — '${dn}' was bound by argument ${boundFrom[bidx]}`,
+				const origin = boundFrom[bidx] >= 0 ? ` — '${dn}' was bound by argument ${boundFrom[bidx]}` : "";
+				addError(ctx, `Argument type mismatch in '${sym.name}' arg ${i}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
 					args[i].location.line, args[i].location.column);
 				return false;
 			}
