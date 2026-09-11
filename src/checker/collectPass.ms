@@ -247,23 +247,6 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	} else {
 		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 	}
-	// REPROMISE T2 Stage C: @awaitable / @affineAwaitable on a class, interface,
-	// struct, or type alias registers the name in the awaitable registry. Every
-	// subsequent GenericInstance of that name will get the flag bits propagated
-	// onto its typeFlags via createGenericInstance, and isAwaitable() will
-	// recognize it via the registry.
-	// Restrict to type-like declarations — @awaitable on a function or variable
-	// makes no sense and would silently pollute the registry.
-	if (info.isAwaitableAnnotated) {
-		const innerKind = dd.decoratedNode.kind;
-		if (innerKind == NodeKind.ClassDecl || innerKind == NodeKind.InterfaceDecl
-			|| innerKind == NodeKind.StructDecl || innerKind == NodeKind.TypeAliasDecl) {
-			// registerAwaitableType removed during parallel/concurrency refactor
-		} else {
-			addWarning(ctx, "@awaitable / @affineAwaitable is only valid on class, interface, struct, or type alias declarations",
-				node.location.line, node.location.column);
-		}
-	}
 }
 
 // ===== Define + Error Helper =====

@@ -34,9 +34,9 @@ function rebaseLocations(node: Node, loc: SourceLocation): void {
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "runtime", "builtin", "cImport",
+	"comptime", "builtin", "cImport",
 ];
-const intrinsicDecorators: string[] = ["pure", "nonisolated", "awaitable", "affineAwaitable"];
+const intrinsicDecorators: string[] = ["nonisolated"];
 const applyFnName = "__decoratorApply";
 const shapeVoid: int32 = 0;
 const shapeNode: int32 = 1;
@@ -741,7 +741,7 @@ registerDecoratorDefers(decoratorRewritesStmt);
 registerApplyDecoratedStmt(applyDecoratedStmt);
 
 test "member wrappers with intrinsic decorators survive the apply pass" {
-	const pr = parseSource("class Calc {\n\t@pure loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
+	const pr = parseSource("class Calc {\n\t@nonisolated loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
 	assert pr.ok;
 	const ctx = createContext();
 	applyDecorators(ctx, pr.value);

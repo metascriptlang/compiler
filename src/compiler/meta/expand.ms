@@ -2163,7 +2163,6 @@ test "isBuiltinDirective recognizes well-known names" {
 	assert !isBuiltinDirective("target");
 	assert isBuiltinDirective("comptime");
 	assert !isBuiltinDirective("answer");
-	assert !isBuiltinDirective("derive");
 }
 
 // Phase D regression tests — NodeKind/DeclKind preprocessing
@@ -2399,9 +2398,9 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("derive", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("derive", []);
-	const inv = createNode(NodeKind.MacroInvocation, { macroName: "derive", macroArgs: [], macroHasParens: false }, synthToken(loc));
+	ctx.macroBodyRegistry.set("myDeco", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
+	ctx.macroParamsRegistry.set("myDeco", []);
+	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc,
 	}, synthToken(loc));

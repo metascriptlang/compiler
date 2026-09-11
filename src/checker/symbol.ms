@@ -82,7 +82,6 @@ export enum SymbolFlag {
 	Exported = 2,       // symbol is exported
 	Mutable = 4,        // let/var/mutable
 	Forward = 8,        // forward declaration (body not yet seen)
-	NoSideEffect = 16,  // @pure — no side effects
 	Global = 32,        // module-level variable
 	ImportC = 64,       // extern declaration (extern ... from)
 	CompileTime = 128,  // @comptime

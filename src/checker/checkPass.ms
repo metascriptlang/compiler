@@ -889,11 +889,6 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		sym.symbolType.typeReturn = createPromise(inner);
 	}
 
-	// @pure effect check: warn on impure calls inside pure functions
-	if (sym.builtinKind == "pure" && d.fnBody != null) {
-		checkPurityViolations(ctx, d.fnBody);
-	}
-
 	ctx.inferredReturn = savedReturn;
 	ctx.inferredReturnStmts = savedReturnStmts;
 	sym.state = SymbolState.Checked;
@@ -1114,72 +1109,6 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 // `checkNarrowedBranch`, `invalidateFacts`, `factReferencesVar` — all
 // gone. The `checkNarrowedBranch` callers (checkIfStmt, checkBlock
 // guard-clause) now call `checkStmt` directly and rely on the flow graph.
-
-// ===== Effect System (@pure) =====
-// Walk function body looking for impure operations: calls to non-pure functions.
-
-function checkPurityViolations(ctx: CheckerContext, body: Node): void {
-	if (body == null) return;
-	if (body.kind == NodeKind.BlockStmt) {
-		const bd = body.data as BlockStmtData;
-		let i = 0;
-		while (i < bd.statements.length) {
-			checkPurityViolations(ctx, bd.statements[i]);
-			i = i + 1;
-		}
-		return;
-	}
-	if (body.kind == NodeKind.ExprStmt) {
-		const ed = body.data as ExprStmtData;
-		checkPurityViolations(ctx, ed.expr);
-		return;
-	}
-	if (body.kind == NodeKind.ReturnStmt) {
-		const rd = body.data as ReturnStmtData;
-		if (rd.argument != null) checkPurityViolations(ctx, rd.argument);
-		return;
-	}
-	if (body.kind == NodeKind.IfStmt) {
-		const id = body.data as IfStmtData;
-		checkPurityViolations(ctx, id.condition);
-		checkPurityViolations(ctx, id.consequent);
-		if (id.alternate != null) checkPurityViolations(ctx, id.alternate);
-		return;
-	}
-	if (body.kind == NodeKind.VariableDecl) {
-		const vd = body.data as VariableDeclData;
-		if (vd.initializer != null) checkPurityViolations(ctx, vd.initializer);
-		return;
-	}
-	if (body.kind == NodeKind.CallExpr) {
-		const cd = body.data as CallExprData;
-		// Check if callee is a known pure function
-		if (cd.callee.kind == NodeKind.Identifier) {
-			const callId = cd.callee.data as IdentifierData;
-			const calleeSym = lookupSymbol(ctx.table, callId.name);
-			if (calleeSym != null && calleeSym.builtinKind != "pure") {
-				addError(ctx, "@pure function calls impure function '" + callId.name + "'", body.location.line, body.location.column);
-			}
-		} else if (cd.callee.kind == NodeKind.MemberExpr) {
-			// member calls (e.g. console.log) are impure by default
-			const me = cd.callee.data as MemberExprData;
-			addError(ctx, "@pure function calls impure method '" + me.property + "'", body.location.line, body.location.column);
-		}
-		// Also check arguments for nested impure calls
-		let j = 0;
-		while (j < cd.arguments.length) {
-			checkPurityViolations(ctx, cd.arguments[j]);
-			j = j + 1;
-		}
-		return;
-	}
-	if (body.kind == NodeKind.BinaryExpr) {
-		const bd = body.data as BinaryExprData;
-		checkPurityViolations(ctx, bd.left);
-		checkPurityViolations(ctx, bd.right);
-		return;
-	}
-}
 
 // Check if a block/statement always exits (return, throw, break, continue, unreachable)
 function isDefiniteExit(node: Node): boolean {
@@ -3439,37 +3368,6 @@ test "guard clause narrows after throw" { assert checkOk("function f(x: string):
 test "logical AND null check" {
 	// x !== null && x > 0 → x is non-null in consequent
 	assert checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }");
-}
-
-test "pure function with pure ops passes" { assert checkOk("@pure function add(a: number, b: number): number { return a + b; }"); }
-
-test "pure function calling impure warns" {
-	const ctx = checkSource("function impure(): void {} @pure function bad(): void { impure(); }");
-	assert hasErrors(ctx);
-}
-
-test "pure calling pure is ok" { assert checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }"); }
-
-// ----- REPROMISE T2 Stage C: @awaitable / @affineAwaitable end-to-end -----
-
-test "@awaitable class parses and type-checks" {
-	assert checkOk("@awaitable class Task<T> { value: T; }");
-}
-
-test "@affineAwaitable class parses and type-checks" {
-	assert checkOk("@affineAwaitable class LocalFlow<T> { value: T; }");
-}
-
-test "@awaitable class used as parameter type" {
-	// The @awaitable annotation flows through collectPass → registry →
-	// createGenericInstance without producing checker errors.
-	assert checkOk("@awaitable class Task<T> { value: T; } function takeTask(t: Task<number>): number { return 42; }");
-}
-
-test "@awaitable on function emits warning but compiles" {
-	// @awaitable is only valid on type declarations. On a function it emits a
-	// warning (not an error) and does NOT register the function name as awaitable.
-	assert checkOk("@awaitable function foo(): number { return 1; }");
 }
 
 test "type alias resolves to type" {

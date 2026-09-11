@@ -19,5 +19,5 @@ test "fmt: for-in statement preserved" {
 }
 
 test "fmt: macro invocation as decorator preserved" {
-	assert assertFmtPreservesAst("@derive class Foo { x: number = 1; }");
+	assert assertFmtPreservesAst("@sealed class Foo { x: number = 1; }");
 }
