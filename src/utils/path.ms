@@ -1,7 +1,7 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
-import { argv, cwd, env } from "std/process";
-import { exists } from "std/fs";
+import { argv, cwd, env, platform } from "std/process";
+import { exists, realpath } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
 // Find the project root by walking up looking for build.ms.
@@ -87,7 +87,8 @@ export function resolveArgv0(arg0: string): string {
 // path spelling was the cause.
 function canonicalRootDir(dir: string): string {
 	if (dir == "" || dir == ".") return cwd();
-	return normalize(dir);
+	const physical = realpath(dir);
+	return normalize(physical != "" ? physical : dir);
 }
 
 // Find the compiler root directory (the one containing std/).
@@ -119,6 +120,11 @@ test "canonicalRootDir — separators are unified" {
 
 test "canonicalRootDir — the two spellings of one root agree" {
 	assert canonicalRootDir("C:/proj/compiler/.") == canonicalRootDir("C:\\proj\\compiler");
+}
+
+test "canonicalRootDir — a symlinked spelling resolves to the physical root" {
+	if (platform == "darwin") assert canonicalRootDir("/tmp") == "/private/tmp";
+	assert canonicalRootDir(".") == cwd();
 }
 
 test "canonicalRootDir — an already-clean root is unchanged" {

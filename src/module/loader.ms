@@ -25,12 +25,12 @@ import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { readFile, writeFile, ensureDir } from "std/fs";
+import { readFile, writeFile, ensureDir, realpath } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
-import { cwd, env } from "std/process";
+import { cwd, env, platform } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 // (utils/string imports removed — using native .slice)
 
@@ -570,13 +570,15 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 // error. Map-provider test paths like `/src/a.ms` already absolute → pass
 // through unchanged.
 export function canonicalModulePath(path: string): string {
-	// Normalize regardless of absolute/relative: a module's identity must collapse
-	// `..`/`.` segments so the same file reached via different import spellings
-	// (e.g. `crypto/index` vs `crypto/tls/../index`) maps to ONE module — otherwise
-	// it loads twice under two identities, emitting duplicate symbols whose mangled
-	// names diverge by path → undefined-symbol link errors.
-	if (isAbsolute(path)) return normalize(path);
-	return normalize(join(cwd(), path));
+	const spelled = isAbsolute(path) ? normalize(path) : normalize(join(cwd(), path));
+	const physical = realpath(spelled);
+	return physical != "" ? normalize(physical) : spelled;
+}
+
+test "canonicalModulePath — two spellings of one directory share an identity" {
+	if (platform == "darwin") assert canonicalModulePath("/tmp") == canonicalModulePath("/private/tmp");
+	assert canonicalModulePath("/src/a.ms") == "/src/a.ms";
+	assert canonicalModulePath("a/../b/c.ms") == normalize(join(cwd(), "b/c.ms"));
 }
 
 function canonicalizeStdModule(path: string, stdPath: string, provider: SourceProvider): string {
@@ -603,9 +605,12 @@ function canonicalizeStdModule(path: string, stdPath: string, provider: SourcePr
 }
 
 // useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
+export function moduleIdentity(path: string, config: ResolverConfig, provider: SourceProvider): string {
+	return canonicalizeStdModule(canonicalModulePath(path), config.stdPath, provider);
+}
+
 export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: int32): Result<boolean, string> {
-	path = canonicalModulePath(path);
-	path = canonicalizeStdModule(path, config.stdPath, provider);
+	path = moduleIdentity(path, config, provider);
 	// Already in graph — check if still loading (circular import)
 	if (hasModule(graph, path)) {
 		const existing = findModule(graph, path);
@@ -666,6 +671,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 			mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
+		resolved = moduleIdentity(resolved, config, provider);
 
 		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
 		mod.imports.push(entry);
@@ -697,6 +703,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 			mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
+		resolved = moduleIdentity(resolved, config, provider);
 
 		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
 		mod.imports.push(entry);
