@@ -11,6 +11,7 @@ extern function msFsReadFile(path: string): string from "msFsReadFile";
 extern function msFsLastErrno(): number from "msFsLastErrno";
 extern function msFsWriteFileMode(path: string, content: string, mode: string): number from "msFsWriteFileMode";
 extern function msFsExists(path: string): number from "msFsExists";
+extern function msFsRealPath(path: string): string from "msFsRealPath";
 extern function msFsIsFile(path: string): number from "msFsIsFile";
 extern function msFsIsDir(path: string): number from "msFsIsDir";
 extern function msFsIsExecutable(path: string): number from "msFsIsExecutable";
@@ -98,6 +99,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 }
 
 export function exists(path: string): boolean { return msFsExists(path) == 1; }
+export function realpath(path: string): string { return msFsRealPath(path); }
 export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
 export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }

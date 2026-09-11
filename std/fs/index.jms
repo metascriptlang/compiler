@@ -10,7 +10,7 @@
 
 @import("node:fs", {
 	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, accessSync,
-	mkdirSync, rmdirSync, unlinkSync, renameSync, readdirSync, chmodSync,
+	mkdirSync, rmdirSync, unlinkSync, renameSync, readdirSync, chmodSync, realpathSync,
 });
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
@@ -19,6 +19,7 @@ extern function readFileSync(path: string, encoding: string): string;
 extern function writeFileSync(path: string, data: string): void;
 extern function appendFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
+extern function realpathSync(path: string): string;
 extern function statSync(path: string): Stats;
 extern function accessSync(path: string, mode: number): void;
 extern function mkdirSync(path: string): void;
@@ -172,6 +173,10 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 // stat() failure is `false` / -1, the same as the C runtime's stat() path.
 
 export function exists(path: string): boolean { return existsSync(path); }
+
+export function realpath(path: string): string {
+	try { return realpathSync(path); } catch (e) { return ""; }
+}
 
 export function isFile(path: string): boolean {
 	try { return statSync(path).isFile(); } catch (e) { return false; }

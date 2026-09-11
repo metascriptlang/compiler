@@ -2,7 +2,7 @@
 
 import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
-	msFsIsExecutable,
+	msFsIsExecutable, msFsRealPath,
 	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
 	msFsChmod, msFsReadDirEntries,
 } from "runtime/fs/header.h";
@@ -103,6 +103,7 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 // ===== Predicates (stay as boolean — not fallible) =====
 
 export function exists(path: string): boolean { return msFsExists(path) == 1; }
+export function realpath(path: string): string { return msFsRealPath(path); }
 export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
 export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }

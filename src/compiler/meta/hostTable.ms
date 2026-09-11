@@ -52,7 +52,7 @@ import {
 import { isNodeWireMetaField } from "./wire";
 
 import {
-	exists, isFile, isDir, isExecutable, fileSize,
+	exists, isFile, isDir, isExecutable, fileSize, realpath,
 	readFile, writeFile, appendFile, chmod,
 	mkdir, rmdir, remove, rename, readDir,
 } from "std/fs";
@@ -99,6 +99,10 @@ function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
 
 function _bridgeMsFsExists(args: RaiserValue[]): RaiserValue {
 	return boxInt(exists(unboxString(args[0])) ? 1 : 0);
+}
+
+function _bridgeMsFsRealPath(args: RaiserValue[]): RaiserValue {
+	return boxString(realpath(unboxString(args[0])));
 }
 
 function _bridgeMsFsIsFile(args: RaiserValue[]): RaiserValue {
@@ -716,6 +720,7 @@ export function ensureHostTableLoaded(): void {
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists);
+	registerHostFn("msFsRealPath",       _bridgeMsFsRealPath);
 	registerHostFn("msFsIsFile",         _bridgeMsFsIsFile);
 	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir);
 	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable);
@@ -811,6 +816,7 @@ test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	assert lookupHostFn("msFsExists") != null;
+	assert lookupHostFn("msFsRealPath") != null;
 	assert lookupHostFn("msFsIsFile") != null;
 	assert lookupHostFn("msFsIsDir") != null;
 }
@@ -830,6 +836,26 @@ test "ensureHostTableLoaded is idempotent" {
 	// We don't assert the count strictly — registerHostFn deduplicates on
 	// re-registration anyway. Just confirm initialized flag is set.
 	assert isHostRegistryInitialized();
+}
+
+test "bridgeMsFsRealPath resolves the working directory to itself" {
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	const fn = lookupHostFn("msFsRealPath");
+	assert fn != null;
+	const result = fn([raiserString(".")]);
+	assert result.kind == RaiserValueKind.String;
+	assert result.strVal == cwd();
+}
+
+test "bridgeMsFsRealPath returns empty for a missing path" {
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	const fn = lookupHostFn("msFsRealPath");
+	assert fn != null;
+	const result = fn([raiserString("/tmp/__nope_xyz__")]);
+	assert result.kind == RaiserValueKind.String;
+	assert result.strVal == "";
 }
 
 test "bridgeMsFsExists returns 1 for present file" {
