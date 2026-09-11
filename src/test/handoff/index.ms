@@ -56,3 +56,4 @@ import "./typeIdentityExact";
 import "./unknownKindReaders";
 import "./genericLiteralFit";
 import "./distinctFnAlias";
+import "./genericAliasBody";

@@ -157,3 +157,4 @@ import "./bug138ExplicitTypeArgSeed";
 import "./bug139ArrayElementInvariance";
 import "./bug140GenericLiteralOptional";
 import "./bug141DistinctFnCallee";
+import "./bug142GenericAliasBody";
