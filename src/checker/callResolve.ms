@@ -1349,53 +1349,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 			}
 		}
-		// Explicit type arg validation (TS-aligned). When the user wrote
-		// `f<int32>(null)`, the explicit `<int32>` binds T=int32. The standard
-		// arg-vs-param check at line ~1845 skips GenericParam to avoid
-		// false-positives in nested generic calls (see ec38c20). Here we
-		// already KNOW T's binding from the explicit type arg, so we can
-		// safely strict-check args against the bound param types — matching
-		// TS error TS2345 "Argument of type 'X' is not assignable to parameter
-		// of type 'Y'".
-		if (calleeType != null && calleeType.kind == TypeKind.Function
-			&& hasGenericParams(calleeType)
-			&& node.resolvedSym != null
-			&& node.resolvedSym.declNode != null
-			&& node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
-			const genericParamNames = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
-			const explicitBindings = bindFromExplicitTypeArgs(node, genericParamNames, ctx);
-			if (explicitBindings.names.length > 0) {
-				const boundFnType = instantiateGeneric(calleeType, explicitBindings.names, explicitBindings.types);
-				if (boundFnType != null && boundFnType.kind == TypeKind.Function) {
-					// Reference parity (tyVarargs): trailing args check against the
-					// element type of the rest param, not the Varargs wrapper itself.
-					const bLastIdx = boundFnType.typeChildren.length - 1;
-					const bLast = bLastIdx >= 0 ? boundFnType.typeChildren[bLastIdx] : null;
-					const bHasRest = bLast != null && bLast.kind == TypeKind.Varargs;
-					const bRestArr = bHasRest ? unwrapRef(unwrapVarargs(bLast)) : null;
-					const bRestElemT = bRestArr != null ? getElementType(bRestArr) : null;
-					const bRestElem = bRestElemT != null && bRestElemT.kind != TypeKind.Inferred ? bRestElemT : null;
-					for (let pi = 0; pi < argTypes.length; pi += 1) {
-						const argT = argTypes[pi];
-						let paramT: Type = null as unknown as Type;
-						if (bHasRest && pi >= bLastIdx) {
-							if (bRestElem != null) { paramT = bRestElem; }
-						} else if (pi < boundFnType.typeChildren.length) {
-							paramT = boundFnType.typeChildren[pi];
-						} else {
-							continue;
-						}
-						if (argT == null || paramT == null) continue;
-						if (isUnresolvedType(argT) || argT.kind == TypeKind.Error) continue;
-						if (paramT.kind == TypeKind.GenericParam || isUnresolvedType(paramT)) continue;
-						if (!isAssignable(argT, paramT)) {
-							const calleeName = getCalleeName(d.callee);
-							addError(ctx, `Argument type mismatch in '${calleeName}' arg ${pi}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(paramT)}${explainStructuralPrefix(argT, paramT)}`, d.arguments[pi].location.line, d.arguments[pi].location.column);
-						}
-					}
-				}
-			}
-		}
 		// On-demand generic instantiation for direct calls (transitive
 		// instantiation). Handles both regular FunctionDecl and STATIC class
 		// MethodDecl — non-static methods on generic classes go through the
@@ -1948,19 +1901,34 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 	}
 
-	for (let ai = 0; ai < reconcileLimit; ai += 1) {
-		const argT = argTypes[ai];
+	const lastFormalIdx = calleeType.typeChildren.length - 1;
+	const lastFormal = lastFormalIdx >= 0 ? calleeType.typeChildren[lastFormalIdx] : null;
+	const restFormal = lastFormal != null && lastFormal.kind == TypeKind.Varargs ? lastFormal : null;
+	for (let ai = 0; ai < cd.arguments.length; ai += 1) {
+		const argT = ai < argTypes.length ? argTypes[ai] : null;
 		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error) continue;
 		if (bindingConflictSkipArg(cd.arguments[ai])) continue;
 		let reported = false;
 		for (const c of conflicted) { if (c == ai) reported = true; }
 		if (reported) continue;
-		if (!hasGenericParams(calleeType.typeChildren[ai])) continue;
-		const formalT = applySubstitutions(calleeType.typeChildren[ai], eb);
+		let rawFormal: Type = null as unknown as Type;
+		if (restFormal != null && ai >= lastFormalIdx) {
+			rawFormal = restFormal;
+		} else if (ai < calleeType.typeChildren.length) {
+			rawFormal = calleeType.typeChildren[ai];
+		}
+		if (rawFormal == null || !hasGenericParams(rawFormal)) continue;
+		let formalT: Type = applySubstitutions(rawFormal, eb);
+		if (formalT != null && formalT.kind == TypeKind.Varargs) {
+			const restArr = unwrapRef(unwrapVarargs(formalT));
+			const restElem = restArr != null ? getElementType(restArr) : null;
+			if (restElem == null || restElem.kind == TypeKind.Inferred) continue;
+			formalT = restElem;
+		}
 		if (formalT == null || hasGenericParams(formalT) || isUnresolvedType(formalT)) continue;
 		if (isAssignable(argT, formalT)) continue;
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
-			+ ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(formalT),
+			+ ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(argT, formalT),
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
