@@ -46,3 +46,4 @@ import "./cases/assertEscape";
 import "./cases/externFunction";
 import "./cases/tryExprAtom";
 import "./cases/methodDefaults";
+import "./cases/headerComment";
