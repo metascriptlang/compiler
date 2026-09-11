@@ -93,5 +93,5 @@ function main(): void {
 test "bug054: getTypeImpl on an unresolvable name is a compile error" {
 	const c = compileToCWithStd(srcUnknownType);
 	assert !c.ok;
-	assert c.error.indexOf("cannot resolve type 'NoSuchTypeAnywhere'", 0) >= 0;
+	assert c.error.indexOf("Undefined variable 'NoSuchTypeAnywhere'", 0) >= 0;
 }
