@@ -12,6 +12,8 @@
 type Setter142<T> = (v: T) => void;
 type Box142<T> = T[];
 type Pair142<T> = [T, T];
+type Phantom142<T> = int32;
+type Same142<T> = T;
 interface Cell142<T> { set: Setter142<T>; }
 
 function mk142<T>(init: T): [() => T, Setter142<T>] {
@@ -60,4 +62,13 @@ test "a generic alias over an array type returns from a generic function" {
 test "a generic alias over a tuple type indexes to the element" {
 	const p: Pair142<int32> = pair142<int32>(4);
 	assert p[0] + p[1] == 8;
+}
+
+test "a generic alias over a primitive stringifies as its value and adds as a number" {
+	const x: Phantom142<boolean> = 3;
+	assert x.toString() == "3";
+	assert (x + 1).toString() == "4";
+	const y: Same142<string> = "hi";
+	assert y.length == 2;
+	assert y.toString() == "hi";
 }
