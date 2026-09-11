@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -254,6 +254,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (leftType != null) {
 		const leftPeeled = peelThrough(leftType, PEEL_ALIAS);
 		if (leftPeeled != null) leftType = leftPeeled;
+		if (leftType != null) leftType = peelTransparentInstance(leftType);
 	}
 	const loc = node.location;
 
@@ -343,7 +344,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// wrapped payload also gets the absent-vs-zero case right, which a payload-only
 	// comparison silently does not.
 	if (isNullEqOp && !hasNullLeft && !hasNullRight) {
-		const rightOperandType = resolveType(ctx, d.right);
+		const rightOperandRaw = resolveType(ctx, d.right);
+		const rightOperandType = rightOperandRaw != null ? peelTransparentInstance(rightOperandRaw) : null;
 		const leftIsMaybe = leftType != null && isMaybeType(leftType);
 		const rightIsMaybe = rightOperandType != null && isMaybeType(rightOperandType);
 		const carrierType = leftIsMaybe ? leftType : rightOperandType;

@@ -22,7 +22,7 @@
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
 import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, TypeKind } from "../../ast/node";
-import { isNumeric, isStringLike, isWideInteger } from "../../checker/types";
+import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeHiddenAddr } from "../util";
@@ -203,7 +203,7 @@ function asAsciiCharCode(node: Node): int32 {
 function isStringTyped(node: Node): boolean {
 	if (node == null) return false;
 	if (node.nodeType == null) return false;
-	return isStringLike(node.nodeType);
+	return isStringLike(peelTransparentInstance(node.nodeType));
 }
 
 // Check if two nodes refer to the same lvalue path (syntactic equality).

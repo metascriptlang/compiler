@@ -702,8 +702,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
 			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
-			let effLeft = leftType;
-			let effRight = rightType;
+			let effLeft = leftType != null ? peelTransparentInstance(leftType) : null;
+			let effRight = rightType != null ? peelTransparentInstance(rightType) : null;
 			if (isIntegerType(leftType) && rightType != null
 				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType!, false)) {
 				effRight = leftType;

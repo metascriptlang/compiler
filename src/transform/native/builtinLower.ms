@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -77,7 +77,7 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 		const me2 = cd.callee.data as MemberExprData;
 		if (me2.property == "toString") {
 			if (me2.object.nodeType != null) {
-				return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
+				return lowerToString(node, me2.object, peelTransparentInstance(me2.object.nodeType), loc, ctx);
 			}
 			// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
 			if (me2.object.kind == NodeKind.NumberLiteral) {
@@ -263,7 +263,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	// String(x) → x.toString() → leverages existing .toString() infrastructure
 	if (builtinKind == "ToString" && cd.arguments.length == 1) {
 		const arg = cd.arguments[0];
-		const argType = arg.nodeType;
+		const argType = arg.nodeType != null ? peelTransparentInstance(arg.nodeType) : null;
 		// String identity: String("hello") → "hello"
 		if (argType != null && argType.kind == TypeKind.String) return arg;
 		// Delegate to .toString() which handles number, boolean, enum, struct, array
