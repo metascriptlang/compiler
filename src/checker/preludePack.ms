@@ -31,7 +31,7 @@
 // entirely). Storage: ~/.metascript/cache/prelude/<key>.pk, marker-GC'd on
 // toolStamp change.
 
-import { Symbol, SymbolKind, SymbolState, Type, TypeKind, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId } from "./idents";
@@ -722,7 +722,7 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		const loc = n.location;
 		const tes = n.typeExprs != null ? idxs(n.typeExprs) : "-";
 		const pls = locsCsv(n.paramLocations);
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint32}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -737,7 +737,7 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 			for (const sf of s.staticFields) stf.push(idxSym(sf));
 		}
 		const dp = s.defaultParams != null ? idxs(s.defaultParams) : "-";
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.originalName)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.originalName)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}`);
 	}
 
 	if (ctx.extensionRegistry != null) {
@@ -1153,8 +1153,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			loc.endLine = f[6].parseInt() as int32;
 			loc.endColumn = f[7].parseInt() as int32;
 			const n = createNodeAt(kind, { nullPlaceholder: true } as NodeData, loc);
-			n.flags = f[3].parseInt() as int32;
+			n.flags = f[3].parseInt() as uint32 as BitSet<NodeFlag>;
 			n.typeArg = unescapeP(f[13]);
+			n.variantSlot = f[14].parseInt() as int32;
 			nodes.push(n);
 			nodeTypeRef.push(f[8].parseInt() as int32);
 			nodeSymRef.push(f[9].parseInt() as int32);
@@ -1162,7 +1163,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			nodeTesRaw.push(f[11]);
 			nodePlsRaw.push(f[12]);
 			const payloadFields: string[] = [];
-			let pi = 14;
+			let pi = 15;
 			while (pi < f.length) {
 				payloadFields.push(f[pi]);
 				pi = pi + 1;
@@ -1171,7 +1172,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		} else if (f[0] == "S") {
 			const s = makeSymbolState(unescapeP(f[13]), f[2].parseInt() as int32 as unknown as SymbolKind, null, false, SymbolState.Hollow);
 			s.state = f[3].parseInt() as int32 as unknown as SymbolState;
-			s.symFlags = f[4].parseInt() as int32;
+			s.symFlags = f[4].parseInt() as uint32 as BitSet<SymbolFlag>;
 			s.overloadIdx = f[5].parseInt() as int32;
 			s.mutatedParams = f[6].parseInt() as int32;
 			s.duVariantSlot = f[7].parseInt() as int32;
@@ -1351,7 +1352,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		const ctx = makeTestCtx();
 		const sym = makeSymbolState("pkTestFn", SymbolKind.Function, null, false, SymbolState.Hollow);
 		sym.state = SymbolState.Checked;
-		sym.symFlags = 2;
+		sym.symFlags = 2 as BitSet<SymbolFlag>;
 		sym.modulePath = "std/pk/test.ms";
 		const fnType = emptyType();
 		fnType.kind = TypeKind.Function;
@@ -1393,7 +1394,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert got != null;
 		assert got.symbolKind == SymbolKind.Function;
 		assert got.state == SymbolState.Checked;
-		assert got.symFlags == 2;
+		assert (got.symFlags as uint32) == 2;
 		assert got.modulePath == "std/pk/test.ms";
 		assert got.symbolType != null && got.symbolType.kind == TypeKind.Function;
 		assert got.symbolType.typeNames.length == 2;
@@ -1437,7 +1438,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const ctx = makeTestCtx();
 		const sym = makeSymbolState("pkKindFn", SymbolKind.Function, null, false, SymbolState.Hollow);
 		sym.state = SymbolState.Checked;
-		sym.symFlags = 3;
+		sym.symFlags = 3 as BitSet<SymbolFlag>;
 		const st = emptyType();
 		st.kind = TypeKind.Int32;
 		sym.symbolType = st;

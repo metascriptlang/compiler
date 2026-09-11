@@ -651,7 +651,7 @@ function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	}
 	// Don't enter nested function bodies or already-lifted closure pairs
 	if (isFuncBoundary(node)) return node;
-	if ((node.flags & NodeFlag.Closure) != 0) return node;
+	if (node.flags.has(NodeFlag.Closure)) return node;
 	mapChildren(node, (child: Node): Node => {
 		const rewritten = rewriteOuterRef(child, rewrite);
 		return rewritten == null ? child : rewritten;
@@ -887,7 +887,7 @@ function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 	wrapVals.push(ident);
 	wrapVals.push(makeNull(loc));
 	const pair = makeObjectLiteral(wrapKeys, wrapVals, loc);
-	pair.flags = pair.flags | NodeFlag.Closure;
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
 	return pair;
 }
 
@@ -966,7 +966,7 @@ function makeEnvVarAndClosurePair(envVarName: string, liftedName: string, envStr
 	envRef.nodeType = refEnvType;
 	closureValues.push(envRef);
 	const pair = makeObjectLiteral(closureKeys, closureValues, loc);
-	pair.flags = pair.flags | NodeFlag.Closure;
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
 	return { envDeclHoisted, envInitStmt, closurePair: pair };
 }
 
@@ -1207,7 +1207,7 @@ function makeClosurePairOnly(liftedName: string, envVarName: string, envStructTy
 	envRef.nodeType = createRef(envStructType);
 	closureValues.push(envRef);
 	const pair = makeObjectLiteral(closureKeys, closureValues, loc);
-	pair.flags = pair.flags | NodeFlag.Closure;
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
 	return pair;
 }
 

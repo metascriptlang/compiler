@@ -135,7 +135,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		let closure = slot.closure;
 		if (closure.kind == NodeKind.Identifier) {
 			const pair = makeObjectLiteral(["fn", "env"], [closure, makeNull(loc)], loc);
-			pair.flags = pair.flags | NodeFlag.Closure;
+			pair.flags = pair.flags.incl(NodeFlag.Closure);
 			pair.nodeType = closure.nodeType;
 			closure = pair;
 		}

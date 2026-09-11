@@ -613,7 +613,7 @@ export function isNrvoReturnType(retType: Type | null, funcType: Type | null): b
 // Function type and genClosureCall emits `void(*)(void)` casts.
 function closurePairFuncType(callee: Node): Type | null {
 	if (callee == null || callee.kind != NodeKind.ObjectLiteral) return null;
-	if ((callee.flags & NodeFlag.Closure) == 0) return null;
+	if (!callee.flags.has(NodeFlag.Closure)) return null;
 	const od = callee.data as ObjectLiteralData;
 	if (od.properties.length == 0) return null;
 	const fnProp = od.properties[0];

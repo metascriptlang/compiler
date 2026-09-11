@@ -768,7 +768,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 // ===== Walk: Find was-async functions and rewrite =====
 
 function isWasAsync(node: Node): boolean {
-	return (node.flags & NodeFlag.WasAsync) != 0;
+	return node.flags.has(NodeFlag.WasAsync);
 }
 
 // Extract Promise<T>'s inner type from a function's declared return type.

@@ -186,6 +186,7 @@ function decomposeExpr(
 		}, syntheticToken(loc));
 		if (expr.nodeType != null) newMember.nodeType = expr.nodeType;
 		newMember.flags = expr.flags;
+		newMember.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newMember.resolvedSym = expr.resolvedSym;
 		return captureValue(newMember, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
@@ -200,6 +201,7 @@ function decomposeExpr(
 		}, syntheticToken(loc));
 		if (expr.nodeType != null) newBinary.nodeType = expr.nodeType;
 		newBinary.flags = expr.flags;
+		newBinary.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newBinary.resolvedSym = expr.resolvedSym;
 		return captureValue(newBinary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
@@ -213,6 +215,7 @@ function decomposeExpr(
 		}, syntheticToken(loc));
 		if (expr.nodeType != null) newUnary.nodeType = expr.nodeType;
 		newUnary.flags = expr.flags;
+		newUnary.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newUnary.resolvedSym = expr.resolvedSym;
 		return captureValue(newUnary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
@@ -235,6 +238,7 @@ function decomposeExpr(
 		}, syntheticToken(loc));
 		if (expr.nodeType != null) newCall.nodeType = expr.nodeType;
 		newCall.flags = expr.flags;
+		newCall.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newCall.resolvedSym = expr.resolvedSym;
 		return captureValue(newCall, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}

@@ -396,7 +396,7 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
 	classType.sym = sym;
 	innerType.sym = sym;
-	if ((node.flags & NodeFlag.ExternC) != 0) {
+	if (node.flags.has(NodeFlag.ExternC)) {
 		setFlag(sym, SymbolFlag.ImportC);
 		sym.nativeName = d.className;
 	}
@@ -429,7 +429,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 	// Static → static extension (typeof ClassName). Instance → instance extension.
 	if (ctx.extensionRegistry != null) {
 		const classGenerics = getGenericDecl(d.className);
-		const isExternClass = (node.flags & NodeFlag.ExternC) != 0;
+		const isExternClass = node.flags.has(NodeFlag.ExternC);
 		for (let si = 0; si < d.classBody.length; si += 1) {
 			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
@@ -633,7 +633,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 
 function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, isRef: boolean): void {
 	const d = node.data as InterfaceDeclData;
-	const isExtern = (node.flags & NodeFlag.ExternC) != 0;
+	const isExtern = node.flags.has(NodeFlag.ExternC);
 	const innerType = createStruct(d.interfaceName, [], [], true);
 	// Extern interfaces stay as value types (C header defines the struct layout)
 	const symType = (isRef && !isExtern) ? createRef(innerType) : innerType;
@@ -661,7 +661,7 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
 	const enumSym = makeSymbol(d.enumName, SymbolKind.Enum, enumType, false);
 	enumType.sym = enumSym;
-	if ((node.flags & NodeFlag.ExternC) != 0) {
+	if (node.flags.has(NodeFlag.ExternC)) {
 		setFlag(enumSym, SymbolFlag.ImportC);
 		enumSym.nativeName = d.enumName;
 	}
@@ -725,7 +725,7 @@ export function collectMacro(ctx: CheckerContext, node: Node): void {
 	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
 	ctx.macroParamTypesRegistry.set(d.macroDeclName, d.macroDeclParamTypes);
 	ctx.macroDeclModuleRegistry.set(d.macroDeclName, ctx.modulePath);
-	if ((node.flags & NodeFlag.Converter) != 0) {
+	if (node.flags.has(NodeFlag.Converter)) {
 		registerConverter(ctx, d.macroDeclReturnType, d.macroDeclName, 0, node.location.line, node.location.column);
 	}
 }
@@ -864,7 +864,7 @@ export function importSymFromRegistry(
 	// Phase 5: carry the OverloadSig bit across module boundaries so
 	// findOverloadImpl can distinguish body-less sigs from the wide impl
 	// when scoring cross-module overload calls.
-	if ((exportInfo.primaryFlags & SymbolFlag.OverloadSig) != 0) {
+	if ((exportInfo.primaryFlags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
 		setFlag(sym, SymbolFlag.OverloadSig);
 	}
 	// Exported Variables are always module-level — locals can't be exported.
@@ -924,7 +924,7 @@ function propagateImportedOverloads(
 		}
 		if (exportInfo.headerPath != "") ovSym.headerPath = exportInfo.headerPath;
 		if (exportInfo.overloadFlags != null && ovIdx < exportInfo.overloadFlags.length
-				&& (exportInfo.overloadFlags[ovIdx] & SymbolFlag.OverloadSig) != 0) {
+				&& (exportInfo.overloadFlags[ovIdx] as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
 			setFlag(ovSym, SymbolFlag.OverloadSig);
 		}
 		if (exportInfo.overloadDeclNodes != null

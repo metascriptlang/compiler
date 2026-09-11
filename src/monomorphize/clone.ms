@@ -98,6 +98,7 @@ export function cloneNodeKeepSem(node: Node): Node {
 function copyNodeMeta(src: Node, dst: Node): Node {
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
+		dst.variantSlot = src.variantSlot;
 		dst.nodeType = src.nodeType;
 		dst.resolvedSym = src.resolvedSym;
 		dst.typeArg = src.typeArg;
@@ -114,7 +115,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// now has concrete HashMap<string,number> — never get re-resolved to their
 	// concrete instantiations. On-demand instantiation (callInstantiateGeneric)
 	// at checkExprPass.ms only fires during the re-check. This unlocks that.
-	dst.flags = src.flags & ~NodeFlag.Sem;
+	dst.flags = src.flags.excl(NodeFlag.Sem);
 	if (currentCloneMode == CloneMode.Mono) {
 		dst.nodeType = src.nodeType;
 		// Preserve explicit generic type args so they survive monomorphize cloning.
@@ -146,7 +147,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	if (src.resolvedSym != null && src.resolvedSym.symbolKind == SymbolKind.EnumMember) {
 		dst.resolvedSym = src.resolvedSym;
 		dst.nodeType = src.nodeType;
-	} else if (src.resolvedSym != null && (src.flags & NodeFlag.BoundSym) != 0) {
+	} else if (src.resolvedSym != null && src.flags.has(NodeFlag.BoundSym)) {
 		// bindSym: pre-bound symbol travels by reference; checker re-derives nodeType.
 		dst.resolvedSym = src.resolvedSym;
 	}

@@ -1,4 +1,5 @@
-import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 
@@ -75,68 +76,33 @@ export enum ScopeKind {
 }
 
 // ===== Symbol Flags (Standard reference implementation parity) =====
-// Bitfield for Symbol.symFlags — tracks declaration properties.
-export enum SymbolFlag {
-	None = 0,
-	Used = 1,           // symbol is referenced somewhere
-	Exported = 2,       // symbol is exported
-	Mutable = 4,        // let/var/mutable
-	Forward = 8,        // forward declaration (body not yet seen)
-	Global = 32,        // module-level variable
-	ImportC = 64,       // extern declaration (extern ... from)
-	CompileTime = 128,  // @comptime
-	GcSafe = 256,       // no GC-unsafe operations
-	WasForwarded = 512, // had forward decl, now has body
-	Static = 1024,      // static class member or static linkage
-	Sink = 2048,        // parameter takes ownership
-	Lent = 4096,        // parameter is a borrow (no RC)
-	NoReturn = 8192,    // function never returns (exit, abort, infinite loop)
-	Async = 16384,      // async function (return type is Promise<T>)
-	ParamMutated = 32768,  // parameter is mutated inside function body (blocks const-ptr promotion)
-	HasConstructor = 65536, // class has a ConstructorDecl → codegen calls ClassName_new()
-	NativeMethod = 131072, // method from extern class — don't set ExtCall, keep as native member call
-	GeneratedOp = 262144, // generated lifecycle hook (=destroy/=copy/=sink/=wasMoved) — skip DRC injection (reference parity: sfGeneratedOp)
-	Nonisolated = 524288, // @nonisolated — actor field/method readable from outside (Swift parity)
-	Consumed = 1048576, // PARALOCK Phase 1: affine-Promise binding (spawn-origin) has been awaited (affine consumption)
-	OverloadSig = 2097152, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
-	OverloadValidated = 4194304, // Tier 1: overload set already validated (return-type compatibility check)
-	SinkTemp = 8388608, // DRC sink-arg temp synthesized by passCopyToSink — always single-use by construction, always last-read
-	ComptimeNodeAlias = 16777216, // `const x = <jsx>` — x binds a compile-time Node, folded into the consuming macro; emits no runtime decl
-	Imported = 33554432, // symbol imported from another module's export registry (importer-side copy)
-	StaticLocal = 67108864, // `static` decl inside a body: carries Global (module storage) but is named per-site, since a body can hold several and a module may hold several bodies
-	ActorProxy = 134217728, // symbol is an actor-method proxy (actorLower): an UNPARKED call to it is a
-	                       // SEND-class handoff — plain-ref args transfer ownership into the message
-	AwaitHandle = 268435456, // awaitLower's `$fut` hoist temp: the initializer call is PARKED on
-	                         // (msWaitForReady below) — its args pass as borrows; the scope outlives the flight
-	Cursor = 536870912, // binding does not own its referent — DRC skips incref and destroy
-}
 
 // Flag helpers
 export function hasFlag(sym: Symbol, flag: SymbolFlag): boolean {
-	return (sym.symFlags & flag) != 0;
+	return sym.symFlags.has(flag);
 }
 
 export function setFlag(sym: Symbol, flag: SymbolFlag): void {
-	sym.symFlags = sym.symFlags | flag;
+	sym.symFlags = sym.symFlags.incl(flag);
 }
 
 export function isCursorSym(sym: Symbol | null): boolean {
-	return sym != null && (sym.symFlags & SymbolFlag.Cursor) != 0;
+	return sym != null && sym.symFlags.has(SymbolFlag.Cursor);
 }
 
 // Mark a symbol as used (referenced).
 // Also marks the enum type owner when an enum field is used.
 export function markUsed(sym: Symbol): void {
-	sym.symFlags = sym.symFlags | SymbolFlag.Used;
+	sym.symFlags = sym.symFlags.incl(SymbolFlag.Used);
 	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Enum && sym.symbolType.sym != null) {
-		sym.symbolType.sym.symFlags = sym.symbolType.sym.symFlags | SymbolFlag.Used;
+		sym.symbolType.sym.symFlags = sym.symbolType.sym.symFlags.incl(SymbolFlag.Used);
 	}
 }
 
 // PARALOCK Phase 1: mark an affine-Promise binding as consumed (awaited).
 // Also implies Used — a consumed binding has been referenced.
 export function markConsumed(sym: Symbol): void {
-	sym.symFlags = sym.symFlags | SymbolFlag.Consumed | SymbolFlag.Used;
+	sym.symFlags = sym.symFlags.incl(SymbolFlag.Consumed).incl(SymbolFlag.Used);
 }
 
 // ===== Scope =====
@@ -309,7 +275,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.nativeName = "";
 	sym.builtinKind = "";
 	sym.defaultParams = [];
-	sym.symFlags = mutable ? SymbolFlag.Mutable : SymbolFlag.None;
+	sym.symFlags = mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>);
 	sym.modulePath = "";
 	sym.originalName = "";
 	sym.headerPath = "";

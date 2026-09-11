@@ -72,7 +72,7 @@ function wrapFuncArgsAsThunks(node: Node): void {
 		const loc = arg.location;
 		const nullNode = makeNull(loc);
 		const thunk = makeObjectLiteral(["fn", "env"], [arg, nullNode], loc);
-		thunk.flags = thunk.flags | NodeFlag.Closure;
+		thunk.flags = thunk.flags.incl(NodeFlag.Closure);
 		// Set closure type from the function's own symbol type
 		if (argSym.symbolType != null) {
 			thunk.nodeType = argSym.symbolType;

@@ -272,7 +272,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
 				&& node.resolvedSym.declNode != null
 				&& node.resolvedSym.declNode.kind == NodeKind.VariableDecl
-				&& (node.resolvedSym.symFlags & SymbolFlag.Mutable) == 0) {
+				&& !node.resolvedSym.symFlags.has(SymbolFlag.Mutable)) {
 				const vd = node.resolvedSym.declNode.data as VariableDeclData;
 				if (vd.initializer != null) {
 					return compileExpr(s, vd.initializer);
@@ -286,7 +286,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			else if (node.resolvedSym.symbolKind != SymbolKind.Variable) why = `symbol kind is ${node.resolvedSym.symbolKind}`;
 			else if (node.resolvedSym.declNode == null) why = "symbol has no declaration node";
 			else if (node.resolvedSym.declNode.kind != NodeKind.VariableDecl) why = `declaration node is ${node.resolvedSym.declNode.kind}`;
-			else if ((node.resolvedSym.symFlags & SymbolFlag.Mutable) != 0) why = "symbol is mutable";
+			else if (node.resolvedSym.symFlags.has(SymbolFlag.Mutable)) why = "symbol is mutable";
 			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer == null) why = "declaration has no initializer";
 			const msg = `cannot evaluate '${d.name}' at comptime: ${why}`;
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
@@ -754,7 +754,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		const sym = d.callee.resolvedSym;
 		if (sym.nativeName != "") {
 			checkHostBridgeCoverage(sym, d.callee);
-			const isStatic = (node.flags & NodeFlag.ExtStatic) != 0;
+			const isStatic = node.flags.has(NodeFlag.ExtStatic);
 			const md = d.callee.data as MemberExprData;
 			const allArgs: Node[] = [];
 			if (!isStatic) allArgs.push(md.object);
@@ -961,7 +961,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): number {
 		const funcIdx = resolveFunc(s, classId.name + "_new");
 		if (funcIdx >= 0) {
 			const sym = d.newCallee.resolvedSym;
-			const knownCtorless = sym != null && (sym.symFlags & SymbolFlag.HasConstructor) == 0;
+			const knownCtorless = sym != null && !sym.symFlags.has(SymbolFlag.HasConstructor);
 			let callArgs: Node[] = d.newArguments;
 			if (knownCtorless && d.newArguments.length > 0) {
 				queueRaiserCompileError(

@@ -191,7 +191,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
 	}
-	if (node.resolvedSym != null && (node.flags & NodeFlag.BoundSym) != 0) {
+	if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
 		keys.push("symHandle");
 		values.push(mkNumber(registerBoundSym(node.resolvedSym), loc));
 	}
@@ -1389,7 +1389,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 		const cd = node.data as CallExprData;
 		if (cd.callee.kind == NodeKind.Identifier) {
 			const calleeName = (cd.callee.data as IdentifierData).name;
-			const calleeBound = (cd.callee.flags & NodeFlag.BoundSym) != 0
+			const calleeBound = cd.callee.flags.has(NodeFlag.BoundSym)
 				&& cd.callee.resolvedSym != null
 				&& cd.callee.resolvedSym.symbolKind == SymbolKind.Macro;
 			if (ctx.macroBodyRegistry.has(calleeName) || calleeBound) {
@@ -1408,7 +1408,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 				node.data = { macroName: calleeName, macroArgs: cd.arguments, macroHasParens: true };
 				if (boundSym != null) {
 					node.resolvedSym = boundSym;
-					node.flags = node.flags | NodeFlag.BoundSym;
+					node.flags = node.flags.incl(NodeFlag.BoundSym);
 				}
 				return node;
 			}
@@ -1671,7 +1671,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	// Bound macro (bindSym): fetch the DECLARING module's registries — the
 	// caller never imported this macro, so the user ctx has no entry for it.
 	let regCtx = ctx;
-	if ((node.flags & NodeFlag.BoundSym) != 0 && node.resolvedSym != null
+	if (node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null
 			&& node.resolvedSym.symbolKind == SymbolKind.Macro && node.resolvedSym.modulePath != "") {
 		const bmc = lookupModuleCtx(node.resolvedSym.modulePath);
 		if (bmc != null) regCtx = bmc;

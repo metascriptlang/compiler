@@ -125,7 +125,7 @@ function walkAsync(node: Node): void {
 			// Recurse first (handle nested async functions)
 			walkAsync(d.fnBody);
 			if (d.fnFlags == "async" || d.fnFlags == "async_generator") {
-				node.flags = node.flags | NodeFlag.WasAsync;
+				node.flags = node.flags.incl(NodeFlag.WasAsync);
 				// Pre-pass: split `return await expr` → `const $retAwait = await expr; return $retAwait;`
 				// Must run BEFORE rewriteAwaits so the VarDecl is in the body for collectDeclNames.
 				splitReturnAwait(d.fnBody);
@@ -157,7 +157,7 @@ function walkAsync(node: Node): void {
 			const d = node.data as MethodDeclData;
 			walkAsync(d.methodBody);
 			if (d.methodFlags == "async" || d.methodFlags == "async_generator") {
-				node.flags = node.flags | NodeFlag.WasAsync;
+				node.flags = node.flags.incl(NodeFlag.WasAsync);
 				splitReturnAwait(d.methodBody);
 				rewriteAwaits(d.methodBody);
 				d.methodFlags = "generator";
@@ -198,7 +198,7 @@ function walkCheckExpr(node: Node | null): void {
 			const d = node.data as FunctionExprData;
 			walkAsync(d.funcExprBody);
 			if (d.funcExprFlags == "async" || d.funcExprFlags == "async_generator") {
-				node.flags = node.flags | NodeFlag.WasAsync;
+				node.flags = node.flags.incl(NodeFlag.WasAsync);
 				splitReturnAwait(d.funcExprBody);
 				rewriteAwaits(d.funcExprBody);
 				d.funcExprFlags = "generator";
@@ -213,7 +213,7 @@ function walkCheckExpr(node: Node | null): void {
 			}
 			walkAsync(d.arrowBody);
 			if (d.arrowFlags == "async" || d.arrowFlags == "async_generator") {
-				node.flags = node.flags | NodeFlag.WasAsync;
+				node.flags = node.flags.incl(NodeFlag.WasAsync);
 				splitReturnAwait(d.arrowBody);
 				rewriteAwaits(d.arrowBody);
 				d.arrowFlags = "generator";

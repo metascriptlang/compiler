@@ -290,7 +290,7 @@ function rewriteZeroCopyBridge(node: Node): Node {
 	const loc = node.location;
 	const targetType = createArray(createPrimitive(TypeKind.Uint8));
 	const conv = makeHiddenStdConv(receiver, targetType, loc);
-	conv.flags = conv.flags | NodeFlag.Cursor;
+	conv.flags = conv.flags.incl(NodeFlag.Cursor);
 	return conv;
 }
 

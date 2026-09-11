@@ -20,7 +20,7 @@ import { createTransformContext, createTransformContextWithChecker } from "../co
 function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	// NF_ExtCall set by checker — no registry lookup needed
-	if ((node.flags & NodeFlag.ExtCall) == 0) return node;
+	if (!node.flags.has(NodeFlag.ExtCall)) return node;
 
 	const call = node.data as CallExprData;
 	if (call.callee.kind != NodeKind.MemberExpr) return node;
@@ -44,7 +44,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// JS backend keeps class instance methods as native member calls.
 	// Static extensions (Math.floor) and true extension methods still get rewritten.
 	if (ctx.jsBackend
-		&& (node.flags & NodeFlag.ExtStatic) == 0
+		&& !node.flags.has(NodeFlag.ExtStatic)
 		&& sym != null && sym.declNode != null
 		&& sym.declNode.kind == NodeKind.MethodDecl) {
 		return node;
@@ -53,7 +53,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	const callName = (sym != null && sym.name != "") ? sym.name : member.property;
 
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
-	if ((node.flags & NodeFlag.ExtStatic) != 0) {
+	if (node.flags.has(NodeFlag.ExtStatic)) {
 		const staticIdent = makeIdent(callName, loc);
 		staticIdent.resolvedSym = sym;
 		const newCall = makeCall(staticIdent, call.arguments, loc);
@@ -95,8 +95,8 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 	if (stmts.length > 0) {
 		const callNode = (stmts[0].data as ExprStmtData).expr;
 		if (callNode != null && callNode.kind == NodeKind.CallExpr) {
-			callNode.flags = callNode.flags | NodeFlag.ExtCall;
-			if (ext.isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
+			callNode.flags = callNode.flags.incl(NodeFlag.ExtCall);
+			if (ext.isStatic) callNode.flags = callNode.flags.incl(NodeFlag.ExtStatic);
 			callNode.resolvedSym = sym;
 		}
 	}
@@ -205,7 +205,7 @@ test "static extension no receiver prepend" {
 	// Simulate checker: set NF_ExtCall + NF_ExtStatic
 	const stmts = getStmts(result.value);
 	const callNode = (stmts[0].data as ExprStmtData).expr;
-	callNode.flags = callNode.flags | NodeFlag.ExtCall | NodeFlag.ExtStatic;
+	callNode.flags = callNode.flags.incl(NodeFlag.ExtCall).incl(NodeFlag.ExtStatic);
 	callNode.resolvedSym = fnSym;
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);

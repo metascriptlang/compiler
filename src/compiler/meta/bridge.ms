@@ -674,7 +674,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			if (node.resolvedSym != null && (node.flags & NodeFlag.BoundSym) != 0) {
+			if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym)));
 			}
 		},
@@ -1362,8 +1362,8 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
 					const rawFlags = readInt(objHeap, handle, "flags") as int32;
-					if ((rawFlags & NodeFlag.StaticStorage) != 0) {
-						out.flags = out.flags | NodeFlag.StaticStorage;
+					if (rawFlags == NodeFlag.StaticStorage as int32) {
+						out.flags = out.flags.incl(NodeFlag.StaticStorage);
 					}
 				}
 				return out;
@@ -1424,7 +1424,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
 			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
 				n.resolvedSym = _boundSyms[hv.intVal];
-				n.flags = n.flags | NodeFlag.BoundSym;
+				n.flags = n.flags.incl(NodeFlag.BoundSym);
 			}
 			return n;
 		},
@@ -3216,7 +3216,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		overloads: [],
 		nativeName: "",
 		builtinKind: "",
-		symFlags: 0 as int32,
+		symFlags: 0 as BitSet<SymbolFlag>,
 		defaultParams: [],
 		modulePath: "",
 		originalName: "",

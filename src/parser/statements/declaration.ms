@@ -61,7 +61,7 @@ export function parseStaticVariableDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected 'const', 'let' or 'var' after 'static' at line ${current(state).line}`);
 	}
 	const decl = try parseVariableDecl(state);
-	decl.flags = decl.flags | NodeFlag.StaticStorage;
+	decl.flags = decl.flags.incl(NodeFlag.StaticStorage);
 	return Result.ok(decl);
 }
 
@@ -514,7 +514,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		if (afterDefault == TokenKind.Function) {
 			const decl = try parseFunctionDecl(state);
 			const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken);
-			exportNode.flags = exportNode.flags | NodeFlag.ExportDefault;
+			exportNode.flags = exportNode.flags.incl(NodeFlag.ExportDefault);
 			return Result.ok(exportNode);
 		}
 		// Otherwise treat as expression
@@ -522,7 +522,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		consumeSemicolon(state);
 		const exprStmt = createNode(NodeKind.ExprStmt, { expr }, exportToken);
 		const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken);
-		exportNode.flags = exportNode.flags | NodeFlag.ExportDefault;
+		exportNode.flags = exportNode.flags.incl(NodeFlag.ExportDefault);
 		return Result.ok(exportNode);
 	}
 
@@ -1697,7 +1697,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			nameLocation: makeLocFromToken(nameToken),
 			memberLocations: memberLocs,
 		}, externToken);
-		enumNode.flags = enumNode.flags | NodeFlag.ExternC;
+		enumNode.flags = enumNode.flags.incl(NodeFlag.ExternC);
 		return Result.ok(enumNode);
 	}
 
@@ -1724,7 +1724,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		if (hasFieldBody) {
 			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind, makeLocFromToken(nameToken));
 			if (ifaceResult.ok) {
-				ifaceResult.value.flags = ifaceResult.value.flags | NodeFlag.ExternC;
+				ifaceResult.value.flags = ifaceResult.value.flags.incl(NodeFlag.ExternC);
 				return ifaceResult;
 			}
 		}
@@ -1759,7 +1759,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 				classBody: members,
 				nameLocation: makeLocFromToken(nameToken),
 			}, externToken);
-			classNode.flags = classNode.flags | NodeFlag.ExternC;
+			classNode.flags = classNode.flags.incl(NodeFlag.ExternC);
 			return Result.ok(classNode);
 		} else {
 			// extern class FILE; — opaque type with optional `from "native"`.
@@ -1872,7 +1872,7 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 		macroDeclReturnType,
 		macroDeclBody: body,
 	}, convToken);
-	node.flags = node.flags | NodeFlag.Converter;
+	node.flags = node.flags.incl(NodeFlag.Converter);
 	node.typeExpr = returnTypeExpr;
 	return Result.ok(node);
 }

@@ -118,7 +118,7 @@ export function printNode(node: Node | null, level: int32): void {
 	const saved = _level;
 	_level = level;
 	const loc = node.location;
-	console.log(`${indent(level)}${nodeKindName(node.kind)} [${loc.line}:${loc.column}-${loc.endLine}:${loc.endColumn}] f=${node.flags}${node.typeArg == "" ? "" : ` ta=${node.typeArg}`}`);
+	console.log(`${indent(level)}${nodeKindName(node.kind)} [${loc.line}:${loc.column}-${loc.endLine}:${loc.endColumn}] f=${node.flags as uint32}${node.typeArg == "" ? "" : ` ta=${node.typeArg}`}`);
 	nodeFields(node, printSink);
 	_level = saved;
 }

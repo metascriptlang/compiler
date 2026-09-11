@@ -708,14 +708,14 @@ export function isBakeableAggregateConst(node: Node): boolean {
 		return bakeableEmptyArrayLiteral(init);
 	}
 	if (init.kind != NodeKind.ObjectLiteral) return false;
-	if ((init.flags & NodeFlag.Closure) != 0) return false;
+	if (init.flags.has(NodeFlag.Closure)) return false;
 	const od = init.data as ObjectLiteralData;
 	if (od.properties.length == 0) return false;
 	for (const prop of od.properties) {
 		if (prop == null) return false;
 		const bakeable = match (prop.kind) {
 			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
-			NodeKind.ObjectLiteral => (prop.flags & NodeFlag.Closure) != 0,
+			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure),
 			_ => false,
 		};
 		if (!bakeable) return false;

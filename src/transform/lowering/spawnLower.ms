@@ -116,7 +116,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		if (closureArg.kind == NodeKind.Identifier) {
 			const loc = closureArg.location;
 			const pair = makeObjectLiteral(["fn", "env"], [closureArg, makeNull(loc)], loc);
-			pair.flags = pair.flags | NodeFlag.Closure;
+			pair.flags = pair.flags.incl(NodeFlag.Closure);
 			pair.nodeType = closureArg.nodeType;
 			cd.arguments[0] = pair;
 			closureArg = pair;
@@ -140,7 +140,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		if (closureRetType != null && needsBoxing(closureRetType)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):
 			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
-			if (closureArg.kind == NodeKind.ObjectLiteral && (closureArg.flags & NodeFlag.Closure) != 0) {
+			if (closureArg.kind == NodeKind.ObjectLiteral && closureArg.flags.has(NodeFlag.Closure)) {
 				const loc = closureArg.location;
 				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
 				const innerCall = makeCall(fnIdent, [], loc);

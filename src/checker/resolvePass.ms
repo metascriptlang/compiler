@@ -910,7 +910,7 @@ export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerCont
 
 export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 	if (!hasFlag(sym, SymbolFlag.Forward)) return;
-	sym.symFlags = sym.symFlags & ~(SymbolFlag.Forward as int32);
+	sym.symFlags = sym.symFlags.excl(SymbolFlag.Forward);
 	const decl = sym.declNode;
 	if (decl == null) return;
 	if (decl.kind == NodeKind.ClassDecl) fillClass(ctx, decl);

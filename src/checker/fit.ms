@@ -218,7 +218,7 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: targetType }, convTok);
 	convNode.nodeType = targetType;
-	convNode.flags = convNode.flags | NodeFlag.Sem;
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 	return convNode;
 }
 
@@ -239,7 +239,7 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 	const tok = createToken(TokenKind.Ident, "", expr.location.line);
 	const conv = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: cstr } as unknown as NodeData, tok);
 	conv.nodeType = cstr;
-	conv.flags = conv.flags | NodeFlag.Sem;
+	conv.flags = conv.flags.incl(NodeFlag.Sem);
 	return conv;
 }
 
@@ -251,14 +251,14 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const presentLit = createNode(NodeKind.BooleanLiteral, { boolValue: true } as NodeData, wrapTok);
 	presentLit.nodeType = booleanType();
-	presentLit.flags = presentLit.flags | NodeFlag.Sem;
+	presentLit.flags = presentLit.flags.incl(NodeFlag.Sem);
 	const wrapped = createNode(NodeKind.ObjectLiteral, {
 		properties: [expr, presentLit],
 		keys: ["value", "present"],
 		keyLocations: [expr.location, expr.location],
 	} as NodeData, wrapTok);
 	wrapped.nodeType = formal;
-	wrapped.flags = wrapped.flags | NodeFlag.Sem;
+	wrapped.flags = wrapped.flags.incl(NodeFlag.Sem);
 	return wrapped;
 }
 
@@ -675,7 +675,8 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	convNode.nodeType = formal;
 	// Same stamp convention as the object-literal path: codegen reads the slot,
 	// it never re-derives one (+1 so 0 keeps meaning "not set").
-	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	convNode.variantSlot = vi + 1;
 	return convNode;
 }
 
@@ -691,7 +692,8 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: formal }, convTok);
 	convNode.nodeType = formal;
-	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	convNode.variantSlot = vi + 1;
 	return convNode;
 }
 
@@ -742,7 +744,8 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: member }, convTok);
 	convNode.nodeType = member;
-	convNode.flags = convNode.flags | NodeFlag.Sem | (((vi + 1) as int32) << 16);
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	convNode.variantSlot = vi + 1;
 	return convNode;
 }
 
@@ -765,11 +768,11 @@ export function tryAdoptAnonStruct(expr: Node, formalIn: Type | null, exprTypeIn
 		const objNode = createNode(NodeKind.Identifier, { name: identD.name } as NodeData, tok);
 		objNode.resolvedSym = expr.resolvedSym;
 		objNode.nodeType = exprType;
-		objNode.flags = objNode.flags | NodeFlag.Sem;
+		objNode.flags = objNode.flags.incl(NodeFlag.Sem);
 		objNode.location = expr.location;
 		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: formal.typeNames[i], isOptional: false } as NodeData, tok);
 		mem.nodeType = formal.typeChildren[i];
-		mem.flags = mem.flags | NodeFlag.Sem;
+		mem.flags = mem.flags.incl(NodeFlag.Sem);
 		mem.location = expr.location;
 		props.push(mem);
 		keys.push(formal.typeNames[i]);
@@ -777,7 +780,7 @@ export function tryAdoptAnonStruct(expr: Node, formalIn: Type | null, exprTypeIn
 	}
 	const lit = createNode(NodeKind.ObjectLiteral, { properties: props, keys: keys, keyLocations: keyLocs } as NodeData, tok);
 	lit.nodeType = formal;
-	lit.flags = lit.flags | NodeFlag.Sem;
+	lit.flags = lit.flags.incl(NodeFlag.Sem);
 	lit.location = expr.location;
 	return lit;
 }
@@ -839,14 +842,14 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const nullNode = createNode(NodeKind.NullLiteral, { nullPlaceholder: true } as NodeData, wrapTok);
 		nullNode.nodeType = nullType();
-		nullNode.flags = nullNode.flags | NodeFlag.Sem;
+		nullNode.flags = nullNode.flags.incl(NodeFlag.Sem);
 		const wrapped = createNode(NodeKind.ObjectLiteral, {
 			properties: [expr, nullNode],
 			keys: ["fn", "env"],
 			keyLocations: [expr.location, expr.location],
 		} as NodeData, wrapTok);
 		wrapped.nodeType = formal;
-		wrapped.flags = wrapped.flags | NodeFlag.Closure | NodeFlag.Sem;
+		wrapped.flags = wrapped.flags.incl(NodeFlag.Closure).incl(NodeFlag.Sem);
 		return wrapped;
 	}
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
@@ -885,7 +888,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
-		convNode.flags = convNode.flags | NodeFlag.Sem;
+		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
 	// A float reaching an integer slot drops its fractional part, and at the
@@ -907,14 +910,14 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
-		convNode.flags = convNode.flags | NodeFlag.Sem;
+		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
 	if (isWideningInt64Conv(exprType, formal)) {
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
-		convNode.flags = convNode.flags | NodeFlag.Sem;
+		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
 	// Convention-based coercion protocol: try `expr.as<TargetType>()` synthesis.

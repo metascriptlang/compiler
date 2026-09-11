@@ -343,11 +343,11 @@ function clearCheckerState(node: Node): void {
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
-	const keepBound = (node.flags & NodeFlag.BoundSym) != 0 && node.resolvedSym != null;
+	const keepBound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (!keepBound && (node.resolvedSym == null || node.resolvedSym.symbolKind != SymbolKind.EnumMember)) {
 		node.resolvedSym = null;
 	}
-	node.flags = node.flags & NodeFlag.BoundSym;
+	node.flags = node.flags.has(NodeFlag.BoundSym) ? (0 as BitSet<NodeFlag>).incl(NodeFlag.BoundSym) : (0 as BitSet<NodeFlag>);
 	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
 }
 

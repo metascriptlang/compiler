@@ -111,7 +111,7 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 // path writes `export ` before it dispatches, so it has to decide first or it
 // leaves a dangling keyword behind.
 export function classEmitsNoJs(node: Node): boolean {
-	if ((node.flags & NodeFlag.ExternC) != 0) return true;
+	if (node.flags.has(NodeFlag.ExternC)) return true;
 	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
 }
 
@@ -210,7 +210,7 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 // points (documented divergence, the same class as "js spawn = scheduling").
 // Same adapter shape the C backend's actorLower uses to build its state class.
 export function emitActorDecl(gen: JSGenerator, node: Node): void {
-	if ((node.flags & NodeFlag.ExternC) != 0) return;
+	if (node.flags.has(NodeFlag.ExternC)) return;
 	const d = node.data as ActorDeclData;
 	// Tier-1 actor surface: the synthesized class carries a synthetic `pid`
 	// field FIRST (before user field defaults — a default may read state, so
@@ -394,7 +394,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	}
 	// Non-bundle: ES module export
 	if (inner.kind == NodeKind.ClassDecl && classEmitsNoJs(inner)) return;
-	if (inner.kind == NodeKind.ActorDecl && (inner.flags & NodeFlag.ExternC) != 0) return;
+	if (inner.kind == NodeKind.ActorDecl && inner.flags.has(NodeFlag.ExternC)) return;
 	emitIndent(gen);
 	emit(gen, "export ");
 	match (inner.kind) {

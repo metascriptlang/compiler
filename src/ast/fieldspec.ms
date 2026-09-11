@@ -15,7 +15,7 @@
 // MS has no method dispatch, so sinks/xforms are function-typed fields (the
 // callbacks.ms pattern); calling V.node("left", x) loads the field and calls.
 
-import { Node, NodeKind, NodeData, SourceLocation, Type, Symbol, DeclKind, ExternKind, makeLoc, createNodeAt,
+import { Node, NodeKind, NodeFlag, NodeData, SourceLocation, Type, Symbol, DeclKind, ExternKind, makeLoc, createNodeAt,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData,
@@ -334,7 +334,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	// header-column coverage rides on two samples: flags/typeArg/typeExpr/
 	// typeExprs/paramLocations/nodeType on the FunctionDecl, resolvedSym on
 	// an Identifier (a cross-table link back into S).
-	fnDecl.flags = 85;
+	fnDecl.flags = 85 as uint32 as BitSet<NodeFlag>;
 	fnDecl.typeArg = "TArg";
 	fnDecl.typeExpr = pkIdent("te");
 	fnDecl.typeExprs = [pkIdent("te1"), pkIdent("te2")];
@@ -454,7 +454,7 @@ export function pkDumpLoc(l: SourceLocation | null): string {
 export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 	if (n == null) return "null";
 	let s = `k${n.kind as int32}`;
-	if (withMeta) s = s + `f${n.flags}ta=${n.typeArg}`;
+	if (withMeta) s = s + `f${n.flags as uint32}vs${n.variantSlot}ta=${n.typeArg}`;
 	s = s + pkDumpLoc(n.location);
 	if (withMeta) {
 		if (n.typeExpr != null) s = s + "te=" + pkDumpNode(n.typeExpr);
@@ -467,7 +467,7 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 			for (const p of n.paramLocations) s = s + pkDumpLoc(p) + ";";
 		}
 		if (n.nodeType != null) s = s + `nt=${n.nodeType.kind as int32}:${n.nodeType.typeName}`;
-		if (n.resolvedSym != null) s = s + `sym=${n.resolvedSym.name}/${n.resolvedSym.symFlags}`;
+		if (n.resolvedSym != null) s = s + `sym=${n.resolvedSym.name}/${n.resolvedSym.symFlags as uint32}`;
 	}
 	const kind = n.kind;
 	if (kind == NodeKind.NumberLiteral) { const d = n.data as NumberLiteralData; return s + `num=${d.value}/${d.isFloat ? "T" : "F"}/${d.intVal}/${d.outOfRangeText}/${d.isBitPattern ? "T" : "F"}`; }

@@ -2,3 +2,4 @@
 // All compiler code imports from here; macro authors import from "std/meta".
 
 export * from "std/meta/node";
+export { SymbolFlag } from "std/meta/node";

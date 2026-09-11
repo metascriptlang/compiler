@@ -127,7 +127,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const producesFreshOwned = d.forOfIterable.kind == NodeKind.CallExpr
 			|| d.forOfIterable.kind == NodeKind.ArrayLiteral;
 		if (!producesFreshOwned) {
-			iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
+			iterDecl.flags = iterDecl.flags.incl(NodeFlag.Cursor);
 		}
 		preamble.push(iterDecl);
 		iterExpr = makeIdentResolved(iterSym, loc);
@@ -185,7 +185,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
 		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
-		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
+		itemDecl.flags = itemDecl.flags.incl(NodeFlag.Cursor);
 		if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
 		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
 		// passes can see the monomorphized binding type. Same reason as the iterator

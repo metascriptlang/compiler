@@ -718,7 +718,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind == NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
-		const sym = (d.callee.flags & NodeFlag.BoundSym) != 0 && d.callee.resolvedSym != null
+		const sym = d.callee.flags.has(NodeFlag.BoundSym) && d.callee.resolvedSym != null
 			? d.callee.resolvedSym
 			: lookupSymbol(ctx.table, calleeName);
 		// Phase B+ eager: Bare-call macro invocation with inline expansion.
@@ -746,14 +746,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
 			// bindSym'd macro: read the bound symbol BEFORE node.data is replaced —
 			// the replacement destroys the old CallExprData and d.callee with it.
-			const boundCalleeSym = (d.callee.flags & NodeFlag.BoundSym) != 0
+			const boundCalleeSym = d.callee.flags.has(NodeFlag.BoundSym)
 				? d.callee.resolvedSym
 				: null as unknown as Symbol;
 			node.kind = NodeKind.MacroInvocation;
 			node.data = { macroName: calleeName, macroArgs: macroArgsRef, macroHasParens: true };
 			if (boundCalleeSym != null) {
 				node.resolvedSym = boundCalleeSym;
-				node.flags = node.flags | NodeFlag.BoundSym;
+				node.flags = node.flags.incl(NodeFlag.BoundSym);
 			}
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
@@ -804,7 +804,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
-			node.flags = 0;
+			node.flags = 0 as BitSet<NodeFlag>;
+			node.variantSlot = 0;
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).
 			// If the expanded result is itself a macro call, this recurses through
@@ -871,9 +872,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						}
 						sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
 						if (!hasFlag(winner.sym, SymbolFlag.NativeMethod)) {
-							node.flags = node.flags | NodeFlag.ExtCall;
+							node.flags = node.flags.incl(NodeFlag.ExtCall);
 						}
-						if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
+						if (winner.isStatic) node.flags = node.flags.incl(NodeFlag.ExtStatic);
 					}
 					let extType = getExtFnType(winner);
 					if (!winner.isStatic && extType.typeChildren.length > 0) {
@@ -1067,7 +1068,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (extPreResolved) {
 		// Fill default args (calleeType already has receiver stripped for non-static)
 		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static (receiver stripped in parser)
-		const extDefaultOffset = (node.flags & NodeFlag.ExtStatic) != 0 ? 0 : 1;
+		const extDefaultOffset = node.flags.has(NodeFlag.ExtStatic) ? 0 : 1;
 		if (argTypes.length < calleeType.typeChildren.length) {
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
@@ -1338,7 +1339,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
 					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
 					convNode.nodeType = paramType;
-					convNode.flags = convNode.flags | NodeFlag.Sem;
+					convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 					d.arguments[pi] = convNode;
 				}
 				if (paramType.kind == TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
@@ -1926,7 +1927,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			let skipConstruct = false;
 			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
 			if (!skipConstruct) {
-				arg.flags = arg.flags & ~NodeFlag.Sem;
+				arg.flags = arg.flags.excl(NodeFlag.Sem);
 				arg.nodeType = null;
 				callCheckExpr(ctx, arg, substituted);
 			}
@@ -2276,7 +2277,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 				const wTok = createToken(TokenKind.Ident, "", d.arguments[wi].location.line);
 				const wConv = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[wi], convType: wpt }, wTok);
 				wConv.nodeType = wpt;
-				wConv.flags = wConv.flags | NodeFlag.Sem;
+				wConv.flags = wConv.flags.incl(NodeFlag.Sem);
 				d.arguments[wi] = wConv;
 				argTypes[wi] = wpt;
 			}
@@ -2468,9 +2469,9 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		callNode.resolvedSym = extWinnerSym;
 		// Mark for transform: skip registry re-lookup (reference resolves UFCS in sem)
 		if (!hasFlag(extWinnerSym, SymbolFlag.NativeMethod)) {
-			callNode.flags = callNode.flags | NodeFlag.ExtCall;
+			callNode.flags = callNode.flags.incl(NodeFlag.ExtCall);
 		}
-		if (exts[idx].isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
+		if (exts[idx].isStatic) callNode.flags = callNode.flags.incl(NodeFlag.ExtStatic);
 	}
 	// Fill default args for extension overloads
 	// defaultOffset: 0 for static (parser stripped receiver from fnDefaults), 1 for non-static
@@ -2600,7 +2601,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 	// member access keeps the un-substituted Result<T, _> shape and codegen fails.
 	if (expInfo.declNode != null) sym.declNode = expInfo.declNode;
 	// Preserve OverloadSig flag on the primary sym for namespace access paths.
-	if ((expInfo.primaryFlags & SymbolFlag.OverloadSig) != 0) {
+	if ((expInfo.primaryFlags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
 		setFlag(sym, SymbolFlag.OverloadSig);
 	}
 	if (expInfo.overloadTypes.length > 0) {
@@ -2629,7 +2630,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 				}
 			}
 			if (expInfo.overloadFlags != null && oi < expInfo.overloadFlags.length
-					&& (expInfo.overloadFlags[oi] & SymbolFlag.OverloadSig) != 0) {
+					&& (expInfo.overloadFlags[oi] as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
 				setFlag(overSym, SymbolFlag.OverloadSig);
 			}
 			// Cross-module mono parity with primary path.
@@ -3460,6 +3461,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					node.data = synthCall.data;
 					node.nodeType = synthCall.nodeType;
 					node.flags = synthCall.flags;
+					node.variantSlot = synthCall.variantSlot;
 					if (synthCall.resolvedSym != null) {
 						node.resolvedSym = synthCall.resolvedSym;
 					}

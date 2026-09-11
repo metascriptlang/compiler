@@ -113,11 +113,11 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (node == null) return;
-	if ((node.flags & NodeFlag.Sem) != 0 && node.nodeType != null) return;
+	if (node.flags.has(NodeFlag.Sem) && node.nodeType != null) return;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = errorType(); return; }
 	checkExprInner(ctx, node, expectedType);
 	viewThroughReadonlyBase(node);
-	node.flags = node.flags | NodeFlag.Sem;
+	node.flags = node.flags.incl(NodeFlag.Sem);
 }
 
 function viewThroughReadonlyBase(node: Node): void {
@@ -178,7 +178,8 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	node.data = { macroName: convName, macroArgs: [jsxArg], macroHasParens: true };
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
-	node.flags = 0;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
 	checkExpr(ctx, node, expectedType);
 	return true;
 }
@@ -343,7 +344,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
-			node.flags = 0;
+			node.flags = 0 as BitSet<NodeFlag>;
+			node.variantSlot = 0;
 			checkExpr(ctx, node, expectedType);
 			node.nodeType = node.nodeType; return;
 		},
@@ -366,7 +368,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// bindSym: the macro pre-bound this identifier in its own module's
 			// scope — the user's scope must not re-resolve (or hijack) it.
-			const sym = (node.flags & NodeFlag.BoundSym) != 0 && node.resolvedSym != null
+			const sym = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null
 				? node.resolvedSym
 				: lookupSymbol(ctx.table, d.name);
 			if (sym == null) {
@@ -691,7 +693,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
 				if (!isInitialized(ctx.initTracker, lhsId.name)) {
 					if (getDeclBlock(ctx.initTracker, lhsId.name) == ctx.initTracker.currentBlock) {
-						node.flags = node.flags | NodeFlag.FirstWrite;
+						node.flags = node.flags.incl(NodeFlag.FirstWrite);
 					}
 				}
 				markInitialized(ctx.initTracker, lhsId.name);
@@ -980,7 +982,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					isDirectCall: true,
 					resolvedOverloadIdx: -1,
 				};
-				node.flags = node.flags & ~NodeFlag.Sem;
+				node.flags = node.flags.excl(NodeFlag.Sem);
 				node.nodeType = null;
 				node.nodeType = checkCallExpr(ctx, node, null); return;
 			}
@@ -1080,13 +1082,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				while (ki < d.keys.length) {
 					const kNode = createNode(NodeKind.StringLiteral, { value: d.keys[ki] }, mtok);
 					kNode.nodeType = mapKeyType;
-					kNode.flags = kNode.flags | NodeFlag.Sem;
+					kNode.flags = kNode.flags.incl(NodeFlag.Sem);
 					keyNodes.push(kNode);
 					ki = ki + 1;
 				}
 				const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, mtok);
 				keysArr.nodeType = createRef(createArray(mapKeyType));
-				keysArr.flags = keysArr.flags | NodeFlag.Sem;
+				keysArr.flags = keysArr.flags.incl(NodeFlag.Sem);
 				// 3. Build values array — reuse the already-checked property nodes.
 				const valNodes: Node[] = [];
 				let vi = 0;
@@ -1096,7 +1098,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
 				valsArr.nodeType = createRef(createArray(mapValType));
-				valsArr.flags = valsArr.flags | NodeFlag.Sem;
+				valsArr.flags = valsArr.flags.incl(NodeFlag.Sem);
 				// 4. Build the builder callee (mapFromPairs for ordered Map,
 				// hashMapFromPairs for HashMap) + mutate this node into the call.
 				const builderName = objExpected.typeName == "HashMap" ? "hashMapFromPairs" : "mapFromPairs";
@@ -1113,7 +1115,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					isDirectCall: true,
 					resolvedOverloadIdx: -1,
 				};
-				node.flags = node.flags & ~NodeFlag.Sem;
+				node.flags = node.flags.excl(NodeFlag.Sem);
 				node.nodeType = null;
 				// 5. Re-check as a call. Generic inference on mapFromPairs<K,V>
 				// binds K and V from the typed array arguments, and the #29 fix
@@ -1392,10 +1394,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							node.location.line, node.location.column);
 					}
 				}
-				// Stamp variant index in high 16 bits of flags.
 				// +1 offset so 0 means "not set" (variant 0 becomes 1).
 				if (varIdx >= 0) {
-					node.flags = node.flags | (((varIdx + 1) as int32) << 16);
+					node.variantSlot = varIdx + 1;
 				}
 				node.nodeType = objExpected; return;
 			} else {
@@ -1612,7 +1613,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = st0 != null ? st0 : inferredType();
 				}
-				node.flags = node.flags | NodeFlag.Sem;
+				node.flags = node.flags.incl(NodeFlag.Sem);
 				return;
 			}
 			const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
@@ -1645,7 +1646,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.kind = NodeKind.NullLiteral;
 				node.data = { nullPlaceholder: true };
 				node.nodeType = targetType;
-				node.flags = node.flags | NodeFlag.Sem;
+				node.flags = node.flags.incl(NodeFlag.Sem);
 				node.nodeType = targetType; return;
 			}
 			// String↔CString needs runtime conversion at the FFI boundary, not erasure.
@@ -1656,7 +1657,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.kind = NodeKind.HiddenStdConv;
 				node.data = { convExpr: d.asExpr, convType: targetType };
 				node.nodeType = targetType;
-				node.flags = node.flags | NodeFlag.Sem;
+				node.flags = node.flags.incl(NodeFlag.Sem);
 				node.nodeType = targetType; return;
 			}
 			// Reference parity: when narrowing a Union, resolve to the actual variant type.
@@ -1836,7 +1837,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (expandedValue.location != null) node.location = expandedValue.location;
 				node.nodeType = null as unknown as Type;
 				node.resolvedSym = null;
-				node.flags = 0;
+				node.flags = 0 as BitSet<NodeFlag>;
+				node.variantSlot = 0;
 				checkExpr(ctx, node, expectedType);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 				node.nodeType = node.nodeType; return;
@@ -1906,7 +1908,7 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 		isDirectCall: true,
 		resolvedOverloadIdx: -1,
 	};
-	node.flags = node.flags & ~NodeFlag.Sem;
+	node.flags = node.flags.excl(NodeFlag.Sem);
 	node.nodeType = null;
 	return checkCallExpr(ctx, node, null);
 }

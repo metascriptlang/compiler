@@ -206,7 +206,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovTypes.push(sym.overloads[ovi].symbolType);
 		ovRtNames.push(sym.overloads[ovi].nativeName);
 		ovBiKinds.push(sym.overloads[ovi].builtinKind);
-		ovFlags.push(sym.overloads[ovi].symFlags);
+		ovFlags.push(sym.overloads[ovi].symFlags as uint32 as int32);
 		ovDisambs.push(sym.overloads[ovi].disamb);
 		// Cross-module mono — carry overload's declNode if it's a generic
 		// FunctionDecl / static generic MethodDecl (same rule as primary).
@@ -329,7 +329,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		definingModule: sym.modulePath != "" ? sym.modulePath : modulePath,
 		originalName: sym.originalName,
 		headerPath: sym.headerPath,
-		primaryFlags: sym.symFlags,
+		primaryFlags: sym.symFlags as uint32 as int32,
 		overloadFlags: ovFlags,
 		disamb: sym.disamb,
 		overloadDisambs: ovDisambs,

@@ -354,7 +354,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				if (od.keys != null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, exprNode.nodeType);
 					// Use checker-stamped variant index (reference parity: codegen reads, never re-determines)
-					const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+					const stamped = exprNode.variantSlot;
 					let varIdx = stamped > 0 ? stamped - 1 : -1;
 					// Fallback for unchecked nodes (transform-generated)
 					if (varIdx < 0) {
@@ -394,7 +394,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				const od = exprNode.data as ObjectLiteralData;
 				if (od.keys != null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, innerType);
-					const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+					const stamped = exprNode.variantSlot;
 					let varIdx = stamped > 0 ? stamped - 1 : -1;
 					if (varIdx < 0) {
 						const keyArr: string[] = [];
@@ -457,7 +457,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				}
 			}
 			// Use checker-stamped variant index
-			const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+			const stamped = exprNode.variantSlot;
 			let varIdx = stamped > 0 ? stamped - 1 : -1;
 			if (varIdx < 0) {
 				const keyArr: string[] = [];
@@ -1869,7 +1869,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Zero-copy string ↔ uint8[] bridge (same memory layout): string is a
 		// fat value (msString), arrays are pointers (msUint8Array*) — each
 		// direction needs its own cast shape.
-		if ((node.flags & NodeFlag.Cursor) != 0) {
+		if (node.flags.has(NodeFlag.Cursor)) {
 			if (d.convType.kind == TypeKind.Array) {
 				ctx.results.push(`((${targetC}*)&(${inner}))`);
 			} else {
@@ -1886,7 +1886,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Checker-stamped slot wins: union variants are frequently anonymous,
 			// so re-deriving one by type NAME here silently found nothing and
 			// emitted the bare variant struct.
-			const stampedSlot = ((node.flags >> 16) & 65535) as int32;
+			const stampedSlot = node.variantSlot;
 			if (stampedSlot > 0) {
 				vi = stampedSlot - 1;
 			} else {
@@ -1908,7 +1908,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// still renders as. A pointer-surface member is re-materialized as a heap
 		// cell: the by-value slot has no out-of-band RC header, so `&slot` would
 		// let refcounting stomp neighbouring union bytes.
-		const projSlot = ((node.flags >> 16) & 65535) as int32;
+		const projSlot = node.variantSlot;
 		// Maybe<A> → Maybe<A|B> (widenMaybePayload): the carrier keeps its shape
 		// and the payload moves into a tagged slot, so the whole carrier is
 		// rebuilt. The operand is read twice — payload and flag — hence the temp.
@@ -1969,7 +1969,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 	// ObjectLiteral
 	if (kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
-		if ((node.flags & NodeFlag.Closure) != 0) {
+		if (node.flags.has(NodeFlag.Closure)) {
 			// Closure literal: (msClosure){ .fn = ..., .env = ... }
 			// Standard reference pattern: env is heap-allocated via msAllocTyped, fields initialized,
 			// then closure pair references the pointer.
@@ -2115,9 +2115,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 							unionWrapIdx = varIdx;
 						}
 					} else {
-						// Undiscriminated: use checker-stamped variant index (high 16 bits of flags).
+						// Undiscriminated: use checker-stamped variant index.
 						// Reference parity: sem stamps resolved variant, codegen reads directly.
-						const stamped = ((node.flags >> 16) & 65535) as int32;
+						const stamped = node.variantSlot;
 						let varIdx = stamped > 0 ? stamped - 1 : -1;
 						// Fallback: re-match by field names + types (for nodes not checked, e.g. transforms)
 						if (varIdx < 0 && d.keys.length > 0) {

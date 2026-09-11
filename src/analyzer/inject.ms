@@ -249,7 +249,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 		// nodeType (the closure leak this session). FAIL LOUD on that exact signature — narrow on
 		// purpose (a blanket warning fires ~800×/build on benign untyped calls). Surfaces via console
 		// like the existing DRC param warning; checkerCtx.errors does NOT print from Phase 4.
-		if (k == NodeKind.ObjectLiteral && (node.flags & NodeFlag.Closure) != 0) {
+		if (k == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
 			const od = node.data as ObjectLiteralData;
 			if (od.properties.length > 1 && od.properties[1] != null && od.properties[1].kind != NodeKind.NullLiteral) {
 				console.log("DRC INTERNAL ERROR: env-bearing closure reached DRC without a type at " + node.location.line + ":" + node.location.column + " — its captured env will leak (a transform built the closure-pair without setting nodeType)");
@@ -577,7 +577,7 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 		|| t.kind == TypeKind.Struct
 		|| t.kind == TypeKind.GenericInstance
 		|| t.kind == TypeKind.Union
-		|| (node.flags & NodeFlag.Closure) != 0;
+		|| node.flags.has(NodeFlag.Closure);
 	const fieldDefault = isRefConstr ? DrcMode.SinkArg
 		: (mode == DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < od.properties.length; i += 1) {
@@ -1740,11 +1740,11 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		isCursor = true;
 	}
 	// NodeFlag.Cursor: for-of bindings are borrows from the array (reference: cursor flag on for-loop vars)
-	if ((stmt.flags & NodeFlag.Cursor) != 0) {
+	if (stmt.flags.has(NodeFlag.Cursor)) {
 		isCursor = true;
 	}
 	// Cursor propagation from initializer: zero-copy bridge HiddenStdConv has NodeFlag.Cursor
-	if (d.initializer != null && (d.initializer.flags & NodeFlag.Cursor) != 0) {
+	if (d.initializer != null && d.initializer.flags.has(NodeFlag.Cursor)) {
 		isCursor = true;
 	}
 	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
@@ -2005,7 +2005,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	// surface re-materializes the payload as a fresh owned heap cell in codegen;
 	// increfing by the underlying borrowed reference strands that cell one ref
 	// high (measured: guard ledger Fake alloc=5 destroy=3).
-	if (expr.kind == NodeKind.HiddenSubConv && ((expr.flags >> 16) & 65535) > 0) {
+	if (expr.kind == NodeKind.HiddenSubConv && expr.variantSlot > 0) {
 		const cv = expr.data as HiddenStdConvData;
 		if (cv.convType != null && cv.convType.kind == TypeKind.Ref) return false;
 	}

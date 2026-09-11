@@ -80,7 +80,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 
 export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExportDeclData;
-	const isDefault = (node.flags & NodeFlag.ExportDefault) != 0;
+	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	// Re-export form: `export { ... } from "..."` — the exportedDecl is an
 	// ImportDecl-shaped node. Inlining `printImportDecl` here would emit a
 	// stray `import` keyword (`export import { ... } from ...`), so we
@@ -496,7 +496,7 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MacroDeclData;
 	const noDefaults: Node[] = [];
 	const params = buildParamList(d.macroDeclParams, d.macroDeclParamTypes, noDefaults, options);
-	const keyword = (node.flags & NodeFlag.Converter) != 0 ? "converter " : "macro ";
+	const keyword = node.flags.has(NodeFlag.Converter) ? "converter " : "macro ";
 	const parts: Doc[] = [docText(keyword + d.macroDeclName)];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.macroDeclReturnType != "") parts.push(docText(": " + d.macroDeclReturnType));

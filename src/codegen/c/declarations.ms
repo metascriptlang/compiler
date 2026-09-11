@@ -283,7 +283,7 @@ export function registerDeclCName(g: CGen, node: Node): void {
 	const k = n.kind;
 	if (k != NodeKind.InterfaceDecl && k != NodeKind.ClassDecl && k != NodeKind.EnumDecl
 		&& k != NodeKind.StructDecl && k != NodeKind.TypeAliasDecl) return;
-	if ((n.flags & NodeFlag.ExternC) != 0) return;
+	if (n.flags.has(NodeFlag.ExternC)) return;
 	const sym = declTypeSym(n);
 	if (sym == null) return;
 	const cn = mangledTypeName(sym, sym.name);
@@ -295,7 +295,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 	const d = node.data as EnumDeclData;
 
 	// Extern enum: defined in C header — skip emission entirely.
-	if ((node.flags & NodeFlag.ExternC) != 0) return;
+	if (node.flags.has(NodeFlag.ExternC)) return;
 
 	const name = mangledTypeName(declTypeSym(node), d.enumName);
 
@@ -324,7 +324,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 
 	// Extern interface: type defined externally — skip struct emission.
 	// Reference parity: isImportedType() skips forward decl + struct body.
-	if ((node.flags & NodeFlag.ExternC) != 0) return;
+	if (node.flags.has(NodeFlag.ExternC)) return;
 
 	// Skip uninstantiated generic interfaces (prelude templates with K, V, T params)
 	const declType = node.nodeType;
@@ -384,7 +384,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	}
 
 	// Extern class: type defined externally — emit typedef forward decl only.
-	if ((node.flags & NodeFlag.ExternC) != 0) {
+	if (node.flags.has(NodeFlag.ExternC)) {
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.className} ${d.className};`);
 		return;
 	}

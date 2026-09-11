@@ -2079,7 +2079,7 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	if (node.kind == NodeKind.MacroDecl) {
 		const mcd = node.data as MacroDeclData;
 		const sig = "(" + sgJoinFieldNames(mcd.macroDeclParamTypes) + ")" + (mcd.macroDeclReturnType != "" ? " => " + mcd.macroDeclReturnType : "");
-		const kw = (node.flags & NodeFlag.Converter) != 0 ? "converter " : "macro ";
+		const kw = node.flags.has(NodeFlag.Converter) ? "converter " : "macro ";
 		const item: SgDocumentSymbol = { name: mcd.macroDeclName, kind: SymbolKind.Macro, location: node.location, detail: kw + sig, isMutable: false, children: [] };
 		result.push(item);
 		return;

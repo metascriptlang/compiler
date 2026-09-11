@@ -340,6 +340,7 @@ function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
 		node.nodeType = null as unknown as Type;
 		node.resolvedSym = null;
 		node.flags = rewritten.flags;
+		node.variantSlot = rewritten.variantSlot;
 	}
 	return after;
 }
@@ -453,7 +454,8 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 	if (last.location != null) node.location = last.location;
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
-	node.flags = 0;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
 	checkStmt(ctx, node);
 }
 
@@ -613,7 +615,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		node.resolvedSym = sym;
 		varDecl(ctx.initTracker, d.declName);
 		markInitialized(ctx.initTracker, d.declName);
-		node.flags = node.flags | NodeFlag.FirstWrite;
+		node.flags = node.flags.incl(NodeFlag.FirstWrite);
 		return;
 	}
 	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
@@ -727,10 +729,10 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// Ref parity: initVar if initializer present
 	// Any initializer counts — even `null as unknown as T` (initialized, just null-valued)
 	if (d.initializer != null) {
-		node.flags = node.flags | NodeFlag.FirstWrite;
+		node.flags = node.flags.incl(NodeFlag.FirstWrite);
 		markInitialized(ctx.initTracker, d.declName);
 	}
-	if ((node.flags & NodeFlag.StaticStorage) != 0) {
+	if (node.flags.has(NodeFlag.StaticStorage)) {
 		checkStaticStorageDecl(ctx, node, d);
 	}
 	// `let x;` with no initializer → NOT marked → will warn on use
@@ -1974,7 +1976,7 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 // silent name-only entry instead of a new diagnostic.
 function checkMacroDecl(ctx: CheckerContext, node: Node): void {
 	markMacroUsedSymbols(ctx, node);
-	if ((node.flags & NodeFlag.Converter) == 0) return;
+	if (!node.flags.has(NodeFlag.Converter)) return;
 	const d = node.data as MacroDeclData;
 	if (d.macroDeclReturnType == "") return;
 	const t = resolveAnnotation(d.macroDeclReturnType, ctx, 0, 0);

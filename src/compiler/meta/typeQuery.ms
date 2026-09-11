@@ -90,7 +90,7 @@ function hostBindSym(args: RaiserValue[]): RaiserValue {
 	if (sym == null) return raiserNil();
 	const ident = createNodeAt(NodeKind.Identifier, { name: sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
 	ident.resolvedSym = sym;
-	ident.flags = ident.flags | (NodeFlag.BoundSym as int32);
+	ident.flags = ident.flags.incl(NodeFlag.BoundSym);
 	return emitNode(ident);
 }
 

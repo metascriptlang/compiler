@@ -64,6 +64,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	fnNode.nodeType = methodNode.nodeType;
 	fnNode.resolvedSym = methodNode.resolvedSym;
 	fnNode.flags = methodNode.flags;
+	fnNode.variantSlot = methodNode.variantSlot;
 	fnNode.paramLocations = methodNode.paramLocations;
 	fnNode.typeExpr = methodNode.typeExpr;
 	fnNode.typeExprs = methodNode.typeExprs;
@@ -145,6 +146,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	if (defaults.length > 0) initSym.defaultParams = defaults;
 	fnNode.resolvedSym = initSym;
 	fnNode.flags = ctorNode.flags;
+	fnNode.variantSlot = ctorNode.variantSlot;
 	fnNode.paramLocations = ctorNode.paramLocations;
 	fnNode.typeExpr = ctorNode.typeExpr;
 	fnNode.typeExprs = ctorNode.typeExprs;
@@ -160,6 +162,7 @@ function rewrapDecorated(member: Node, dd: DecoratedDeclData, liftedFn: Node): N
 		decoratedNode: liftedFn,
 	}, member.location);
 	newDecorated.flags = member.flags;
+	newDecorated.variantSlot = member.variantSlot;
 	newDecorated.resolvedSym = liftedFn.resolvedSym;
 	return newDecorated;
 }
