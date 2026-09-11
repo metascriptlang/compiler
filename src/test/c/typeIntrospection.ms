@@ -231,7 +231,7 @@ macro symKindOf(x: Node): Node {
 		kind: NodeKind.NumberLiteral,
 		line: x.line,
 		column: x.column,
-		value: x.resolvedSym.kind,
+		value: x.resolvedSym.symbolKind,
 		isFloat: false,
 	};
 }
@@ -642,4 +642,106 @@ main();
 	const c = compileToCWithStd(src);
 	assert !c.ok;
 	if (!c.ok) assert c.error.contains("bindSym cannot resolve 'local'");
+}
+
+test "E2E: typeKind sees enum, class ref, class impl, and primitive behind the rendered AST" {
+	const src = `
+import { Node, TypeKind, bindSym, getType, getTypeImpl, resolveType, typeKind } from "std/meta";
+
+enum Color { Red, Green }
+class Box { x: int32 = 0; }
+
+macro probe(x: Node): Node {
+	const c = getType(bindSym("Color"));
+	const b = getType(bindSym("Box"));
+	const bi = getTypeImpl(bindSym("Box"));
+	const i = resolveType("int32");
+	if (c == null) error("Color null", x);
+	else if (typeKind(c) != TypeKind.Enum) error("Color not Enum", x);
+	if (b == null) error("Box null", x);
+	else if (typeKind(b) != TypeKind.Ref) error("Box not Ref", x);
+	if (bi == null) error("Box impl null", x);
+	else if (typeKind(bi) != TypeKind.Struct) error("Box impl not Struct", x);
+	if (i == null) error("int32 null", x);
+	else if (typeKind(i) != TypeKind.Int32) error("int32 not Int32", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: sameType compares the types behind two resolved nodes" {
+	const src = `
+import { Node, resolveType, sameType } from "std/meta";
+
+macro probe(x: Node): Node {
+	const s1 = resolveType("string");
+	const s2 = resolveType("string");
+	const i = resolveType("int32");
+	if (s1 == null) error("string null", x);
+	else if (s2 == null) error("string null", x);
+	else if (i == null) error("int32 null", x);
+	else if (!sameType(s1, s2)) error("string != string", x);
+	else if (sameType(s1, i)) error("string == int32", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: symKind reports the symbol kind of a bound name" {
+	const src = `
+import { Node, SymbolKind, bindSym, symKind } from "std/meta";
+
+enum Color { Red }
+function helper(a: int32): int32 { return a; }
+
+macro probe(x: Node): Node {
+	if (symKind(bindSym("Color")) != SymbolKind.Enum) error("Color not Enum sym", x);
+	else if (symKind(bindSym("helper")) != SymbolKind.Function) error("helper not Function sym", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: getType on a function renders a TypeFunction with its parameters" {
+	const src = `
+import { Node, NodeKind, bindSym, getType } from "std/meta";
+
+function add(a: int32, b: int32): boolean { return true; }
+
+macro probe(x: Node): Node {
+	const t = getType(bindSym("add"));
+	if (t == null) error("getType(add) null", x);
+	else if (t.kind != NodeKind.TypeFunction) error("add not TypeFunction", x);
+	else if (t.typExprParams.length != 2) error("add param count wrong", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
 }

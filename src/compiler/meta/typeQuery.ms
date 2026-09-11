@@ -2,9 +2,10 @@ import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNod
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { RaiserValue, RaiserValueKind, raiserNil, heapObjectGetField } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField, heapObjectSetField } from "../../raiser/value";
 import { registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt } from "./bridge";
+import { mapTypeToAst, nodeToValue, boundSymAt, registerBoundType, boundTypeAt } from "./bridge";
+import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 
 export function stillDecoratedMessage(name: string): string {
@@ -31,6 +32,43 @@ function emitNode(n: Node): RaiserValue {
 	const arrHeap = activeHostArrayHeap();
 	if (objHeap == null || arrHeap == null) return raiserNil();
 	return nodeToValue(n, objHeap, arrHeap);
+}
+
+function emitTypeNode(n: Node, src: Type): RaiserValue {
+	const v = emitNode(n);
+	const objHeap = activeHostObjectHeap();
+	if (objHeap != null && v.kind == RaiserValueKind.Object) {
+		heapObjectSetField(objHeap, v.intVal, "typeHandle", raiserInt(registerBoundType(src)));
+	}
+	return v;
+}
+
+function peelAlias(t: Type): Type {
+	let cur = t;
+	let g = 0;
+	while (cur != null && cur.kind == TypeKind.Alias && cur.typeReturn != null && g < 8) {
+		cur = cur.typeReturn;
+		g = g + 1;
+	}
+	return cur;
+}
+
+function typeArgOf(v: RaiserValue): Type | null {
+	if (v.kind == RaiserValueKind.Object) {
+		const heap = activeHostObjectHeap();
+		if (heap != null) {
+			const th = heapObjectGetField(heap, v.intVal, "typeHandle");
+			if (th.kind == RaiserValueKind.Int) { const t = boundTypeAt(th.intVal as int32); if (t != null) return t; }
+			if (th.kind == RaiserValueKind.Float) { const t = boundTypeAt(th.floatVal as int32); if (t != null) return t; }
+		}
+	}
+	const sym = boundSymOf(v);
+	if (sym != null && !hasFlag(sym, SymbolFlag.Forward)) {
+		const ctx = activeMetaCtx();
+		if (ctx != null && sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, ctx);
+		return sym.symbolType;
+	}
+	return null;
 }
 
 function peelToImpl(t: Type): Type {
@@ -74,7 +112,8 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 	const t = sym.symbolType;
 	if (t == null) return queryError(ctx, "node has no type");
 	const loc = makeLoc(activeMetaLine(), activeMetaColumn());
-	return emitNode(mapTypeToAst(impl ? peelToImpl(t) : t, loc));
+	const src = impl ? peelToImpl(t) : t;
+	return emitTypeNode(mapTypeToAst(src, loc), src);
 }
 
 function hostGetImpl(args: RaiserValue[]): RaiserValue {
@@ -93,7 +132,35 @@ function hostResolveType(args: RaiserValue[]): RaiserValue {
 	const line = activeMetaLine();
 	const column = activeMetaColumn();
 	const t = resolveAnnotation(args[0].strVal, ctx, line, column);
-	return emitNode(mapTypeToAst(t, makeLoc(line, column)));
+	if (t == null) return raiserNil();
+	return emitTypeNode(mapTypeToAst(t, makeLoc(line, column)), t);
+}
+
+function hostTypeKind(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null || args.length < 1) return raiserNil();
+	const sym = boundSymOf(args[0]);
+	if (sym != null && hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
+	const t = typeArgOf(args[0]);
+	if (t == null) return queryError(ctx, "node carries no type");
+	return raiserInt(peelAlias(t).kind as number);
+}
+
+function hostSameType(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null || args.length < 2) return raiserBool(false);
+	const a = typeArgOf(args[0]);
+	const b = typeArgOf(args[1]);
+	if (a == null || b == null) { queryError(ctx, "sameType needs two type nodes"); return raiserBool(false); }
+	return raiserBool(sameType(a, b));
+}
+
+function hostSymKind(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null || args.length < 1) return raiserNil();
+	const sym = boundSymOf(args[0]);
+	if (sym == null) return queryError(ctx, "node is not a symbol");
+	return raiserInt(sym.symbolKind as number);
 }
 
 export function registerTypeQueryHostFns(): void {
@@ -101,4 +168,7 @@ export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaGetType", hostGetType);
 	registerHostFn("msMetaGetImpl", hostGetImpl);
 	registerHostFn("msMetaResolveType", hostResolveType);
+	registerHostFn("msMetaTypeKind", hostTypeKind);
+	registerHostFn("msMetaSameType", hostSameType);
+	registerHostFn("msMetaSymKind", hostSymKind);
 }

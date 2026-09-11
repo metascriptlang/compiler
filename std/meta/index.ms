@@ -48,9 +48,15 @@ extern function msMetaBindSym(name: string): Node | null;
 extern function msMetaGetType(n: Node, impl: boolean): Node | null;
 extern function msMetaGetImpl(n: Node): Node | null;
 extern function msMetaResolveType(text: string): Node | null;
+extern function msMetaTypeKind(n: Node): int32;
+extern function msMetaSameType(a: Node, b: Node): boolean;
+extern function msMetaSymKind(n: Node): int32;
 
 export function bindSym(name: string): Node | null { return msMetaBindSym(name); }
 export function getType(n: Node): Node | null { return msMetaGetType(n, false); }
 export function getTypeImpl(n: Node): Node | null { return msMetaGetType(n, true); }
 export function getImpl(n: Node): Node | null { return msMetaGetImpl(n); }
 export function resolveType(text: string): Node | null { return msMetaResolveType(text); }
+export function typeKind(n: Node): TypeKind { return msMetaTypeKind(n) as TypeKind; }
+export function sameType(a: Node, b: Node): boolean { return msMetaSameType(a, b); }
+export function symKind(n: Node): SymbolKind { return msMetaSymKind(n) as SymbolKind; }

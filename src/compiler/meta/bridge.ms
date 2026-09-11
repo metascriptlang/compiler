@@ -277,6 +277,18 @@ function arrayToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	}, loc);
 }
 
+function functionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	const names: string[] = [];
+	for (const n of t.typeNames) names.push(n);
+	return createNodeAt(NodeKind.TypeFunction, {
+		typExprParams: mapTypes(t.typeChildren, loc, visited),
+		typExprReturn: t.typeReturn != null
+			? mapTypeToAstWith(t.typeReturn, loc, visited)
+			: atomicTypeNode("void", loc),
+		typExprParamNames: names,
+	}, loc);
+}
+
 // Build a TypeGeneric node for a GenericInstance (e.g., Container<int32>).
 // Surfaces the generic structure to macros (base name + type args) rather than
 // expanding the instantiated body. Codec macros typically introspect the type
@@ -389,10 +401,8 @@ function modifierToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	}, loc);
 }
 
-// Fallback for not-yet-handled non-atomic kinds: surface t.typeName (placeholder)
-// or "unknown" sentinel. Replaced as Week 2 handlers land (Union, Ref/modifiers).
 function fallbackTypeName(t: Type, loc: SourceLocation): Node {
-	return atomicTypeNode(nameOrDefault(t, "unknown"), loc);
+	return atomicTypeNode(nameOrDefault(t, "<unmapped-type>"), loc);
 }
 
 // Internal dispatch — threads the `visited` stack for cycle detection.
@@ -438,6 +448,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") == "true" }, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
 			=> modifierToAst(t, loc, visited),
+		TypeKind.Function => functionToAst(t, loc, visited),
 		_ => fallbackTypeName(t, loc),
 	};
 	visited.pop();
@@ -553,12 +564,25 @@ export function boundSymAt(index: int32): Symbol | null {
 	return _boundSyms[index];
 }
 
-// Day 9 — minimal Symbol → RaiserValue. Surfaces name + kind only.
-// `declNode` skipped to avoid Symbol↔Node cycle; V2 if codecs need decl site.
+let _boundTypes: Type[] = [];
+
+export function registerBoundType(t: Type): number {
+	_boundTypes.push(t);
+	return _boundTypes.length - 1;
+}
+
+export function boundTypeAt(index: int32): Type | null {
+	if (index < 0 || index >= _boundTypes.length) return null;
+	return _boundTypes[index];
+}
+
+// `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
 	setStr(objHeap, handle, "name", sym.name);
-	heapObjectSetField(objHeap, handle, "kind", raiserInt(sym.symbolKind as number));
+	heapObjectSetField(objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as number));
+	setStr(objHeap, handle, "modulePath", sym.modulePath);
+	setStr(objHeap, handle, "builtinKind", sym.builtinKind);
 	return raiserObject(handle);
 }
 
@@ -2406,11 +2430,11 @@ test "mapTypeToAst — not-yet-handled kind falls back to typeName when set" {
 	assert (out.data as IdentifierData).name == "Color";
 }
 
-test "mapTypeToAst — not-yet-handled kind with no typeName emits Identifier(\"unknown\")" {
+test "mapTypeToAst — not-yet-handled kind with no typeName emits the unmapped sentinel" {
 	const loc = makeLoc(1, 0);
 	const out = mapTypeToAst(makePrimType(TypeKind.Enum), loc);
 	assert out.kind == NodeKind.Identifier;
-	assert (out.data as IdentifierData).name == "unknown";
+	assert (out.data as IdentifierData).name == "<unmapped-type>";
 }
 
 // ===== mapTypeToAst tests — Day 2 (Struct → TypeObject) =====
@@ -3209,7 +3233,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 	};
 }
 
-test "nodeToValue — Node with resolvedSym emits { name, kind } object" {
+test "nodeToValue — Node with resolvedSym emits { name, symbolKind } object" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
@@ -3221,7 +3245,7 @@ test "nodeToValue — Node with resolvedSym emits { name, kind } object" {
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
 	assert nameVal.kind == RaiserValueKind.String;
 	assert nameVal.strVal == "myVar";
-	const kindVal = heapObjectGetField(objH, symVal.intVal, "kind");
+	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
 	assert kindVal.kind == RaiserValueKind.Int;
 	assert kindVal.intVal == SymbolKind.Variable as number;
 }
@@ -3245,7 +3269,7 @@ test "nodeToValue — different SymbolKinds preserved correctly" {
 	ident.resolvedSym = makeSymbol("fn", SymbolKind.Function);
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
-	const kindVal = heapObjectGetField(objH, symVal.intVal, "kind");
+	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
 	assert kindVal.intVal == SymbolKind.Function as number;
 }
 
@@ -3288,11 +3312,11 @@ test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
 	const leftVal = heapObjectGetField(objH, v.intVal, "left");
 	const leftSym = heapObjectGetField(objH, leftVal.intVal, "resolvedSym");
 	assert leftSym.kind == RaiserValueKind.Object;
-	const leftKind = heapObjectGetField(objH, leftSym.intVal, "kind");
+	const leftKind = heapObjectGetField(objH, leftSym.intVal, "symbolKind");
 	assert leftKind.intVal == SymbolKind.Variable as number;
 	const rightVal = heapObjectGetField(objH, v.intVal, "right");
 	const rightSym = heapObjectGetField(objH, rightVal.intVal, "resolvedSym");
-	const rightKind = heapObjectGetField(objH, rightSym.intVal, "kind");
+	const rightKind = heapObjectGetField(objH, rightSym.intVal, "symbolKind");
 	assert rightKind.intVal == SymbolKind.Function as number;
 }
 
