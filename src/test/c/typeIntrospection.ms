@@ -723,6 +723,72 @@ main();
 	assert c.ok;
 }
 
+test "E2E: typed queries chain on a nullable node without narrowing" {
+	const src = `
+import { Node, TypeKind, SymbolKind, bindSym, getType, getTypeImpl, resolveType, typeKind, sameType, symKind } from "std/meta";
+
+enum Color { Red, Green }
+class Box { x: int32 = 0; }
+
+macro probe(x: Node): Node {
+	if (typeKind(getType(bindSym("Color"))) != TypeKind.Enum) error("Color not Enum", x);
+	else if (typeKind(getTypeImpl(bindSym("Box"))) != TypeKind.Struct) error("Box impl not Struct", x);
+	else if (typeKind(resolveType("int32")) != TypeKind.Int32) error("int32 not Int32", x);
+	else if (symKind(bindSym("Box")) != SymbolKind.Class) error("Box not Class sym", x);
+	else if (!sameType(resolveType("int32"), resolveType("int32"))) error("int32 != int32", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: getType, getTypeImpl and getImpl propagate a null node" {
+	const src = `
+import { Node, bindSym, getType, getTypeImpl, getImpl } from "std/meta";
+
+macro probe(x: Node): Node {
+	const missing = "No" + "pe";
+	if (getType(bindSym(missing)) != null) error("type should be null", x);
+	else if (getTypeImpl(bindSym(missing)) != null) error("impl type should be null", x);
+	else if (getImpl(bindSym(missing)) != null) error("impl should be null", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: typeKind on a null node is a loud error" {
+	const src = `
+import { Node, TypeKind, bindSym, getType, typeKind } from "std/meta";
+
+macro probe(x: Node): Node {
+	const missing = "No" + "pe";
+	if (typeKind(getType(bindSym(missing))) == TypeKind.Enum) error("unreachable", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+	if (!c.ok) assert c.error.contains("node carries no type");
+}
+
 test "E2E: getType on a function renders a TypeFunction with its parameters" {
 	const src = `
 import { Node, NodeKind, bindSym, getType } from "std/meta";
