@@ -14,7 +14,7 @@ import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNode
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -539,6 +539,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			if (noExplicit && !giCtxOk) {
 				addError(ctx, `'new ${calleeName2}()' requires explicit type arguments: new ${calleeName2}<...>()`, node.location.line, node.location.column);
 			}
+			if (!noExplicit) checkExplicitTypeArgArity(ctx, node, extractGenericNames("gen:" + genericParams2), calleeName2);
 		}
 	}
 	// Resolve inner struct type for field type propagation
@@ -1360,6 +1361,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, directFlags, expectedType);
 				if (newCalleeType != null) calleeType = newCalleeType;
 			}
+			if (!isGenericFn(directFlags) && node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
+				checkExplicitTypeArgArity(ctx, node, [], getCalleeName(d.callee));
+			}
 		}
 		// If explicit type args (<T>) and generic params, resolve type args at checker time
 		if (hasGenericParams(calleeType)) {
@@ -1761,6 +1765,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const cd = node.data as CallExprData;
 
 	const genericNames = extractGenericNames(flags);
+	checkExplicitTypeArgArity(ctx, node, genericNames, getCalleeName(cd.callee));
 	const eb = createUnifyBindings();
 	const ebFrom: int32[] = [];
 	const conflicted: int32[] = [];
@@ -1939,26 +1944,6 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	cd.callee.resolvedSym = instSym;
 	cd.callee.nodeType = instSym.symbolType;
 	return instSym.symbolType;
-}
-
-function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
-	const result = createUnifyBindings();
-	if (paramNames.length == 0) return result;
-	const explicitStr = findCallTypeArg(node);
-	if (explicitStr == "") return result;
-	const argNames = splitTopLevel(explicitStr, ",");
-	const limit = paramNames.length < argNames.length ? paramNames.length : argNames.length;
-	for (let i = 0; i < limit; i += 1) {
-		const paramName = paramNames[i].trim();
-		const argTypeStr = argNames[i].trim();
-		if (paramName == "" || argTypeStr == "") continue;
-		const resolved = resolveAnnotation(argTypeStr, ctx, node.location.line, node.location.column);
-		if (resolved != null && !isUnresolvedType(resolved)) {
-			result.names.push(paramName);
-			result.types.push(resolved);
-		}
-	}
-	return result;
 }
 
 // Tier 1: locate the implementation symbol in an overload set.

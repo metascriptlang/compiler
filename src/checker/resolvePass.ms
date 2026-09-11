@@ -7,11 +7,11 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, registerBitSetBase } from "./types";
+import { UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, registerBitSetBase } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
+import { findCallTypeArg, getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
 import { monoTypeKey } from "../monomorphize/registry";
@@ -207,6 +207,38 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
 	}
 	return t;
+}
+
+export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
+	const result = createUnifyBindings();
+	if (paramNames.length == 0) return result;
+	const explicitStr = findCallTypeArg(node);
+	if (explicitStr == "") return result;
+	const argNames = splitTopLevel(explicitStr, ",");
+	const limit = paramNames.length < argNames.length ? paramNames.length : argNames.length;
+	for (let i = 0; i < limit; i += 1) {
+		const paramName = paramNames[i].trim();
+		const argTypeStr = argNames[i].trim();
+		if (paramName == "" || argTypeStr == "") continue;
+		const resolved = resolveAnnotation(argTypeStr, ctx, node.location.line, node.location.column);
+		if (resolved != null && !isUnresolvedType(resolved)) {
+			result.names.push(paramName);
+			result.types.push(resolved);
+		}
+	}
+	return result;
+}
+
+export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, paramNames: string[], calleeName: string): boolean {
+	const explicitStr = findCallTypeArg(node);
+	if (explicitStr == "") return true;
+	let given: int32 = 0;
+	for (const a of splitTopLevel(explicitStr, ",")) {
+		if (a.trim() != "") given += 1;
+	}
+	if (given == paramNames.length) return true;
+	addError(ctx, `Wrong number of type arguments to '${calleeName}': expected ${paramNames.length}, got ${given}`, node.location.line, node.location.column);
+	return false;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
