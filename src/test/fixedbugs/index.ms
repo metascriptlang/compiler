@@ -158,3 +158,4 @@ import "./bug139ArrayElementInvariance";
 import "./bug140GenericLiteralOptional";
 import "./bug141DistinctFnCallee";
 import "./bug142GenericAliasBody";
+import "./bug143TypeofNarrow";
