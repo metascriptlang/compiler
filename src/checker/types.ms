@@ -4,6 +4,7 @@
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/node";
+import { getGenericDecl } from "../parser/context";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -1597,6 +1598,35 @@ export function createBrandDistinct(brandKey: string, inner: Type): Type {
 export function isBrandDistinct(t: Type | null): boolean {
 	if (t == null) return false;
 	return t.kind == TypeKind.Distinct && (t.typeFlags & (TypeFlag.BrandWiden as int32)) != 0;
+}
+
+export function distinctBody(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.Distinct) return t.typeReturn;
+	if (t.kind != TypeKind.GenericInstance) return null;
+	const base = t.typeExtra;
+	if (base == null || base.kind != TypeKind.Distinct || base.typeReturn == null) return null;
+	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
+	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return base.typeReturn;
+	const names: string[] = [];
+	const args: Type[] = [];
+	for (let pi = 0; pi < paramNames.length; pi += 1) {
+		names.push(paramNames[pi].trim());
+		args.push(t.typeChildren[pi]);
+	}
+	return substituteAllParams(base.typeReturn, names, args);
+}
+
+export function distinctCallTarget(t: Type | null): Type | null {
+	const body = distinctBody(t);
+	return body != null && body.kind == TypeKind.Function ? body : null;
+}
+
+export function distinctWidenBody(t: Type | null): Type | null {
+	if (t == null) return null;
+	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
+	if (!isBrandDistinct(wrapper)) return null;
+	return distinctBody(t);
 }
 
 export function createGenericParam(name: string): Type {

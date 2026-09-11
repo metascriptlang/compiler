@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType } from "../checker/types";
+import { distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
@@ -63,6 +63,8 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const elem = t.typeReturn;
+	const elemBody = distinctBody(elem);
+	if (elemBody != null) return classifyArray(createArray(elemBody), ctx);
 	if (elem != null && elem.kind == TypeKind.Uint8) {
 		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
@@ -242,6 +244,8 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			// (Amendment H — deferred decref to dispatcher, serializing with the drain
 			// decref to eliminate the concurrent-decref race without atomic rc).
 			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			const distinctInner = distinctBody(t);
+			if (distinctInner != null) return classifyType(distinctInner, ctx);
 			// Result is a boolean-discriminated match-type Union post-migration —
 			// flow through the standard mangled hook generation below.
 			// Monomorphized struct instance: build hook names via `mangleMonoName` so they match

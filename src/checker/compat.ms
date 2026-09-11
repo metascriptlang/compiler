@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -335,6 +335,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Brand widens implicitly to its base (CubeId → string); base → brand needs `as`.
 	if (isBrandDistinct(source) && source.typeReturn != null && target.kind != TypeKind.Distinct) {
 		return isAssignable(source.typeReturn, target);
+	}
+	if (source.kind == TypeKind.GenericInstance && !isNominalType(target)) {
+		const widenBody = distinctWidenBody(source);
+		if (widenBody != null) return isAssignable(widenBody, target);
 	}
 
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>

@@ -1665,6 +1665,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (d.aliasIsDistinct) {
 		const distType = createDistinct(resolved);
 		distType.typeName = d.aliasName;
+		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags | (TypeFlag.BrandWiden as int32);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 		if (d.aliasName == "BitSet") { registerBitSetBase(sym.symbolType); }

@@ -1952,6 +1952,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
 		}
+		if (d.convType.kind == TypeKind.Function) {
+			ctx.results.push(inner);
+			return;
+		}
 		ctx.results.push(`((${targetC})(${inner}))`);
 		return;
 	}
