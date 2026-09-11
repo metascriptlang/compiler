@@ -248,6 +248,19 @@ export function captureGenericParams(state: ParserState): string {
 					advance(state);
 				}
 			}
+			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign && depth == 1) {
+				advance(state);
+				let defaultDepth = 0;
+				while (!isAtEnd(state)) {
+					const k = current(state).kind;
+					if (k == TokenKind.Comma && defaultDepth == 0) break;
+					if (k == TokenKind.Gt) { if (defaultDepth < 1) break; defaultDepth -= 1; }
+					else if (k == TokenKind.GtGt) { if (defaultDepth < 2) break; defaultDepth -= 2; }
+					else if (k == TokenKind.GtGtGt) { if (defaultDepth < 3) break; defaultDepth -= 3; }
+					else if (k == TokenKind.Lt) defaultDepth += 1;
+					advance(state);
+				}
+			}
 			continue;
 		}
 		if (current(state).kind == TokenKind.Lt) { depth += 1; }
