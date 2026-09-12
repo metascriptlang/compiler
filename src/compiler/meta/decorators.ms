@@ -16,6 +16,7 @@ import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly } from "../../c
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
 import { parseSource } from "../../parser/statements/validation";
 import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
@@ -686,16 +687,6 @@ function bareMember(member: Node): Node {
 	return member;
 }
 
-function fieldAssignStmt(member: Node): Node {
-	const pd = member.data as PropertyDeclData;
-	const loc = member.location;
-	const receiver = createNodeAt(NodeKind.Identifier, { name: "this" }, loc);
-	const target = createNodeAt(NodeKind.MemberExpr, { object: receiver, property: pd.propName, isOptional: false }, loc);
-	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: target, right: pd.propInitializer }, loc);
-	pd.propInitializer = null as unknown as Node;
-	return createNodeAt(NodeKind.ExprStmt, { expr: assign }, loc);
-}
-
 function instanceFieldNames(body: Node[]): string[] {
 	const names: string[] = [];
 	for (const m of body) {
@@ -724,7 +715,7 @@ function instanceInitStatements(plan: ClassPlan): Node[] {
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (pd.propIsStatic) continue;
-		if (pd.propInitializer != null) out.push(fieldAssignStmt(member));
+		if (pd.propInitializer != null) out.push(fieldInitAssignment(member, null));
 		for (const inits of plan.memberInits) {
 			if (inits.fieldName != pd.propName) continue;
 			for (const s of inits.stmts) out.push(s);

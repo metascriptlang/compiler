@@ -12,7 +12,7 @@ import {
 	Node, NodeKind, ClassDeclData, PropertyDeclData, ConstructorDeclData,
 	BlockStmtData, ProgramData, ExportDeclData, DecoratedDeclData,
 	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData,
-	createNodeAt, SymbolKind,
+	createNodeAt, SymbolKind, Type,
 } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeBlock, makeCall, makeIdent } from "../util";
@@ -21,27 +21,32 @@ import { getCtorParamTypes, parentClassSymOf } from "../../checker/symbol";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts } from "../testUtil";
 
+export function fieldInitAssignment(member: Node, receiverType: Type | null): Node {
+	const pd = member.data as PropertyDeclData;
+	// Untyped initializers (an empty array literal) codegen by their
+	// declared field type, not by a guessed default.
+	if (pd.propInitializer.nodeType == null && member.nodeType != null) {
+		pd.propInitializer.nodeType = member.nodeType;
+	}
+	const receiver = makeTypedIdent("this", receiverType, member.location);
+	const target = makeMember(receiver, pd.propName, member.location);
+	if (target.nodeType == null && member.nodeType != null) {
+		target.nodeType = member.nodeType;
+	}
+	const assign = makeAssign(target, pd.propInitializer, member.location);
+	// The initializer now lives in exactly one place. Leaving it on the
+	// PropertyDecl too would hand later passes the same node twice.
+	pd.propInitializer = null as unknown as Node;
+	return makeExprStmt(assign, member.location);
+}
+
 function fieldInitStatements(classNode: Node, cd: ClassDeclData): Node[] {
 	const stmts: Node[] = [];
 	for (const member of cd.classBody) {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic && pd.propInitializer != null) {
-				// Untyped initializers (an empty array literal) codegen by their
-				// declared field type, not by a guessed default.
-				if (pd.propInitializer.nodeType == null && member.nodeType != null) {
-					pd.propInitializer.nodeType = member.nodeType;
-				}
-				const receiver = makeTypedIdent("this", classNode.nodeType, member.location);
-				const target = makeMember(receiver, pd.propName, member.location);
-				if (target.nodeType == null && member.nodeType != null) {
-					target.nodeType = member.nodeType;
-				}
-				const assign = makeAssign(target, pd.propInitializer, member.location);
-				stmts.push(makeExprStmt(assign, member.location));
-				// The initializer now lives in exactly one place. Leaving it on the
-				// PropertyDecl too would hand later passes the same node twice.
-				pd.propInitializer = null as unknown as Node;
+				stmts.push(fieldInitAssignment(member, classNode.nodeType));
 			}
 		}
 	}
