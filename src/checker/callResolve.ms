@@ -1748,29 +1748,34 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
 }
 
-function reportBindingConflict(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], fb: UnifyBindings, cd: CallExprData, argIdx: int32): boolean {
-	if (argIdx >= cd.arguments.length) return false;
-	const arg = cd.arguments[argIdx];
-	if (bindingConflictSkipArg(arg)) return false;
-	for (let i = 0; i < fb.names.length; i += 1) {
-		const newT = fb.types[i];
-		if (newT == null || hasGenericParams(newT)) continue;
-		for (let j = 0; j < eb.names.length; j += 1) {
-			if (eb.names[j] != fb.names[i]) continue;
-			const boundT = eb.types[j];
-			if (boundT == null || hasGenericParams(boundT)) break;
-			const from = j < ebFrom.length ? ebFrom[j] : 0;
-			if (from < 0) break;
-			if (isAssignable(newT, boundT)) break;
-			if (widensToBase(ctx, boundT, newT)) { eb.types[j] = newT; break; }
-			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
-				+ ": got " + typeDisplayName(newT) + ", expected " + typeDisplayName(boundT)
-				+ " — '" + eb.names[j] + "' was bound by argument " + String(from),
+function strictlyWidens(from: Type, to: Type): boolean {
+	return isAssignable(from, to) && !isAssignable(to, from);
+}
+
+function chooseInferredBindings(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], candNames: string[], candTypes: Type[], candFrom: int32[], cd: CallExprData, conflicted: int32[]): void {
+	for (let ci = 0; ci < candNames.length; ci += 1) {
+		const name = candNames[ci];
+		if (findBindingIndex(eb, name) != -1) continue;
+		let chosen = candTypes[ci];
+		let chosenFrom = candFrom[ci];
+		for (let cj = ci + 1; cj < candNames.length; cj += 1) {
+			if (candNames[cj] != name || bindingConflictSkipArg(cd.arguments[candFrom[cj]])) continue;
+			if (strictlyWidens(chosen, candTypes[cj])) { chosen = candTypes[cj]; chosenFrom = candFrom[cj]; }
+		}
+		eb.names.push(name);
+		eb.types.push(chosen);
+		ebFrom.push(chosenFrom);
+		for (let cj = ci; cj < candNames.length; cj += 1) {
+			if (candNames[cj] != name || candFrom[cj] == chosenFrom) continue;
+			const arg = cd.arguments[candFrom[cj]];
+			if (bindingConflictSkipArg(arg) || isAssignable(candTypes[cj], chosen)) continue;
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(candFrom[cj])
+				+ ": got " + typeDisplayName(candTypes[cj]) + ", expected " + typeDisplayName(chosen)
+				+ " — '" + name + "' was bound by argument " + String(chosenFrom),
 				arg.location.line, arg.location.column);
-			return true;
+			conflicted.push(candFrom[cj]);
 		}
 	}
-	return false;
 }
 
 function fillArgBindings(ctx: CheckerContext, raw: UnifyBindings, into: UnifyBindings, cd: CallExprData, argIdx: int32): boolean {
@@ -1814,6 +1819,9 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
 	// Pass 1: unify args against params to derive bindings.
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
+	const candNames: string[] = [];
+	const candTypes: Type[] = [];
+	const candFrom: int32[] = [];
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] != null) {
 			// Per-arg filter: a binding whose bound type still CONTAINS generic
@@ -1826,11 +1834,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
 			const fb = createUnifyBindings();
 			if (fillArgBindings(ctx, ab, fb, cd, i)) conflicted.push(i);
-			if (reportBindingConflict(ctx, eb, ebFrom, fb, cd, i)) conflicted.push(i);
-			mergeUnifyBindings(eb, fb);
-			while (ebFrom.length < eb.names.length) ebFrom.push(i);
+			for (let bi = 0; bi < fb.names.length; bi += 1) {
+				candNames.push(fb.names[bi]);
+				candTypes.push(fb.types[bi]);
+				candFrom.push(i);
+			}
 		}
 	}
+	chooseInferredBindings(ctx, eb, ebFrom, candNames, candTypes, candFrom, cd, conflicted);
 	// Pass 2: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
