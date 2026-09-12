@@ -38,7 +38,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 			const objId = member.object.data as IdentifierData;
 			if (objId.name == "console") return node;
 		}
-		if (sym != null && sym.nativeName != "") return node;
+		if (sym != null && sym.nativeName != "" && sym.builtinKind == "") return node;
 	}
 
 	// JS backend keeps class instance methods as native member calls.
