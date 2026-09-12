@@ -32,9 +32,14 @@ test "T bound through an array element rejects a bad scalar" {
 	assert hasError(src, "Argument type mismatch in 'first' arg 1: got string, expected int32");
 }
 
-test "narrowing float64 into an int32 binding is rejected" {
-	const src = "function pick<T>(a: T, b: T): T { return a; }\nconst c = pick(1, 2.5);";
-	assert hasError(src, "Argument type mismatch in 'pick' arg 1: got float64, expected int32");
+test "an int64 argument after an int32 binding is rejected" {
+	const src = "function pick<T>(a: T, b: T): T { return a; }\nconst w: int64 = 5;\nconst c = pick(1, w);";
+	assert hasError(src, "Argument type mismatch in 'pick' arg 1: got int64, expected int32");
+}
+
+test "the diagnostic names the widest candidate when it comes later" {
+	const src = CLASSES + "function pair3<T>(a: T, b: T, c: T): T { return a; }\nconst c = pair3(dog, animal, \"s\");";
+	assert hasError(src, "Argument type mismatch in 'pair3' arg 2: got string, expected Animal — 'T' was bound by argument 1");
 }
 
 test "sibling classes with no common binding are rejected" {
@@ -77,6 +82,23 @@ test "a subtype argument fits a supertype binding" {
 
 test "a base-class argument widens the binding instead of failing" {
 	assert strictErrorCount(CLASSES + "const c = pair(dog, animal);") == 0;
+}
+
+test "a float64 argument widens an int32 binding" {
+	const src = "function pick<T>(a: T, b: T): T { return a; }\nconst c = pick(1, 2.5);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "the common base is found regardless of argument order" {
+	const src = CLASSES + "class Cat extends Animal { lives: int32 = 9; }\nconst cat = new Cat();\nfunction pair3<T>(a: T, b: T, c: T): T { return a; }\n";
+	assert strictErrorCount(src + "const c = pair3(dog, cat, animal);") == 0;
+	assert strictErrorCount(src + "const c = pair3(dog, animal, cat);") == 0;
+	assert strictErrorCount(src + "const c = pair3(animal, dog, cat);") == 0;
+}
+
+test "a narrower interface widens a wider structural binding" {
+	const src = "interface P { a: int32; }\ninterface PB { a: int32; b: int32; }\nfunction pair<T>(a: T, b: T): T { return a; }\nconst x: PB = { a: 1, b: 2 };\nconst y: P = { a: 3 };\nconst c = pair(x, y);";
+	assert strictErrorCount(src) == 0;
 }
 
 test "an explicit base type arg is not second-guessed" {
@@ -138,6 +160,16 @@ test "a template argument contradicting an explicit type argument is rejected" {
 
 test "an explicit template binding is not widened by a later argument" {
 	assert hasError(TPL_CLASSES + "const c = tp<Dog>(animal, dog);", "Argument type mismatch in 'tp' arg 0: got Animal, expected Dog");
+}
+
+test "a template finds the common base regardless of argument order" {
+	const src = TPL_CLASSES + "class Cat extends Animal { lives: int32 = 9; }\nconst cat = new Cat();\ntemplate tp3<T>(a: T, b: T, c: T): T { return a; }\nconst c = tp3(dog, cat, animal);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a template still rejects siblings with no covering candidate" {
+	const src = TPL_CLASSES + "class Cat extends Animal { lives: int32 = 9; }\nconst cat = new Cat();\nconst c = tp(dog, cat);";
+	assert hasError(src, "Argument type mismatch in 'tp' arg 1: got Cat, expected Dog");
 }
 
 test "an explicit template binding accepts subclass arguments in any order" {
