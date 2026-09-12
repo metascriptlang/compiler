@@ -9,9 +9,9 @@ import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
-import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved } from "./declaration";
+import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved , parseObjectPattern, parseArrayPattern } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
-import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
+import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser, registerPatternParsers } from "./callbacks";
 import { attachComments } from "../util";
 
 
@@ -367,6 +367,7 @@ export function registerCoreParsers(): void {
 	registerStmtExprParser(parseExpressionFromState);
 	registerStateProgramParser(parseProgram);
 	registerBlockParser(parseBlockStmt);
+	registerPatternParsers(parseObjectPattern, parseArrayPattern);
 }
 
 // Auto-register at module load so parser tests work without explicit init

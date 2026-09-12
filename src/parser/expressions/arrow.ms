@@ -4,7 +4,7 @@
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParsedDefaults, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 
@@ -129,6 +129,7 @@ export function parseArrowFunction(
 	const raw = parseParamList(state, "");
 	const arrowParamTypeExprs = getLastParamTypeExprs();
 	const arrowParamLocs = getLastParamLocations();
+	const arrowPatterns = getLastParamPatterns();
 	const arrowParams = extractParamNames(raw);
 	const arrowParamTypes = extractParamTypes(raw);
 	// Pad defaults to match arrowParams length (parser only pushes when default present)
@@ -151,7 +152,7 @@ export function parseArrowFunction(
 	advance(state); // consume =>
 	// Body: block { ... } or expression
 	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
-		const body = try blockParser(state);
+		const body = prependParamPatterns(try blockParser(state), arrowPatterns, arrowParamLocs);
 		const arrowNode1 = createNode(NodeKind.ArrowFunction, {
 			arrowParams,
 			arrowParamTypes,
@@ -166,7 +167,7 @@ export function parseArrowFunction(
 		return Result.ok(arrowNode1);
 	}
 
-	const body = try exprParser(state, 0);
+	const body = prependParamPatterns(try exprParser(state, 0), arrowPatterns, arrowParamLocs);
 	const arrowNode2 = createNode(NodeKind.ArrowFunction, {
 		arrowParams,
 		arrowParamTypes,

@@ -2,11 +2,11 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, makeLoc, NumberLiteralData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
+import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
-import { callExprParser } from "./statements/callbacks";
+import { callExprParser, callObjectPatternParser, callArrayPatternParser } from "./statements/callbacks";
 
 
 // ===== Comment Preservation =====
@@ -180,11 +180,42 @@ export function getLastParamLocations(): SourceLocation[] {
 	return _lastParamLocations;
 }
 
+let _lastParamPatterns: Node[] = [];
+
+export function getLastParamPatterns(): Node[] {
+	return _lastParamPatterns;
+}
+
+export function paramPatternName(slot: int32): string {
+	return `_destr${slot}`;
+}
+
+export function prependParamPatterns(body: Node, patterns: Node[], locs: SourceLocation[]): Node {
+	const decls: Node[] = [];
+	for (let i = 0; i < patterns.length; i += 1) {
+		const pattern = patterns[i];
+		if (pattern == null) continue;
+		const loc = i < locs.length ? locs[i] : body.location;
+		const init = createNodeAt(NodeKind.Identifier, { name: paramPatternName(i) }, loc);
+		decls.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: pattern, destrInit: init, destrIsConst: true }, loc));
+	}
+	if (decls.length == 0) return body;
+	if (body.kind == NodeKind.BlockStmt) {
+		const d = body.data as BlockStmtData;
+		for (const stmt of d.statements) decls.push(stmt);
+		d.statements = decls;
+		return body;
+	}
+	decls.push(createNodeAt(NodeKind.ReturnStmt, { argument: body }, body.location));
+	return createNodeAt(NodeKind.BlockStmt, { statements: decls }, body.location);
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
 	_lastParamTypeExprs = [];
 	_lastParamLocations = [];
+	_lastParamPatterns = [];
 	if (current(state).kind != TokenKind.LParen) { return params; }
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
@@ -252,8 +283,12 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
 			const destToken = current(state);
 			_lastParamLocations.push(makeLoc(destToken.line, destToken.column));
-			skipDestructurePattern(state);
-			params.push(`${paramPrefix}_destructure`);
+			const patResult = destToken.kind == TokenKind.LBrace ? callObjectPatternParser(state) : callArrayPatternParser(state);
+			if (!patResult.ok) { break; }
+			const slot = params.length / 2;
+			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null); }
+			_lastParamPatterns.push(patResult.value);
+			params.push(`${paramPrefix}${paramPatternName(slot)}`);
 			params.push(captureOptionalType(state));
 			_lastParamTypeExprs.push(_lastTypeExpr);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {

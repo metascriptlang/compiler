@@ -44,6 +44,24 @@ export function registerStateProgramParser(fn: StateProgramParserFn): void {
 	stateProgramParserFn = fn;
 }
 
+type PatternParserFn = (state: ParserState) => NodeResult;
+let objectPatternParserFn: PatternParserFn = (state: ParserState): NodeResult => {
+	return Result.err("Object pattern parser not registered");
+};
+let arrayPatternParserFn: PatternParserFn = (state: ParserState): NodeResult => {
+	return Result.err("Array pattern parser not registered");
+};
+export function registerPatternParsers(objectFn: PatternParserFn, arrayFn: PatternParserFn): void {
+	objectPatternParserFn = objectFn;
+	arrayPatternParserFn = arrayFn;
+}
+export function callObjectPatternParser(state: ParserState): NodeResult {
+	return objectPatternParserFn(state);
+}
+export function callArrayPatternParser(state: ParserState): NodeResult {
+	return arrayPatternParserFn(state);
+}
+
 export function callBlockParser(state: ParserState): NodeResult {
 	return blockParserFn(state);
 }

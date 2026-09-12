@@ -1834,6 +1834,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 				paramType = paramType.typeChildren[0];
 			}
 		}
+		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
+			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
+			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
+		}
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {

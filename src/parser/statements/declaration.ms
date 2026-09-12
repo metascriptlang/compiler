@@ -6,7 +6,7 @@ import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createN
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt } from "./validation";
 
@@ -244,6 +244,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const fnDefaults = getLastParsedDefaults();
 	const fnParamTypeExprs = getLastParamTypeExprs();
 	const fnParamLocs = getLastParamLocations();
+	const fnPatterns = getLastParamPatterns();
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
 
@@ -269,6 +270,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnFlagsFinal = flags == "" ? "overload" : (flags + " overload");
 	} else {
 		fnBody = try callBlockParser(state);
+		fnBody = prependParamPatterns(fnBody, fnPatterns, fnParamLocs);
 		fnFlagsFinal = flags;
 	}
 
@@ -1238,10 +1240,11 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	const raw = parseParamList(state, "constructor");
 	const ctorParamTypeExprs = getLastParamTypeExprs();
 	const ctorParamLocs = getLastParamLocations();
+	const ctorPatterns = getLastParamPatterns();
 	const ctorDefaults = getLastParsedDefaults();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
-	const body = try callBlockParser(state);
+	const body = prependParamPatterns(try callBlockParser(state), ctorPatterns, ctorParamLocs);
 	const ctorNode = createNode(NodeKind.ConstructorDecl, {
 		ctorParams,
 		ctorParamTypes,
@@ -1263,12 +1266,13 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	const raw = parseParamList(state, `${accKind}_${accName}`);
 	const accParamTypeExprs = getLastParamTypeExprs();
 	const accParamLocs = getLastParamLocations();
+	const accPatterns = getLastParamPatterns();
 	const accDefaults = getLastParsedDefaults();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
 	const methodReturnTypeExpr = getLastTypeExpr();
-	const body = try callBlockParser(state);
+	const body = prependParamPatterns(try callBlockParser(state), accPatterns, accParamLocs);
 	const accNode = createNode(NodeKind.MethodDecl, {
 		methodName: `${accKind}_${accName}`,
 		methodParams,
@@ -1298,6 +1302,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	const raw = parseParamList(state, nameToken.value);
 	const methodParamTypeExprs = getLastParamTypeExprs();
 	const methodParamLocs = getLastParamLocations();
+	const methodPatterns = getLastParamPatterns();
 	const methodDefaults = getLastParsedDefaults();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
@@ -1354,7 +1359,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		mNode2.paramLocations = methodParamLocs;
 		return Result.ok(mNode2);
 	}
-	const body = try callBlockParser(state);
+	const body = prependParamPatterns(try callBlockParser(state), methodPatterns, methodParamLocs);
 	const mNode3 = createNode(NodeKind.MethodDecl, {
 		methodName: nameToken.value,
 		methodParams,

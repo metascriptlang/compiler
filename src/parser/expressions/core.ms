@@ -5,7 +5,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
@@ -220,12 +220,14 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	}
 	const raw = parseParamList(state, "");
 	const feParamTypeExprs = getLastParamTypeExprs();
+	const feParamLocs = getLastParamLocations();
+	const fePatterns = getLastParamPatterns();
 	const funcExprParams = extractParamNames(raw);
 	const funcExprParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);
 	const funcExprRetTypeExpr = getLastTypeExpr();
-	const feBody = try blockParser(state);
+	const feBody = prependParamPatterns(try blockParser(state), fePatterns, feParamLocs);
 	const feNode = createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token);
 	feNode.typeExpr = funcExprRetTypeExpr;
 	feNode.typeExprs = feParamTypeExprs;
