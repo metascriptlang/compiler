@@ -3,7 +3,7 @@ import {
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
 	MacroInvocationData, MacroDeclData, MethodDeclData, PropertyDeclData, FunctionDeclData,
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
-	ConstructorDeclData, ExprStmtData,
+	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
 import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -38,13 +38,19 @@ const shapeVoid: int32 = 0;
 const shapeNode: int32 = 1;
 const shapeTransformer: int32 = 2;
 
+interface MemberInits {
+	node: Node;
+	stmts: Node[];
+}
+
 interface ClassPlan {
 	classNode: Node;
 	className: string;
 	isActor: boolean;
 	metaKeys: string[];
 	metaValues: Node[];
-	instanceInits: Node[];
+	memberInits: MemberInits[];
+	activeInits: MemberInits;
 	staticInits: Node[];
 }
 
@@ -199,7 +205,7 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 	const name = isActor ? (decl.data as ActorDeclData).actorName : (decl.data as ClassDeclData).className;
 	const metaKeys: string[] = [];
 	const metaValues: Node[] = [];
-	const instanceInits: Node[] = [];
+	const memberInits: MemberInits[] = [];
 	const staticInits: Node[] = [];
 	return {
 		classNode: decl,
@@ -207,7 +213,8 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 		isActor: isActor,
 		metaKeys: metaKeys,
 		metaValues: metaValues,
-		instanceInits: instanceInits,
+		memberInits: memberInits,
+		activeInits: null as unknown as MemberInits,
 		staticInits: staticInits,
 	};
 }
@@ -236,7 +243,13 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
+			const stmts: Node[] = [];
+			const inits: MemberInits = { node: inner, stmts: stmts };
+			plan.activeInits = inits;
 			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
+			plan.activeInits = null as unknown as MemberInits;
+			inits.node = rewritten;
+			if (stmts.length > 0) plan.memberInits.push(inits);
 			const kept = intrinsicOnly(dd.decorators);
 			if (kept.length == 0) {
 				body[i] = rewritten;
@@ -619,8 +632,8 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc);
 	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc);
 	for (const s of inits) {
-		if (info.isStatic || info.kind == "class") plan.staticInits.push(s);
-		else plan.instanceInits.push(s);
+		if (info.isStatic || info.kind == "class" || plan.activeInits == null) plan.staticInits.push(s);
+		else plan.activeInits.stmts.push(s);
 	}
 	const rv = heapObjectGetField(objHeap, h, "result");
 	if (rv.kind == RaiserValueKind.Object) {
@@ -666,7 +679,50 @@ function isSuperCall(stmt: Node): boolean {
 	return calleeName(e) == "super";
 }
 
-function injectIntoConstructor(plan: ClassPlan): void {
+function bareMember(member: Node): Node {
+	if (member != null && member.kind == NodeKind.DecoratedDecl) {
+		const dd = member.data as DecoratedDeclData;
+		if (dd.decoratedNode != null) return dd.decoratedNode;
+	}
+	return member;
+}
+
+function fieldAssignStmt(member: Node): Node {
+	const pd = member.data as PropertyDeclData;
+	const loc = member.location;
+	const receiver = createNodeAt(NodeKind.Identifier, { name: "this" }, loc);
+	const target = createNodeAt(NodeKind.MemberExpr, { object: receiver, property: pd.propName, isOptional: false }, loc);
+	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: target, right: pd.propInitializer }, loc);
+	pd.propInitializer = null as unknown as Node;
+	return createNodeAt(NodeKind.ExprStmt, { expr: assign }, loc);
+}
+
+function instanceInitStatements(plan: ClassPlan): Node[] {
+	const body = planBody(plan);
+	const out: Node[] = [];
+	for (const inits of plan.memberInits) {
+		let inBody = false;
+		for (const m of body) {
+			if (bareMember(m) == inits.node) inBody = true;
+		}
+		if (inits.node.kind == NodeKind.PropertyDecl && inBody) continue;
+		for (const s of inits.stmts) out.push(s);
+	}
+	for (const m of body) {
+		const member = bareMember(m);
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic) continue;
+		if (pd.propInitializer != null) out.push(fieldAssignStmt(member));
+		for (const inits of plan.memberInits) {
+			if (inits.node != member) continue;
+			for (const s of inits.stmts) out.push(s);
+		}
+	}
+	return out;
+}
+
+function injectIntoConstructor(plan: ClassPlan, stmts: Node[]): void {
 	const cd = plan.classNode.data as ClassDeclData;
 	let ctor: Node = null as unknown as Node;
 	for (const m of cd.classBody) {
@@ -689,17 +745,17 @@ function injectIntoConstructor(plan: ClassPlan): void {
 	if (body.statements.length > 0 && isSuperCall(body.statements[0])) at = 1;
 	const merged: Node[] = [];
 	for (let i = 0; i < at; i += 1) merged.push(body.statements[i]);
-	for (const s of plan.instanceInits) merged.push(s);
+	for (const s of stmts) merged.push(s);
 	for (let i = at; i < body.statements.length; i += 1) merged.push(body.statements[i]);
 	body.statements = merged;
 }
 
 function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
-	if (plan.instanceInits.length > 0) {
+	if (plan.memberInits.length > 0) {
 		if (plan.isActor) {
 			addError(ctx, `addInitializer on actor members is not supported`, plan.classNode.location.line, plan.classNode.location.column);
 		} else {
-			injectIntoConstructor(plan);
+			injectIntoConstructor(plan, instanceInitStatements(plan));
 		}
 	}
 	for (const s of plan.staticInits) after.push(s);
@@ -741,6 +797,53 @@ test "an intrinsic member wrapper beside a user decorator is consumed by the fil
 	assert body[0].kind == NodeKind.MethodDecl;
 	assert body[0].resolvedSym != null;
 	assert body[0].resolvedSym.builtinKind == "CalcLoud";
+}
+
+function exprStmtProperty(stmt: Node): string {
+	if (stmt.kind != NodeKind.ExprStmt) return "";
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e == null || e.kind != NodeKind.BinaryExpr) return "";
+	const left = (e.data as BinaryExprData).left;
+	if (left == null || left.kind != NodeKind.MemberExpr) return "";
+	return (left.data as MemberExprData).property;
+}
+
+test "member initializers land in the constructor in tsc order" {
+	const pr = parseSource("class C {\n\ta: int32 = 1;\n\tm(): void { }\n\tb: int32 = 2;\n\tc: int32;\n\tconstructor() { }\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	const cls = (pr.value.data as ProgramData).programStmts[0];
+	const body = (cls.data as ClassDeclData).classBody;
+	const plan = newPlan(ctx, cls, false);
+	const loc = cls.location;
+	const mInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "mInit" }, loc) }, loc);
+	const bInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "bInit" }, loc) }, loc);
+	plan.memberInits.push({ node: body[2], stmts: [bInit] });
+	plan.memberInits.push({ node: body[1], stmts: [mInit] });
+	const after: Node[] = [];
+	finishPlan(ctx, plan, after);
+	const ctor = (body[4].data as ConstructorDeclData).ctorBody.data as BlockStmtData;
+	assert ctor.statements.length == 4;
+	assert ctor.statements[0] == mInit;
+	assert exprStmtProperty(ctor.statements[1]) == "a";
+	assert exprStmtProperty(ctor.statements[2]) == "b";
+	assert ctor.statements[3] == bInit;
+	assert (body[0].data as PropertyDeclData).propInitializer == null;
+	assert (body[2].data as PropertyDeclData).propInitializer == null;
+	assert after.length == 0;
+}
+
+test "a class without member initializers keeps its field initializers in place" {
+	const pr = parseSource("class D {\n\ta: int32 = 1;\n\tconstructor() { }\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	const cls = (pr.value.data as ProgramData).programStmts[0];
+	const body = (cls.data as ClassDeclData).classBody;
+	const plan = newPlan(ctx, cls, false);
+	const after: Node[] = [];
+	finishPlan(ctx, plan, after);
+	assert (body[0].data as PropertyDeclData).propInitializer != null;
+	assert ((body[1].data as ConstructorDeclData).ctorBody.data as BlockStmtData).statements.length == 0;
 }
 
 test "collect mints a decorated class in place" {
