@@ -4,7 +4,7 @@
 // number formatting for C output.
 
 import { Builder, addLine, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
-import { Type, TypeKind, NumberLiteralData } from "../../ast/node";
+import { Type, TypeKind, TypeFlag, NumberLiteralData } from "../../ast/node";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 
 
@@ -230,28 +230,28 @@ test "positive integer" { assert formatCNumber(42.0) == "42"; }
 test "negative integer" { assert formatCNumber(-7.0) == "-7"; }
 
 test "zero in float context emits 0.0" {
-	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert formatCNumber(0.0, t) == "0.0";
 }
 
 test "positive integer in float context emits .0 suffix" {
-	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert formatCNumber(1.0, t) == "1.0";
 	assert formatCNumber(42.0, t) == "42.0";
 }
 
 test "negative integer in float context emits .0 suffix" {
-	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert formatCNumber(-1.0, t) == "-1.0";
 }
 
 test "fractional value unchanged by float context" {
-	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert formatCNumber(0.5, t) == "0.5";
 }
 
 test "negative zero in float context emits -0.0" {
-	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	const negZero: number = -1.0 * 0.0;
 	assert formatCNumber(negZero, t) == "-0.0";
 }
@@ -262,7 +262,7 @@ test "negative zero with null type emits -0" {
 }
 
 test "integer type still emits plain integer" {
-	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert formatCNumber(42.0, t) == "42";
 }
 
@@ -270,13 +270,13 @@ test "integer type still emits plain integer" {
 test "int32 suffix" { assert formatCInt32(42) == "42"; }
 
 test "number literal emission dispatches on uint64" {
-	const tu: Type = { kind: TypeKind.Uint64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const tu: Type = { kind: TypeKind.Uint64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	const d: NumberLiteralData = { value: 0.0, isFloat: false, intVal: -1, outOfRangeText: "", isBitPattern: true };
 	assert formatCNumberLit(d, tu) == "18446744073709551615ULL";
 }
 
 test "number literal emission dispatches on int64" {
-	const ti: Type = { kind: TypeKind.Int64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 };
+	const ti: Type = { kind: TypeKind.Int64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	const d: NumberLiteralData = { value: 42.0, isFloat: false, intVal: 42, outOfRangeText: "", isBitPattern: false };
 	assert formatCNumberLit(d, ti) == "42LL";
 }

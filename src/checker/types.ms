@@ -96,7 +96,7 @@ export function emptyType(): Type {
 		typeChildren: [],
 		typeReturn: null,
 		typeExtra: null,
-		typeFlags: 0,
+		typeFlags: 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
@@ -109,7 +109,7 @@ export function createPrimitive(kind: TypeKind): Type {
 	// bigint is a managed primitive like string, but its ordinal sits past the
 	// _sysTypes bound, so the flag cannot be stamped on a shared instance — an
 	// owner that never sees HasAsgn on the field gets no scope destroy at all.
-	if (kind == TypeKind.BigInt) { t.typeFlags = TypeFlag.HasAsgn as int32; }
+	if (kind == TypeKind.BigInt) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn); }
 	return t;
 }
 
@@ -119,7 +119,7 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.typeName = name;
 	t.typeNames = propNames;
 	t.typeChildren = propTypes;
-	if (isInterface) { t.typeFlags = TypeFlag.IsStruct as int32; }
+	if (isInterface) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct); }
 	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
 	for (const pt of propTypes) { propagateToOwner(t, pt); }
 	return t;
@@ -171,7 +171,7 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 export function createArray(element: Type | null): Type {
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: element, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		typeReturn: element, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -182,7 +182,7 @@ export function createArray(element: Type | null): Type {
 export function createVarargs(arrayType: Type): Type {
 	return {
 		kind: TypeKind.Varargs, typeName: "", typeNames: [], typeChildren: [arrayType],
-		typeReturn: null, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		typeReturn: null, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -235,7 +235,7 @@ export function createFunction(paramTypes: Type[], paramNames: string[], returnT
 	}
 	return {
 		kind: TypeKind.Function, typeName: "", typeNames: ownNames, typeChildren: ownTypes,
-		typeReturn: returnType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		typeReturn: returnType, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -305,7 +305,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	base.typeName = "Result";
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
-	base.typeFlags = TypeFlag.HasAsgn as int32;
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
 	return createGenericInstance(base, [okType, errType]);
 }
 
@@ -334,7 +334,7 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// createGenericInstance propagates base.typeFlags onto the produced
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
-	base.typeFlags = (TypeFlag.AwaitableAffine | TypeFlag.AwaitableScopeBound) as int32;
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
 	return createGenericInstance(base, [innerType]);
 }
 
@@ -470,7 +470,7 @@ export function isAwaitable(t: Type | null): boolean {
 	if (p == null || p.kind != TypeKind.GenericInstance) return false;
 	if (p.typeName == "Promise") return true;
 	// REPROMISE T2 Stage A: @affineAwaitable-annotated types carry both bits.
-	if ((p.typeFlags & (TypeFlag.AwaitableAffine as int32)) != 0) return true;
+	if (p.typeFlags.has(TypeFlag.AwaitableAffine)) return true;
 	return false;
 }
 
@@ -492,7 +492,7 @@ export function isAffineAwaitable(t: Type | null): boolean {
 	if (t == null) return false;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p == null) return false;
-	return (p.typeFlags & (TypeFlag.AwaitableAffine as int32)) != 0;
+	return p.typeFlags.has(TypeFlag.AwaitableAffine);
 }
 
 export function createTypeRef(name: string): Type {
@@ -596,8 +596,7 @@ export function createUnion(types: Type[]): Type {
 function stampInlineDuVariants(seen: Type[]): void {
 	for (const v of seen) {
 		if (v.kind == TypeKind.Struct && v.typeName == "") {
-			const nf: int32 = v.typeFlags | (TypeFlag.DuVariant as int32);
-			v.typeFlags = nf;
+			v.typeFlags = v.typeFlags.incl(TypeFlag.DuVariant);
 			duRegAdd(_duVariantRegistry, v);
 		}
 	}
@@ -1320,7 +1319,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + key;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = (TypeFlag.IsStruct | TypeFlag.IsMaybe) as int32;
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe);
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	_maybeCache.push(t);
@@ -1332,7 +1331,7 @@ export function createRef(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ref;
 	t.typeReturn = inner;
-	t.typeFlags = TypeFlag.HasAsgn as int32;
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
 	return t;
 }
 
@@ -1340,12 +1339,12 @@ export function createArc(inner: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ref;
 	t.typeReturn = inner;
-	t.typeFlags = (TypeFlag.HasAsgn | TypeFlag.IsAtomic) as int32;
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn).incl(TypeFlag.IsAtomic);
 	return t;
 }
 
 export function isAtomicRef(t: Type | null): boolean {
-	return t != null && t.kind == TypeKind.Ref && (t.typeFlags & TypeFlag.IsAtomic) != 0;
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsAtomic);
 }
 
 // Locked<T> (PARALOCK I22) — the one sanctioned shared-mutable cell. ONE
@@ -1371,20 +1370,18 @@ export function createLocked(payload: Type | null): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ref;
 	t.typeReturn = createLockedCell(payload);
-	t.typeFlags = (TypeFlag.HasAsgn | TypeFlag.IsAtomic | TypeFlag.IsLocked) as int32;
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn).incl(TypeFlag.IsAtomic).incl(TypeFlag.IsLocked);
 	return t;
 }
 
 export function isLockedRef(t: Type | null): boolean {
-	return t != null && t.kind == TypeKind.Ref && (t.typeFlags & TypeFlag.IsLocked) != 0;
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsLocked);
 }
-
-const READONLY_VIEW_BIT: int32 = TypeFlag.IsReadonly as int32;
 
 export function isReadonlyView(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct) return false;
-	return (t.typeFlags & READONLY_VIEW_BIT) != 0;
+	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
 function copyTypeShallow(t: Type): Type {
@@ -1436,7 +1433,7 @@ export function createReadonlyView(t: Type | null): Type {
 		|| (t.kind == TypeKind.Struct && structCarriesRef(t, 0));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
-	c.typeFlags = (c.typeFlags | READONLY_VIEW_BIT) as int32;
+	c.typeFlags = c.typeFlags.incl(TypeFlag.IsReadonly);
 	c.mutableView = t;
 	t.readonlyView = c;
 	return c;
@@ -1447,7 +1444,7 @@ export function withoutReadonlyView(t: Type | null): Type {
 	if (!isReadonlyView(t)) return t;
 	if (t.mutableView != null) return t.mutableView;
 	const c = copyTypeShallow(t);
-	c.typeFlags = (c.typeFlags ^ READONLY_VIEW_BIT) as int32;
+	c.typeFlags = c.typeFlags.excl(TypeFlag.IsReadonly);
 	c.readonlyView = t;
 	t.mutableView = c;
 	return c;
@@ -1615,13 +1612,13 @@ export function createBitSet(elem: Type): Type {
 export function createBrandDistinct(brandKey: string, inner: Type): Type {
 	const t = createDistinct(inner);
 	t.typeName = brandKey;
-	t.typeFlags = t.typeFlags | (TypeFlag.BrandWiden as int32);
+	t.typeFlags = t.typeFlags.incl(TypeFlag.BrandWiden);
 	return t;
 }
 
 export function isBrandDistinct(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.kind == TypeKind.Distinct && (t.typeFlags & (TypeFlag.BrandWiden as int32)) != 0;
+	return t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden);
 }
 
 export function distinctBody(t: Type | null): Type | null {
@@ -1678,7 +1675,7 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 		typeChildren: typeArgs,
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
-		typeFlags: innerBase != null ? innerBase.typeFlags : 0 as int32,
+		typeFlags: innerBase != null ? innerBase.typeFlags : 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
@@ -1726,7 +1723,7 @@ function initSysTypes(): void {
 		_sysTypes.push(createPrimitive(i as TypeKind));
 	}
 	// Managed primitives get TypeFlag.HasAsgn (Reference parity: managed types have tfHasAsgn)
-	_sysTypes[TypeKind.String as number].typeFlags = TypeFlag.HasAsgn;
+	_sysTypes[TypeKind.String as number].typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
 }
 initSysTypes();
 
@@ -2140,12 +2137,12 @@ export function isStructType(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Alias) return isStructType(t.typeReturn);
 	if (t.kind != TypeKind.Struct) return false;
-	return (t.typeFlags & TypeFlag.IsStruct) != 0;
+	return t.typeFlags.has(TypeFlag.IsStruct);
 }
 
 export function isMaybeType(t: Type | null): boolean {
 	if (t == null) return false;
-	return (t.typeFlags & TypeFlag.IsMaybe) != 0;
+	return t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
 // Whether `t | null` should wrap into Maybe<T> at the resolver. Pointers
@@ -2248,7 +2245,7 @@ export function needsRC(t: Type | null): boolean {
 
 export function hasAsgnFlag(t: Type): boolean {
 	if (t == null) return false;
-	return (t.typeFlags & TypeFlag.HasAsgn) != 0;
+	return t.typeFlags.has(TypeFlag.HasAsgn);
 }
 
 // Does an array element of this type need per-element cleanup — i.e. a per-type
@@ -2288,8 +2285,8 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 }
 
 export function propagateToOwner(parent: Type, child: Type): void {
-	if (child != null && (child.typeFlags & TypeFlag.HasAsgn) != 0) {
-		parent.typeFlags = parent.typeFlags | TypeFlag.HasAsgn;
+	if (child != null && child.typeFlags.has(TypeFlag.HasAsgn)) {
+		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);
 	}
 }
 
@@ -2394,7 +2391,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	if (!changed) return t;
 	// Rebuild via createMaybeType: it stamps IsMaybe + derives the substituted name.
 	// createStruct drops IsMaybe → isMaybeType fails downstream (operatorLower, nullableLower).
-	if ((t.typeFlags & TypeFlag.IsMaybe) != 0) {
+	if (t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return createMaybeType(newFieldTypes[0]);
 	}
 	const newNames: string[] = [];
@@ -2407,8 +2404,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
-	const withDu: int32 = result.typeFlags | (t.typeFlags & (TypeFlag.DuVariant as int32));
-	result.typeFlags = withDu;
+	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
 	return result;
 }
 
@@ -2421,7 +2417,7 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeName = t.typeName;
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
-	result.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	result.typeFlags = t.typeFlags.excl(TypeFlag.Substituting);
 	result.typeValue = t.typeValue;
 	result.callConv = t.callConv;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
@@ -2451,16 +2447,16 @@ function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type
 // (identity-based, no incref/decref on tracked types). O(1) check vs O(n) linear scan.
 // Cannot use Type[] stack — DRC push/pop/decref frees rc=0 types (fatal in C binary).
 function substituteIsSeen(t: Type): boolean {
-	return (t.typeFlags & TypeFlag.Substituting) != 0;
+	return t.typeFlags.has(TypeFlag.Substituting);
 }
 
 function substituteSetFlag(t: Type): void {
-	t.typeFlags = t.typeFlags | TypeFlag.Substituting;
+	t.typeFlags = t.typeFlags.incl(TypeFlag.Substituting);
 }
 
 function substituteClearFlag(t: Type): void {
-	if ((t.typeFlags & TypeFlag.Substituting) != 0) {
-		t.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	if (t.typeFlags.has(TypeFlag.Substituting)) {
+		t.typeFlags = t.typeFlags.excl(TypeFlag.Substituting);
 	}
 }
 
@@ -2647,7 +2643,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[]): Type 
 		if (sub != t.typeChildren[ci]) changed = true;
 	}
 	if (!changed) return t;
-	if ((t.typeFlags & TypeFlag.IsMaybe) != 0) {
+	if (t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return createMaybeType(newFieldTypes[0]);
 	}
 	const newNames: string[] = [];
@@ -2657,8 +2653,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[]): Type 
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
-	const withDu: int32 = result.typeFlags | (t.typeFlags & (TypeFlag.DuVariant as int32));
-	result.typeFlags = withDu;
+	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
 	return result;
 }
 
@@ -3458,7 +3453,7 @@ test "createStruct" {
 	assert obj.typeName == "Point";
 	assert obj.typeNames.length == 1;
 	assert obj.typeChildren.length == 1;
-	assert obj.typeFlags == 0;
+	assert obj.typeFlags.isEmpty();
 }
 
 test "createEnum" {
@@ -3687,10 +3682,10 @@ test "setMinArity zero" {
 
 test "preserves low bits" {
 	const fn4 = createFunction([numberType()], ["a"], voidType());
-	fn4.typeFlags = TypeFlag.IsStruct as int32;
+	fn4.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	setMinArity(fn4, 1);
 	assert getMinArity(fn4) == 1;
-	assert (fn4.typeFlags & TypeFlag.IsStruct) != 0;
+	assert fn4.typeFlags.has(TypeFlag.IsStruct);
 }
 
 test "createTuple" {

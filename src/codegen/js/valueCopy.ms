@@ -33,7 +33,7 @@ export function needsValueCopy(t: Type | null): boolean {
 	// nullable string at runtime (corpus 015 "p1=[object Object]").
 	t = jsValueRepr(t);
 	if (t == null) return false;
-	if (t.kind == TypeKind.Struct) return (t.typeFlags & TypeFlag.IsStruct) != 0;
+	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
 	if (t.kind == TypeKind.Tuple) return true;
 	if (t.kind == TypeKind.Array) return true;
 	if (t.kind == TypeKind.SizedArray) return true;
@@ -43,7 +43,7 @@ export function needsValueCopy(t: Type | null): boolean {
 // The runtime representation a JS value of static type `t` actually has:
 // Maybe<T> carriers are erased to `T | null` (see needsValueCopy).
 function jsValueRepr(t: Type | null): Type | null {
-	if (t != null && t.kind == TypeKind.Struct && (t.typeFlags & TypeFlag.IsMaybe) != 0) {
+	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return t.typeReturn;
 	}
 	return t;

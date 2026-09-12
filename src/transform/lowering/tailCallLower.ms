@@ -106,7 +106,7 @@ function holdsLoweredLoop(body: Node): boolean {
 function lowerClassMethods(node: Node, ctx: TransformContext): Node {
 	const classStruct = peelToStruct(node.nodeType);
 	if (classStruct == null) return node;
-	if ((classStruct.typeFlags & TypeFlag.OpenClass) != 0) return node;
+	if (classStruct.typeFlags.has(TypeFlag.OpenClass)) return node;
 	const cd = node.data as ClassDeclData;
 	for (const member of cd.classBody) {
 		if (member.kind != NodeKind.MethodDecl) continue;

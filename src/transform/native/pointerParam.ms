@@ -9,7 +9,7 @@
 //
 // Reference: standard optimized C codegen patterns for struct parameters
 
-import { Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
+import { TypeFlag, Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
 import { createPtr, isStructType, getTypeSize, isResult, skipModifier, isAwaitable } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -31,8 +31,6 @@ function safeLoc(node: Node): SourceLocation {
 // We don't have inheritance or forwarded types, so all interfaces are "final + no base".
 // Threshold: 24 bytes (floatSize=8 * 3) on 64-bit.
 const PTR_THRESHOLD: number = 24;
-// typeFlags bit 5: marks Ptr<T> types introduced by reference pointer introduction (not user-declared)
-const TF_CCG_INTRODUCED: number = 32;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t == null) return false;
@@ -83,7 +81,7 @@ function transformFunction(node: Node): void {
 				ptrParams.push(d.params[i]);
 				// Wrap param type: T → Ptr<T> so codegen emits T*
 				const introduced = createPtr(paramType);
-				introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+				introduced.typeFlags = introduced.typeFlags.incl(TypeFlag.PtrIntroduced);
 				fnType.typeChildren[i] = introduced;
 			}
 		}
@@ -100,7 +98,7 @@ function transformFunction(node: Node): void {
 			while (i < d.params.length && i < symType.typeChildren.length) {
 				if (ccgIntroducedPtr(symType.typeChildren[i])) {
 					const introduced = createPtr(symType.typeChildren[i]);
-					introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+					introduced.typeFlags = introduced.typeFlags.incl(TypeFlag.PtrIntroduced);
 					symType.typeChildren[i] = introduced;
 				}
 				i += 1;
@@ -121,7 +119,7 @@ function transformExternDecl(node: Node): void {
 	while (i < symType.typeChildren.length) {
 		if (ccgIntroducedPtr(symType.typeChildren[i])) {
 			const introduced = createPtr(symType.typeChildren[i]);
-			introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+			introduced.typeFlags = introduced.typeFlags.incl(TypeFlag.PtrIntroduced);
 			symType.typeChildren[i] = introduced;
 			changed = true;
 		}
@@ -133,7 +131,7 @@ function transformExternDecl(node: Node): void {
 		while (i < node.nodeType.typeChildren.length) {
 			if (ccgIntroducedPtr(node.nodeType.typeChildren[i])) {
 				const introduced = createPtr(node.nodeType.typeChildren[i]);
-				introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+				introduced.typeFlags = introduced.typeFlags.incl(TypeFlag.PtrIntroduced);
 				node.nodeType.typeChildren[i] = introduced;
 			}
 			i += 1;
@@ -345,8 +343,7 @@ function transformCallSite(node: Node): void {
 	const minLen = (paramTypes.length < cd.arguments.length) ? paramTypes.length : cd.arguments.length;
 	while (i < minLen) {
 		// If Pass 1 wrapped the param type in Ptr<T>, the arg needs HiddenAddr
-		// Only match ccg-introduced Ptrs (TF_CCG_INTRODUCED flag), not user-declared Ptr<T>
-		if (paramTypes[i] != null && paramTypes[i].kind == TypeKind.Ptr && (paramTypes[i].typeFlags & TF_CCG_INTRODUCED) != 0) {
+		if (paramTypes[i] != null && paramTypes[i].kind == TypeKind.Ptr && paramTypes[i].typeFlags.has(TypeFlag.PtrIntroduced)) {
 			const arg = cd.arguments[i];
 			// Don't double-wrap: if already HiddenAddr, skip
 			if (arg.kind != NodeKind.HiddenAddr) {

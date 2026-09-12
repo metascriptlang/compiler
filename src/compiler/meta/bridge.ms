@@ -2379,7 +2379,7 @@ function makePrimType(k: TypeKind): Type {
 		typeChildren: [],
 		typeReturn: null,
 		typeExtra: null,
-		typeFlags: 0,
+		typeFlags: 0 as BitSet<TypeFlag>,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
 		sym: null,
@@ -2684,7 +2684,7 @@ test "mapTypeToAst — Array<Array<T>> emits nested TypeArray" {
 test "mapTypeToAst — SizedArray size is independent of the Substituting flag" {
 	const loc = makeLoc(1, 0);
 	const t = makeArrayType(TypeKind.SizedArray, makePrimType(TypeKind.Int32), 8);
-	t.typeFlags = TypeFlag.Substituting as int32;
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.Substituting);
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeArrayData;
 	assert d.typExprSize == 8;

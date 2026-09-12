@@ -1174,7 +1174,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		// walked inline by the per-field loops below, so calling parent destroy
 		// would double-free. ensureHooksByName above is preserved (parent type
 		// still needs hooks emitted for cross-module references).
-		const fieldsFlattened = (objType.typeFlags & TypeFlag.HasInheritedFields) != 0;
+		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
 		if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
@@ -2024,7 +2024,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Struct && node.nodeType.typeName == ""
 				&& node.nodeType.typeNames.length > 0
-				&& (node.nodeType.typeFlags & (TypeFlag.DuVariant as int32)) == 0) {
+				&& !node.nodeType.typeFlags.has(TypeFlag.DuVariant)) {
 				// Nameless anon structs: classify OWNS these now (msAnon_<hash> hooks) —
 				// generate their defs here or the analyzer's destroy/copy calls become
 				// undefined symbols. DU-variant payloads excluded (classify defers them

@@ -17,7 +17,7 @@ export enum TypeKind {
 	// REPROMISE T2: legacy `Promise` variant removed. All awaitables share the
 	// single surface type `Promise<T>`, represented as GenericInstance. Origin
 	// (plain async vs spawn-affine) is distinguished by AwaitableAffine +
-	// AwaitableScopeBound flag bits on typeFlags.
+	// AwaitableScopeBound in typeFlags.
 	Distinct,
 	Error,
 	StringLiteral,
@@ -63,19 +63,20 @@ export enum CallingConvention {
 
 // ===== Type Flags =====
 export enum TypeFlag {
-	IsStruct = 1,                // bit 0
-	IsMaybe = 16,                // bit 4
-	HasAsgn = 32,                // bit 5
-	AwaitableAffine = 64,        // bit 6 — PARALOCK affine (spawn-origin Promise)
-	AwaitableScopeBound = 128,   // bit 7 — PARALOCK R3/E4 (cannot escape creating scope)
-	HasInheritedFields = 256,    // bit 8 — class has flattened parent fields (suppresses DRC parent-call)
-	Substituting = 1048576,      // bit 20 (high to avoid SizedArray size collision)
-	IsAtomic = 2097152,          // bit 21 (high, like Substituting — Arc<T> atomic-rc marker on a Ref; never on SizedArray size / Function minArity)
-	DuVariant = 4194304,         // bit 22 (high, same rule) — INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
-	OpenClass = 8388608,         // bit 23 (high, same rule) — class is extended (non-final): canFormAcycle returns true unconditionally, the Nim tfFinal rule (types.nim:436-438). Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
-	BrandWiden = 16777216,       // bit 24 (high, same rule) — TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
-	IsLocked = 33554432,         // bit 25 (high, same rule) — Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
-	IsReadonly = 67108864,       // bit 26 (high, same rule) — read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
+	IsStruct,
+	IsMaybe,
+	HasAsgn,
+	AwaitableAffine,      // PARALOCK affine (spawn-origin Promise)
+	AwaitableScopeBound,  // PARALOCK R3/E4 (cannot escape creating scope)
+	HasInheritedFields,   // class has flattened parent fields (suppresses DRC parent-call)
+	Substituting,
+	IsAtomic,             // Arc<T> atomic-rc marker on a Ref
+	DuVariant,            // INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
+	OpenClass,            // class is extended (non-final): canFormAcycle returns true unconditionally, the tfFinal rule. Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
+	BrandWiden,           // TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
+	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
+	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
+	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -113,7 +114,7 @@ export enum AttachedOp {
 //                    Struct with generic params → generic body; Array → element (legacy);
 //                    GenericInstance → monomorphized concrete body; TypeAlias → aliased type.
 //                    Consult per-TypeKind documentation before use.
-//   typeFlags      — bitset (TypeFlag.HasAsgn, IsStruct, AwaitableAffine, ...) — propagated
+//   typeFlags      — BitSet<TypeFlag> (HasAsgn, IsStruct, AwaitableAffine, ...) — propagated
 //                    bottom-up by propagateToOwner when building parent types.
 //   typeValue      — kind-specific integer: SizedArray → element count; enum member
 //                    (Number child of an Enum) → ordinal value; Function → minArity + 1.
@@ -128,7 +129,7 @@ export class Type {
 	typeChildren: Type[];
 	typeReturn: Type | null;
 	typeExtra: Type | null;
-	typeFlags: int32;
+	typeFlags: BitSet<TypeFlag>;
 	typeValue: int32;
 	callConv: CallingConvention;
 	attachedOps: string[];

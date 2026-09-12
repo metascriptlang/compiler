@@ -9,7 +9,7 @@ const ERASE_MAX_DEPTH: int32 = 8;
 
 function eraseBrandType(t: Type | null, depth: int32): Type | null {
 	if (t == null || depth > ERASE_MAX_DEPTH) return t;
-	if (t.kind == TypeKind.Distinct && (t.typeFlags & (TypeFlag.BrandWiden as int32)) != 0 && t.typeReturn != null) {
+	if (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden) && t.typeReturn != null) {
 		return eraseBrandType(t.typeReturn, depth + 1);
 	}
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {

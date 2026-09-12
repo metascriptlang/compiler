@@ -46,7 +46,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			// subclassed into a back-edge, so it can form a cycle independent of its
 			// own declared fields. Independent of the typeExtra walk below (that covers
 			// field inheritance; BOTH apply).
-			if ((t.typeFlags & TypeFlag.OpenClass) != 0) return true;
+			if (t.typeFlags.has(TypeFlag.OpenClass)) return true;
 			const key = typeIdentity(t);
 			if (withRef && key != "" && key == origKey) return true;
 			if (key != "") {

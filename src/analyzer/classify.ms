@@ -190,7 +190,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	// INLINE union-variant payloads (DuVariant, stamped at createUnion): C storage is
 	// the DU machinery's <Union>_vN carrier — msAnon hooks would name a type that
 	// doesn't exist in that TU. The machinery owns their lifecycle; defer.
-	if ((t.typeFlags & (TypeFlag.DuVariant as int32)) != 0) return noRcInfo();
+	if (t.typeFlags.has(TypeFlag.DuVariant)) return noRcInfo();
 	// Anon structs (typeName "" or checker "__anon" pseudo-name) are named msAnon_<hash>
 	// by codegen (anonTypeName); destructorLifting's field recursion generates their
 	// hooks under that name — resolve identically here (same recipe as fillBody's
@@ -536,7 +536,7 @@ test "DuVariant-flagged payload defers to the DU machinery" {
 	const ctx = createTransformContext();
 	const v = createStruct("", ["vpay"], [stringType()], false);
 	createUnion([v, numberType()]);
-	assert (v.typeFlags & (TypeFlag.DuVariant as int32)) != 0;
+	assert v.typeFlags.has(TypeFlag.DuVariant);
 	const info = classifyType(v, ctx);
 	assert !info.needsCleanup;
 }
@@ -546,7 +546,7 @@ test "structurally-equal copy of a registered variant defers via hash registry" 
 	const original = createStruct("", ["vpay2"], [stringType()], false);
 	createUnion([original, numberType()]);
 	const copy = createStruct("", ["vpay2"], [stringType()], false);
-	assert (copy.typeFlags & (TypeFlag.DuVariant as int32)) == 0;
+	assert !copy.typeFlags.has(TypeFlag.DuVariant);
 	const info = classifyType(copy, ctx);
 	assert !info.needsCleanup;
 }

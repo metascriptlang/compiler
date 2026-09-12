@@ -1557,7 +1557,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeName = d.interfaceName;
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
-	target.typeFlags = TypeFlag.IsStruct as int32;
+	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each OWN interface field DEF for symbol graph (inherited fields
@@ -1673,7 +1673,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (d.aliasIsDistinct) {
 		const distType = createDistinct(resolved);
 		distType.typeName = d.aliasName;
-		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags | (TypeFlag.BrandWiden as int32);
+		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if (!hasGenericAlias && resolved.sym != null
@@ -1973,7 +1973,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const inner = unwrapRef(sym.symbolType);
 	inner.kind = TypeKind.Struct;
 	inner.typeName = d.className;
-	inner.typeFlags = (inner.typeFlags | TypeFlag.IsStruct) as int32;
+	inner.typeFlags = inner.typeFlags.incl(TypeFlag.IsStruct);
 
 	// Phase 4: Class field flatten — merge parent fields into child's typeChildren.
 	// Mirrors interface/struct (Phases 1-3); for class we also keep typeExtra
@@ -2041,7 +2041,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			// a subclass that closes a back-edge, so any class that IS extended can
 			// form a cycle regardless of its own declared fields.
 			if (parentStruct.kind == TypeKind.Struct) {
-				parentStruct.typeFlags = (parentStruct.typeFlags | TypeFlag.OpenClass) as int32;
+				parentStruct.typeFlags = parentStruct.typeFlags.incl(TypeFlag.OpenClass);
 			}
 			// B8: only struct/class parents allowed.
 			if (parentStruct.kind != TypeKind.Struct) {
@@ -2075,7 +2075,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	inner.typeNames = mergedNames;
 	inner.typeChildren = mergedTypes;
 	if (didMergeParent) {
-		inner.typeFlags = (inner.typeFlags | TypeFlag.HasInheritedFields) as int32;
+		inner.typeFlags = inner.typeFlags.incl(TypeFlag.HasInheritedFields);
 	}
 	// Propagate HasAsgn from any managed field (parent + own after merge)
 	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
@@ -2169,7 +2169,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 	inner.typeName = d.actorName;
 	inner.typeNames = memberNames;
 	inner.typeChildren = memberTypes;
-	inner.typeFlags = TypeFlag.IsStruct as int32;
+	inner.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
 }
@@ -2492,13 +2492,13 @@ test "string | null wraps as Maybe<string>" {
 	// Pointers (Ref/Ptr) stay as Union (NULL is the natural sentinel).
 	const t = resolveWith("string | null");
 	assert t.kind == TypeKind.Struct;
-	assert (t.typeFlags & TypeFlag.IsMaybe) != 0;
+	assert t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
 test "number | null wraps as Maybe<number>" {
 	const t = resolveWith("number | null");
 	assert t.kind == TypeKind.Struct;
-	assert (t.typeFlags & TypeFlag.IsMaybe) != 0;
+	assert t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
 // An overload appended AFTER its primary was already shaped must still get
