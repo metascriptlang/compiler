@@ -12,6 +12,7 @@ import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
+import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly } from "../../checker/decoratorHelpers";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -32,11 +33,6 @@ function rebaseLocations(node: Node, loc: SourceLocation): void {
 	forEachChild(node, (child: Node): void => { rebaseLocations(child, loc); });
 }
 
-const passThroughDirectives: string[] = [
-	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "cImport",
-];
-const intrinsicDecorators: string[] = ["nonisolated"];
 const applyFnName = "__decoratorApply";
 const shapeVoid: int32 = 0;
 const shapeNode: int32 = 1;
@@ -56,21 +52,6 @@ interface TargetInfo {
 	kind: string;
 	name: string;
 	isStatic: boolean;
-}
-
-export function isBuiltinDirective(name: string): boolean {
-	for (const n of passThroughDirectives) {
-		if (n == name) return true;
-	}
-	return false;
-}
-
-function isIntrinsicDecorator(name: string): boolean {
-	if (isBuiltinDirective(name)) return true;
-	for (const n of intrinsicDecorators) {
-		if (n == name) return true;
-	}
-	return false;
 }
 
 function hasUserDecorator(decorators: Node[]): boolean {
@@ -169,25 +150,6 @@ function finishDeferredStatement(ctx: CheckerContext, originalName: string, rewr
 	fillForwardSymbol(ctx, sym);
 }
 
-function intrinsicOnly(decorators: Node[]): Node[] {
-	const kept: Node[] = [];
-	for (const d of decorators) {
-		if (d.kind == NodeKind.MacroInvocation && !isIntrinsicDecorator((d.data as MacroInvocationData).macroName)) continue;
-		kept.push(d);
-	}
-	return kept;
-}
-
-function rewrapStatement(wrapper: Node, node: Node): Node {
-	if (wrapper == null) return node;
-	const dd = wrapper.data as DecoratedDeclData;
-	const kept = intrinsicOnly(dd.decorators);
-	if (kept.length == 0) return node;
-	dd.decorators = kept;
-	dd.decoratedNode = node;
-	return wrapper;
-}
-
 function unwrapExport(node: Node): Node {
 	if (node != null && node.kind == NodeKind.ExportDecl) {
 		const ed = node.data as ExportDeclData;
@@ -213,7 +175,7 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 		if (wrapper != null) {
 			runDecorators(ctx, (wrapper.data as DecoratedDeclData).decorators, decl, null as unknown as ClassPlan);
 		}
-		return rewrapStatement(wrapper, node);
+		return node;
 	}
 	const plan = newPlan(ctx, decl, isActor);
 	applyToMembers(ctx, plan);
@@ -230,7 +192,7 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 			node = finalDecl;
 		}
 	}
-	return rewrapStatement(wrapper, node);
+	return node;
 }
 
 function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
@@ -740,15 +702,38 @@ registerApplyDecorators(applyDecorators);
 registerDecoratorDefers(decoratorRewritesStmt);
 registerApplyDecoratedStmt(applyDecoratedStmt);
 
-test "member wrappers with intrinsic decorators survive the apply pass" {
-	const pr = parseSource("class Calc {\n\t@nonisolated loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
+test "an intrinsic member wrapper is consumed into the method symbol before the apply pass" {
+	const pr = parseSource("class Calc {\n\t@builtin(\"CalcLoud\") loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
 	assert pr.ok;
 	const ctx = createContext();
+	collectTopLevel(ctx, pr.value);
 	applyDecorators(ctx, pr.value);
 	const cls = (pr.value.data as ProgramData).programStmts[0];
 	assert cls.kind == NodeKind.ClassDecl;
 	const body = (cls.data as ClassDeclData).classBody;
-	assert body[0].kind == NodeKind.DecoratedDecl;
+	assert body[0].kind == NodeKind.MethodDecl;
+	assert body[0].resolvedSym != null;
+	assert body[0].resolvedSym.builtinKind == "CalcLoud";
+}
+
+test "an intrinsic member wrapper beside a user decorator is consumed by the fill after the apply pass" {
+	const pr = parseSource("macro keep(value: Node): Node { return value; }\n@keep\nclass Calc {\n\t@builtin(\"CalcLoud\") loud(): int32 { return 1; }\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	collectTopLevel(ctx, pr.value);
+	const cls = (pr.value.data as ProgramData).programStmts[1];
+	assert cls.kind == NodeKind.DecoratedDecl;
+	const inner = (cls.data as DecoratedDeclData).decoratedNode;
+	assert inner.kind == NodeKind.ClassDecl;
+	assert (inner.data as ClassDeclData).classBody[0].kind == NodeKind.DecoratedDecl;
+	const sym = lookupSymbol(ctx.table, "Calc");
+	assert sym != null && hasFlag(sym, SymbolFlag.Forward);
+	sym.declNode = inner;
+	fillForwardSymbol(ctx, sym);
+	const body = (inner.data as ClassDeclData).classBody;
+	assert body[0].kind == NodeKind.MethodDecl;
+	assert body[0].resolvedSym != null;
+	assert body[0].resolvedSym.builtinKind == "CalcLoud";
 }
 
 test "collect mints a decorated class in place" {

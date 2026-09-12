@@ -8,6 +8,54 @@ export interface DecoratorInfo {
 	nonisolated: boolean;
 }
 
+const passThroughDirectives: string[] = [
+	"emit", "include", "compile", "link", "passC", "passL", "import",
+	"comptime", "builtin", "cImport",
+];
+const intrinsicDecorators: string[] = ["nonisolated"];
+
+export function isBuiltinDirective(name: string): boolean {
+	for (const n of passThroughDirectives) {
+		if (n == name) return true;
+	}
+	return false;
+}
+
+export function isIntrinsicDecorator(name: string): boolean {
+	if (isBuiltinDirective(name)) return true;
+	for (const n of intrinsicDecorators) {
+		if (n == name) return true;
+	}
+	return false;
+}
+
+export function intrinsicOnly(decorators: Node[]): Node[] {
+	const kept: Node[] = [];
+	for (const d of decorators) {
+		if (d.kind == NodeKind.MacroInvocation && !isIntrinsicDecorator((d.data as MacroInvocationData).macroName)) continue;
+		kept.push(d);
+	}
+	return kept;
+}
+
+function allIntrinsic(decorators: Node[]): boolean {
+	for (const d of decorators) {
+		if (d.kind != NodeKind.MacroInvocation) return false;
+		if (!isIntrinsicDecorator((d.data as MacroInvocationData).macroName)) return false;
+	}
+	return true;
+}
+
+export function stripIntrinsicMemberWrappers(body: Node[]): void {
+	for (let i = 0; i < body.length; i += 1) {
+		const member = body[i];
+		if (member.kind != NodeKind.DecoratedDecl) continue;
+		const dd = member.data as DecoratedDeclData;
+		if (dd.decoratedNode == null || !allIntrinsic(dd.decorators)) continue;
+		body[i] = dd.decoratedNode;
+	}
+}
+
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
 export function hasDecoratorNamed(decorators: Node[], name: string): boolean {
 	for (const dec of decorators) {

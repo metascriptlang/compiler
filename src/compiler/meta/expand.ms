@@ -61,7 +61,8 @@ import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "
 import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
-import { isBuiltinDirective } from "./decorators";
+import { isBuiltinDirective } from "../../checker/decoratorHelpers";
+import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
