@@ -84,3 +84,8 @@ test "bug149: intersection, union and symmetric difference on the array band" {
 	assert r.lastError == "";
 	assert r.lastResult.intVal == 29;
 }
+test "bug149: the 64-bit band shifts past bit 31" {
+	const r = evalSourceFull("enum E { M0,M1,M2,M3,M4,M5,M6,M7,M8,M9,M10,M11,M12,M13,M14,M15,M16,M17,M18,M19,M20,M21,M22,M23,M24,M25,M26,M27,M28,M29,M30,M31,M32,M33,M34,M35,M36,M37,M38,M39 } const s: BitSet<E> = E.M39 | E.M1; const t: BitSet<E> = E.M7 | E.M1; return (s.has(E.M7) ? 1 : 0) + (s.has(E.M39) ? 2 : 0) + ((E.M33 | E.M0).has(E.M1) ? 4 : 0) + (s == t ? 8 : 0);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 2;
+}

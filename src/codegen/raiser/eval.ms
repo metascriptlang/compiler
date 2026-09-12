@@ -265,6 +265,48 @@ function evalOrcVM(code: string): RaiserVM {
 	return execModule(mod, "orc");
 }
 
+test "engine: shift left on int64 keeps bits past 31" {
+	const r = evalSourceFull("function shl(one: int64, n: int64): int64 { return one << n; } return shl(1, 39);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 549755813888;
+}
+
+test "engine: shift left on int32 sign-extends at the type width" {
+	const r = evalSourceFull("function shl(one: int32, n: int32): int32 { return one << n; } return shl(1, 31);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == -2147483648;
+}
+
+test "engine: shift count is taken modulo the type width" {
+	const r = evalSourceFull("function shl(one: int32, n: int32): int32 { return one << n; } return shl(1, 39);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 128;
+}
+
+test "engine: shift left on uint32 masks to the type width" {
+	const r = evalSourceFull("function shl(one: uint32, n: uint32): uint32 { return one << n; } return shl(3, 31);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 2147483648;
+}
+
+test "engine: bitwise NOT on uint8 stays in the byte" {
+	const r = evalSourceFull("function inv(x: uint8): uint8 { return ~x; } return inv(5);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 250;
+}
+
+test "engine: shift right on uint64 is logical" {
+	const r = evalSourceFull("function shl(one: uint64, n: uint64): uint64 { return one << n; } function shr(x: uint64, n: uint64): uint64 { return x >> n; } return shr(shl(1, 63), 63);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 1;
+}
+
+test "engine: shift right on uint32 is logical" {
+	const r = evalSourceFull("function shr(x: uint32, n: uint32): uint32 { return x >> n; } return shr(2147483648, 31);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 1;
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
