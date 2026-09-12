@@ -10,7 +10,7 @@ export interface DecoratorInfo {
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "cImport",
+	"comptime", "builtin",
 ];
 const intrinsicDecorators: string[] = ["nonisolated"];
 
