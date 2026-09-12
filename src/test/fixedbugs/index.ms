@@ -172,3 +172,5 @@ import "./bug153AutoCallHeldThroughHidden";
 import "./bug154AccessorAutoCallIdent";
 import "./bug155ParamDestructure";
 import "./bug158BitSetOperandRules";
+import "./bug156MaybeGenericInstancePayload";
+import "./bug157GenericReturnIntoMaybe";
