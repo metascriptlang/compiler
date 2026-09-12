@@ -520,6 +520,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";
+	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
 	instSym.originalName = mangledName;

@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
-import { bitSetElemType, distinctInstanceRepr, booleanType, createPrimitive } from "../../checker/types";
+import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
@@ -37,17 +37,14 @@ function isSetOperand(n: Node | null): boolean {
 
 function arrayRepr(t: Type | null): Type | null {
 	if (bitSetElemType(t) == null) return null;
-	const repr = distinctInstanceRepr(t);
+	const repr = setRepr(t);
 	if (repr == null || repr.kind != TypeKind.SizedArray) return null;
 	return repr;
 }
 
 function setOpName(sym: Node): string {
 	if (sym.kind != NodeKind.Identifier || sym.resolvedSym == null) return "";
-	let name = sym.resolvedSym.name;
-	const instSep = name.indexOf("__", 0);
-	if (instSep >= 0) name = name.slice(0, instSep);
-	return name;
+	return sym.resolvedSym.builtinKind;
 }
 
 function isSetBinaryOp(op: string): boolean {
@@ -59,17 +56,17 @@ function isSetBinaryOp(op: string): boolean {
 function lowerWordCall(node: Node, name: string, recv: Node, repr: Type): Node {
 	const d = node.data as CallExprData;
 	const loc = node.location;
-	if (name == "BitSet_isEmpty" && d.arguments.length == 1) {
+	if (name == "SetIsEmpty" && d.arguments.length == 1) {
 		return typedBinary(recv, "==", typedNumber(0, repr, loc), booleanType(), loc);
 	}
 	if (d.arguments.length != 2) return node;
 	const bit = shiftMember(d.arguments[1], repr);
-	if (name == "BitSet_has") {
+	if (name == "SetHas") {
 		const masked = typedBinary(recv, "&", bit, repr, loc);
 		return typedBinary(masked, "!=", typedNumber(0, repr, loc), booleanType(), loc);
 	}
-	if (name == "BitSet_incl") return typedBinary(recv, "|", bit, recv.nodeType, loc);
-	if (name == "BitSet_excl") {
+	if (name == "SetIncl") return typedBinary(recv, "|", bit, recv.nodeType, loc);
+	if (name == "SetExcl") {
 		const cleared = makeUnary("~", bit, loc);
 		cleared.nodeType = repr;
 		return typedBinary(recv, "&", cleared, recv.nodeType, loc);
@@ -140,23 +137,23 @@ function lowerArrayCall(node: Node, name: string, recv: Node, repr: Type, ctx: T
 	const d = node.data as CallExprData;
 	const loc = node.location;
 	const n = wordCount(repr);
-	if (name == "BitSet_isEmpty" && d.arguments.length == 1) {
+	if (name == "SetIsEmpty" && d.arguments.length == 1) {
 		let acc = wordAt(recv, 0, repr, ctx, loc);
 		for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, repr, ctx, loc), uint32Type(), loc);
 		return typedBinary(acc, "==", typedNumber(0, uint32Type(), loc), booleanType(), loc);
 	}
 	if (d.arguments.length != 2) return node;
 	const member = d.arguments[1];
-	if (name == "BitSet_has") {
+	if (name == "SetHas") {
 		const word = wordAtIndex(recv, memberWordIndex(member, loc), repr, ctx, loc);
 		const masked = typedBinary(word, "&", memberBitInWord(member, loc), uint32Type(), loc);
 		return typedBinary(masked, "!=", typedNumber(0, uint32Type(), loc), booleanType(), loc);
 	}
-	if (name == "BitSet_incl" || name == "BitSet_excl") {
+	if (name == "SetIncl" || name == "SetExcl") {
 		const elements: Node[] = [];
 		for (let i = 0; i < n; i += 1) {
 			const bit = memberBit(member, i, loc);
-			if (name == "BitSet_incl") {
+			if (name == "SetIncl") {
 				elements.push(typedBinary(wordAt(recv, i, repr, ctx, loc), "|", bit, uint32Type(), loc));
 			} else {
 				const cleared = makeUnary("~", bit, loc);
@@ -210,7 +207,7 @@ function lowerCall(node: Node, ctx: TransformContext): Node {
 	if (d.arguments.length == 0) return node;
 	const recv = d.arguments[0];
 	if (!isSetOperand(recv)) return node;
-	const repr = distinctInstanceRepr(recv.nodeType);
+	const repr = setRepr(recv.nodeType);
 	if (repr == null) return node;
 	const name = setOpName(d.callee);
 	if (name == "") return node;
@@ -222,7 +219,7 @@ function lowerBinary(node: Node, ctx: TransformContext): Node {
 	const d = node.data as BinaryExprData;
 	if (isSetBinaryOp(d.operator)) {
 		if (bitSetElemType(node.nodeType) == null) return node;
-		const repr = distinctInstanceRepr(node.nodeType);
+		const repr = setRepr(node.nodeType);
 		if (repr == null) return node;
 		if (repr.kind == TypeKind.SizedArray) return lowerArrayBinary(node, repr, ctx);
 		return lowerWordBinary(node, repr);

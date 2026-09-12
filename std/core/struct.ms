@@ -892,27 +892,27 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // constructors can't be tested inline — they emit in the defining module,
 // causing typeInfo conflicts).
 // ===== BitSet<E> =====
-// A set of enum members: bit position = member ordinal. The representation is
-// sized by the member count (one 32-bit word up to 32, a 64-bit word up to 64, a
-// word array up to 65536); the `uint32` here is the smallest band. Unsigned so
-// that the ordinal-31 shift is defined.
-// Value type, so it has no mutating methods — `|` adds, `& ~` removes, `.has()`
-// asks. The checker gives `E.A | E.B` the type `BitSet<E>`.
-// See docs/LANG-PRIMITIVE.md for the design record.
+// A set of enum members: bit position = member ordinal. The checker gives
+// `E.A | E.B` the type `BitSet<E>` and sizes it by the member count; the four
+// operations below are lowered before codegen. See docs/LANG-PRIMITIVE.md.
 export type BitSet<E> = distinct uint32;
 
+@builtin("SetHas")
 export function has<E>(this self: BitSet<E>, member: E): boolean {
 	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;
 }
 
+@builtin("SetIncl")
 export function incl<E>(this self: BitSet<E>, member: E): BitSet<E> {
 	return ((self as uint32) | ((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
+@builtin("SetExcl")
 export function excl<E>(this self: BitSet<E>, member: E): BitSet<E> {
 	return ((self as uint32) & ~((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
+@builtin("SetIsEmpty")
 export function isEmpty<E>(this self: BitSet<E>): boolean {
 	return (self as uint32) == 0;
 }

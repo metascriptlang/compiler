@@ -70,23 +70,27 @@ export extern function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): v
 export extern function toItems<T>(this s: Set<T>): T[] from "Array.from(#.values())";
 
 // ===== BitSet<E> =====
-// Same source as the native prelude: a set of enum members in one word, bit
-// position = member ordinal. uint32 keeps this a plain Number on this backend —
-// no BigInt, so the operators are the machine's own.
+// Same source as the native prelude: a set of enum members, bit position =
+// member ordinal, sized by the member count; the four operations are lowered
+// before codegen.
 export type BitSet<E> = distinct uint32;
 
+@builtin("SetHas")
 export function has<E>(this self: BitSet<E>, member: E): boolean {
 	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;
 }
 
+@builtin("SetIncl")
 export function incl<E>(this self: BitSet<E>, member: E): BitSet<E> {
 	return ((self as uint32) | ((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
+@builtin("SetExcl")
 export function excl<E>(this self: BitSet<E>, member: E): BitSet<E> {
 	return ((self as uint32) & ~((1 as uint32) << (member as uint32))) as BitSet<E>;
 }
 
+@builtin("SetIsEmpty")
 export function isEmpty<E>(this self: BitSet<E>): boolean {
 	return (self as uint32) == 0;
 }
