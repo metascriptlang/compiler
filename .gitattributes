@@ -1,0 +1,7 @@
+*.ms  linguist-language=TypeScript
+*.cms linguist-language=TypeScript
+*.jms linguist-language=TypeScript
+*.rms linguist-language=TypeScript
+vendor/** linguist-vendored
+tools/editor-plugin/**/tree-sitter/src/** linguist-generated
+docs/** linguist-documentation
