@@ -1,4 +1,5 @@
 .claude/
+/CLAUDE.md
 .metascript-cache/
 .DS_Store
 
@@ -34,20 +35,40 @@ msc-*
 # self-host compiler binaries (msc-* above only covers the suffixed variants)
 /msc
 /msc2
-/msc_nim
 /msc.lock
 
 # object files + foreign toolchain caches
 *.o
-nim-cache/
 
 # a mis-expanded ~ once created a nested copy of the repo here
 /Users/
 
-# docs/ is a Syncthing folder root (NIM-REF.md shared with the Windows box)
-docs/.stfolder/
-docs/.stignore
-docs/.stversions/
+# docs/ is published selectively
+docs/*
+!docs/LANG.md
+!docs/LANG-BUILD.md
+!docs/LANG-CONCURRENCE.md
+!docs/LANG-INTERLOP.md
+!docs/LANG-JSX.md
+!docs/LANG-METAPROGRAMMING.md
+!docs/LANG-MORPH.md
+!docs/LANG-MOVE.md
+!docs/LANG-PRELUDE.md
+!docs/LANG-PRIMITIVE.md
+!docs/LANG-RAW.md
+!docs/LANG-RUNTIME.md
+!docs/LANG-STRUCT.md
+!docs/LANG-TEST.md
+!docs/BARE.md
+!docs/BUILD-PERF.md
+!docs/FEATURES.md
+!docs/KNOWN-ISSUES.md
+!docs/LSP.md
+!docs/PIPELINE.md
+!docs/PROJECT-STRUCTURE.md
+!docs/RAISER.md
+!docs/TRANSFORM.md
+!docs/WINDOWS-TRAPS.md
 
 # local compiler build candidates + their debug PDBs (root only)
 /msc.exe
