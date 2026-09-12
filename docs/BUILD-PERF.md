@@ -72,9 +72,9 @@ of `xform=204 ms`).
 
 | Direction | Verdict | Why |
 |---|---|---|
-| Slim `defaultGlobalImports` (Nim `nimPreviewSlimSystem` model) | **rejected by product decision** | implicit stdlib surface is a language promise (user rejected). Keep as documented fallback if this whole plan fails |
+| Slim `defaultGlobalImports` | **rejected by product decision** | implicit stdlib surface is a language promise (user rejected). Keep as documented fallback if this whole plan fails |
 | Lazy name-scan prelude selection | rejected | no reference precedent; false-negative risk (comptime-generated names, extensions) |
-| Whole-context snapshot / Nim-IC style | rejected | Nim's IC attempts (rod → sqlite → NIF) never became default; persisting whole contexts is the graveyard |
+| Whole-context snapshot | rejected | persisting whole contexts has repeatedly failed to become the default elsewhere; it is the graveyard |
 | Daemon / persistent worker (Bazel worker protocol) | superseded | disk persistence + `--batch` give the same wins without IPC; a daemon would be built then obsoleted |
 | Checker hot-loop profiling | **keep as parallel track (cheap)** | `node.ms` 2.4 ms/KB vs graph avg 1.4 ms/KB suggests quadratic spots; current `--time` does not even decompose the 702 ms |
 
@@ -111,10 +111,8 @@ Implementation: wrap `inlineHeaderImports` (loader.ms) — key → read cache �
 hit: return; miss: compute + atomic publish. Kill-switch env
 `MSC_NO_HEADER_CACHE=1`.
 
-**Reference model (nothing invented):** the reference compiler has no
-header-translation step at all — its FFI bindings are hand-written
-declarations (`.importc.` pragmas; verified lib/system.nim), so it never
-pays this cost. The mechanism itself is the established
+**Prior art (nothing invented):** a compiler with hand-written FFI declarations
+and no header-translation step never pays this cost. The mechanism itself is the established
 "cache a pure transform's output, content-hash keyed" family:
 Zig `@cImport` (translate-c output cached in the content-addressed local/
 global cache, keyed by header hashes + options — the closest analog: C
@@ -194,10 +192,7 @@ self-host/suite floor.
 | disk persistence of query results | rustc incremental compilation (rustc-dev-guide, "Queries" + "Incremental compilation" chapters) |
 | interface artifact at library boundary | rustc `rmeta`/`rlib` (rustc-dev-guide "Libraries and metadata" — verified 2026-09-01); TypeScript `.d.ts` same family |
 | invalidation | content hashes (`hashNode` exists) + SVH-analog = `toolchainStamp` (hardened + marker GC, 2026-09-01) |
-| anti-reference | Nim IC — persisting whole contexts; also Zig's laziness = different axis, not retrofittable |
-
-Local reference trees: `~/projects/nim` (yes). rust/rust-analyzer: NOT on
-this Windows host — clone or read via web when needed.
+| anti-reference | persisting whole contexts; also Zig's laziness = different axis, not retrofittable |
 
 ---
 
@@ -390,9 +385,9 @@ persistence is now Phase A).
       ignored — FIXED 2026-09-03 (`bacbdab6`): the shared prelude scope lets
       a later module's overload land on an already-Shaped primary, where
       ensureShaped's early-return skipped it; shaping now drains the whole
-      chain. Full story: docs/NIM-REF.md "Symbol identity" section.
+      chain.
 - [x] Phase A1 v2 impl + verify — DONE 2026-09-03, DEFAULT ON. The pack is a
-      SELF-CONTAINED closure (Nim ast2nif / rustc rmeta model): one
+      SELF-CONTAINED closure (rustc rmeta model): one
       index-linked object graph of Symbols, Types AND Nodes (declNode,
       defaultParams, macro bodies, nodeType/resolvedSym/typeExpr refs) — no
       donor contexts, no lazy materializer, no downstream ensure-hooks;

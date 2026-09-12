@@ -58,7 +58,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 
 ### Phase 5.5: Incremental Performance (MOSTLY COMPLETE)
 *   **Goal**: Close gaps found via audit against standard references and rust-analyzer (Salsa, DefMap, PrimeCaches).
-*   **Audit date**: 2026-03-07. Compared against standard reference compilers and `~/projects/rust/src/tools/rust-analyzer/`.
+*   **Audit date**: 2026-03-07. Compared against standard reference compilers and rust-analyzer.
 *   **Tasks**:
     - [ ] **G1: Output-Hash Early Cutoff** — When parse output hash is unchanged after re-parse (e.g., comment-only edit), dependents stay GREEN. Implements the core Salsa "backdating" optimization. Requires `taHashNode` for AST content hashing + comparison in `tryMarkGreen`. *(High impact, Medium effort)*
     - ~~[x] **G2: Durability for Stdlib** — Mark std/ files as `TaDurability.High` via `dbSetStdPath` prefix matching. Skip `tryMarkGreen` recursive verification for High-durability entries (they never change during a session). HIGH durability skip still checks `computedAt` for safety. Standard reference: `belongsToStdlib`. rust-analyzer: 3-tier version vector skips sysroot.~~
@@ -137,7 +137,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 - **IDE commands**: Enum covering suggestions, definitions, usage tracking, highlighting, outlining, inlay hints, etc.
 - **belongsToStdlib**: Uses package-ID comparison or path matching for robust stdlib detection.
 
-### rust-analyzer Key Patterns (~/projects/rust/src/tools/rust-analyzer/)
+### rust-analyzer Key Patterns
 - **Salsa red-green**: Query dependencies tracked automatically. On re-request, validate each dependency's revision. GREEN = return cached. RED = recompute.
 - **Early cutoff (backdating)**: If re-executed query produces same output hash, it's "backdated" — blocks cascading to all transitive dependents. Comment-only edits: parse re-runs, AST unchanged, type-check stays cached. **This is our G1 — highest-impact remaining optimization.**
 - **3-tier durability**: Volatile (open files), Normal (project code), Durable (external crates/sysroot). Version vector `[volatile, normal, durable]` — editing user file only bumps volatile counter, skips all durable query verification.

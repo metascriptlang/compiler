@@ -525,4 +525,3 @@ Object/array construction in `moveOrCopy()` handles each field/element through t
 |------|--------|---------|
 | `src/analyzer/inject.ms` | 1-4, 6 | MoveExpr handling in 7 functions, new helpers, tests |
 | `src/analyzer/scope.ms` | 5 | NullInitVars tracking (interface + 3 functions) |
-| `docs/CODEGEN-GAP.md` | All | Mark Gap 15 as DONE |

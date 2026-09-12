@@ -78,17 +78,17 @@ Run after general transforms, only for C target.
 
 ## Pending Transforms: Architecture
 
-Two transforms are deferred. This section defines their architecture based on Nim's proven patterns, adapted for MetaScript's self-hosted context.
+Two transforms are deferred. This section defines their architecture based on proven patterns from other compilers, adapted for MetaScript's self-hosted context.
 
 ### 1. Dead Code Elimination (DCE)
 
 **What**: Compute the set of "alive" symbols so codegen can skip dead code.
 
-**Nim reference**: `ic/dce.nim` (169 LOC). NOT an AST transform — it's an analysis pass that produces an `AliveSyms` set. Codegen queries `isAlive()` to skip dead symbols.
+**Shape**: NOT an AST transform — it's an analysis pass that produces an `AliveSyms` set. Codegen queries `isAlive()` to skip dead symbols.
 
 **MetaScript reference**: `dce.zig` (990 LOC). Same architecture but more complex due to string-based module system and lifecycle hook proactive marking.
 
-#### Algorithm (Nim-aligned: worklist marking)
+#### Algorithm (worklist marking)
 
 1. **Seed**: Walk all top-level code in all modules. Mark `main()`, exports, `@runtime` functions.
 2. **Worklist**: For each alive symbol, walk its body. Any symbol it references → add to worklist.
@@ -118,7 +118,7 @@ Single-module stub: ~20 LOC (everything alive). Multi-module: ~200 LOC (worklist
 
 **What**: Prevent double-evaluation of expressions with side effects.
 
-**Nim reference**: `lowerings.nim:evalOnce` (15 LOC). NOT a standalone pass — it's a utility function called ad-hoc by other transforms.
+**Shape**: NOT a standalone pass — it's a utility function called ad-hoc by other transforms.
 
 ```
 // Input (inside optionalChain transform):
@@ -207,14 +207,14 @@ Phase 2             │  1-15. (see table above)             │
 
 ## Skipped Transforms (with rationale)
 
-Compared against Nim's `transf.nim` which has only 7 essential transforms. These reference compiler transforms are overkill:
+Compared against compilers that get by with a handful of essential transforms, these are overkill here:
 
 | Transform | Reason |
 |-----------|--------|
 | recordToMap | No `Record<K,V>` type in MetaScript |
 | dateLower | Too specialized — one type doesn't justify a transform |
 | subscriptLower | Needs custom `[]` infrastructure we don't have |
-| methodCallLower | UFCS — Nim handles in semantic phase, not transforms |
+| methodCallLower | UFCS belongs in the semantic phase, not in transforms |
 | arrayMethodInline | Needs type info for correctness, marginal benefit |
 | astValidator | Defensive — better to fix transforms than add post-validation |
 

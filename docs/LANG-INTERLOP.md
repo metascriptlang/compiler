@@ -400,10 +400,10 @@ Phase 1 covers 90% of use cases (all `std/runtime/*.ms` patterns). Phase 2 enabl
 ---
 
 ## Reference Files
-| libclang bindings | `~/projects/metascript/src/interop/c/clang.zig` | 200-520 |
-| C→MS AST transformer | `~/projects/metascript/src/interop/c/transform.zig` | 1-100 |
-| Codegen (#include emission) | `~/projects/metascript/src/codegen/c/cgen.zig` | 2930-3142, 19440-19460 |
-| Build system (CompileFeatures) | `~/projects/metascript/src/build/cc.zig` | 43-506 |
+| libclang bindings | `internal compiler: src/interop/c/clang.zig` | 200-520 |
+| C→MS AST transformer | `internal compiler: src/interop/c/transform.zig` | 1-100 |
+| Codegen (#include emission) | `internal compiler: src/codegen/c/cgen.zig` | 2930-3142, 19440-19460 |
+| Build system (CompileFeatures) | `internal compiler: src/build/cc.zig` | 43-506 |
 | Self-hosted extern parser | `src/parser/statements/declaration.ms` | 959-1020 |
 | **ARO (Zig C Parser)** | | |
 | Upstream repo | `github.com/Vexu/arocc` | MIT, 1595 stars |
@@ -413,6 +413,6 @@ Phase 1 covers 90% of use cases (all `std/runtime/*.ms` patterns). Phase 2 enabl
 | AST | `aro/Tree.zig` | root_decls, Node types, tokSlice |
 | Types | `aro/TypeStore.zig` | QualType, Type specifiers |
 | **Zig translate-c (reference usage)** | | |
-| ARO integration | `~/projects/zig/lib/compiler/translate-c/main.zig` | Full ARO init + parse flow |
-| C→Zig type translator | `~/projects/zig/lib/compiler/translate-c/Translator.zig` | 1061-1180 |
-| Macro translator | `~/projects/zig/lib/compiler/translate-c/MacroTranslator.zig` | 51K |
+| ARO integration | `zig/lib/compiler/translate-c/main.zig` | Full ARO init + parse flow |
+| C→Zig type translator | `zig/lib/compiler/translate-c/Translator.zig` | 1061-1180 |
+| Macro translator | `zig/lib/compiler/translate-c/MacroTranslator.zig` | 51K |

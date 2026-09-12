@@ -190,7 +190,7 @@ node.flags & TypeFlag.HasAsgn      // node.flags is NodeFlag-shaped
 Scale in this repo: **224** raw bit operations on `flags` fields, **154** `hasFlag`/`setFlag`
 calls, **391** `.kind == X ||` chains that a set membership test would collapse. The
 reference reaches for the same construct **1131** times (`x in {...}`) and declares **7**
-set aliases over its core enums (`astdef.nim:50,152,307,351,425,459,657`).
+set aliases over its core enums.
 
 `Symbol.symFlags` is also **out of room**: it is an `int32` whose highest flag is `2^29`,
 leaving exactly one bit. Hand-assigned powers of two are what exhausted it.
@@ -260,10 +260,9 @@ back to `int`, which discards the type safety that motivates the feature.
 
 ### Width, and why it is also the JS fast path
 
-This follows the reference's sizing (`sizealignoffsetimpl.nim:302-325`: `≤8 → 1 byte`,
-`≤16 → 2`, `≤32 → 4`, `≤64 → 8`, larger → byte array) read through `mapSetType`
-(`ccgtypes.nim:221`), which turns that size into a C type and falls to an array above 8 bytes.
-`checker/types.ms` `bitSetRepr` is the port, and `setRepr` reads it, so the representation is
+The width bands are `≤8 → 1 byte`, `≤16 → 2`, `≤32 → 4`, `≤64 → 8`, larger → byte array;
+the band picks a C integer type and falls to an array above 8 bytes.
+`checker/types.ms` `bitSetRepr` holds the bands, and `setRepr` reads it, so the representation is
 decided by the element enum's member count at every point that asks. Measured 2026-09-12
 (`src/test/c/bitSetWidth.ms` pins the struct field types; corpus `761-bitSetNarrow.ms` runs
 the 1- and 2-byte bands on both backends):
@@ -277,10 +276,9 @@ the 1- and 2-byte bands on both backends):
 | ≤ 65536 | `SizedArray<uint8, ⌈n/8⌉>` | `uint8_t data[13];` (100 members) | `(s[m >> 3] & (1 << (m & 7))) != 0` |
 | above | rejected with a loud error | — | — |
 
-The cap is the reference's own `MaxSetElements = 1 shl 16` (`nversion.nim:14`). Every band
-matches the reference's `mapSetType` (`ccgtypes.nim:221`): a 5-member enum costs 1 byte, and
+The cap is 2^16 members. Within it a 5-member enum costs 1 byte, and
 the array band is a byte array, not a word array. Until 2026-09-12 the floor was a 32-bit word
-and the array band used 32-bit words; that narrowing was removed for parity.
+and the array band used 32-bit words; that narrowing was removed.
 
 The 33–64 band stays a single 64-bit word rather than a two-word array, and that was measured,
 not assumed: on the JS backend a two-word array ran **~20% slower** than the BigInt path

@@ -15,8 +15,8 @@ Only relevant when the dev box is Windows. On macOS/Linux hosts, skip.
   compiler source.
 - **pwsh `git show X | Set-Content` corrupts non-ASCII source** (one mangled
   char broke a `fit.ms` export list). In a throwaway worktree use
-  `git checkout -- <file>` instead; in the main tree see the Git Rules in
-  `CLAUDE.md`.
+  `git checkout -- <file>` instead; never discard working-tree state in the
+  main tree.
 - **`Start-Process` ExitCode is sometimes empty even after `-Wait`** — judge
   runs by artifacts (test totals in the log, built binaries), not
   `$p.ExitCode`.

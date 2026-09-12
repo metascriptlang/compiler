@@ -27,7 +27,7 @@ Workarounds for bugs in the reference compiler (Zig-based `msc`). Each entry: pr
 **Problem:** Pushing to a string array inside a function does not propagate to the caller.
 **Context:** `function addItem(arr: string[], item: string) { arr.push(item); }` — caller's array unchanged after call.
 **Why:** Strings are still value types in MetaScript. Function parameters receive a copy, so mutations are local to the callee.
-**Status:** Arrays (`T[]` for non-string T) are now fixed via the `pointerParam` transform (Nim's `nkHiddenAddr`/`nkHiddenDeref` pattern). Array wrappers have been removed — bare `T[]` types work correctly. **Strings remain value types** — string array (`string[]`) mutation still does not propagate. Wrap in interface if needed.
+**Status:** Arrays (`T[]` for non-string T) are now fixed via the `pointerParam` transform (hidden address-of / dereference pattern). Array wrappers have been removed — bare `T[]` types work correctly. **Strings remain value types** — string array (`string[]`) mutation still does not propagate. Wrap in interface if needed.
 
 ---
 

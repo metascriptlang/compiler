@@ -6,7 +6,7 @@
 
 ### Design: Single Source of Truth in `.ms` Files
 
-All builtins declared in `std/*.ms` files (auto-imported like Nim's system.nim). Normal MetaScript code — `export`, `class`, `@runtime`, `@builtin`, static/instance extensions. The compiler handles auto-importing.
+All builtins declared in `std/*.ms` files (auto-imported). Normal MetaScript code — `export`, `class`, `@runtime`, `@builtin`, static/instance extensions. The compiler handles auto-importing.
 
 **3-tier system:**
 
