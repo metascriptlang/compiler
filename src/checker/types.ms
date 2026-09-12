@@ -1559,13 +1559,28 @@ export function isOrdinalEnum(t: Type | null): boolean {
 // A generic distinct/alias instance is nominal to the checker only; its
 // representation is the substituted body. Backends that switch on width need
 // that body, not the instance.
+function instanceBody(t: Type): Type | null {
+	const base = t.typeExtra;
+	if (base == null || base.typeReturn == null) return null;
+	if (t.typeReturn != null) return t.typeReturn;
+	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
+	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return base.typeReturn;
+	const names: string[] = [];
+	const args: Type[] = [];
+	for (let pi = 0; pi < paramNames.length; pi += 1) {
+		names.push(paramNames[pi].trim());
+		args.push(t.typeChildren[pi]);
+	}
+	return substituteAllParams(base.typeReturn, names, args);
+}
+
 export function distinctInstanceRepr(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind != TypeKind.GenericInstance) return null;
 	const base = t.typeExtra;
 	if (base == null || base.typeReturn == null) return null;
 	if (base.kind != TypeKind.Distinct && base.kind != TypeKind.Alias) return null;
-	return base.typeReturn;
+	return instanceBody(t);
 }
 
 export function genericInstanceAbiRepr(t: Type): Type {
@@ -1636,16 +1651,8 @@ export function distinctBody(t: Type | null): Type | null {
 	if (t.kind == TypeKind.Distinct) return t.typeReturn;
 	if (t.kind != TypeKind.GenericInstance) return null;
 	const base = t.typeExtra;
-	if (base == null || base.kind != TypeKind.Distinct || base.typeReturn == null) return null;
-	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
-	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return base.typeReturn;
-	const names: string[] = [];
-	const args: Type[] = [];
-	for (let pi = 0; pi < paramNames.length; pi += 1) {
-		names.push(paramNames[pi].trim());
-		args.push(t.typeChildren[pi]);
-	}
-	return substituteAllParams(base.typeReturn, names, args);
+	if (base == null || base.kind != TypeKind.Distinct) return null;
+	return distinctInstanceRepr(t);
 }
 
 export function distinctCallTarget(t: Type | null): Type | null {
