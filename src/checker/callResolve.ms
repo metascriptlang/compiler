@@ -1240,15 +1240,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// every arg) EXCEPT literal lambdas — their params/return are typed
 			// CONTEXTUALLY from this formal at their own check site, and re-checking
 			// against a generic-containing formal false-positives (ec38c20 family).
-			const argIsFnValue = argTypes[pi].kind == TypeKind.Function
+			const argIsFnValue = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
 				&& pi < d.arguments.length && d.arguments[pi] != null
 				&& d.arguments[pi].kind != NodeKind.ArrowFunction
 				&& d.arguments[pi].kind != NodeKind.FunctionExpr;
+			const paramFnShape = peelTransparentInstance(paramType);
 			const fnPairCheckable = argIsFnValue
-				&& paramType.kind == TypeKind.Function
+				&& paramFnShape.kind == TypeKind.Function
 				&& !hasGenericParams(paramType);
 			const fnKindMismatch = argIsFnValue
-				&& paramType.kind != TypeKind.Function && !isUnresolvedType(paramType)
+				&& paramFnShape.kind != TypeKind.Function && !isUnresolvedType(paramType)
 				&& paramType.kind != TypeKind.GenericParam && !isMaybeType(paramType)
 				&& !unionHasMemberOfKind(paramType, TypeKind.Function)
 				&& !hasGenericParams(paramType);

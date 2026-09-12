@@ -552,6 +552,7 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 		const an = nonNullMemberOfNullable(a);
 		if (an != null) return fnSlotReprMismatch(an, b);
 	}
+	if ((a.kind == TypeKind.Union) != (b.kind == TypeKind.Union)) return true;
 	if (fieldReprMismatch(a, b)) return true;
 	return isReinterpretUnsafe(a, b);
 }
@@ -839,6 +840,8 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (actual.kind == TypeKind.Sink || actual.kind == TypeKind.Lent) {
 		if (actual.typeReturn != null) actual = actual.typeReturn;
 	}
+	formal = peelTransparentInstance(formal);
+	actual = peelTransparentInstance(actual);
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
 	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
@@ -902,6 +905,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
+					if (fnSlotReprMismatch(formal.typeChildren[pi], actual.typeChildren[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formal.typeChildren[pi], actual.typeChildren[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
 					if (paramRel < worst) worst = paramRel;
@@ -909,6 +913,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				// A null side carries no information (inference pending), so it does
 				// not penalise — only two known return types are compared.
 				if (formal.typeReturn != null && actual.typeReturn != null) {
+					if (fnSlotReprMismatch(formal.typeReturn, actual.typeReturn)) return TypeRelation.None;
 					const retRel = typeRelation(formal.typeReturn, actual.typeReturn);
 					if (retRel == TypeRelation.None) return TypeRelation.None;
 					if (retRel < worst) worst = retRel;

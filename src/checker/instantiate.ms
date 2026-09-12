@@ -206,6 +206,13 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}
+	if (t.kind == TypeKind.GenericInstance) {
+		if (t.typeName != "") tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		if (t.typeChildren != null) {
+			for (const arg of t.typeChildren) injectConcreteTypeSyms(arg, ctx, callerCtx, injected);
+		}
+		return;
+	}
 	if (t.kind == TypeKind.Union) {
 		if (t.typeName != "") {
 			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);

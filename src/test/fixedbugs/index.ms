@@ -160,3 +160,5 @@ import "./bug141DistinctFnCallee";
 import "./bug142GenericAliasBody";
 import "./bug143TypeofNarrow";
 import "./bug144UnionArrayMember";
+import "./bug145UnionContextual";
+import "./bug146AliasInstanceConsumers";

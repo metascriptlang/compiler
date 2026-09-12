@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { genericInstanceAbiRepr, isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -542,7 +542,10 @@ export function ccgIntroducedPtr(t: Type): boolean {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
-		TypeKind.GenericInstance => !isAwaitable(inner),
+		TypeKind.GenericInstance => {
+			const repr = genericInstanceAbiRepr(inner);
+			return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(repr);
+		},
 		_ => false,
 	};
 }
@@ -556,7 +559,7 @@ export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolea
 	// is mutated by definition; the struct-mutation branch must not see
 	// through Var via skipModifier).
 	if (paramType.kind == TypeKind.Var) return false;
-	const inner = skipModifier(paramType);
+	const inner = paramAbiType(paramType);
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
 		return getTypeSize(inner) > PTR_THRESHOLD;
@@ -565,12 +568,20 @@ export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolea
 	return ccgIntroducedPtr(paramType);
 }
 
+function paramAbiType(paramType: Type): Type | null {
+	const inner = skipModifier(paramType);
+	if (inner == null) return null;
+	if (inner.kind == TypeKind.GenericInstance) return genericInstanceAbiRepr(inner);
+	if (inner.kind == TypeKind.Distinct && inner.typeReturn != null) return inner.typeReturn;
+	return inner;
+}
+
 // Should this promoted param use const qualifier?
 // Only unmutated struct params get const — all other promoted types use plain T*.
 export function shouldConstParam(paramType: Type, isMutated: boolean): boolean {
 	if (isMutated) return false;
 	if (paramType == null) return false;
-	const inner = skipModifier(paramType);
+	const inner = paramAbiType(paramType);
 	return inner != null && isStructType(inner);
 }
 

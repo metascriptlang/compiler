@@ -10,7 +10,7 @@
 // Reference: standard optimized C codegen patterns for struct parameters
 
 import { TypeFlag, Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
-import { createPtr, isStructType, getTypeSize, isResult, skipModifier, isAwaitable } from "../../checker/types";
+import { createPtr, isStructType, getTypeSize, isResult, skipModifier, isAwaitable, genericInstanceAbiRepr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
@@ -43,7 +43,10 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (inner.kind == TypeKind.Array) return true;  // arrays always by pointer
 	if (inner.kind == TypeKind.Union) return true;
 	if (inner.kind == TypeKind.Span) return true;
-	if (inner.kind == TypeKind.GenericInstance) return !isAwaitable(inner);
+	if (inner.kind == TypeKind.GenericInstance) {
+		const repr = genericInstanceAbiRepr(inner);
+		return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(repr);
+	}
 	return false;
 }
 

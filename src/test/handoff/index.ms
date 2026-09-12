@@ -58,3 +58,5 @@ import "./genericLiteralFit";
 import "./distinctFnAlias";
 import "./genericAliasBody";
 import "./typeofNarrow";
+import "./unionContextual";
+import "./fnSlotUnionRepr";

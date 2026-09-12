@@ -1568,6 +1568,14 @@ export function distinctInstanceRepr(t: Type | null): Type | null {
 	return base.typeReturn;
 }
 
+export function genericInstanceAbiRepr(t: Type): Type {
+	const transparent = peelTransparentInstance(t);
+	if (transparent != t) return transparent;
+	const distinctRepr = distinctInstanceRepr(t);
+	if (distinctRepr != null && distinctRepr.kind != TypeKind.Struct && distinctRepr.kind != TypeKind.Union) return distinctRepr;
+	return t;
+}
+
 export const BITSET_MAX_MEMBERS: int32 = 65536;
 
 export function bitSetRepr(elem: Type | null): Type | null {
@@ -2009,6 +2017,28 @@ export function unionHasMemberOfKind(t: Type | null, kind: TypeKind): boolean {
 	return false;
 }
 
+export function soleUnionMember(u: Type | null, pred: (t: Type) => boolean): Type | null {
+	if (u == null || u.kind != TypeKind.Union || u.typeChildren == null) return null;
+	let found: Type | null = null;
+	for (const m of u.typeChildren) {
+		if (m == null) continue;
+		const inner = peelTransparentInstance(m);
+		if (!pred(inner)) continue;
+		if (found != null) return null;
+		found = inner;
+	}
+	return found;
+}
+
+export function isFunctionKind(t: Type): boolean {
+	return t.kind == TypeKind.Function;
+}
+
+export function isArrayShaped(t: Type): boolean {
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return true;
+	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+}
+
 export function isTypeofTag(s: string): boolean {
 	return s == "string" || s == "number" || s == "boolean" || s == "function" || s == "bigint" || s == "object";
 }
@@ -2153,6 +2183,7 @@ export function isMaybeType(t: Type | null): boolean {
 // SomePointer-vs-value-type split (~/projects/nim/lib/pure/options.nim:90-99).
 export function isMaybeWrappable(t: Type | null): boolean {
 	if (t == null) return false;
+	t = peelTransparentInstance(t);
 	if (t.kind == TypeKind.Null) return false;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr
