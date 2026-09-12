@@ -28,6 +28,7 @@ import { RaiserContext } from "../../raiser/context";
 import { valueToNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
 import { CheckerContext, addError } from "../../checker/context";
+import { pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 
 // --- Evaluate a single ComptimeBlock node ---
 // Exported so the checker can eagerly fold @comptime blocks during type
@@ -84,7 +85,9 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 			nameLocation: loc,
 		}, synthToken(loc));
 		const program = createNode(NodeKind.Program, { programStmts: [comptimeFn] }, synthToken(loc));
+		pushActiveMetaCtx(checkerCtx, loc.line, loc.column);
 		ctx = evalProgramViaEngine(program, checkerCtx, "__comptimeBody");
+		popActiveMetaCtx();
 	} else {
 		const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));
 		ctx = evalASTFull(program);
