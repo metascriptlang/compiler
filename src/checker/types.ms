@@ -1540,12 +1540,9 @@ export function createDistinct(inner: Type): Type {
 }
 
 // ===== BitSet<E> =====
-// The std declaration `type BitSet<E> = distinct uint32` is registered here when
-// the checker resolves it, so operator inference can build an instance without a
-// symbol table. Same shape as the Locked/Var special cases in resolveAnnotation.
-let _bitSetBase: Type | null = null;
-
-export function registerBitSetBase(t: Type): void { _bitSetBase = t; }
+// A set of enum members is a type of its own (TypeKind.Set, element in
+// typeReturn); `BitSet<E>` resolves to it in resolveAnnotation the same way
+// Span/Ref/Arc/Locked do, and its representation follows the member count.
 
 // BitSet numbers members by ORDINAL. An enum whose members carry hand-assigned
 // values (1, 2, 4, ...) is already a flag encoding, so combining it must keep the
@@ -1570,8 +1567,6 @@ export function distinctInstanceRepr(t: Type | null): Type | null {
 	const base = t.typeExtra;
 	if (base == null || base.typeReturn == null) return null;
 	if (base.kind != TypeKind.Distinct && base.kind != TypeKind.Alias) return null;
-	const setRepr = bitSetRepr(bitSetElemType(t));
-	if (setRepr != null) return setRepr;
 	return base.typeReturn;
 }
 
@@ -1586,27 +1581,34 @@ export function bitSetRepr(elem: Type | null): Type | null {
 	return null;
 }
 
+export function setRepr(t: Type | null): Type | null {
+	if (t == null || t.kind != TypeKind.Set) return null;
+	return bitSetRepr(t.typeReturn);
+}
+
 export function peelToRepr(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
+	if (t.kind == TypeKind.Set) {
+		const sr = setRepr(t);
+		return sr != null ? peelToRepr(sr) : t;
+	}
 	const repr = distinctInstanceRepr(t);
 	if (repr != null) return peelToRepr(repr);
 	return t;
 }
 
 export function bitSetElemType(t: Type | null): Type | null {
-	if (t == null) return null;
-	if (t.kind != TypeKind.GenericInstance) return null;
-	if (t.typeName != "BitSet") return null;
-	if (t.typeChildren.length != 1) return null;
-	return t.typeChildren[0];
+	if (t == null || t.kind != TypeKind.Set) return null;
+	return t.typeReturn;
 }
 
-export function createBitSet(elem: Type): Type | null {
-	if (_bitSetBase == null) return null;
-	const gi = createGenericInstance(_bitSetBase, [elem]);
-	gi.typeName = "BitSet";
-	return gi;
+export function createBitSet(elem: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Set;
+	t.typeName = "BitSet";
+	t.typeReturn = elem;
+	return t;
 }
 
 export function createBrandDistinct(brandKey: string, inner: Type): Type {
@@ -1991,6 +1993,7 @@ export function isTagCarriedUnion(t: Type | null): boolean {
 export function typeofTagOf(t: Type | null): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
+	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
 	if (isNumeric(v)) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
 	if (v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral) return "boolean";
@@ -2120,6 +2123,9 @@ function typeKey(t: Type): string {
 		TypeKind.Span => {
 			return "Span(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
 		},
+		TypeKind.Set => {
+			return "BitSet(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+		},
 		TypeKind.SizedArray => {
 			return "SizedArray" + t.typeFlags.toString() + "(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
 		},
@@ -2221,6 +2227,7 @@ export function needsRC(t: Type | null): boolean {
 		TypeKind.Array => true,
 		TypeKind.SizedArray => needsRC(t.typeReturn),
 		TypeKind.Span => false,
+		TypeKind.Set => false,
 		TypeKind.Ref => true,
 		TypeKind.Tuple => {
 			let i = 0;
@@ -2363,6 +2370,10 @@ function getTypeSizeInner(t: Type): int32 {
 			return 4 + maxSize;
 		},
 		TypeKind.Span => targetPtrSize + targetPtrSize, // ptr + length
+		TypeKind.Set => {
+			const sr = setRepr(t);
+			return sr != null ? getTypeSize(sr) : 4;
+		},
 		_ => targetPtrSize, // conservative fallback
 	};
 }
@@ -2474,6 +2485,7 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
 			TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Set => createBitSet(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Varargs => t.typeChildren.length > 0
 				? createVarargs(substituteType(t.typeChildren[0], paramName, concrete))
 				: t,
@@ -2563,6 +2575,7 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 			TypeKind.Array => createArray(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.SizedArray => createSizedArray(substituteAllParams(t.typeReturn, names, concretes), t.typeFlags - TypeFlag.Substituting),
 			TypeKind.Span => createSpan(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Set => createBitSet(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Varargs => t.typeChildren.length > 0
 				? createVarargs(substituteAllParams(t.typeChildren[0], names, concretes))
 				: t,
@@ -2722,7 +2735,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	// Array/Span/Ref/Ptr: unify element types
 	if (formal.kind == concrete.kind
 		&& (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray
-			|| formal.kind == TypeKind.Span || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr)) {
+			|| formal.kind == TypeKind.Span || formal.kind == TypeKind.Set || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr)) {
 		if (formal.typeReturn != null && concrete.typeReturn != null) {
 			unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		}
@@ -2790,7 +2803,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind != concrete.kind) return;
-	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span) {
+	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span || formal.kind == TypeKind.Set) {
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
@@ -3171,6 +3184,7 @@ function typeNameOfInner(t: Type | null): string {
 		TypeKind.BigInt => "bigint",
 		TypeKind.Array => "Array",
 		TypeKind.SizedArray => "Array", // Both map to "Array" for extension lookup (UFCS)
+		TypeKind.Set => "BitSet",
 		TypeKind.Span => "Span",
 		TypeKind.Borrow => "Borrow",
 		TypeKind.Tuple => "Tuple",
@@ -3241,6 +3255,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		}
 		return t.typeName + "<" + argsText + ">";
 	}
+	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an

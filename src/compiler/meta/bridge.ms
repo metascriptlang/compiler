@@ -293,6 +293,13 @@ function functionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 // Surfaces the generic structure to macros (base name + type args) rather than
 // expanding the instantiated body. Codec macros typically introspect the type
 // parameters; the concrete body is reachable separately via the base symbol.
+function setToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	return createNodeAt(NodeKind.TypeGeneric, {
+		typExprBase: atomicTypeNode("BitSet", loc),
+		typExprArgs: [mapTypeToAstWith(t.typeReturn, loc, visited)],
+	}, loc);
+}
+
 function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode(nameOrDefault(t, "<anon-generic>"), loc),
@@ -434,6 +441,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		TypeKind.Struct when (isMaybeType(t) && t.typeReturn != null) => maybeToUnionAst(t, loc, visited),
 		TypeKind.Struct => structToAst(t, loc, visited),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
+		TypeKind.Set => setToAst(t, loc, visited),
 		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
 		TypeKind.GenericParam => atomicTypeNode(nameOrDefault(t, "T"), loc),
 		TypeKind.Union => unionToAst(t, loc, visited),

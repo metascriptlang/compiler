@@ -48,7 +48,7 @@ function sameElementRepr(a: Type | null, b: Type | null): boolean {
 export function isNominalType(t: Type | null): boolean {
 	const s = skipModifier(t);
 	if (s == null) return false;
-	if (s.kind == TypeKind.Enum || s.kind == TypeKind.EnumLiteral || s.kind == TypeKind.Distinct) return true;
+	if (s.kind == TypeKind.Enum || s.kind == TypeKind.EnumLiteral || s.kind == TypeKind.Distinct || s.kind == TypeKind.Set) return true;
 	return s.kind == TypeKind.GenericInstance && s.typeExtra != null && s.typeExtra.kind == TypeKind.Distinct;
 }
 
@@ -281,6 +281,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (source.kind == target.kind) {
 		return match (source.kind) {
 			TypeKind.SizedArray => source.typeFlags == target.typeFlags && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.Set => sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
 				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
@@ -810,6 +811,7 @@ function sameTypeInner(a: Type, b: Type): boolean {
 			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
 		TypeKind.SizedArray => a.typeFlags == b.typeFlags && sameInnerType(a, b),
+		TypeKind.Set => sameInnerType(a, b),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
 			| TypeKind.Lent => sameInnerType(a, b),
@@ -864,6 +866,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formal.typeNames[0] == actual.typeNames[0]) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
+			TypeKind.Set => sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
 			TypeKind.SizedArray => {
 				if (formal.typeFlags != actual.typeFlags) return TypeRelation.None;
 				if (formal.typeReturn != null && actual.typeReturn != null) {

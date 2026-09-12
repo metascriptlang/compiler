@@ -50,6 +50,7 @@ export enum TypeKind {
 	// builds hang deterministically in expand. Append-only, like every member
 	// after Error.
 	BigInt,
+	Set,
 }
 
 // ===== Calling Convention =====

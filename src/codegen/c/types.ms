@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -392,6 +392,10 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Span => {
 			const elemKey = typeKey(t.typeReturn);
 			return "span:" + elemKey;
+		},
+		TypeKind.Set => {
+			const elemKey = typeKey(t.typeReturn);
+			return "set:" + elemKey;
 		},
 		TypeKind.Function => {
 			let key = "func(";
@@ -878,6 +882,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 	}
 	if (t.kind == TypeKind.Alias) {
 		return getTypeDesc(g, t.typeReturn);
+	}
+	if (t.kind == TypeKind.Set) {
+		const sr = setRepr(t);
+		if (sr != null) return getTypeDesc(g, sr);
 	}
 	// Reference parity: tyVarargs is a transparent marker for rest params. The C
 	// param descriptor is the wrapped array type — the marker carries no ABI.

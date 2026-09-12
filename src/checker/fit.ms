@@ -419,6 +419,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
 	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
 	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
+	if (a.kind == TypeKind.Set && b.kind == TypeKind.Set) return true;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;

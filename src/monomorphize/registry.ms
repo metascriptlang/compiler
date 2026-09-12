@@ -139,6 +139,7 @@ export function monoTypeKey(t: Type | null): string {
 		},
 		TypeKind.SizedArray => "sizedArr_" + t.typeFlags.toString() + "_" + monoTypeKey(t.typeReturn),
 		TypeKind.Span => "span_" + monoTypeKey(t.typeReturn),
+		TypeKind.Set => "set_" + monoTypeKey(t.typeReturn),
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
 		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
 		TypeKind.Distinct => "distinct_" + monoTypeKey(t.typeReturn),
