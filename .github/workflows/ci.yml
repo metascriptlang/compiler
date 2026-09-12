@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install the bootstrap compiler
+        run: |
+          curl -fsSL https://metascriptlang.org/install.sh | sh
+          echo "$HOME/.metascript/bin" >> "$GITHUB_PATH"
+      - name: Build msc from source
+        run: msc build src/index.ms --gc=drc --release --cc=clang --output=msc
+      - name: Version
+        run: ./msc --version
+      - name: Compiler test suite
+        run: ./msc test src/index.ms
+
+  corpus:
+    name: corpus (parity + RSS)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install the bootstrap compiler
+        run: |
+          curl -fsSL https://metascriptlang.org/install.sh | sh
+          echo "$HOME/.metascript/bin" >> "$GITHUB_PATH"
+      - name: Build msc from source
+        run: msc build src/index.ms --gc=drc --release --cc=clang --output=msc
+      - name: Corpus lanes
+        run: ./msc run src/test/corpus/run.ms
+      - name: Sanitizer lane
+        run: MSCORPUS_SAN=1 ./msc run src/test/corpus/run.ms
