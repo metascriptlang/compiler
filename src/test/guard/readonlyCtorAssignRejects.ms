@@ -9,6 +9,8 @@
 // GUARD-CHECK-FAIL cannot assign to 'inArrow' because it is a read-only property
 // GUARD-CHECK-FAIL cannot assign to 'inFree' because it is a read-only property
 // GUARD-CHECK-FAIL cannot assign to 'inStatic' because it is a read-only property
+// GUARD-CHECK-FAIL cannot assign to 'inSubCtor' because it is a read-only property
+// GUARD-CHECK-FAIL cannot assign to 'inherited' because it is a read-only property
 
 class K {
 	readonly inMethod: int32 = 1;

@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, isReadonlyView, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf } from "./symbol";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
@@ -98,21 +98,27 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 }
 
 function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
-	const decl = classDeclNodeOf(classSym);
-	if (decl == null) return null as unknown as Symbol;
-	const body = decl.kind == NodeKind.ClassDecl
-		? (decl.data as ClassDeclData).classBody
-		: (decl.data as ActorDeclData).actorBody;
-	for (const m of body) {
-		let prop = m;
-		if (prop.kind == NodeKind.DecoratedDecl) {
-			const dd = prop.data as DecoratedDeclData;
-			if (dd.decoratedNode != null) prop = dd.decoratedNode;
+	let sym = classSym;
+	let depth = 0;
+	while (sym != null && depth < 64) {
+		const decl = classDeclNodeOf(sym);
+		if (decl == null) return null as unknown as Symbol;
+		const body = decl.kind == NodeKind.ClassDecl
+			? (decl.data as ClassDeclData).classBody
+			: (decl.data as ActorDeclData).actorBody;
+		for (const m of body) {
+			let prop = m;
+			if (prop.kind == NodeKind.DecoratedDecl) {
+				const dd = prop.data as DecoratedDeclData;
+				if (dd.decoratedNode != null) prop = dd.decoratedNode;
+			}
+			if (prop.kind != NodeKind.PropertyDecl) continue;
+			const pd = prop.data as PropertyDeclData;
+			if (pd.propName != propName) continue;
+			return pd.propIsReadonly ? sym : (null as unknown as Symbol);
 		}
-		if (prop.kind != NodeKind.PropertyDecl) continue;
-		const pd = prop.data as PropertyDeclData;
-		if (pd.propName != propName) continue;
-		return pd.propIsReadonly ? classSym : (null as unknown as Symbol);
+		sym = parentClassSymOf(sym);
+		depth += 1;
 	}
 	return null as unknown as Symbol;
 }
