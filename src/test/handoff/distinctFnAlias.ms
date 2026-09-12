@@ -12,8 +12,8 @@ test "a generic distinct over a function type parses and casts" {
 	assert strictErrorCount(THUNK) == 0;
 }
 
-test "the instance stays nominal against a plain slot" {
-	assert hasError(THUNK + "const s: string = t;", "Type 'Thunk<number>' is not assignable to type 'string'");
+test "the instance stays nominal against a callable slot of another shape" {
+	assert hasError(THUNK + "const s: () => string = t;", "Type 'Thunk<number>' is not assignable to type 'function'");
 }
 
 test "sibling generic distincts stay apart" {

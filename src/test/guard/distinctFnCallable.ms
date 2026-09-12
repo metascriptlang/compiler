@@ -17,7 +17,7 @@
 type Thunk<T> = distinct (() => T);
 interface Box { f: Thunk<number>; }
 function make(n: number): Thunk<number> { return (() => n) as Thunk<number>; }
-function keep(x: Thunk<number>): Thunk<number> { const y = x; return y; }
+function keep(x: Thunk<number>): Thunk<number> { const y: Thunk<number> = x; return y; }
 
 const t = make(7);
 const f: () => number = t;

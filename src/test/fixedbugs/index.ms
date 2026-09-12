@@ -165,3 +165,8 @@ import "./bug146AliasInstanceConsumers";
 import "./bug147DistinctFnParamAbi";
 import "./bug148DistinctInstanceBody";
 import "./bug149BitSetInMacro";
+import "./bug150AccessorAutoCallMember";
+import "./bug151AccessorAutoCallClosure";
+import "./bug152AccessorNoAutoCall";
+import "./bug153AutoCallHeldThroughHidden";
+import "./bug154AccessorAutoCallIdent";

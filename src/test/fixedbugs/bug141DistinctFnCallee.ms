@@ -10,7 +10,7 @@
 type Thunk141<T> = distinct (() => T);
 type Th141 = distinct (() => number);
 interface Box141 { f: Thunk141<number>; }
-function keep141(x: Thunk141<number>): Thunk141<number> { const y = x; return y; }
+function keep141(x: Thunk141<number>): Thunk141<number> { const y: Thunk141<number> = x; return y; }
 function make141(n: number): Thunk141<number> { return (() => n) as Thunk141<number>; }
 
 test "a non-generic distinct thunk is callable" {

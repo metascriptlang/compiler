@@ -60,3 +60,4 @@ import "./genericAliasBody";
 import "./typeofNarrow";
 import "./unionContextual";
 import "./fnSlotUnionRepr";
+import "./accessorAutoCall";
