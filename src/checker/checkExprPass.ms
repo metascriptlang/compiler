@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, isReadonlyView, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes } from "./symbol";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
@@ -95,6 +95,41 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 	const ro = readonlyPrefixType(target);
 	if (ro == null) return;
 	reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
+}
+
+function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
+	const decl = classDeclNodeOf(classSym);
+	if (decl == null) return null as unknown as Symbol;
+	const body = decl.kind == NodeKind.ClassDecl
+		? (decl.data as ClassDeclData).classBody
+		: (decl.data as ActorDeclData).actorBody;
+	for (const m of body) {
+		let prop = m;
+		if (prop.kind == NodeKind.DecoratedDecl) {
+			const dd = prop.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) prop = dd.decoratedNode;
+		}
+		if (prop.kind != NodeKind.PropertyDecl) continue;
+		const pd = prop.data as PropertyDeclData;
+		if (pd.propName != propName) continue;
+		return pd.propIsReadonly ? classSym : (null as unknown as Symbol);
+	}
+	return null as unknown as Symbol;
+}
+
+function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: Symbol): boolean {
+	let receiverNode = object;
+	while (receiverNode != null && receiverNode.kind == NodeKind.HiddenDeref) {
+		receiverNode = (receiverNode.data as HiddenDerefData).expr;
+	}
+	if (receiverNode == null || receiverNode.kind != NodeKind.Identifier) return false;
+	if ((receiverNode.data as IdentifierData).name != "this") return false;
+	const fn = ctx.currentFunction;
+	if (fn == null || fn.name != "constructor" || fn.symbolKind != SymbolKind.Method) return false;
+	if (fn.symbolType == null || fn.symbolType.kind != TypeKind.Function || fn.symbolType.typeChildren.length == 0) return false;
+	const receiver = unwrapRef(fn.symbolType.typeChildren[0]);
+	if (receiver == null || receiver.sym == null) return false;
+	return receiver.sym == declaring || classDeclNodeOf(receiver.sym) == classDeclNodeOf(declaring);
 }
 
 // Phase 4: invalidateFacts / factReferencesVar deleted.
@@ -458,30 +493,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							addError(ctx, `cannot assign to 'pid' because it is a read-only property`,
 								d.left.location.line, d.left.location.column);
 						}
-						// User-declared readonly fields
-						if (ownerType.sym.declNode != null) {
-							let bodyMembers: Node[] = null as unknown as Node[];
-							if (ownerType.sym.declNode.kind == NodeKind.ClassDecl) {
-								bodyMembers = (ownerType.sym.declNode.data as ClassDeclData).classBody;
-							} else if (ownerType.sym.declNode.kind == NodeKind.ActorDecl) {
-								bodyMembers = (ownerType.sym.declNode.data as ActorDeclData).actorBody;
-							}
-							if (bodyMembers != null) {
-								for (const m of bodyMembers) {
-									let prop = m;
-									if (prop.kind == NodeKind.DecoratedDecl) {
-										const dd = prop.data as DecoratedDeclData;
-										if (dd.decoratedNode != null) prop = dd.decoratedNode;
-									}
-									if (prop.kind == NodeKind.PropertyDecl) {
-										const pd = prop.data as PropertyDeclData;
-										if (pd.propName == md.property && pd.propIsReadonly == true) {
-											addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
-												d.left.location.line, d.left.location.column);
-										}
-									}
-								}
-							}
+						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
+						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
+							addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+								d.left.location.line, d.left.location.column);
 						}
 					}
 				}
