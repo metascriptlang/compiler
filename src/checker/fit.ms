@@ -8,7 +8,7 @@ import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatc
 import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
+import { isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -654,6 +654,26 @@ function arrayDisplay(t: Type | null): string {
 // picks a temp's type from the STATIC type — so without this node it passes a
 // bare variant struct where the union is expected and clang only warns.
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
+function structuralMemberIndex(formal: Type, exprType: Type): int32 {
+	if (!isTagCarriedUnion(formal) || isPrimitiveUnionMember(exprType)) return -1;
+	let found: int32 = -1;
+	let ci: int32 = 0;
+	for (const child of formal.typeChildren) {
+		if (child == null || child.kind == TypeKind.Null) return -1;
+		if (sameType(child, exprType)) {
+			if (found >= 0) return -1;
+			found = ci;
+		}
+		ci += 1;
+	}
+	return found;
+}
+
+function slotHoldsStructByValue(member: Type): boolean {
+	const s = peelToStruct(member);
+	return s != null && s.kind == TypeKind.Struct;
+}
+
 export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
 	if (unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
@@ -669,7 +689,8 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 		return null as unknown as Node;
 	}
 	const valueType = unwrapRef(exprType);
-	const vi = variantIndexInUnion(formal, valueType);
+	let vi = variantIndexInUnion(formal, valueType);
+	if (vi < 0) vi = structuralMemberIndex(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	// A union slot holds the variant BY VALUE, so a ref operand is READ and
@@ -678,7 +699,7 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	// nobody. Spelling the deref keeps the ref owned by its own scope and
 	// routes the payload through the ordinary value-copy path.
 	let operand = expr;
-	if (valueType != exprType) {
+	if (valueType != exprType && slotHoldsStructByValue(formal.typeChildren[vi])) {
 		const drefNode = createNode(NodeKind.HiddenDeref, { expr: expr }, convTok);
 		drefNode.nodeType = valueType;
 		operand = drefNode;
