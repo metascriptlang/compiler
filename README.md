@@ -1,10 +1,14 @@
 # MetaScript
 
-**TypeScript-shaped syntax. Native performance. Deterministic memory.**
+[![CI](https://github.com/metascriptlang/compiler/actions/workflows/ci.yml/badge.svg)](https://github.com/metascriptlang/compiler/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/metascriptlang/compiler)](https://github.com/metascriptlang/compiler/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-MetaScript is a statically typed programming language that compiles to C (and to JavaScript), built for systems work — servers, game logic, tooling, wasm. No garbage collector pauses, no runtime lurking under your types: memory is managed by deterministic reference counting (DRC) with a cycle collector (ORC), verified at compile time by lifecycle analysis.
+**TypeScript-shaped syntax. Native binaries. Deterministic memory.**
 
-The entire compiler is written in MetaScript — **880 source files, ~175K lines** — and every generation of it is built by the previous one. The language carries its own weight.
+MetaScript is a statically typed language that compiles to C, and secondarily to JavaScript. It is built for systems work: servers, game logic, tooling, wasm. Memory is reference-counted with a cycle collector, and the retain/release points are decided at compile time by a lifecycle analysis, so there is no garbage collector and no pause.
+
+This repository is the self-hosted compiler. The compiler, its test runner, its formatter, its language server and its package manager are written in MetaScript, and each build of `msc` is produced by the previous release.
 
 ```ms
 function hexDigit(ch: string): int32 {
@@ -39,8 +43,8 @@ function main(): void {
     const parsed = try parseHex("cafe");        // Result + try: unwrap or early-return
     console.log("cafe = " + parsed.toString());
     const acc = new Accumulator();
-    acc.add(20);                                 // SEND — fire-and-forget
-    const total = await acc.add(22);             // CALL — reply via Promise<int32>
+    acc.add(20);                                 // SEND: fire-and-forget
+    const total = await acc.add(22);             // CALL: reply through Promise<int32>
     console.log("actor total = " + total.toString());
     const h = spawn(() => parsed * 2);           // structured parallel task
     console.log("spawn 2x = " + (await h).toString());
@@ -48,141 +52,140 @@ function main(): void {
 main();
 ```
 
-The program above is real: it builds and runs natively via `msc run`, printing `cafe = 51966`, `actor total = 42`, `spawn 2x = 103932`.
+Save that as `hello.ms` and `msc run hello.ms` prints:
+
+```
+cafe = 51966
+actor total = 42
+spawn 2x = 103932
+done.
+```
 
 ## Why MetaScript
 
-- **Familiar surface, systems substrate.** If you know TypeScript, you can read MetaScript. But under it: sized integers (`int32`, `uint64`, `float64`), value `struct`s vs reference `interface`s, `move` ownership transfer, `defer` scope-exit cleanup, and `distinct` nominal types.
-- **Deterministic memory — no GC pauses.** DRC reference counting with compiler-synthesized `=destroy` / `=sink` / `=wasMoved` hooks per type, plus an ORC cycle collector. Need more control? `--gc=manual` (arena/pool allocators) and `--os=bare` (freestanding, no libc) are both shipped.
-- **Match expressions as the dispatch backbone.** Patterns, or-patterns, `when` guards, destructuring — as expressions, lowered to C `switch` where the discriminant allows it.
-- **Errors as values.** `Result<T, E>` + the `try` operator (Rust-style), including compiler-checked `Promise<Result<T, E>>` typing for async failures.
-- **A locked-in concurrency model.** One `await` keyword. `spawn` for structured parallelism with affine, scope-checked handles. Actors with BEAM-style pids (generation-checked 53-bit handles, hazard-pointer reclamation), suspension without thread blocking, supervision, and explicit shared state via `Arc<T>` / `Locked<T>`. The full design is locked in
-`docs/PARALOCK.md` (kept in sync outside git — see the repo's docs directory).
-- **Real metaprogramming.** User `macro`s (AST → AST), `quote`, `@comptime` blocks executed on Raiser — an embedded register-based bytecode VM — and JSX parsed into compile-time AST for macros to consume.
-- **One source, many targets.** Native C via clang or `zig cc` (macOS, Linux, Windows, Android — cross-compiling from any host), wasm32-WASI and Emscripten for the web, static/shared library output (`--app=lib|staticlib`) for embedding. A JavaScript backend with source maps for the rest.
-- **A toolchain, not just a compiler.** `msc` ships build/run/test/check/fmt/init/lsp commands, a content-addressed build cache, phase timers, a package manager with a registry and lockfiles, and LSP support with an incremental red/green re-check engine.
+- **Familiar surface, systems substrate.** If you read TypeScript you can read MetaScript. Underneath: sized integers (`int32`, `uint64`, `float64`), value `struct` versus reference `interface`, `move` for ownership transfer, `defer` for scope-exit cleanup, `distinct` nominal types, `out` parameters.
+- **Deterministic memory.** Reference counting with compiler-synthesized `=destroy`, `=sink` and `=wasMoved` hooks per type, plus a cycle collector. Four modes: `--gc=orc` (default), `--gc=drc`, `--gc=none`, `--gc=manual`. `--os=bare` builds freestanding, without libc ([docs/BARE.md](docs/BARE.md)).
+- **`match` is the dispatch backbone.** Or-patterns, `when` guards, destructuring, as an expression, lowered to a C `switch` where the discriminant allows it.
+- **Errors as values.** `Result<T, E>` with `try` to unwrap-or-return and `try … catch fallback` to unwrap-or-substitute. `Promise<Result<T, E>>` is type-checked for async failures.
+- **One concurrency model.** `await`. `spawn` returns an affine handle: it must be awaited exactly once and cannot escape, and the checker enforces it. Actors own a mailbox; a `void` method is a send, a returning method is a call that yields a `Promise`. Actor state is isolated, `nonisolated` fields opt out. Details: [docs/LANG-CONCURRENCE.md](docs/LANG-CONCURRENCE.md).
+- **Metaprogramming.** `macro` (AST to AST), `quote`, `@comptime` blocks run on Raiser, an embedded register-based bytecode VM, TypeScript-style decorators applied at compile time, and JSX parsed into a compile-time AST for macros to consume. [docs/LANG-METAPROGRAMMING.md](docs/LANG-METAPROGRAMMING.md), [docs/LANG-JSX.md](docs/LANG-JSX.md).
+- **Testing in the language.** `test` is a keyword; a test body asserts with `assert`. `msc test file.ms` runs the file's tests plus those of everything it imports.
+- **One source, many targets.** C through `clang` or `zig cc`: macOS, Linux, Windows, Android, iOS, FreeBSD, cross-compiled from any host. wasm32-WASI and Emscripten for the browser. `--app=lib|staticlib` for embedding. A JavaScript backend with source maps.
+- **A toolchain.** `msc build | run | test | check | fmt | init | lsp | upgrade`, a content-addressed build cache, and a package manager (`add`, `install`, `publish`) with a registry and lockfiles.
 
-## Quick Start
-
-Install a release binary (see the [installation guide](https://metascriptlang.org/installation)) — the compiler bootstraps itself from the previous release, so no other toolchain is needed beyond a C compiler (`zig` or `clang` recommended).
+## Quick start
 
 ```bash
-# Run a program natively
-msc run hello.ms
+curl -fsSL https://metascriptlang.org/install.sh | sh   # or a release archive from GitHub
 
-# Optimized native build
-msc build hello.ms --release --output=hello
-
-# Cross-compile: same command from any host
-msc build hello.ms --os=windows --release
-msc build hello.ms --os=linux  --release
-msc build hello.ms --os=emcc            # browser wasm
-
-# Run the test suite of a project
-msc test src/index.ms
-
-# Editor support: VS Code, Neovim, Zed, JetBrains (tools/editor-plugin/)
+msc run hello.ms                               # build and run natively
+msc build hello.ms --release --output=hello    # optimized binary
+msc build hello.ms --os=windows --release      # cross-compile from any host
+msc build hello.ms --os=linux --release
+msc build hello.ms --os=emcc                   # browser wasm
+msc test hello.ms                              # run the file's test blocks
 ```
 
-## The Language in One Minute
+Installation guide: [metascriptlang.org/installation](https://metascriptlang.org/installation). Editor support for VS Code, Neovim, Zed and JetBrains lives in [tools/editor-plugin/](tools/editor-plugin/). Worked examples: [metascript-tutorial](https://github.com/metascriptlang/metascript-tutorial).
+
+## The language in one minute
 
 ```ms
-// Sized integers; bare literals infer int32
-const id: int32 = 42;
+const id: int32 = 42;                              // bare integer literals infer int32
 const ratio: float64 = 0.75;
 
-// struct = value type (stack, copied) — interface = reference (RC'd)
-struct Vec2 { x: float64; y: float64; }
+struct Vec2 { x: float64; y: float64; }            // value type: stack, copied
+interface User { name: string; age: int32; }       // reference type: heap, reference-counted
 
-// Errors as values
-const cfg = try readConfig("app.json") catch defaultConfig;
+function parseAge(raw: string): Result<int32, string> {
+    if (raw.length === 0) return Result.err("empty");
+    return Result.ok(parseInt(raw) as int32);
+}
+const age = try parseAge("42") catch 0;            // unwrap, or substitute
 
-// Ownership and cleanup
-function process(): string {
-    defer releaseLock();
-    let buf = readFile("input.bin");
-    consume(move buf);            // ownership handed off — use-after-move is an error
-    return "done";
+function describe(u: User): string {
+    defer console.log("seen " + u.name);
+    return match (u.age) {
+        0 => "newborn",
+        _ when (u.age < 18) => "minor",
+        _ => "adult",
+    };
 }
 
-// Conditional compilation, checked before type checking
-when (os == "windows") {
-    extern function WaitForSingleObject(h: Ptr<void>): uint32 from "WaitForSingleObject";
+function consume(items: int32[]): int32 { return items.length; }
+let buf = [1, 2, 3];
+consume(move buf);                                 // ownership handed off; a later use of buf is a compile error
+
+when (js) {                                        // conditional compilation, resolved before type checking
+    console.log("javascript backend");
+} else {
+    console.log("native backend");
 }
 
-// Generics with constraints and const parameters
-function identity<T>(v: T): T { return v; }
+test "describe classifies ages" {
+    assert describe({ name: "ada", age: 30 }) === "adult";
+}
 ```
 
-Deeper reference: [docs/LANG.md](docs/LANG.md). Concurrency model: `docs/PARALOCK.md`. Memory model internals: [docs/ORC.md](docs/ORC.md).
+Reference: [docs/LANG.md](docs/LANG.md). Move semantics: [docs/LANG-MOVE.md](docs/LANG-MOVE.md). Structs and the type system: [docs/LANG-STRUCT.md](docs/LANG-STRUCT.md). Runtime: [docs/LANG-RUNTIME.md](docs/LANG-RUNTIME.md).
 
-## Standard Library
+## Standard library
 
-Twenty modules, pre-compiled into the build: `core` (19 submodules — string, array, math, bigint, json, fetch with TLS, promise, actor, buffer, date, websocket...), `crypto` (AES, ChaCha20, Ed25519, X25519, Argon2, RSA, TLS — mbedTLS-backed), `http`/`net`/`io` (select / epoll / kqueue / IOCP / io_uring engines), `serialize` (JSON + CBOR), `compress` (deflate/zip), `hash`, `archive`, `fs`, `os`, `process`, and more.
+Nineteen modules, pre-compiled into the build: `core` (string, array, math, bigint, json, fetch, promise, actor, buffer, date, websocket and more), `crypto` (AES, ChaCha20, BLAKE2b, Ed25519, X25519, Argon2, RSA, TLS on mbedTLS), `http`, `https`, `net`, `io` (epoll, kqueue, IOCP, io_uring engines), `serialize` (JSON, CBOR), `compress`, `archive`, `hash`, `fs`, `os`, `process`, `actor`, `build`, `meta`, `runtime`, `surreal`, `toycodec`. Overview: [docs/LANG-PRELUDE.md](docs/LANG-PRELUDE.md).
 
-## Project Status
+## Status
 
-**v0.2.53 — fully self-hosted.** The compiler, its test runner, its LSP, its formatter, and its package manager are all written in MetaScript. A fresh machine bootstraps from a released binary and rebuilds everything from source.
+Fully self-hosted. The version lives in `src/compiler/usage.ms`; binaries are on the [releases page](https://github.com/metascriptlang/compiler/releases).
 
-Measured, not claimed (Apple Silicon, 8-core):
+Counted from this tree on 2026-09-13:
 
-| Metric | Value |
+| | |
 |---|---|
-| Self-compile, cold | ~53 s (of which ~35 s is the C toolchain) |
-| Self-compile, warm cache | ~32 s |
-| Test suite execution | 4,794 inline test blocks |
-| Regression suite | 128 append-only `bugNNN` programs |
-| Parity corpus | 168 programs, C vs JS byte-compared (no golden files) |
-| Lifecycle guards | 89 probes run under a DRC ledger that aborts on double-finalize |
-| Self-hosted `msc` binary | ~10.3 MB (thin-LTO) |
+| Compiler source (`src/`) | 1,016 files, 191,506 lines of MetaScript |
+| `test` blocks | 5,270 in `src/`, 585 in `std/` |
+| Regression programs (`src/test/fixedbugs/`) | 168 |
+| Corpus programs (`src/test/corpus/`) | 197: 128 compared byte-for-byte between C and JS, 69 with an RSS ceiling |
+| Lifecycle guards (`src/test/guard/`) | 130 probes |
+| Self-hosted `msc` | 12.0 MB |
 
-Every guard probe is proven red before it is trusted; the corpus runs parity, RSS (under both `--gc=drc` and `--gc=orc`), and ASan lanes. [docs/BUILD-PERF.md](docs/BUILD-PERF.md) has the measurement methodology.
+A lifecycle guard is proven red on a binary that has the bug before it is trusted green. The corpus runs C/JS parity, RSS ceilings under both `--gc=drc` and `--gc=orc`, and an AddressSanitizer lane with a reference-count ledger that aborts on a double release. Build timings and how they are measured: [docs/BUILD-PERF.md](docs/BUILD-PERF.md).
 
-**Honest gaps** (documented, not hidden): actor spawn-capture static rules S1/S3 are designed but not yet enforced; `@derive` and `@inline` are documented as reference-only/planned; the Erlang backend is postponed. Details live in the docs linked above.
+**Known gaps** are in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), each entry measured on a named commit. In short: `@derive` is planned, not implemented; the JavaScript backend is secondary and has no lifecycle analyzer; an Erlang backend is postponed.
 
 ## Development
 
 ```bash
-# Build the self-hosted compiler binary (fastest the toolchain can link)
-msc build src/index.ms --gc=drc --danger --output=msc
-
-# Full compiler test suite
-msc test src/index.ms
-
-# Corpus: parity + RSS lanes; SAN lane adds ASan + DRC ledger
-msc run src/test/corpus/run.ms
-MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
-
-# Lifecycle guards (proven-red discipline)
-src/test/guard/run.sh
+msc build src/index.ms --gc=drc --danger --output=msc   # self-host binary
+msc test src/index.ms                                   # full compiler suite
+msc run src/test/corpus/run.ms                          # corpus: parity + RSS lanes
 ```
 
-Full workflow (syncing `~/.metascript/`, release process): `docs/DEVELOPMENT.md` in this tree.
+Build, test, sync and release workflow, plus the conventions used in this codebase: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Why This Repository?
+## Origins
 
-This is the public, self-hosted implementation of MetaScript — a clean rewrite of the internal compiler that has been running in production at [Metacraft Studio](https://metacraft.studio), powering gameplay logic, network code, asset pipelines, and build tooling across shipped games. The internal version served well but accumulated hacks through rapid iteration; this repository is the canonical going-forward implementation, built in the open with transparent design decisions.
+MetaScript comes out of [Metacraft Studio](https://metacraft.studio), where it is used for gameplay logic, networking, asset pipelines and build tooling. The first compiler was internal and accumulated shortcuts through rapid iteration; this repository is the clean, self-hosted rewrite, developed in the open.
 
 ## Acknowledgments
 
-MetaScript is a new language with its own tradeoffs, not a clone — but it would not exist in its current shape without the work these communities did first:
+MetaScript has its own tradeoffs and is not a clone of anything, but it would not have its current shape without the work these communities did first:
 
-- **TypeScript** — surface syntax, structural typing, and developer ergonomics familiar to JavaScript developers
-- **Nim** — transformation pipeline design, phase ordering, IR-based lowering, and the **ORC** reference counting model that directly inspired our deterministic memory management
-- **Zig** — `defer` for scope-exit cleanup, `comptime` metaprogramming, explicit allocators passed as arguments, and the "no hidden allocations" philosophy behind our memory system
-- **Rust** — memory safety discipline, ownership semantics, `Result<T, E>` error handling, and the principle of making unsafe code opt-in rather than the default
-- **Swift** — ARC (automatic reference counting) patterns and the idioms around safe, deterministic object lifecycles that informed our DRC implementation
-- **Pony** — actor model with capability-based concurrency and garbage collection per actor, the foundation of our own actor runtime
-- **Erlang / OTP** — supervisor trees, hierarchical fault recovery, and the "let it crash" philosophy behind our supervision model
-- **Haxe** — multi-target compilation philosophy: one source, many native outputs
-- **Salsa** — query-based incremental computation, directly inspired **Trans-Am**, our incremental build and caching engine
+- **TypeScript**: surface syntax, structural typing, and ergonomics familiar to JavaScript developers
+- **Nim**: transformation pipeline design, phase ordering, IR-based lowering, and the ORC reference-counting model behind our memory management
+- **Zig**: `defer`, `comptime` metaprogramming, explicit allocators, and the "no hidden allocations" philosophy
+- **Rust**: ownership semantics, `Result<T, E>` error handling, and unsafe code as opt-in
+- **Swift**: ARC patterns and the idioms around deterministic object lifecycles
+- **Pony**: the actor model with capability-based concurrency
+- **Erlang / OTP**: supervisor trees and the "let it crash" philosophy behind our supervision model
+- **Haxe**: one source, many native outputs
+- **Salsa**: query-based incremental computation, the model behind Trans-Am, our incremental build and caching engine
 
 ## Community
 
-- **Discord**: [Join us](https://discord.com/invite/gCwkmqS3xB)
+- **Discord**: [join](https://discord.com/invite/gCwkmqS3xB)
 - **Website**: [metascriptlang.org](https://metascriptlang.org)
-- **Issues**: bug reports with minimal reproductions are gold — the `src/test/fixedbugs/` suite grows one file per fixed bug
+- **Issues**: a bug report with a minimal reproduction becomes a program in `src/test/fixedbugs/`
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
