@@ -3859,10 +3859,8 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		}
 	}
 	let matchJoined: Type | null = null;
-	if (expectedType == null || isUnresolvedType(expectedType)) {
-		const j = joinBranchTypes(branchBodyTypes);
-		if (!isUnresolvedType(j)) { matchJoined = j; returnType = j; }
-	}
+	const joined = joinBranchTypes(branchBodyTypes);
+	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		if (cd.caseBody.kind == NodeKind.BlockStmt) {
