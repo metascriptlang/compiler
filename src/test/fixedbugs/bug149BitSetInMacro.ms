@@ -55,3 +55,32 @@ test "bug149: the 16-bit band shifts by the ordinal" {
 	assert r.lastError == "";
 	assert r.lastResult.intVal == 102050;
 }
+
+const arrayEnum = "enum E { M0,M1,M2,M3,M4,M5,M6,M7,M8,M9,M10,M11,M12,M13,M14,M15,M16,M17,M18,M19,M20,M21,M22,M23,M24,M25,M26,M27,M28,M29,M30,M31,M32,M33,M34,M35,M36,M37,M38,M39,M40,M41,M42,M43,M44,M45,M46,M47,M48,M49,M50,M51,M52,M53,M54,M55,M56,M57,M58,M59,M60,M61,M62,M63,M64,M65,M66,M67,M68,M69,M70,M71,M72,M73,M74,M75,M76,M77,M78,M79,M80,M81,M82,M83,M84,M85,M86,M87,M88,M89,M90,M91,M92,M93,M94,M95,M96,M97,M98,M99 }";
+
+test "bug149: the array band reads and rewrites the member bits" {
+	const r = evalSourceFull(arrayEnum + " const s: BitSet<E> = E.M99 | E.M1; return (s.has(E.M99) ? 1 : 0) + (s.has(E.M1) ? 2 : 0) + (s.has(E.M0) ? 4 : 0) + (s.incl(E.M70).has(E.M70) ? 8 : 0) + (s.excl(E.M99).has(E.M99) ? 16 : 0);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 11;
+}
+
+test "bug149: isEmpty on the zero array set and on a populated one" {
+	const z = evalSourceFull(arrayEnum + " const z = 0 as BitSet<E>; return z.isEmpty();");
+	assert z.lastError == "";
+	assert z.lastResult.intVal == 1;
+	const s = evalSourceFull(arrayEnum + " const s: BitSet<E> = E.M99 | E.M1; return s.isEmpty();");
+	assert s.lastError == "";
+	assert s.lastResult.intVal == 0;
+}
+
+test "bug149: equality on the array band compares every word" {
+	const r = evalSourceFull(arrayEnum + " const a: BitSet<E> = E.M99 | E.M1; const b: BitSet<E> = E.M1 | E.M99; const c: BitSet<E> = E.M98 | E.M1; return (a == b ? 1 : 0) + (a != b ? 2 : 0) + (a == c ? 4 : 0) + (a != c ? 8 : 0);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 9;
+}
+
+test "bug149: intersection, union and symmetric difference on the array band" {
+	const r = evalSourceFull(arrayEnum + " const a: BitSet<E> = E.M99 | E.M1; const b: BitSet<E> = E.M1 | E.M99; const c: BitSet<E> = E.M98 | E.M1; const d = a & c; const u = a | c; return (d.has(E.M1) ? 1 : 0) + (d.has(E.M99) ? 2 : 0) + (u.has(E.M98) ? 4 : 0) + (u.has(E.M99) ? 8 : 0) + ((a ^ b).isEmpty() ? 16 : 0);");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 29;
+}
