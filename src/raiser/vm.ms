@@ -851,6 +851,20 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			setReg(vm, base + inst.a, raiserInt(lhs.intVal >> (rhs.intVal & 63)));
+		} else if (op == RaiserOpcode.NarrowU) {
+			const val = getReg(vm, base + inst.a);
+			const width = inst.b as int64;
+			setReg(vm, base + inst.a, raiserInt(val.intVal & (((1 as int64) << width) - 1)));
+		} else if (op == RaiserOpcode.SignExtend) {
+			const val = getReg(vm, base + inst.a);
+			const imm = 64 - (inst.b as int64);
+			const raised = ((val.intVal as uint64) << (imm as uint64)) as int64;
+			setReg(vm, base + inst.a, raiserInt(raised >> imm));
+		} else if (op == RaiserOpcode.ShiftRightU) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			const count = (rhs.intVal & 63) as uint64;
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) >> count) as int64));
 		// --- Complex ops (previously handled in MetaScript fallback) ---
 		} else if (op == RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);

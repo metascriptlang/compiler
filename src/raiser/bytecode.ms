@@ -139,6 +139,9 @@ export enum RaiserOpcode {
 	// not a catchable raise, so guest code cannot swallow "the compiler could
 	// not compile this". Same append-at-the-END rule as the opcodes above.
 	Trap,             // ABx: fatal vmError with message K[Bx]
+	NarrowU,          // AB: R[A] = R[A] & ((1 << B) - 1)
+	SignExtend,       // AB: R[A] = sign-extend the low B bits of R[A]
+	ShiftRightU,      // ABC: R[A] = R[B] >>> R[C]
 }
 
 // --- Instruction ---

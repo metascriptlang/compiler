@@ -2,7 +2,7 @@
 // AST expression nodes → typed bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, SymbolKind, Symbol,
+	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
@@ -121,6 +121,36 @@ function isBitwiseOp(op: string): boolean {
 	return match (op) {
 		"&" | "|" | "^" | "<<" | ">>" => true,
 		_ => false,
+	};
+}
+
+function peelDistinct(t: Type): Type {
+	return t.kind == TypeKind.Distinct && t.typeReturn != null ? peelDistinct(t.typeReturn) : t;
+}
+
+function intBandBits(t: Type | null): int32 {
+	if (t == null) return 0;
+	return match (peelDistinct(t).kind) {
+		TypeKind.Int8 | TypeKind.Uint8 => 8,
+		TypeKind.Int16 | TypeKind.Uint16 => 16,
+		TypeKind.Int32 | TypeKind.Uint32 => 32,
+		_ => 0,
+	};
+}
+
+function isUnsignedBand(t: Type | null): boolean {
+	if (t == null) return false;
+	return match (peelDistinct(t).kind) {
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
+		_ => false,
+	};
+}
+
+function shiftCountBits(bits: int32): int32 {
+	return match (bits) {
+		8 => 3,
+		16 => 4,
+		_ => 5,
 	};
 }
 
@@ -484,7 +514,30 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 
 	// Bitwise operators
 	if (isBitwiseOp(op)) {
-		emitInst(s, raiserABC(bitwiseOpcode(op), dest, lReg, rReg));
+		const opc = bitwiseOpcode(op);
+		if (opc != RaiserOpcode.ShiftLeft && opc != RaiserOpcode.ShiftRight) {
+			emitInst(s, raiserABC(opc, dest, lReg, rReg));
+			return dest;
+		}
+		const bits = intBandBits(node.nodeType);
+		const unsigned = isUnsignedBand(node.nodeType);
+		const count = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, count, rReg, 0));
+		if (bits > 0) emitInst(s, raiserABC(RaiserOpcode.NarrowU, count, shiftCountBits(bits), 0));
+		let left = lReg;
+		let shift = opc;
+		if (opc == RaiserOpcode.ShiftRight && unsigned) {
+			shift = RaiserOpcode.ShiftRightU;
+			if (bits > 0) {
+				left = allocReg(s);
+				emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
+				emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
+			}
+		}
+		emitInst(s, raiserABC(shift, dest, left, count));
+		if (opc == RaiserOpcode.ShiftLeft && bits > 0) {
+			emitInst(s, raiserABC(unsigned ? RaiserOpcode.NarrowU : RaiserOpcode.SignExtend, dest, bits, 0));
+		}
 		return dest;
 	}
 
@@ -531,6 +584,8 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): number {
 		}
 	} else if (d.unaryOp == "~") {
 		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
+		const bits = intBandBits(node.nodeType);
+		if (bits > 0 && isUnsignedBand(node.nodeType)) emitInst(s, raiserABC(RaiserOpcode.NarrowU, dest, bits, 0));
 	} else if (d.unaryOp == "!") {
 		// Logical NOT: result = (src == 0) ? true : false
 		const zeroReg = allocReg(s);
