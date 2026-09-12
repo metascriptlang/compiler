@@ -164,3 +164,4 @@ import "./bug145UnionContextual";
 import "./bug146AliasInstanceConsumers";
 import "./bug147DistinctFnParamAbi";
 import "./bug148DistinctInstanceBody";
+import "./bug149BitSetInMacro";
