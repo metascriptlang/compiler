@@ -13,7 +13,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, ArrayAccessData, CallExprData, IdentifierData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -158,7 +158,8 @@ function rewriteNewExpr(node: Node): Node {
 function rewriteArrayAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
 	d.array = unwrapRefArrayRecv(d.array);
-	const arrType = d.array.nodeType != null ? peelTransparentInstance(d.array.nodeType) : null;
+	const peeled = d.array.nodeType != null ? peelTransparentInstance(d.array.nodeType) : null;
+	const arrType = peeled != null && peeled.kind == TypeKind.Set ? setRepr(peeled) : peeled;
 	if (arrType == null) return node;
 
 	const loc = node.location;
