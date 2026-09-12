@@ -159,3 +159,4 @@ import "./bug140GenericLiteralOptional";
 import "./bug141DistinctFnCallee";
 import "./bug142GenericAliasBody";
 import "./bug143TypeofNarrow";
+import "./bug144UnionArrayMember";
