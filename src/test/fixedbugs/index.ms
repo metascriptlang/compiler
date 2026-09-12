@@ -170,3 +170,4 @@ import "./bug151AccessorAutoCallClosure";
 import "./bug152AccessorNoAutoCall";
 import "./bug153AutoCallHeldThroughHidden";
 import "./bug154AccessorAutoCallIdent";
+import "./bug155ParamDestructure";
