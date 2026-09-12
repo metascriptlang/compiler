@@ -39,7 +39,7 @@ const shapeNode: int32 = 1;
 const shapeTransformer: int32 = 2;
 
 interface MemberInits {
-	node: Node;
+	fieldName: string;
 	stmts: Node[];
 }
 
@@ -244,11 +244,10 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
 			const stmts: Node[] = [];
-			const inits: MemberInits = { node: inner, stmts: stmts };
+			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", stmts: stmts };
 			plan.activeInits = inits;
 			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
 			plan.activeInits = null as unknown as MemberInits;
-			inits.node = rewritten;
 			if (stmts.length > 0) plan.memberInits.push(inits);
 			const kept = intrinsicOnly(dd.decorators);
 			if (kept.length == 0) {
@@ -697,15 +696,27 @@ function fieldAssignStmt(member: Node): Node {
 	return createNodeAt(NodeKind.ExprStmt, { expr: assign }, loc);
 }
 
+function instanceFieldNames(body: Node[]): string[] {
+	const names: string[] = [];
+	for (const m of body) {
+		const member = bareMember(m);
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (!pd.propIsStatic) names.push(pd.propName);
+	}
+	return names;
+}
+
 function instanceInitStatements(plan: ClassPlan): Node[] {
 	const body = planBody(plan);
+	const fields = instanceFieldNames(body);
 	const out: Node[] = [];
 	for (const inits of plan.memberInits) {
-		let inBody = false;
-		for (const m of body) {
-			if (bareMember(m) == inits.node) inBody = true;
+		let declaredField = false;
+		for (const name of fields) {
+			if (name == inits.fieldName) declaredField = true;
 		}
-		if (inits.node.kind == NodeKind.PropertyDecl && inBody) continue;
+		if (declaredField) continue;
 		for (const s of inits.stmts) out.push(s);
 	}
 	for (const m of body) {
@@ -715,7 +726,7 @@ function instanceInitStatements(plan: ClassPlan): Node[] {
 		if (pd.propIsStatic) continue;
 		if (pd.propInitializer != null) out.push(fieldAssignStmt(member));
 		for (const inits of plan.memberInits) {
-			if (inits.node != member) continue;
+			if (inits.fieldName != pd.propName) continue;
 			for (const s of inits.stmts) out.push(s);
 		}
 	}
@@ -818,8 +829,8 @@ test "member initializers land in the constructor in tsc order" {
 	const loc = cls.location;
 	const mInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "mInit" }, loc) }, loc);
 	const bInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "bInit" }, loc) }, loc);
-	plan.memberInits.push({ node: body[2], stmts: [bInit] });
-	plan.memberInits.push({ node: body[1], stmts: [mInit] });
+	plan.memberInits.push({ fieldName: "b", stmts: [bInit] });
+	plan.memberInits.push({ fieldName: "", stmts: [mInit] });
 	const after: Node[] = [];
 	finishPlan(ctx, plan, after);
 	const ctor = (body[4].data as ConstructorDeclData).ctorBody.data as BlockStmtData;

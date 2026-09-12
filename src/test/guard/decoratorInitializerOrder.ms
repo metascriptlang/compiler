@@ -2,11 +2,13 @@
 // addInitializer statements run where tsc runs them: a method's initializer
 // before the first field initializer, a field's initializer right after that
 // field's own value is set, all of it after super() and before the constructor
-// body. Measured against tsc 5.x (es2022 and es2015 agree).
+// body. Measured against tsc 5.x (es2022 and es2015 agree). The class also
+// carries a class decorator that returns it, so the members the initializers
+// belong to are the copy the decorator handed back.
 //
 // A red guard means an initializer drifted relative to the field initializers.
 
-import { Node, NodeKind, ClassMethodDecoratorContext, ClassFieldDecoratorContext } from "std/meta";
+import { Node, NodeKind, ClassDecoratorContext, ClassMethodDecoratorContext, ClassFieldDecoratorContext } from "std/meta";
 
 let trace: string = "";
 function mark(s: string): int32 { trace = trace + s + ","; return 1; }
@@ -28,10 +30,13 @@ macro pushTag(value: Node, context: ClassFieldDecoratorContext): Node {
 	return value;
 }
 
+macro keepClass(value: Node, context: ClassDecoratorContext): Node { return value; }
+
 class P {
 	constructor() { mark("P-ctor"); }
 }
 
+@keepClass
 class K extends P {
 	a: int32 = mark("init-a");
 	@onMethod m(): void {}
