@@ -789,8 +789,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
 			} else {
-				const quot: int32 = (lhs.intVal as int32 / rhs.intVal as int32) | 0;
-				setReg(vm, base + inst.a, raiserInt(quot as number));
+				setReg(vm, base + inst.a, raiserInt(lhs.intVal / rhs.intVal));
 			}
 		} else if (op == RaiserOpcode.ModI64) {
 			const lhs = getReg(vm, base + inst.b);
@@ -831,37 +830,27 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.BitAnd) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const la: int32 = lhs.intVal as int32;
-			const ra: int32 = rhs.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((la & ra) as number));
+			setReg(vm, base + inst.a, raiserInt(lhs.intVal & rhs.intVal));
 		} else if (op == RaiserOpcode.BitOr) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const lo: int32 = lhs.intVal as int32;
-			const ro: int32 = rhs.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((lo | ro) as number));
+			setReg(vm, base + inst.a, raiserInt(lhs.intVal | rhs.intVal));
 		} else if (op == RaiserOpcode.BitXor) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const lx: int32 = lhs.intVal as int32;
-			const rx: int32 = rhs.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((lx ^ rx) as number));
+			setReg(vm, base + inst.a, raiserInt(lhs.intVal ^ rhs.intVal));
 		} else if (op == RaiserOpcode.BitNot) {
 			const val = getReg(vm, base + inst.b);
-			const vn: int32 = val.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((~vn) as number));
+			setReg(vm, base + inst.a, raiserInt(~val.intVal));
 		} else if (op == RaiserOpcode.ShiftLeft) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const lsl: int32 = lhs.intVal as int32;
-			const rsl: int32 = rhs.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((lsl << rsl) as number));
+			const count = (rhs.intVal & 63) as uint64;
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) << count) as int64));
 		} else if (op == RaiserOpcode.ShiftRight) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const lsr: int32 = lhs.intVal as int32;
-			const rsr: int32 = rhs.intVal as int32;
-			setReg(vm, base + inst.a, raiserInt((lsr >> rsr) as number));
+			setReg(vm, base + inst.a, raiserInt(lhs.intVal >> (rhs.intVal & 63)));
 		// --- Complex ops (previously handled in MetaScript fallback) ---
 		} else if (op == RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);
@@ -1154,7 +1143,7 @@ function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
 	const len = heapArrayLen(vm.arrayHeap, handle);
-	const result = raiserInt(len);
+	const result = raiserInt(len as int64);
 	setReg(vm, vm.baseReg + inst.a, result);
 }
 
@@ -1458,7 +1447,6 @@ function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): v
 
 // --- Bitwise handlers ---
 
-// Bitwise ops are handled entirely in C dispatch (vmDispatch.c)
 // using int64_t casts — MetaScript fallback not needed.
 
 // --- CallHost handler ---
@@ -1553,7 +1541,7 @@ function execBinOp(op: RaiserOpcode, a: number, b: number): RaiserVM {
 			raiserABC(op, 2, 0, 1),
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserInt(a), raiserInt(b)]
+		[raiserInt(a as int64), raiserInt(b as int64)]
 	));
 }
 
@@ -2511,7 +2499,7 @@ test "each strand keeps its own registers" {
 // Builds the closure pair codegen emits for a non-capturing closure:
 // { fn: funcIdx, env: -1 } in R1, using K0=funcIdx, K1="fn", K2=-1, K3="env".
 function closurePairConsts(funcIdx: number): RaiserValue[] {
-	return [raiserInt(funcIdx), raiserString("fn"), raiserInt(-1), raiserString("env")];
+	return [raiserInt(funcIdx as int64), raiserString("fn"), raiserInt(-1), raiserString("env")];
 }
 
 function closurePairCode(): RaiserInstruction[] {

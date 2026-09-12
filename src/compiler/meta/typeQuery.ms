@@ -38,7 +38,7 @@ function emitTypeNode(n: Node, src: Type): RaiserValue {
 	const v = emitNode(n);
 	const objHeap = activeHostObjectHeap();
 	if (objHeap != null && v.kind == RaiserValueKind.Object) {
-		heapObjectSetField(objHeap, v.intVal, "typeHandle", raiserInt(registerBoundType(src)));
+		heapObjectSetField(objHeap, v.intVal, "typeHandle", raiserInt(registerBoundType(src) as int64));
 	}
 	return v;
 }
@@ -143,7 +143,7 @@ function hostTypeKind(args: RaiserValue[]): RaiserValue {
 	if (sym != null && hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	const t = typeArgOf(args[0]);
 	if (t == null) return queryError(ctx, "node carries no type");
-	return raiserInt(peelAlias(t).kind as number);
+	return raiserInt(peelAlias(t).kind as int64);
 }
 
 function hostSameType(args: RaiserValue[]): RaiserValue {
@@ -160,7 +160,7 @@ function hostSymKind(args: RaiserValue[]): RaiserValue {
 	if (ctx == null || args.length < 1) return raiserNil();
 	const sym = boundSymOf(args[0]);
 	if (sym == null) return queryError(ctx, "node is not a symbol");
-	return raiserInt(sym.symbolKind as number);
+	return raiserInt(sym.symbolKind as int64);
 }
 
 export function registerTypeQueryHostFns(): void {

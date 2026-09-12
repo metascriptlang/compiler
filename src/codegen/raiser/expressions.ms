@@ -199,7 +199,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitLoadConst(s, reg, raiserFloat(d.value));
 				markRegFloat(s, reg);
 			} else {
-				emitLoadConst(s, reg, raiserInt(d.value));
+				emitLoadConst(s, reg, raiserInt(d.value as int64));
 			}
 			return reg;
 		},

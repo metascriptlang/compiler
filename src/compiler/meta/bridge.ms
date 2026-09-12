@@ -583,7 +583,7 @@ export function boundTypeAt(index: int32): Type | null {
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
 	setStr(objHeap, handle, "name", sym.name);
-	heapObjectSetField(objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as number));
+	heapObjectSetField(objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as int64));
 	setStr(objHeap, handle, "modulePath", sym.modulePath);
 	setStr(objHeap, handle, "builtinKind", sym.builtinKind);
 	return raiserObject(handle);
@@ -635,7 +635,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	const node = stripMacroArgWrappers(nodeIn);
 	const handle = heapAllocObject(objHeap);
 	// Common fields: kind, line, column
-	const kindVal = raiserInt(node.kind as number);
+	const kindVal = raiserInt(node.kind as int64);
 	heapObjectSetField(objHeap, handle, "kind", kindVal);
 	const lineVal = raiserInt(node.location.line);
 	heapObjectSetField(objHeap, handle, "line", lineVal);
@@ -650,7 +650,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(d.value);
+			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(d.value as int64);
 			heapObjectSetField(objHeap, handle, "value", v);
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
 			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
@@ -678,7 +678,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
 			if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
-				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym)));
+				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
 		},
 
@@ -877,7 +877,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "declName", d.declName);
 			setStr(objHeap, handle, "declType", d.declType);
 			setNode(objHeap, arrHeap, handle, "initializer", d.initializer);
-			const dk = raiserInt(d.declKind as number);
+			const dk = raiserInt(d.declKind as int64);
 			heapObjectSetField(objHeap, handle, "declKind", dk);
 		},
 		NodeKind.IfStmt => {
@@ -1032,7 +1032,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
-			heapObjectSetField(objHeap, handle, "externKind", raiserInt(d.externKind as number));
+			heapObjectSetField(objHeap, handle, "externKind", raiserInt(d.externKind as int64));
 			setStr(objHeap, handle, "externName", d.externName);
 			setStr(objHeap, handle, "nativeName", d.nativeName);
 			setStr(objHeap, handle, "externType", d.externType);
@@ -1101,7 +1101,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.TypeArray => {
 			const d = node.data as TypeArrayData;
 			setNode(objHeap, arrHeap, handle, "typExprElement", d.typExprElement);
-			heapObjectSetField(objHeap, handle, "typExprSize", raiserInt(d.typExprSize));
+			heapObjectSetField(objHeap, handle, "typExprSize", raiserInt(d.typExprSize as int64));
 		},
 		NodeKind.TypeUnion => {
 			// V3 disc fields — symmetric with deserialize in this file

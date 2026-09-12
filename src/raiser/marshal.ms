@@ -64,7 +64,7 @@ export function boxString(s: string): RaiserValue {
 }
 
 export function boxInt(n: number): RaiserValue {
-	return raiserInt(n);
+	return raiserInt(n as int64);
 }
 
 export function boxFloat(f: number): RaiserValue {

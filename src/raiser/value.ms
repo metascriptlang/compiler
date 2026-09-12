@@ -18,7 +18,7 @@ export enum RaiserValueKind {
 // Matches project convention (see checker/types.ms Type interface).
 export interface RaiserValue {
 	kind: RaiserValueKind;
-	intVal: number;
+	intVal: int64;
 	floatVal: number;
 	strVal: string;
 }
@@ -35,7 +35,7 @@ export function raiserBool(b: boolean): RaiserValue {
 	return { kind: RaiserValueKind.Bool, intVal: v, floatVal: 0.0, strVal: "" };
 }
 
-export function raiserInt(n: number): RaiserValue {
+export function raiserInt(n: int64): RaiserValue {
 	return { kind: RaiserValueKind.Int, intVal: n, floatVal: 0.0, strVal: "" };
 }
 
@@ -48,15 +48,15 @@ export function raiserString(s: string): RaiserValue {
 }
 
 export function raiserArray(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Array, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Array, intVal: handle as int64, floatVal: 0.0, strVal: "" };
 }
 
 export function raiserObject(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Object, intVal: handle as int64, floatVal: 0.0, strVal: "" };
 }
 
 export function raiserFuture(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Future, intVal: handle as int64, floatVal: 0.0, strVal: "" };
 }
 
 // --- Deep copy (avoids pointer aliasing) ---
