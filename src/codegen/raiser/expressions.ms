@@ -398,7 +398,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Binary ---
 
-function compileBinaryExpr(s: RaiserCompState, node: Node): number {
+function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
@@ -570,7 +570,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 
 // --- Unary ---
 
-function compileUnaryExpr(s: RaiserCompState, node: Node): number {
+function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as UnaryExprData;
 	const srcReg = compileExpr(s, d.operand);
 	const dest = allocReg(s);
@@ -601,7 +601,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): number {
 
 // --- Logical (short-circuit) ---
 
-function compileLogicalExpr(s: RaiserCompState, node: Node): number {
+function compileLogicalExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const dest = allocReg(s);
 
@@ -630,7 +630,7 @@ function compileLogicalExpr(s: RaiserCompState, node: Node): number {
 
 // --- Compound assignment (+=, -=, *=, /=, %=) ---
 
-function compileCompoundAssign(s: RaiserCompState, node: Node): number {
+function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
@@ -703,7 +703,7 @@ function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	}
 }
 
-function compileCallExpr(s: RaiserCompState, node: Node): number {
+function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 
 	// arr.push(val)
@@ -841,7 +841,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 	return compileClosureCall(s, node);
 }
 
-function compileClosureCall(s: RaiserCompState, node: Node): number {
+function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const argCount = d.arguments.length;
 
@@ -896,7 +896,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): number {
 
 // --- Conditional (ternary) ---
 
-function compileConditionalExpr(s: RaiserCompState, node: Node): number {
+function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ConditionalExprData;
 	const dest = allocReg(s);
 
@@ -919,7 +919,7 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): number {
 
 // --- Update (i++, ++i, i--, --i) ---
 
-function emitStepped(s: RaiserCompState, fromReg: number, updateOp: string): number {
+function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string): int32 {
 	const oneReg = allocReg(s);
 	emitLoadConst(s, oneReg, raiserInt(1));
 	const outReg = allocReg(s);
@@ -927,7 +927,7 @@ function emitStepped(s: RaiserCompState, fromReg: number, updateOp: string): num
 	return outReg;
 }
 
-function compileUpdateExpr(s: RaiserCompState, node: Node): number {
+function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as UpdateExprData;
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
@@ -989,7 +989,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): number {
 
 // --- Object ---
 
-function compileObjectLiteral(s: RaiserCompState, node: Node): number {
+function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ObjectLiteralData;
 	const dest = allocReg(s);
 
@@ -1008,7 +1008,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): number {
 
 // --- New ---
 
-function compileNewExpr(s: RaiserCompState, node: Node): number {
+function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as NewExprData;
 
 	if (d.newCallee.kind == NodeKind.Identifier) {
@@ -1038,7 +1038,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): number {
 
 // --- Array ---
 
-function compileArrayLiteral(s: RaiserCompState, node: Node): number {
+function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayLiteralData;
 	const elemCount = d.elements.length;
 
@@ -1061,7 +1061,7 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): number {
 	return dest;
 }
 
-function compileArrayAccess(s: RaiserCompState, node: Node): number {
+function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayAccessData;
 	const arrReg = compileExpr(s, d.array);
 	const idxReg = compileExpr(s, d.index);
@@ -1070,7 +1070,7 @@ function compileArrayAccess(s: RaiserCompState, node: Node): number {
 	return dest;
 }
 
-function compileMemberExpr(s: RaiserCompState, node: Node): number {
+function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
 
 	// Enum member access: Color.Red → integer constant (codegen-only path; the
@@ -1124,7 +1124,7 @@ function isToStringCall(node: Node): boolean {
 	return d.property == "toString";
 }
 
-function compileToStringCall(s: RaiserCompState, node: Node): number {
+function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const objReg = compileExpr(s, md.object);
@@ -1135,7 +1135,7 @@ function compileToStringCall(s: RaiserCompState, node: Node): number {
 	return dest;
 }
 
-function compileArrayPushCall(s: RaiserCompState, node: Node): number {
+function compileArrayPushCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
@@ -1146,7 +1146,7 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): number {
 	return arrReg;
 }
 
-function compileArraySetLenCall(s: RaiserCompState, node: Node): number {
+function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
@@ -1170,7 +1170,7 @@ function isExitCall(callee: Node): boolean {
 	return false;
 }
 
-function compileExitCall(s: RaiserCompState, node: Node): number {
+function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const codeReg = compileExpr(s, d.arguments[0]);
 	// b=1 marks the halt abrupt: it skips the strand drain, the way
@@ -1197,7 +1197,7 @@ function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean
 	return exprIsString(s, d.object);
 }
 
-function compileStrCharAt(s: RaiserCompState, node: Node): number {
+function compileStrCharAt(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);
@@ -1207,7 +1207,7 @@ function compileStrCharAt(s: RaiserCompState, node: Node): number {
 	return dest;
 }
 
-function compileStrSlice(s: RaiserCompState, node: Node): number {
+function compileStrSlice(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);

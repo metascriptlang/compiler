@@ -481,7 +481,7 @@ export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
 	_raiserStmtCompiler(s, stmt);
 }
 
-export function emitTrapNil(s: RaiserCompState, message: string): number {
+export function emitTrapNil(s: RaiserCompState, message: string): int32 {
 	const cIdx = addConst(s, raiserString(message));
 	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
 	const reg = allocReg(s);
