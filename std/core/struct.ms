@@ -894,25 +894,16 @@ export function* toItems<T>(this s: Set<T>): Iterator<T> {
 // ===== BitSet<E> =====
 // A set of enum members: bit position = member ordinal. The checker gives
 // `E.A | E.B` the type `BitSet<E>` and sizes it by the member count; the four
-// operations below are lowered before codegen. See docs/LANG-PRIMITIVE.md.
-export type BitSet<E> = distinct uint32;
-
+// operations below are declared without a body and lowered by tag before
+// codegen. See docs/LANG-PRIMITIVE.md.
 @builtin("SetHas")
-export function has<E>(this self: BitSet<E>, member: E): boolean {
-	return (((self as uint32) >> (member as uint32)) & (1 as uint32)) != 0;
-}
+export extern function has<E>(this self: BitSet<E>, member: E): boolean;
 
 @builtin("SetIncl")
-export function incl<E>(this self: BitSet<E>, member: E): BitSet<E> {
-	return ((self as uint32) | ((1 as uint32) << (member as uint32))) as BitSet<E>;
-}
+export extern function incl<E>(this self: BitSet<E>, member: E): BitSet<E>;
 
 @builtin("SetExcl")
-export function excl<E>(this self: BitSet<E>, member: E): BitSet<E> {
-	return ((self as uint32) & ~((1 as uint32) << (member as uint32))) as BitSet<E>;
-}
+export extern function excl<E>(this self: BitSet<E>, member: E): BitSet<E>;
 
 @builtin("SetIsEmpty")
-export function isEmpty<E>(this self: BitSet<E>): boolean {
-	return (self as uint32) == 0;
-}
+export extern function isEmpty<E>(this self: BitSet<E>): boolean;
