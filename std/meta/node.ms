@@ -252,6 +252,7 @@ export enum NodeFlag {
 	BoundSym,     // macro bindSym: resolvedSym pre-bound in the macro's module — checker must not re-lookup
 	Converter,    // parser: MacroDecl is a converter — compiler-invoked at settled type boundaries
 	StaticStorage, // parser: VariableDecl declared `static` inside a body — storage at module scope (reference: global storage flag)
+	AutoCall,
 }
 
 // ===== Node Kind Enum =====

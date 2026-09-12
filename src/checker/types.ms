@@ -1667,6 +1667,24 @@ export function distinctWidenBody(t: Type | null): Type | null {
 	return distinctBody(t);
 }
 
+export function autoCallTarget(t: Type | null): Type | null {
+	if (t == null) return null;
+	const fn = distinctCallTarget(withoutReadonlyView(t));
+	return fn != null && fn.typeChildren.length == 0 ? fn : null;
+}
+
+export function expectsCallable(t: Type | null): boolean {
+	if (t == null) return false;
+	const shape = peelTransparentInstance(t);
+	if (shape.kind == TypeKind.Function || distinctCallTarget(shape) != null) return true;
+	if (shape.kind == TypeKind.Union) {
+		for (const member of shape.typeChildren) { if (expectsCallable(member)) return true; }
+		return false;
+	}
+	if (isMaybeType(shape)) return expectsCallable(shape.typeChildren[0]);
+	return false;
+}
+
 export function createGenericParam(name: string): Type {
 	const t = emptyType();
 	t.kind = TypeKind.GenericParam;

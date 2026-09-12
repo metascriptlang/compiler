@@ -424,7 +424,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				readType = readType.typeReturn;
 			}
 			const flowType = getFlowTypeOfReference(node, readType);
-			node.nodeType = capturedView ? createReadonlyView(flowType) : flowType; return;
+			node.nodeType = capturedView ? createReadonlyView(flowType) : flowType;
+			autoCallIfAccessor(ctx, node, flowType, expectedType); return;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -888,7 +889,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
+			const updateHold = ctx.autoCallHold;
+			ctx.autoCallHold = d.updateArg;
 			checkExpr(ctx, d.updateArg, null);
+			ctx.autoCallHold = updateHold;
 			reportSharedWrite(ctx, d.updateArg);
 			if (d.updateArg.kind == NodeKind.MemberExpr) {
 				const umd = d.updateArg.data as MemberExprData;
@@ -909,7 +913,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.nodeType = int32Type(); return;
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
-		NodeKind.MemberExpr => checkMemberExpr(ctx, node, expectedType),
+		NodeKind.MemberExpr => {
+			node.nodeType = checkMemberExpr(ctx, node, expectedType);
+			autoCallIfAccessor(ctx, node, node.nodeType, expectedType); return;
+		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			// Defensive: malformed ArrayAccess may have null d.array (e.g. macro
@@ -2379,7 +2386,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, foldComptimeNodeAliasArgs, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, foldComptimeNodeAliasArgs, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

@@ -228,7 +228,7 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 // MemberExpr(HiddenDeref(this), n). Assignment LHS stays unwrapped
 // (leftPartOfAsgn). All shape tests must peel, or wrapped `this` reads
 // misclassify as bare-this captures.
-function peelHidden(n: Node): Node {
+export function peelHidden(n: Node): Node {
 	let cur = n;
 	while (cur != null) {
 		if (cur.kind == NodeKind.HiddenDeref) { cur = (cur.data as HiddenDerefData).expr; continue; }

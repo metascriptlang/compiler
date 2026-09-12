@@ -20,8 +20,8 @@ import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
+import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, autoCallTarget, expectsCallable, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, peelHidden } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -674,7 +674,10 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	const outerHold = ctx.autoCallHold;
+	ctx.autoCallHold = d.callee;
 	callCheckExpr(ctx, d.callee, null);
+	ctx.autoCallHold = outerHold;
 	// Phase 5: super(args) call — type-check args against parent class
 	// constructor signature. resolveSuper set callee.resolvedSym to the parent
 	// class symbol. Reuse getCtorParamTypes which returns user-only params (no
@@ -2148,8 +2151,13 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 			argTypes.push(null as unknown as Type);
 			skipMask.push(true);
 		} else {
-			argTypes.push(checkArgWithExpected(ctx, arg, null as unknown as Type));
-			skipMask.push(false);
+			const outerHold = ctx.autoCallHold;
+			ctx.autoCallHold = arg;
+			const argType = checkArgWithExpected(ctx, arg, null as unknown as Type);
+			ctx.autoCallHold = outerHold;
+			const deferred = autoCallTarget(argType) != null;
+			argTypes.push(deferred ? null as unknown as Type : argType);
+			skipMask.push(deferred);
 		}
 	}
 
@@ -2250,8 +2258,12 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		for (let ai = 0; ai < args.length; ai += 1) {
 			if (ai >= winnerType.typeChildren.length) break;
-			if (!isContextSensitive(args[ai])) continue;
-			callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			if (!skipMask[ai]) continue;
+			if (isContextSensitive(args[ai])) {
+				callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			} else {
+				autoCallIfAccessor(ctx, args[ai], args[ai].nodeType, winnerType.typeChildren[ai]);
+			}
 			const refinedArgType = args[ai].nodeType;
 			if (refinedArgType != null) { argTypes[ai] = refinedArgType; }
 		}
@@ -2854,6 +2866,26 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 	callCheckExpr(ctx, outer, createFunction(paramTypes, names, inferredType()));
 	args[0] = createNodeAt(NodeKind.CallExpr, { callee: outer, arguments: moveArgs, isDirectCall: false, resolvedOverloadIdx: -1 }, thunk.location);
 	return movedKeys;
+}
+
+export function autoCallIfAccessor(ctx: CheckerContext, node: Node, readType: Type | null, expectedType: Type | null): void {
+	if (peelHidden(ctx.autoCallHold) == node || ctx.initTracker.leftPartOfAsgn > 0) return;
+	if (autoCallTarget(readType) == null || expectsCallable(expectedType)) return;
+	const callee = createNodeAt(node.kind, node.data, node.location);
+	callee.nodeType = node.nodeType;
+	callee.resolvedSym = node.resolvedSym;
+	callee.typeExpr = node.typeExpr;
+	callee.flowNode = node.flowNode;
+	callee.variantSlot = node.variantSlot;
+	callee.flags = node.flags.incl(NodeFlag.Sem);
+	node.kind = NodeKind.CallExpr;
+	node.data = { callee: callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 };
+	node.flags = node.flags.excl(NodeFlag.Sem);
+	node.nodeType = null;
+	node.resolvedSym = null;
+	node.flowNode = null;
+	node.nodeType = checkCallExpr(ctx, node, expectedType);
+	node.flags = node.flags.incl(NodeFlag.Sem).incl(NodeFlag.AutoCall);
 }
 
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
