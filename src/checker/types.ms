@@ -2193,6 +2193,8 @@ export function isMaybeType(t: Type | null): boolean {
 export function isMaybeWrappable(t: Type | null): boolean {
 	if (t == null) return false;
 	t = peelTransparentInstance(t);
+	const body = distinctBody(t);
+	if (body != null) t = body;
 	if (t.kind == TypeKind.Null) return false;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) return false;
 	// unknown is void* in C — pointer branch of the SomePointer split, same as Ref/Ptr

@@ -55,6 +55,7 @@ export function isNominalType(t: Type | null): boolean {
 export function isNominalMismatch(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	if (source.kind == TypeKind.Null) return false;
+	if (isMaybeType(target) && !isMaybeType(source)) return isNominalMismatch(source, target.typeChildren[0]);
 	if (!isNominalType(source) && !isNominalType(target)) return false;
 	return !isAssignable(source, target);
 }
