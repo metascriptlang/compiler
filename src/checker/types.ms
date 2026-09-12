@@ -1581,9 +1581,11 @@ export const BITSET_MAX_MEMBERS: int32 = 65536;
 export function bitSetRepr(elem: Type | null): Type | null {
 	if (elem == null) return null;
 	const members = elem.typeNames.length;
+	if (members <= 8) return createPrimitive(TypeKind.Uint8);
+	if (members <= 16) return createPrimitive(TypeKind.Uint16);
 	if (members <= 32) return createPrimitive(TypeKind.Uint32);
 	if (members <= 64) return createPrimitive(TypeKind.Uint64);
-	if (members <= BITSET_MAX_MEMBERS) return createSizedArray(createPrimitive(TypeKind.Uint32), (members + 31) >> 5);
+	if (members <= BITSET_MAX_MEMBERS) return createSizedArray(createPrimitive(TypeKind.Uint8), (members + 7) >> 3);
 	return null;
 }
 

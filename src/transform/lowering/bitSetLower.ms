@@ -7,7 +7,7 @@ import { makeBinary, makeUnary, makeNumber, makeCall, makeIdent, makeIdentResolv
 import { cloneIfPure } from "../coercion/intArithJS";
 import { DeclKind } from "../../ast/node";
 
-function uint32Type(): Type { return createPrimitive(TypeKind.Uint32); }
+function byteType(): Type { return createPrimitive(TypeKind.Uint8); }
 function int32Type(): Type { return createPrimitive(TypeKind.Int32); }
 
 function typedNumber(val: number, t: Type, loc: SourceLocation): Node {
@@ -81,7 +81,7 @@ function lowerWordBinary(node: Node, repr: Type): Node {
 	return node;
 }
 
-// ===== array class (SizedArray<uint32, N>) — the reference's ctArray branch =====
+// ===== array class (SizedArray<uint8, N>) — the reference's ctArray branch =====
 
 function wordCount(repr: Type): int32 { return repr.typeValue; }
 
@@ -90,11 +90,11 @@ function wordAtIndex(recv: Node, index: Node, repr: Type, ctx: TransformContext,
 	if (r == null) return null as unknown as Node;
 	if (ctx.jsBackend) {
 		const access = makeArrayAccess(r, index, loc);
-		access.nodeType = uint32Type();
+		access.nodeType = byteType();
 		return access;
 	}
 	const call = makeCall(makeIdent("msSizedArrayAccess", loc), [r, index, typedNumber(wordCount(repr), int32Type(), loc)], loc);
-	call.nodeType = uint32Type();
+	call.nodeType = byteType();
 	return call;
 }
 
@@ -105,20 +105,20 @@ function wordAt(recv: Node, i: int32, repr: Type, ctx: TransformContext, loc: So
 function memberWordIndex(member: Node, loc: SourceLocation): Node {
 	const m = cloneIfPure(member);
 	if (m == null) return null as unknown as Node;
-	return typedBinary(m, ">>", typedNumber(5, int32Type(), loc), int32Type(), loc);
+	return typedBinary(m, ">>", typedNumber(3, int32Type(), loc), int32Type(), loc);
 }
 
 function memberBitInWord(member: Node, loc: SourceLocation): Node {
 	const m = cloneIfPure(member);
 	if (m == null) return null as unknown as Node;
-	const offset = typedBinary(m, "&", typedNumber(31, int32Type(), loc), int32Type(), loc);
-	return typedBinary(typedNumber(1, uint32Type(), loc), "<<", offset, uint32Type(), loc);
+	const offset = typedBinary(m, "&", typedNumber(7, int32Type(), loc), int32Type(), loc);
+	return typedBinary(typedNumber(1, byteType(), loc), "<<", offset, byteType(), loc);
 }
 
 function memberBit(member: Node, i: int32, loc: SourceLocation): Node {
 	const inWord = typedBinary(memberWordIndex(member, loc), "==", typedNumber(i, int32Type(), loc), booleanType(), loc);
-	const picked = makeConditional(inWord, memberBitInWord(member, loc), typedNumber(0, uint32Type(), loc), loc);
-	picked.nodeType = uint32Type();
+	const picked = makeConditional(inWord, memberBitInWord(member, loc), typedNumber(0, byteType(), loc), loc);
+	picked.nodeType = byteType();
 	return picked;
 }
 
@@ -139,26 +139,26 @@ function lowerArrayCall(node: Node, name: string, recv: Node, repr: Type, ctx: T
 	const n = wordCount(repr);
 	if (name == "SetIsEmpty" && d.arguments.length == 1) {
 		let acc = wordAt(recv, 0, repr, ctx, loc);
-		for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, repr, ctx, loc), uint32Type(), loc);
-		return typedBinary(acc, "==", typedNumber(0, uint32Type(), loc), booleanType(), loc);
+		for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, repr, ctx, loc), byteType(), loc);
+		return typedBinary(acc, "==", typedNumber(0, byteType(), loc), booleanType(), loc);
 	}
 	if (d.arguments.length != 2) return node;
 	const member = d.arguments[1];
 	if (name == "SetHas") {
 		const word = wordAtIndex(recv, memberWordIndex(member, loc), repr, ctx, loc);
-		const masked = typedBinary(word, "&", memberBitInWord(member, loc), uint32Type(), loc);
-		return typedBinary(masked, "!=", typedNumber(0, uint32Type(), loc), booleanType(), loc);
+		const masked = typedBinary(word, "&", memberBitInWord(member, loc), byteType(), loc);
+		return typedBinary(masked, "!=", typedNumber(0, byteType(), loc), booleanType(), loc);
 	}
 	if (name == "SetIncl" || name == "SetExcl") {
 		const elements: Node[] = [];
 		for (let i = 0; i < n; i += 1) {
 			const bit = memberBit(member, i, loc);
 			if (name == "SetIncl") {
-				elements.push(typedBinary(wordAt(recv, i, repr, ctx, loc), "|", bit, uint32Type(), loc));
+				elements.push(typedBinary(wordAt(recv, i, repr, ctx, loc), "|", bit, byteType(), loc));
 			} else {
 				const cleared = makeUnary("~", bit, loc);
-				cleared.nodeType = uint32Type();
-				elements.push(typedBinary(wordAt(recv, i, repr, ctx, loc), "&", cleared, uint32Type(), loc));
+				cleared.nodeType = byteType();
+				elements.push(typedBinary(wordAt(recv, i, repr, ctx, loc), "&", cleared, byteType(), loc));
 			}
 		}
 		return arrayLiteral(elements, repr, loc);
@@ -173,7 +173,7 @@ function lowerArrayBinary(node: Node, repr: Type, ctx: TransformContext): Node {
 	if (isSetBinaryOp(d.operator)) {
 		const elements: Node[] = [];
 		for (let i = 0; i < n; i += 1) {
-			elements.push(typedBinary(wordOf(d.left, i, repr, ctx, loc), d.operator, wordOf(d.right, i, repr, ctx, loc), uint32Type(), loc));
+			elements.push(typedBinary(wordOf(d.left, i, repr, ctx, loc), d.operator, wordOf(d.right, i, repr, ctx, loc), byteType(), loc));
 		}
 		return arrayLiteral(elements, repr, loc);
 	}
@@ -196,7 +196,7 @@ function lowerArrayZero(node: Node, repr: Type): Node {
 	if (d.asExpr == null || d.asExpr.kind != NodeKind.NumberLiteral) return node;
 	if ((d.asExpr.data as NumberLiteralData).intVal != 0) return node;
 	const elements: Node[] = [];
-	for (let i = 0; i < wordCount(repr); i += 1) elements.push(typedNumber(0, uint32Type(), node.location));
+	for (let i = 0; i < wordCount(repr); i += 1) elements.push(typedNumber(0, byteType(), node.location));
 	return arrayLiteral(elements, repr, node.location);
 }
 
