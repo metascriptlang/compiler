@@ -250,6 +250,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 
 function decoratorPositionValid(target: Node): boolean {
 	return target.kind == NodeKind.ClassDecl
+		|| target.kind == NodeKind.ActorDecl
 		|| target.kind == NodeKind.MethodDecl
 		|| target.kind == NodeKind.PropertyDecl;
 }
@@ -279,11 +280,15 @@ function targetInfo(target: Node): TargetInfo {
 		const pd = target.data as PropertyDeclData;
 		return { kind: "field", name: pd.propName, isStatic: pd.propIsStatic };
 	}
+	if (target.kind == NodeKind.ActorDecl) {
+		return { kind: "class", name: (target.data as ActorDeclData).actorName, isStatic: false };
+	}
 	return { kind: "class", name: (target.data as ClassDeclData).className, isStatic: false };
 }
 
 function kindLabel(kind: NodeKind): string {
 	if (kind == NodeKind.ClassDecl) return "class";
+	if (kind == NodeKind.ActorDecl) return "actor";
 	if (kind == NodeKind.MethodDecl) return "method";
 	if (kind == NodeKind.PropertyDecl) return "field";
 	return "node";
@@ -641,7 +646,9 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		const replacement = valueToNode(rv, objHeap, arrHeap, loc);
 		if (replacement == null || replacement.kind != target.kind) {
 			const got = replacement == null ? "nothing" : kindLabel(replacement.kind);
-			addError(ctx, `decorator '${name}' on a ${info.kind} must return a ${info.kind} or nothing, got ${got}`, loc.line, loc.column);
+			const want = kindLabel(target.kind);
+			const article = want == "actor" ? "an" : "a";
+			addError(ctx, `decorator '${name}' on ${article} ${want} must return ${article} ${want} or nothing, got ${got}`, loc.line, loc.column);
 		} else {
 			adoptReplacement(target, replacement);
 			outNode = replacement;
