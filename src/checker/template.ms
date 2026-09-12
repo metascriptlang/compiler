@@ -22,7 +22,6 @@ import {
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
 import { isAssignable } from "./compat";
-import { widensToBase } from "./fit";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -168,33 +167,50 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 		boundTypes.push(explicit.types[ei]);
 		boundFrom.push(-1);
 	}
+	const candNames: string[] = [];
+	const candTypes: Type[] = [];
+	const candFrom: int32[] = [];
 	for (let i: int32 = 0; i < args.length; i++) {
 		const declared = symType.typeChildren[i + offset];
 		const argT = args[i].nodeType;
 		if (declared == null || argT == null) continue;
 		const dn = declared.kind == TypeKind.GenericParam ? declared.typeName : "";
 		if (dn != "" && nameIndex(genNames, dn) >= 0) {
-			const bidx = nameIndex(boundNames, dn);
-			if (bidx < 0) {
-				boundNames.push(dn);
-				boundTypes.push(argT);
-				boundFrom.push(i);
-			} else if (!isAssignable(argT, boundTypes[bidx])) {
-				if (boundFrom[bidx] >= 0 && widensToBase(ctx, boundTypes[bidx], argT)) {
-					boundTypes[bidx] = argT;
-					continue;
-				}
-				const origin = boundFrom[bidx] >= 0 ? ` — '${dn}' was bound by argument ${boundFrom[bidx]}` : "";
-				addError(ctx, `Argument type mismatch in '${sym.name}' arg ${i}: got ${typeDisplayName(argT)}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
-					args[i].location.line, args[i].location.column);
-				return false;
-			}
+			candNames.push(dn);
+			candTypes.push(argT);
+			candFrom.push(i);
 			continue;
 		}
 		if (hasGenericParams(declared) || isUnknownType(declared) || isUnresolvedType(declared)) continue;
 		if (!isAssignable(argT, declared)) {
 			addError(ctx, `Template '${sym.name}': argument ${i + 1} expects ${typeDisplayName(declared)}, got ${typeDisplayName(argT)}`,
 				callNode.location.line, callNode.location.column);
+			return false;
+		}
+	}
+	for (let ci = 0; ci < candNames.length; ci += 1) {
+		const dn = candNames[ci];
+		let bidx = nameIndex(boundNames, dn);
+		if (bidx < 0) {
+			boundNames.push(dn);
+			boundTypes.push(candTypes[ci]);
+			boundFrom.push(candFrom[ci]);
+			bidx = boundNames.length - 1;
+			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
+				if (candNames[cj] != dn) continue;
+				if (isAssignable(boundTypes[bidx], candTypes[cj]) && !isAssignable(candTypes[cj], boundTypes[bidx])) {
+					boundTypes[bidx] = candTypes[cj];
+					boundFrom[bidx] = candFrom[cj];
+				}
+			}
+		} else if (boundFrom[bidx] >= 0) {
+			continue;
+		}
+		for (let cj = ci; cj < candNames.length; cj += 1) {
+			if (candNames[cj] != dn || candFrom[cj] == boundFrom[bidx] || isAssignable(candTypes[cj], boundTypes[bidx])) continue;
+			const origin = boundFrom[bidx] >= 0 ? ` — '${dn}' was bound by argument ${boundFrom[bidx]}` : "";
+			addError(ctx, `Argument type mismatch in '${sym.name}' arg ${candFrom[cj]}: got ${typeDisplayName(candTypes[cj])}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
+				args[candFrom[cj]].location.line, args[candFrom[cj]].location.column);
 			return false;
 		}
 	}
