@@ -127,6 +127,11 @@ function inferBitSetOp(op: string, leftType: Type, rightType: Type): Type | null
 		if (rightElem != null && rightElem.typeName == leftElem.typeName) return leftType;
 		return null;
 	}
+	const rightElem = bitSetElemType(rightType);
+	if (rightElem != null) {
+		if (leftType.kind == TypeKind.Enum && leftType.typeName == rightElem.typeName) return rightType;
+		return null;
+	}
 	if (leftType.kind == TypeKind.Enum && rightType.kind == TypeKind.Enum
 		&& leftType.typeName != "" && leftType.typeName == rightType.typeName
 		&& isOrdinalEnum(leftType)) {
@@ -361,7 +366,7 @@ function relationalNeedsOperator(t: Type): boolean {
 	const s = skipModifier(t);
 	if (s.kind == TypeKind.Struct) return !isMaybeType(s);
 	return s.kind == TypeKind.Array || s.kind == TypeKind.SizedArray
-		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function;
+		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function || s.kind == TypeKind.Set;
 }
 
 export function checkRelationalOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
@@ -410,7 +415,14 @@ function arithOperandsOk(op: string, a: Type, b: Type): boolean {
 	return false;
 }
 
+function sameSetElement(a: Type, b: Type): boolean {
+	const ea = bitSetElemType(a);
+	const eb = bitSetElemType(b);
+	return ea != null && eb != null && ea.typeName == eb.typeName;
+}
+
 function equalityOperandsOk(a: Type, b: Type): boolean {
+	if (a.kind == TypeKind.Set || b.kind == TypeKind.Set) return sameSetElement(a, b);
 	if (isNumeric(a) && isNumeric(b)) return true;
 	if (isStringLike(a) && isStringLike(b)) return true;
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
@@ -419,7 +431,6 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
 	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
 	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
-	if (a.kind == TypeKind.Set && b.kind == TypeKind.Set) return true;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
