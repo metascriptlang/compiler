@@ -1555,7 +1555,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// Reference parity (semArrayConstr): error only on too-many elements.
 				// Too-few is allowed at literal level; type compatibility catches mismatches.
 				if (arrExpected != null && arrExpected.kind == TypeKind.SizedArray) {
-					const expectedLen = arrExpected.typeFlags;
+					const expectedLen = arrExpected.typeValue;
 					if (d.elements.length > expectedLen) {
 						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
 					}

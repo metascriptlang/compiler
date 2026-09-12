@@ -2251,7 +2251,7 @@ test "number[4]" {
 	const t = resolveWith("number[4]");
 	assert t.kind == TypeKind.SizedArray;
 	assert t.typeReturn != null && t.typeReturn.kind == TypeKind.Number;
-	assert t.typeFlags == 4;
+	assert t.typeValue == 4;
 }
 
 test "Span<boolean>" {

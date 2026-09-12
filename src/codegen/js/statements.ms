@@ -45,7 +45,7 @@ export function emitAssertStmt(gen: JSGenerator, node: Node): void {
 function jsDefaultValue(t: Type): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.SizedArray) {
-		const size = t.typeFlags;
+		const size = t.typeValue;
 		const elemType = t.typeReturn;
 		let fill = "null";
 		if (elemType != null) {

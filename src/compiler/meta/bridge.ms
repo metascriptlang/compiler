@@ -259,17 +259,12 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 }
 
 // Build a TypeArray node for Array<T> / SizedArray<T,N> / Span<T>.
-// Size encoding: SizedArray reads t.typeFlags (raw int size). Array and Span
-// emit -1 (unsized sentinel — see node.ms:357). Array vs Span distinction is
+// Size encoding: SizedArray reads t.typeValue. Array and Span emit -1
+// (unsized sentinel — see node.ms:357). Array vs Span distinction is
 // intentionally lost in the AST per plan.
-//
-// Substituting flag mask: SizedArray.typeFlags can co-locate the size with
-// the TypeFlag.Substituting bit (node.ms:51 confirms intentional layout). If
-// the macro VM somehow sees a mid-substitution Type, the raw flags would
-// add 1048576 to the reported size. Mask defensively.
 function arrayToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	const size: number = t.kind == TypeKind.SizedArray
-		? (t.typeFlags & ~TypeFlag.Substituting) as number
+		? t.typeValue as number
 		: -1;
 	return createNodeAt(NodeKind.TypeArray, {
 		typExprElement: mapTypeToAstWith(t.typeReturn, loc, visited),
@@ -2642,7 +2637,7 @@ test "mapTypeToAst — class wrapped in ExportDecl peels through to find class b
 function makeArrayType(kind: TypeKind, element: Type, size: int32): Type {
 	const t = makePrimType(kind);
 	t.typeReturn = element;
-	t.typeFlags = size;
+	t.typeValue = size;
 	return t;
 }
 
@@ -2686,10 +2681,10 @@ test "mapTypeToAst — Array<Array<T>> emits nested TypeArray" {
 	assert (innerData.typExprElement.data as IdentifierData).name == "int32";
 }
 
-test "mapTypeToAst — SizedArray with Substituting flag bit masked from size" {
+test "mapTypeToAst — SizedArray size is independent of the Substituting flag" {
 	const loc = makeLoc(1, 0);
 	const t = makeArrayType(TypeKind.SizedArray, makePrimType(TypeKind.Int32), 8);
-	t.typeFlags = (8 + TypeFlag.Substituting) as int32;
+	t.typeFlags = TypeFlag.Substituting as int32;
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeArrayData;
 	assert d.typExprSize == 8;

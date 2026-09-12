@@ -390,7 +390,7 @@ function sgTypeToStringDepth(t: Type | null, depth: number): string {
 	}
 
 	if (t.kind == TypeKind.SizedArray) {
-		return sgTypeToStringDepth(t.typeReturn, depth + 1) + "[" + String(t.typeFlags as int64) + "]";
+		return sgTypeToStringDepth(t.typeReturn, depth + 1) + "[" + String(t.typeValue as int64) + "]";
 	}
 
 	if (t.kind == TypeKind.GenericParam) return t.typeName;

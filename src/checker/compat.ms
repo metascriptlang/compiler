@@ -280,7 +280,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
 		return match (source.kind) {
-			TypeKind.SizedArray => source.typeFlags == target.typeFlags && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.SizedArray => source.typeValue == target.typeValue && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Set => sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Ref => {
@@ -810,7 +810,7 @@ function sameTypeInner(a: Type, b: Type): boolean {
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
 			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
-		TypeKind.SizedArray => a.typeFlags == b.typeFlags && sameInnerType(a, b),
+		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b),
 		TypeKind.Set => sameInnerType(a, b),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
@@ -868,7 +868,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			TypeKind.Set => sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
 			TypeKind.SizedArray => {
-				if (formal.typeFlags != actual.typeFlags) return TypeRelation.None;
+				if (formal.typeValue != actual.typeValue) return TypeRelation.None;
 				if (formal.typeReturn != null && actual.typeReturn != null) {
 					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
 					if (elemRel == TypeRelation.None) return TypeRelation.None;

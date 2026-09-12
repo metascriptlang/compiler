@@ -172,7 +172,7 @@ function rewriteArrayAccess(node: Node): Node {
 	}
 
 	if (arrType.kind == TypeKind.SizedArray) {
-		const size = arrType.typeFlags;
+		const size = arrType.typeValue;
 		const result = makeCall(makeIdent("msSizedArrayAccess", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;

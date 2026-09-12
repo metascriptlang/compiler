@@ -56,7 +56,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 					} else if (srcType.kind == TypeKind.SizedArray) {
 						// SizedArray -> Span: { data: arr.data, len: N }
 						const dataExpr = makeMember(d.convExpr, "data", loc);
-						const lenExpr = makeNumber(srcType.typeFlags, loc);
+						const lenExpr = makeNumber(srcType.typeValue, loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: str.data, len: str.len }

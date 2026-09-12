@@ -114,7 +114,7 @@ function destCovers(src: Type | null, dest: Type): boolean {
 		const hi = getRangeMaxForKind(dest.kind);
 		for (const member of s.typeChildren) {
 			if (member == null) return false;
-			const v = member.typeFlags as int32;
+			const v = member.typeValue;
 			if (v < lo || v > hi) return false;
 		}
 		return true;

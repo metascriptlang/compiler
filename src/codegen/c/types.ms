@@ -387,7 +387,7 @@ export function typeKey(t: Type | null): string {
 		},
 		TypeKind.SizedArray => {
 			const elemKey = typeKey(t.typeReturn);
-			return `sizedArray:${elemKey}[${t.typeFlags}]`;
+			return `sizedArray:${elemKey}[${t.typeValue}]`;
 		},
 		TypeKind.Span => {
 			const elemKey = typeKey(t.typeReturn);
@@ -1076,7 +1076,7 @@ function genEnumType(g: CGen, t: Type): string {
 		const memberName = `${name}_${mangle(t.typeNames[i])}`;
 		let val = i;
 		if (t.typeChildren != null && i < t.typeChildren.length && t.typeChildren[i] != null) {
-			val = t.typeChildren[i].typeFlags as int32;
+			val = t.typeChildren[i].typeValue;
 		}
 		addLine(sec(g, CSection.Types), `#define ${memberName} (((${name})${val.toString()}))`);
 	}
@@ -1462,7 +1462,7 @@ export function getArrayContentType(arrTypeName: string): string {
 
 function genSizedArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
-	const size = t.typeFlags;
+	const size = t.typeValue;
 	const key = typeKey(t);
 	const name = `msSizedArray_${mangle(elemType)}_${size}`;
 

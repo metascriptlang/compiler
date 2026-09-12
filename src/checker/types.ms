@@ -48,7 +48,7 @@ import { getGenericDecl } from "../parser/context";
 //   Result         — boolean-disc match-type Union; GI typeChildren = [ok, err]
 //   Ref/Ptr/Borrow — typeReturn = referent type
 //   Array/Span     — typeReturn = element type
-//   SizedArray     — typeReturn = element, typeFlags upper bits = size
+//   SizedArray     — typeReturn = element, typeValue = element count
 //
 // =====================================================================
 
@@ -81,6 +81,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeReturn = source.typeReturn;
 	target.typeExtra = source.typeExtra;
 	target.typeFlags = source.typeFlags;
+	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
 	target.attachedOps = source.attachedOps;
 }
@@ -96,6 +97,7 @@ export function emptyType(): Type {
 		typeReturn: null,
 		typeExtra: null,
 		typeFlags: 0,
+		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
 	};
@@ -200,7 +202,7 @@ export function createSizedArray(element: Type | null, size: int32): Type {
 	const t = emptyType();
 	t.kind = TypeKind.SizedArray;
 	t.typeReturn = element;
-	t.typeFlags = size;
+	t.typeValue = size;
 	return t;
 }
 
@@ -251,14 +253,13 @@ export function createEnum(name: string, members: string[], values: number[]): T
 	t.kind = TypeKind.Enum;
 	t.typeName = name;
 	t.typeNames = members;
-	// Store enum member values as Type objects with typeFlags holding the integer value
 	if (values != null && values.length > 0) {
 		const valTypes: Type[] = [];
 		let i = 0;
 		while (i < values.length) {
 			const vt = emptyType();
 			vt.kind = TypeKind.Number;
-			vt.typeFlags = values[i] as int32;
+			vt.typeValue = values[i] as int32;
 			valTypes.push(vt);
 			i = i + 1;
 		}
@@ -1553,7 +1554,7 @@ export function isOrdinalEnum(t: Type | null): boolean {
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const v = t.typeChildren[i];
 		if (v == null) return false;
-		if ((v.typeFlags as int32) != (i as int32)) return false;
+		if (v.typeValue != (i as int32)) return false;
 	}
 	return true;
 }
@@ -1678,6 +1679,7 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
 		typeFlags: innerBase != null ? innerBase.typeFlags : 0 as int32,
+		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
 	};
@@ -2015,17 +2017,16 @@ export function isTypeofTag(s: string): boolean {
 }
 
 // ===== Min Arity (Default Parameters) =====
-// Encoded in typeFlags bits 8-15. Zero = not set = all params required.
-// Stores minArity + 1 so that 0 means "not set" (backward compatible).
+// typeValue holds minArity + 1 so that 0 means "not set" = all params required.
 
 export function setMinArity(t: Type | null, minArity: number): void {
 	if (t == null) return;
-	t.typeFlags = (t.typeFlags & 0xFF) | (((minArity as int32) + 1) << 8);
+	t.typeValue = (minArity as int32) + 1;
 }
 
 export function getMinArity(t: Type | null): number {
 	if (t == null) return 0;
-	const encoded: int32 = (t.typeFlags >> 8) & 0xFF;
+	const encoded: int32 = t.typeValue;
 	if (encoded == 0) return t.typeChildren.length;
 	return (encoded - 1) as number;
 }
@@ -2127,7 +2128,7 @@ function typeKey(t: Type): string {
 			return "BitSet(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
 		},
 		TypeKind.SizedArray => {
-			return "SizedArray" + t.typeFlags.toString() + "(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
 		},
 		_ => t.kind.toString(),
 	};
@@ -2421,6 +2422,7 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
 	result.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	result.typeValue = t.typeValue;
 	result.callConv = t.callConv;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
 		result.typeChildren.push(null as unknown as Type);
@@ -2483,7 +2485,7 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
+			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeValue),
 			TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Set => createBitSet(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Varargs => t.typeChildren.length > 0
@@ -2573,7 +2575,7 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
 			TypeKind.Array => createArray(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.SizedArray => createSizedArray(substituteAllParams(t.typeReturn, names, concretes), t.typeFlags - TypeFlag.Substituting),
+			TypeKind.SizedArray => createSizedArray(substituteAllParams(t.typeReturn, names, concretes), t.typeValue),
 			TypeKind.Span => createSpan(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Set => createBitSet(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Varargs => t.typeChildren.length > 0
@@ -3433,7 +3435,7 @@ test "createSizedArray" {
 	const arrType = createSizedArray(numberType(), 4);
 	assert arrType.kind == TypeKind.SizedArray;
 	assert arrType.typeReturn != null && arrType.typeReturn.kind == TypeKind.Number;
-	assert arrType.typeFlags == 4;
+	assert arrType.typeValue == 4;
 }
 
 test "createSpan" {

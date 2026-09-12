@@ -232,7 +232,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				&& node.resolvedSym.symbolType != null) {
 				// Self-contained ordinal (primary): the member's EnumLiteral carries
 				// the full enum Type on typeReturn (createEnumLiteral), whose
-				// typeChildren[i].typeFlags hold the ordinals (createEnum). Reading
+				// typeChildren[i].typeValue hold the ordinals (createEnum). Reading
 				// it here means the ordinal no longer depends on the EnumDecl being
 				// physically injected into the comptime synthetic program — fixes
 				// single-file/local enums the same way as cross-module ones.
@@ -242,7 +242,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 					while (ei < enumTy.typeNames.length) {
 						if (enumTy.typeNames[ei] == node.resolvedSym.name) {
 							const ord = (enumTy.typeChildren != null && ei < enumTy.typeChildren.length)
-								? enumTy.typeChildren[ei].typeFlags : ei;
+								? enumTy.typeChildren[ei].typeValue : ei;
 							const r0 = allocReg(s);
 							emitLoadConst(s, r0, raiserInt(ord));
 							return r0;

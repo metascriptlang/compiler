@@ -137,7 +137,7 @@ export function monoTypeKey(t: Type | null): string {
 			}
 			return key;
 		},
-		TypeKind.SizedArray => "sizedArr_" + t.typeFlags.toString() + "_" + monoTypeKey(t.typeReturn),
+		TypeKind.SizedArray => "sizedArr_" + t.typeValue.toString() + "_" + monoTypeKey(t.typeReturn),
 		TypeKind.Span => "span_" + monoTypeKey(t.typeReturn),
 		TypeKind.Set => "set_" + monoTypeKey(t.typeReturn),
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),

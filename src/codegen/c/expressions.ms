@@ -1465,7 +1465,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.property == "length" || d.property == "byteLength") {
 			const objType = d.object.nodeType != null ? peelTransparentInstance(d.object.nodeType) : null;
 			if (objType != null && objType.kind == TypeKind.SizedArray) {
-				ctx.results.push(String(objType.typeFlags));
+				ctx.results.push(String(objType.typeValue));
 				return;
 			}
 			const isRuntimeType = objType != null && (objType.kind == TypeKind.Array

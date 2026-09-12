@@ -115,6 +115,8 @@ export enum AttachedOp {
 //                    Consult per-TypeKind documentation before use.
 //   typeFlags      — bitset (TypeFlag.HasAsgn, IsStruct, AwaitableAffine, ...) — propagated
 //                    bottom-up by propagateToOwner when building parent types.
+//   typeValue      — kind-specific integer: SizedArray → element count; enum member
+//                    (Number child of an Enum) → ordinal value; Function → minArity + 1.
 //   attachedOps    — hook function names (index = AttachedOp enum: Destroy/Copy/Sink/...).
 //                    Populated by destructorLifting. Inline per-Type; see setAttachedOp /
 //                    getAttachedOp in src/checker/types.ms.
@@ -127,6 +129,7 @@ export class Type {
 	typeReturn: Type | null;
 	typeExtra: Type | null;
 	typeFlags: int32;
+	typeValue: int32;
 	callConv: CallingConvention;
 	attachedOps: string[];
 	sym: Symbol | null;

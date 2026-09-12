@@ -302,7 +302,7 @@ function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
 			const argType = arg.nodeType;
 			if (argType != null && argType.kind == TypeKind.SizedArray) {
 				newArgs.push(makeMember(arg, "data", loc));
-				newArgs.push(makeNumber(argType.typeFlags, loc));
+				newArgs.push(makeNumber(argType.typeValue, loc));
 				ai = ai + 1;
 				continue;
 			}

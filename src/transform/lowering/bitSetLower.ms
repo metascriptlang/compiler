@@ -83,7 +83,7 @@ function lowerWordBinary(node: Node, repr: Type): Node {
 
 // ===== array class (SizedArray<uint32, N>) — the reference's ctArray branch =====
 
-function wordCount(repr: Type): int32 { return repr.typeFlags; }
+function wordCount(repr: Type): int32 { return repr.typeValue; }
 
 function wordAtIndex(recv: Node, index: Node, repr: Type, ctx: TransformContext, loc: SourceLocation): Node {
 	const r = cloneIfPure(recv);

@@ -713,7 +713,7 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
 		const ops: string[] = t.attachedOps != null ? t.attachedOps : [];
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(ops)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(ops)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1139,14 +1139,15 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			const t = emptyType();
 			t.kind = f[2].parseInt() as int32 as unknown as TypeKind;
 			t.typeFlags = f[3].parseInt() as int32;
-			t.callConv = f[4].parseInt() as int32 as unknown as CallingConvention;
-			t.typeName = unescapeP(f[5]);
-			t.typeNames = splitCsv(f[6]);
-			typeChildrenIdx.push(parseIntsCsv(f[7]));
-			typeReturnIdx.push(f[8].parseInt() as int32);
-			typeExtraIdx.push(f[9].parseInt() as int32);
-			typeSymIdx.push(f[10].parseInt() as int32);
-			t.attachedOps = splitCsv(f[11]);
+			t.typeValue = f[4].parseInt() as int32;
+			t.callConv = f[5].parseInt() as int32 as unknown as CallingConvention;
+			t.typeName = unescapeP(f[6]);
+			t.typeNames = splitCsv(f[7]);
+			typeChildrenIdx.push(parseIntsCsv(f[8]));
+			typeReturnIdx.push(f[9].parseInt() as int32);
+			typeExtraIdx.push(f[10].parseInt() as int32);
+			typeSymIdx.push(f[11].parseInt() as int32);
+			t.attachedOps = splitCsv(f[12]);
 			types.push(t);
 		} else if (f[0] == "N") {
 			const kind = f[2].parseInt() as int32 as unknown as NodeKind;
