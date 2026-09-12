@@ -307,8 +307,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.GenericInstance => {
 				// Structural compatibility: compare type args pairwise
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
+				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
-					if (!isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
+					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
 				// PARALOCK: an affine `Promise<T>` (spawn-origin, AwaitableAffine bit set)
 				// upcasts to a plain `Promise<T>` with compatible inner — this is the

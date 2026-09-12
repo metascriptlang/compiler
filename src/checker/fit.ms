@@ -902,6 +902,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	// them. Skip when expr is already Maybe-typed (passthrough like
 	// `return otherMaybeFn()`).
 	if (isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType)) {
+		if (isNominalMismatch(exprType, formal)) {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
+			return expr;
+		}
 		return synthMaybeWrap(expr, formal, exprType);
 	}
 	if (isMaybeType(formal) && isMaybeType(exprType)) {

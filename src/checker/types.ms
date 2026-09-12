@@ -1289,6 +1289,7 @@ function identSafeKey(s: string): string {
 
 function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
+	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
 	if (inner.typeName != "") return inner.typeName;
 	if (isAllStringLiteralUnion(inner)) {
 		let key = "slu";
@@ -2130,8 +2131,18 @@ export function tupleTypeName(t: Type | null): string {
 // msTuple_<hash> name, so this key need only be internally stable.
 function typeKey(t: Type): string {
 	if (t == null) return "null";
-	if (t.typeName != "" && t.kind != TypeKind.Tuple) return t.typeName;
+	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
+		TypeKind.GenericInstance => {
+			let k = t.typeName + "<";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + (t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "any");
+				i += 1;
+			}
+			return k + ">";
+		},
 		TypeKind.Number => "number",
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
@@ -2796,6 +2807,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		if (formal.typeReturn != null && concrete.typeReturn != null) {
 			unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		}
+		return;
+	}
+	if (concrete.kind == TypeKind.Struct && isMaybeType(concrete) && concrete.typeReturn != null
+			&& formal.kind != TypeKind.Union && !isMaybeType(formal)) {
+		unifyType(formal, concrete.typeReturn, bindings);
 		return;
 	}
 	// GenericInstance: structural unification of type arguments
