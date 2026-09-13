@@ -7,7 +7,7 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, SymbolKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
@@ -1080,6 +1080,20 @@ test "cross-module interface field resolution" {
 	// Field types should be resolved — x: Bar is Ref<Struct(Bar)>
 	assert inner.typeChildren != null;
 	assert inner.typeChildren.length == 2;
+}
+
+test "exported static extension carries its signature" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/box.ms", "export struct Box { v: int32; }\nexport function make(this typeof Box, v: int32, w: int32): Box { const b: Box = { v: v + w }; return b; }");
+	dbSetFileText(db, "/test/use.ms", 'import { Box } from "./box";\nexport function f(): int32 { return Box.make(3, 4).v; }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/test/use.ms"), getFileId(db.fileInput, "/test/box.ms"));
+	const visited: HashSet<string> = new HashSet<string>();
+	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
+	const make = findExportedSymbol(db.exportRegistry, "/test/box.ms", "make");
+	assert make != null;
+	assert make.extIsStatic;
+	assert make.symType.kind == TypeKind.Function;
+	assert make.symType.typeChildren.length == 2;
 }
 
 test "module exports keep a decorated exported class" {
