@@ -9,7 +9,6 @@
 //  6. stringTruthiness      — normalize bare conditions after coercions
 //  8. destructuringLower    — unpack array/object patterns before forOf/result
 //  9. spreadExpand          — inline array literal spreads after destructuring
-// 10. arrayMethodInline     — arr.map/filter/reduce → inline while loops (before forLoop/extensionMethod)
 // 11. forLoopLower          — normalize for→while before forOf
 // 12. forOfLower            — desugars for-of to while
 // 13. resultDesugar         — 1:N expansion of try expressions
@@ -51,7 +50,6 @@ import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArraySpread } from "./desugar/arraySpreadLower";
-import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
@@ -117,7 +115,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
-	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
