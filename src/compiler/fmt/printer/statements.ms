@@ -135,13 +135,37 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function sourceByteAt(source: string, line: int32, column: int32): int32 {
+	let currentLine = 1;
+	let pos = 0;
+	while (pos < source.byteLength && currentLine < line) {
+		if (source.byteAt(pos) == "\n".code) currentLine = currentLine + 1;
+		pos = pos + 1;
+	}
+	pos = pos + column - 1;
+	return pos >= 0 && pos < source.byteLength ? source.byteAt(pos) : -1;
+}
+
+function bracelessOnLine(body: Node, line: int32, options: FormatOptions): Node | null {
+	if (options.source == "" || body.kind != NodeKind.BlockStmt || body.location.line != line) return null;
+	const block = body.data as BlockStmtData;
+	if (block.statements.length != 1 || block.statements[0].comments.length > 0) return null;
+	if (sourceByteAt(options.source, body.location.line, body.location.column) == "{".code) return null;
+	return block.statements[0];
+}
+
+function printBody(body: Node, line: int32, options: FormatOptions): Doc {
+	const single = bracelessOnLine(body, line, options);
+	return callPrintNode(single != null ? single : body, options);
+}
+
 export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as IfStmtData;
 	const parts: Doc[] = [
 		docText("if ("),
 		callPrintNode(d.condition, options),
 		docText(") "),
-		callPrintNode(d.consequent, options),
+		printBody(d.consequent, node.location.line, options),
 	];
 	// Skip empty else blocks (parser may create a BlockStmt with 0 statements)
 	if (d.alternate != null) {
@@ -152,7 +176,9 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		}
 		if (!isEmpty) {
 			parts.push(docText(" else "));
-			parts.push(callPrintNode(d.alternate, options));
+			parts.push(d.alternate.kind == NodeKind.IfStmt
+				? callPrintNode(d.alternate, options)
+				: printBody(d.alternate, d.consequent.location.line, options));
 		}
 	}
 	return docGroup(parts);
