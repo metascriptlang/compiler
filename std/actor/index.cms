@@ -3,6 +3,11 @@
 
 @include("runtime/actor/actor.h");
 
+// ===== Actor Isolation =====
+
+@builtin("nonisolated")
+export extern function nonisolated(): void;
+
 // ===== ExitReason — why an actor terminated (Erlang OTP parity) =====
 
 export enum ExitReason {
