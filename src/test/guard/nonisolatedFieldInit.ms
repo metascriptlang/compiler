@@ -3,6 +3,8 @@
 // collected, so constructor lowering sees a plain field. A red guard means a
 // decorator wrapper leaked past the checker and the initializer was dropped.
 
+import { nonisolated } from "std/actor";
+
 actor Srv {
 	@nonisolated
 	readonly name: string = "srv";
