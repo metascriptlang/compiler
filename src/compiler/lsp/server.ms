@@ -44,7 +44,10 @@ function setupPackageAliases(db: TransAmDb, filePath: string): void {
 	}
 }
 
-import { lspDispatch, publishPendingDiagnostics } from "./handlers/lifecycle";
+import {
+	lspDispatch, publishPendingDiagnostics,
+	clientSupportsWatchedFileRegistration, watchedFilesRegistration,
+} from "./handlers/lifecycle";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { resolveRuntimeDir } from "../../utils/path";
 
@@ -54,6 +57,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 export class LspServerState {
 	initialized: boolean;
 	shutdownRequested: boolean;
+	watchFilesThroughClient: boolean;
 	db: TransAmDb;
 	completionCache: CompletionCache;
 }
@@ -62,6 +66,7 @@ export function createServerState(): LspServerState {
 	return {
 		initialized: false,
 		shutdownRequested: false,
+		watchFilesThroughClient: false,
 		db: createTransAmDb(512),
 		completionCache: createCompletionCache(),
 	};
@@ -263,6 +268,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 	// Track lifecycle
 	if (method == "initialize") {
 		state.initialized = true;
+		state.watchFilesThroughClient = clientSupportsWatchedFileRegistration(params);
 		const root = resolveRuntimeDir();
 		if (root.length > 0) {
 			dbSetStdPath(state.db, root + "/std");
@@ -271,6 +277,9 @@ export function processMessage(msg: string, state: LspServerState): string {
 	}
 	if (method == "shutdown") {
 		state.shutdownRequested = true;
+	}
+	if (method == "initialized") {
+		return state.watchFilesThroughClient ? lspFormatMessage(watchedFilesRegistration()) : "";
 	}
 
 	// Invalidate completion cache when new content arrives

@@ -1,17 +1,27 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, getFileId, invalidateFile } from "../../transam/index";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
 import { requestCancel } from "../../transam/cancel";
 import { writeStderr } from "std/io";
-import { readFile } from "std/fs";
+import { readFile, writeFile, mkdir, remove } from "std/fs";
+import { env } from "std/process";
+import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
-import { CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles } from "./shared";
-import { buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile, resetFormatOptions, resetLspTargetCache } from "./diagnostics";
+import {
+	CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles,
+	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
+	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource,
+} from "./shared";
+import {
+	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
+	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics,
+} from "./diagnostics";
 import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
 import {
@@ -31,7 +41,6 @@ import { handleCodeAction, handleFormatting } from "./formatting";
 
 export function publishPendingDiagnostics(db: TransAmDb): string {
 	const changed = drainChangedFiles();
-	if (changed.length == 0) return "";
 	let result = "";
 	for (const entry of changed) {
 		const path = entry[0];
@@ -46,6 +55,13 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", lspFmtPublishDiagnostics(uri, "[]")));
+		}
+	}
+	for (const path of drainStaleDependents()) {
+		try {
+			result = result + buildTransitiveDiagnosticsWire(db, path);
+		} catch (e) {
+			writeStderr("[LSP] dependents check failed for " + path + ": " + e + "\n");
 		}
 	}
 	return result;
@@ -93,6 +109,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const uri = lspGetField(textDoc, "uri");
 	const text = lspGetField(textDoc, "text");
 	const path = lspUriToPath(uri);
+	markDocumentOpen(path);
 
 	dbSetFileText(db, path, text);
 	const t1 = performance.now();
@@ -133,8 +150,74 @@ export function handleDidChange(params: string, db: TransAmDb): string {
 export function handleDidClose(params: string, db: TransAmDb): string {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	markDocumentClosed(path);
+	forgetPublishedDiagnostics(path);
+	refreshFromDisk(db, path);
 	const diagParams = "{\"uri\":" + lspJsonString(uri) + ",\"diagnostics\":[]}";
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
+}
+
+const FILE_CREATED: number = 1;
+
+export function handleDidChangeWatchedFiles(params: string, db: TransAmDb): string {
+	let created = false;
+	for (const change of lspGetArrayItems(lspGetObjectField(params, "changes"))) {
+		const path = knownPathFor(db, lspUriToPath(lspGetField(change, "uri")));
+		if (path == "" || isDocumentOpen(path)) continue;
+		if (getFileId(db.fileInput, path) >= 0) {
+			refreshFromDisk(db, path);
+		} else if (lspGetNumberField(change, "type") == FILE_CREATED) {
+			created = true;
+		}
+	}
+	if (created) {
+		reresolveOpenDocuments(db);
+	}
+	return "";
+}
+
+function knownPathFor(db: TransAmDb, path: string): string {
+	if (path == "" || getFileId(db.fileInput, path) >= 0) return path;
+	const normalized = normalize(path);
+	return getFileId(db.fileInput, normalized) >= 0 ? normalized : path;
+}
+
+function refreshFromDisk(db: TransAmDb, path: string): void {
+	if (!lspReloadFromDisk(db, path)) return;
+	recordImportsForFile(db, path, dbParse(db, path));
+	markDependentsStale(path);
+}
+
+function reresolveOpenDocuments(db: TransAmDb): void {
+	dbForgetAllTypeChecks(db);
+	for (const path of openDocuments()) {
+		if (getFileId(db.fileInput, path) < 0) continue;
+		recordImportsForFile(db, path, dbParse(db, path));
+		markFileChanged(path, lspPathToUri(path));
+	}
+}
+
+export function clientSupportsWatchedFileRegistration(initializeParams: string): boolean {
+	const capabilities = lspGetObjectField(initializeParams, "capabilities");
+	const workspace = lspGetObjectField(capabilities, "workspace");
+	const watchedFiles = lspGetObjectField(workspace, "didChangeWatchedFiles");
+	return lspGetBoolField(watchedFiles, "dynamicRegistration");
+}
+
+export function watchedFilesRegistration(): string {
+	let watchers = "";
+	for (const glob of ["**/*.ms", "**/*.cms", "**/*.jms", "**/*.h"]) {
+		if (watchers != "") {
+			watchers = watchers + ",";
+		}
+		watchers = watchers + "{\"globPattern\":" + lspJsonString(glob) + "}";
+	}
+	const registration = "{\"id\":\"msc-watched-files\""
+		+ ",\"method\":\"workspace/didChangeWatchedFiles\""
+		+ ",\"registerOptions\":{\"watchers\":[" + watchers + "]}}";
+	const params = "{\"registrations\":[" + registration + "]}";
+	return lspRequest("\"msc/registerWatchedFiles\"", "client/registerCapability", params);
 }
 
 // ===== Did Save =====
@@ -161,6 +244,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didChange" => handleDidChange(params, db),
 		"textDocument/didClose" => handleDidClose(params, db),
 		"textDocument/didSave" => handleDidSave(params, db),
+		"workspace/didChangeWatchedFiles" => handleDidChangeWatchedFiles(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
 		"textDocument/completion" => handleCompletion(id, params, db, cache),
 		"completionItem/resolve" => handleCompletionResolve(id, params),
@@ -927,4 +1011,141 @@ test "re-checking an edited file stays under 50ms" {
 	dbTypeCheck(db, path);
 	const elapsed = performance.now() - t0;
 	assert elapsed < 50;
+}
+
+const DEP_WITH_PCT = "export struct Dice { seed: int32; }\nexport function pct(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
+const DEP_WITH_PERCENT = "export struct Dice { seed: int32; }\nexport function percent(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
+const USE_PERCENT = "import { Dice } from \"./dep\";\nexport function rollOnce(dice: Dice): int32 { return dice.percent(1); }\n";
+
+function syncTmpDir(name: string): string {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = normalize(tmp + "/msc-lspsync-" + name);
+	mkdir(dir);
+	return dir;
+}
+
+function syncOpenParams(path: string, text: string): string {
+	return "{\"textDocument\":{\"uri\":" + lspJsonString(lspPathToUri(path))
+		+ ",\"languageId\":\"metascript\",\"version\":1,\"text\":" + lspJsonString(text) + "}}";
+}
+
+function syncDocumentParams(path: string): string {
+	return "{\"textDocument\":{\"uri\":" + lspJsonString(lspPathToUri(path)) + "}}";
+}
+
+function syncWatchedParams(path: string, changeType: int32): string {
+	return "{\"changes\":[{\"uri\":" + lspJsonString(lspPathToUri(path)) + ",\"type\":" + changeType + "}]}";
+}
+
+function syncReportsMissingPercent(db: TransAmDb, path: string): boolean {
+	return buildDiagnosticsJson(lspPathToUri(path), db, path).indexOf("'percent'") >= 0;
+}
+
+function syncReportsAnything(db: TransAmDb, path: string): boolean {
+	return buildDiagnosticsJson(lspPathToUri(path), db, path).indexOf("\"message\"") >= 0;
+}
+
+test "a dependency changed on disk re-checks an open importer" {
+	const dir = syncTmpDir("changed");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PCT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert syncReportsMissingPercent(db, usePath);
+	writeFile(depPath, DEP_WITH_PERCENT);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
+	publishPendingDiagnostics(db);
+	assert !syncReportsMissingPercent(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "an open document ignores disk events for itself" {
+	const dir = syncTmpDir("open");
+	const depPath = dir + "/dep.ms";
+	writeFile(depPath, DEP_WITH_PCT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
+	assert dbGetSource(db, depPath) == DEP_WITH_PERCENT;
+	markDocumentClosed(depPath);
+}
+
+test "closing a document falls back to disk and re-checks its importers" {
+	const dir = syncTmpDir("closed");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PCT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert !syncReportsMissingPercent(db, usePath);
+	handleDidClose(syncDocumentParams(depPath), db);
+	assert dbGetSource(db, depPath) == DEP_WITH_PCT;
+	assert publishPendingDiagnostics(db).indexOf("'percent'") >= 0;
+	assert syncReportsMissingPercent(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "a deleted dependency is emptied and its importer reports it" {
+	const dir = syncTmpDir("deleted");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PERCENT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert !syncReportsAnything(db, usePath);
+	remove(depPath);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 3), db);
+	publishPendingDiagnostics(db);
+	assert dbGetSource(db, depPath) == "";
+	assert syncReportsAnything(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "a created file resolves an open importer's missing import" {
+	const dir = syncTmpDir("created");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	remove(depPath);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert syncReportsAnything(db, usePath);
+	writeFile(depPath, DEP_WITH_PERCENT);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 1), db);
+	publishPendingDiagnostics(db);
+	assert !syncReportsAnything(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "a created file resolves a closed importer when it is reopened" {
+	const dir = syncTmpDir("reopened");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	remove(depPath);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert syncReportsAnything(db, usePath);
+	handleDidClose(syncDocumentParams(usePath), db);
+	writeFile(depPath, DEP_WITH_PERCENT);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 1), db);
+	publishPendingDiagnostics(db);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert !syncReportsAnything(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "watched files are registered only for clients that support it" {
+	const supported = "{\"capabilities\":{\"workspace\":{\"didChangeWatchedFiles\":{\"dynamicRegistration\":true}}}}";
+	assert clientSupportsWatchedFileRegistration(supported);
+	assert !clientSupportsWatchedFileRegistration("{\"capabilities\":{\"workspace\":{}}}");
+	const request = watchedFilesRegistration();
+	assert lspGetField(request, "method") == "client/registerCapability";
+	assert request.indexOf("**/*.ms") >= 0;
+	assert request.indexOf("workspace/didChangeWatchedFiles") >= 0;
 }

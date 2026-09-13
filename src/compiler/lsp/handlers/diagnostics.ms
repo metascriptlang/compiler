@@ -413,6 +413,10 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 	return result;
 }
 
+export function forgetPublishedDiagnostics(path: string): void {
+	_lastDiagCache.delete(path);
+}
+
 // ===== Tests — LSP target resolution =====
 
 function lspProbeTmpDir(): string {

@@ -96,19 +96,77 @@ export function dbGetSource(db: TransAmDb, path: string): string {
 }
 
 // Load a file into the TransAm DB if not already present.
+export function lspReadDiskSource(filePath: string): Result<string, string> {
+	const readResult = readFile(filePath);
+	if (!readResult.ok) { return Result.err(filePath); }
+	const isHeader = filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) == ".h";
+	return Result.ok(isHeader ? translateCHeader(readResult.value, []) : readResult.value);
+}
+
 export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
 		const t0 = performance.now();
-		const readResult = readFile(filePath);
-		if (readResult.ok) {
-			let source = readResult.value;
-			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) == ".h") {
-				source = translateCHeader(source, []);
-			}
-			dbSetFileText(db, filePath, source);
+		const source = lspReadDiskSource(filePath);
+		if (source.ok) {
+			dbSetFileText(db, filePath, source.value);
 		}
 		const t1 = performance.now();
 		writeStderr("[LSP] loadFile " + filePath + " " + (t1 - t0) + "ms\n");
 	}
+}
+
+export function lspReloadFromDisk(db: TransAmDb, filePath: string): boolean {
+	if (getFileId(db.fileInput, filePath) < 0) return false;
+	const source = lspReadDiskSource(filePath);
+	if (!source.ok) return dbSetFileText(db, filePath, "");
+	return dbSetFileText(db, filePath, source.value);
+}
+
+let _openDocuments: string[] = [];
+
+export function markDocumentOpen(path: string): void {
+	if (!isDocumentOpen(path)) {
+		_openDocuments.push(path);
+	}
+}
+
+export function markDocumentClosed(path: string): void {
+	const kept: string[] = [];
+	for (const open of _openDocuments) {
+		if (open != path) {
+			kept.push(open);
+		}
+	}
+	_openDocuments = kept;
+}
+
+export function isDocumentOpen(path: string): boolean {
+	for (const open of _openDocuments) {
+		if (open == path) return true;
+	}
+	return false;
+}
+
+export function openDocuments(): string[] {
+	const copy: string[] = [];
+	for (const open of _openDocuments) {
+		copy.push(open);
+	}
+	return copy;
+}
+
+let _staleDependents: string[] = [];
+
+export function markDependentsStale(path: string): void {
+	for (const stale of _staleDependents) {
+		if (stale == path) return;
+	}
+	_staleDependents.push(path);
+}
+
+export function drainStaleDependents(): string[] {
+	const drained = _staleDependents;
+	_staleDependents = [];
+	return drained;
 }
 
