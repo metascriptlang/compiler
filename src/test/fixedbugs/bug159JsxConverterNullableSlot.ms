@@ -39,3 +39,23 @@ test "bug159: a plain target still lowers and an unrelated nullable target still
 	assert errorsOf("function main(): void { const n: number = <x/>; console.log(n); }") == "";
 	assert errorsOf("function main(): void { const s: string | null = <x/>; console.log(s); }").contains("must be consumed by a macro");
 }
+
+test "bug159: a nullable slot reports the payload's name, never the Maybe wrapper" {
+	const e = errorsOf("function main(): void { const s: string | null = <x/>; console.log(s); }");
+	assert e.contains("targeting 'string'"), e;
+	assert !e.contains("Maybe_"), e;
+}
+
+test "bug159: a pointer payload peels through the union representation too" {
+	const REF = "class Box { v: number = 0; }\nexport converter toBox(n: Node): Box { return { kind: NodeKind.NumberLiteral, line: n.line, column: n.column, value: 7 }; }\n";
+	const plain = errorsOf(REF + "function main(): void { const b: Box = <x/>; console.log(b); }");
+	const nullable = errorsOf(REF + "function main(): void { const b: Box | null = <x/>; console.log(b); }");
+	assert !plain.contains("must be consumed by a macro"), plain;
+	assert !nullable.contains("must be consumed by a macro"), nullable;
+}
+
+test "bug159: a two-way union is refused and named as written" {
+	const e = errorsOf("function main(): void { const v: number | string = <x/>; console.log(v); }");
+	assert e.contains("must be consumed by a macro"), e;
+	assert e.contains("targeting 'number | string'"), e;
+}
