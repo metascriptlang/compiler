@@ -1,3 +1,4 @@
+// GUARD-JS
 // A field carrying the actor-isolation intrinsic keeps its initializer: the
 // intrinsic wrapper is consumed into the actor symbol when the body is
 // collected, so constructor lowering sees a plain field. A red guard means a
