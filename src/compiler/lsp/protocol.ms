@@ -187,6 +187,43 @@ export function lspGetObjectField(json: string, field: string): string {
 	return "";
 }
 
+export function lspGetBoolField(json: string, field: string): boolean {
+	const pattern = "\"" + field + "\":";
+	const i = json.indexOf(pattern);
+	if (i < 0) return false;
+	let j = i + pattern.byteLength;
+	while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
+	return json.slice(j, j + 4) == "true";
+}
+
+export function lspGetArrayItems(arrayJson: string): string[] {
+	const items: string[] = [];
+	let depth = 0;
+	let start = -1;
+	let j = 0;
+	while (j < arrayJson.byteLength) {
+		const c = arrayJson.charAt(j);
+		if (c == "\"") {
+			j = j + 1;
+			while (j < arrayJson.byteLength && arrayJson.charAt(j) != "\"") {
+				if (arrayJson.charAt(j) == "\\") { j = j + 1; }
+				j = j + 1;
+			}
+		} else if (c == "{" || c == "[") {
+			depth = depth + 1;
+			if (depth == 2 && c == "{") { start = j; }
+		} else if (c == "}" || c == "]") {
+			if (depth == 2 && c == "}" && start >= 0) {
+				items.push(arrayJson.slice(start, j + 1));
+				start = -1;
+			}
+			depth = depth - 1;
+		}
+		j = j + 1;
+	}
+	return items;
+}
+
 // ===== Content-Length Framing =====
 
 // Parse Content-Length from a header line. Returns -1 if not a Content-Length header.
@@ -228,6 +265,10 @@ function parseSimpleInt(s: string): int32 {
 // Build a JSON-RPC response: {"jsonrpc":"2.0","id":N,"result":{...}}
 export function lspResponse(id: string, resultJson: string): string {
 	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + resultJson + "}";
+}
+
+export function lspRequest(id: string, method: string, paramsJson: string): string {
+	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":" + lspJsonString(method) + ",\"params\":" + paramsJson + "}";
 }
 
 // Build a JSON-RPC notification: {"jsonrpc":"2.0","method":"...","params":{...}}
@@ -567,4 +608,24 @@ test "uri to path folds multi-byte utf-8 escapes into one code point" {
 test "uri to path keeps a literal percent that is not an escape" {
 	assert lspUriToPath("file:///Users/100%pure/a.ms") == "/Users/100%pure/a.ms";
 	assert lspUriToPath("file:///Users/a%zz/b.ms") == "/Users/a%zz/b.ms";
+}
+
+test "bool field reads true only" {
+	assert lspGetBoolField("{\"dynamicRegistration\": true}", "dynamicRegistration");
+	assert !lspGetBoolField("{\"dynamicRegistration\":false}", "dynamicRegistration");
+	assert !lspGetBoolField("{}", "dynamicRegistration");
+}
+
+test "array items split top-level objects" {
+	const items = lspGetArrayItems("[{\"uri\":\"file:///a}.ms\",\"type\":2},{\"uri\":\"file:///b.ms\",\"extra\":{\"x\":1}}]");
+	assert items.length == 2;
+	assert lspGetField(items[0], "uri") == "file:///a}.ms";
+	assert lspGetField(items[1], "uri") == "file:///b.ms";
+	assert lspGetArrayItems("[]").length == 0;
+}
+
+test "request carries id, method and params" {
+	const r = lspRequest("\"r1\"", "client/registerCapability", "{}");
+	assert lspGetField(r, "id") == "r1";
+	assert lspGetField(r, "method") == "client/registerCapability";
 }
