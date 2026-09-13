@@ -39,7 +39,7 @@ macro counted(value: Node, context: ClassDecoratorContext): Node {
 		expr: {
 			kind: NodeKind.CallExpr, line: value.line, column: value.column,
 			callee: { kind: NodeKind.Identifier, line: value.line, column: value.column, name: "bump" },
-			args: [],
+			arguments: [],
 		},
 	});
 	return value;
