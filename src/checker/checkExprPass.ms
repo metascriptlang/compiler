@@ -345,7 +345,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.nodeType = booleanType(); return;
 		},
 		NodeKind.NullLiteral => nullType(),
-		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.JSXText => noneType(),
+		NodeKind.QuoteExpr => {
+			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
+			node.nodeType = noneType(); return;
+		},
+		NodeKind.RegexLiteral | NodeKind.JSXText => noneType(),
 		// JSX is a compile-time `Node` (like quote {}) — typed unknown, consumed by a macro before
 		// codegen. Still walk the embedded expressions/attribute values so their symbols resolve.
 		NodeKind.JSXElement => {
