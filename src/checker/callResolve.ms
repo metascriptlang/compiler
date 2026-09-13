@@ -13,7 +13,7 @@ import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRan
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
-import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
+import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
@@ -715,6 +715,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	let overloadSym: Symbol | null = null;
 	// Extension pre-resolution state (set in MemberExpr branch, used after arg checking)
 	let extPreResolved = false;
+	let extRecvBindings = createUnifyBindings();
 	let extMultiFiltered: ExtensionMethod[] = [];
 	let extMultiObjType: Type | null = null;
 	let extMultiMethodName = "";
@@ -895,6 +896,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							if (objP != null && objP.kind == TypeKind.Ref && objP.typeReturn != null && objP.typeReturn.kind == TypeKind.Array) objP = objP.typeReturn;
 							unifyType(recvP, objP, eb);
 							if (eb.names.length > 0) extType = instantiateGeneric(extType, eb.names, eb.types);
+							extRecvBindings = eb;
 						}
 						calleeType = stripReceiverParam(extType);
 					} else {
@@ -1115,6 +1117,15 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			const newCalleeType = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, methodFlags, expectedType);
 			if (newCalleeType != null) {
 				calleeType = newCalleeType;
+				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
+			}
+		}
+		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
+				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
+			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
+			if (extInst != null) {
+				calleeType = stripReceiverParam(extInst);
+				d.callee.nodeType = calleeType;
 				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 			}
 		}
@@ -1736,6 +1747,37 @@ function hasBindingName(b: UnifyBindings, name: string): boolean {
 // 4+ call sites (ext static path, direct call mono, explicit-type-arg
 // validation, overload winner). Returns "" when declNode is null or of an
 // unsupported kind; callers should treat that as "no mono path applies".
+function rearmLiteralForRecheck(lit: Node, formal: Type | null): void {
+	lit.flags = lit.flags.excl(NodeFlag.Sem);
+	lit.nodeType = null;
+	if (lit.kind != NodeKind.ObjectLiteral) return;
+	const od = lit.data as ObjectLiteralData;
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const v = od.properties[i];
+		if (v == null) continue;
+		if (v.kind != NodeKind.ObjectLiteral && v.kind != NodeKind.ArrowFunction && v.kind != NodeKind.FunctionExpr) continue;
+		let ft: Type | null = null;
+		if (formal != null && i < od.keys.length) {
+			const got = getProperty(formal, od.keys[i]);
+			if (got != null && !isUnresolvedType(got) && got.kind != TypeKind.Error) ft = got;
+		}
+		if (ft != null && !hasGenericParams(ft)) continue;
+		if (v.kind != NodeKind.ObjectLiteral) { clearCheckerState(v); continue; }
+		const st = ft == null ? null : peelToStructOrUnion(ft);
+		if (st == null || st.kind != TypeKind.Struct) continue;
+		rearmLiteralForRecheck(v, ft);
+	}
+}
+
+function bindingsCoverDecl(eb: UnifyBindings, declNode: Node): boolean {
+	const names = extractGenericNames(getGenericDeclFlags(declNode));
+	if (names.length == 0) return true;
+	for (const gn of names) {
+		if (findBindingIndex(eb, gn) == -1) return false;
+	}
+	return true;
+}
+
 function getGenericDeclFlags(declNode: Node): string {
 	if (declNode == null) return "";
 	if (declNode.kind == NodeKind.FunctionDecl) return (declNode.data as FunctionDeclData).fnFlags;
@@ -1805,7 +1847,7 @@ function fillArgBindings(ctx: CheckerContext, raw: UnifyBindings, into: UnifyBin
 	return boundTwice;
 }
 
-function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type): Type {
+function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
 	if (sym == null || sym.builtinKind != "" || sym.declNode == null) {
@@ -1819,6 +1861,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const ebFrom: int32[] = [];
 	const conflicted: int32[] = [];
 	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
+	if (receiverBindings != null) mergeUnifyBindings(eb, receiverBindings);
 	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
 	// Pass 1: unify args against params to derive bindings.
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
@@ -1945,8 +1988,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			let skipConstruct = false;
 			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
 			if (!skipConstruct) {
-				arg.flags = arg.flags.excl(NodeFlag.Sem);
-				arg.nodeType = null;
+				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
 				callCheckExpr(ctx, arg, substituted);
 			}
 			if (arg.nodeType == null) arg.nodeType = substituted;
@@ -3454,7 +3496,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					if (eb.names.length > 0) {
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version
-						if (ext.sym != null && ext.sym.declNode != null && ext.sym.builtinKind == "") {
+						if (ext.sym != null && ext.sym.declNode != null && ext.sym.builtinKind == "" && bindingsCoverDecl(eb, ext.sym.declNode)) {
 							const instSym = callInstantiateGeneric(ext.sym, eb.names, eb.types, ctx, node.location);
 							if (instSym != null) {
 								node.resolvedSym = instSym;

@@ -334,7 +334,7 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 // cloned AST so the re-check regenerates them against concrete types. forEachChild drives
 // the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
 // Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
-function clearCheckerState(node: Node): void {
+export function clearCheckerState(node: Node): void {
 	if (node == null) return;
 	while (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv) {
 		const inner = node.kind == NodeKind.HiddenStdConv
