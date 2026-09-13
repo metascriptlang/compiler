@@ -24,6 +24,8 @@ import {
 
 export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
 
+export type RaiserPrintSink = (text: string) => void;
+
 // --- Unbox helpers ---
 
 export function unboxString(v: RaiserValue): string {

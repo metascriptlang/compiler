@@ -20,7 +20,7 @@ import {
 } from "./module";
 import { orcCollectCycles } from "./orc";
 import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
-import { RaiserHostFn } from "./marshal";
+import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 // --- VM State ---
 
@@ -114,6 +114,7 @@ export interface RaiserVM {
 	halted: boolean;
 	exitValue: RaiserValue;
 	output: string;
+	printSink: RaiserPrintSink | null;
 	funcIdx: number;
 	baseReg: number;
 	callStack: RaiserCallFrames;
@@ -191,7 +192,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -870,6 +871,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			const val = getReg(vm, base + inst.a);
 			const s = raiserToString(val);
 			vm.output = `${vm.output}${s}\n`;
+			const sink = vm.printSink;
+			if (sink != null) sink(s);
 		} else if (op == RaiserOpcode.Call) {
 			vmHandleCall(vm, inst);
 		} else if (op == RaiserOpcode.CallIndirect) {
@@ -1618,6 +1621,40 @@ test "print captures output" {
 		[raiserInt(42)]
 	));
 	assert vm.output == "42\n";
+}
+
+test "print reaches an installed sink as each line is produced" {
+	const seen: string[] = [];
+	const mod = makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 0, 1),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(42), raiserInt(7)]
+	);
+	const vm = createVM(mod, "arena");
+	vm.printSink = (text: string): void => { seen.push(text); };
+	execLoop(vm);
+	assert seen.length == 2;
+	assert seen[0] == "42";
+	assert seen[1] == "7";
+	assert vm.output == "42\n7\n";
+}
+
+test "print without a sink still captures output" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(5)]
+	));
+	assert vm.printSink == null;
+	assert vm.output == "5\n";
 }
 
 test "bgt: 10 > 5 → true branch" {
