@@ -1120,6 +1120,15 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 			}
 		}
+		if (hasGenericParams(calleeType) && node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
+				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
+			const staticInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType);
+			if (staticInst != null) {
+				calleeType = staticInst;
+				d.callee.nodeType = calleeType;
+				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
+			}
+		}
 		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
 				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
 			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
