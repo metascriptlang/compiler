@@ -176,11 +176,21 @@ function viewThroughReadonlyBase(node: Node): void {
 }
 
 
+function converterSlotTarget(t: Type): Type {
+	if (isMaybeType(t)) {
+		const payload = unwrapMaybeType(t);
+		if (payload != null) return payload;
+	}
+	const refPayload = unwrapRefNullUnion(t);
+	if (refPayload != null) return refPayload;
+	return t;
+}
+
 function reportUnconsumedJsx(ctx: CheckerContext, node: Node, what: string, expectedType: Type | null): void {
 	if (ctx.jsxMacroArgDepth == 0) {
 		let msg = what + " must be consumed by a macro (it produces a compile-time Node)";
 		if (expectedType != null && !isUnresolvedType(expectedType)) {
-			msg = msg + "; import a converter targeting '" + typeDisplayName(expectedType) + "' to lower it at this boundary";
+			msg = msg + "; import a converter targeting '" + typeDisplayName(converterSlotTarget(expectedType)) + "' to lower it at this boundary";
 		}
 		addError(ctx, msg, node.location.line, node.location.column);
 	}
@@ -194,7 +204,7 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	if (expectedType == null) return false;
 	if (isUnresolvedType(expectedType) || expectedType.kind == TypeKind.GenericParam) return false;
 	if (ctx.jsxMacroArgDepth > 0) return false;
-	const target = isMaybeType(expectedType) ? unwrapMaybeType(expectedType) : expectedType;
+	const target = converterSlotTarget(expectedType);
 	const targetName = typeDisplayName(target);
 	let convName: string | null = null;
 	if (ctx.converterTargets.has(targetName)) {
