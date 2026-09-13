@@ -228,6 +228,8 @@ export class Symbol {
 	staticFields: Symbol[];  // Static properties (only for class symbols)
 	fieldDecoratorNames: string[];
 	fieldDecorators: Node[][];
+	metaKeys: string[];
+	metaValues: Node[];
 	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 }

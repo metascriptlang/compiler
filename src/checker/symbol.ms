@@ -285,6 +285,8 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.staticFields = [];
 	sym.fieldDecoratorNames = [];
 	sym.fieldDecorators = [];
+	sym.metaKeys = [];
+	sym.metaValues = [];
 	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
 	return sym;

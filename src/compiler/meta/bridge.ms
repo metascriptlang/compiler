@@ -3231,6 +3231,8 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		staticFields: [],
 		fieldDecoratorNames: [],
 		fieldDecorators: [],
+		metaKeys: [],
+		metaValues: [],
 		nonisolatedFields: [],
 		duVariantSlot: 0 as int32,
 	};
