@@ -5,7 +5,7 @@
 import { Node, Symbol, createNode, NodeKind, ProgramData } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, Severity, setEngineCheckMode } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, Severity, addError, setEngineCheckMode } from "../../checker/context";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
@@ -225,6 +225,13 @@ registerRaiserOnDemand(ensureCompiledIntoEngine);
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
 	const result = compileMacroIntoEngine(program, token, fnName);
 	if (result == null as unknown as EngineMacroResult) return createContext();
+	if (result.errors != null) {
+		for (const e of result.errors) {
+			if (e.severity != Severity.Error) continue;
+			addError(token, `@comptime block: ${e.message}`, e.line, e.column);
+		}
+	}
+	if (result.funcIdx < 0) return createContext();
 	const noArgs: RaiserValue[] = [];
 	const resultVal = vmCallFunction(result.vm, result.funcIdx, noArgs);
 	return {
