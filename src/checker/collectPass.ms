@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
-import { extractDecoratorInfo, hasDecoratorNamed, stripIntrinsicMemberWrappers } from "./decoratorHelpers";
+import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
@@ -16,7 +16,7 @@ import { callDecoratorDefers } from "./checkerCallbacks";
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
-		if (callDecoratorDefers(stmt)) {
+		if (callDecoratorDefers(ctx, stmt)) {
 			collectDeclMint(ctx, stmt);
 			continue;
 		}
@@ -434,7 +434,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
 	}
-	stripIntrinsicMemberWrappers(d.classBody);
+	stripIntrinsicMemberWrappers(ctx, d.classBody);
 }
 
 export function collectActor(ctx: CheckerContext, node: Node): void {
@@ -452,7 +452,7 @@ export function mintActor(ctx: CheckerContext, node: Node): void {
 		let nonisolated = false;
 		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
-			nonisolated = hasDecoratorNamed(dd.decorators, "nonisolated");
+			nonisolated = hasIntrinsicDecorator(ctx, dd.decorators, "nonisolated");
 			if (dd.decoratedNode != null) member = dd.decoratedNode;
 		}
 		if (member.kind == NodeKind.PropertyDecl) {
@@ -490,7 +490,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}
 	}
-	stripIntrinsicMemberWrappers(d.actorBody);
+	stripIntrinsicMemberWrappers(ctx, d.actorBody);
 }
 
 function methodDeclOfMember(member: Node): Node | null {
@@ -1435,14 +1435,14 @@ test "collect function" {
 
 test "the actor fill records a nonisolated field on the symbol and leaves a plain field behind" {
 	const ctx = createContext();
-	const pr = parseSource("actor Srv {\n\t@nonisolated name: string = \"srv\";\n\tplain: string = \"plain\";\n}\n");
+	const pr = parseSource("@builtin(\"nonisolated\") extern function nonisolated(): void;\nactor Srv {\n\t@nonisolated name: string = \"srv\";\n\tplain: string = \"plain\";\n}\n");
 	assert pr.ok;
 	collectTopLevel(ctx, pr.value);
 	const sym = lookupSymbol(ctx.table, "Srv");
 	assert sym != null;
 	assert sym.nonisolatedFields.length == 1;
 	assert sym.nonisolatedFields[0] == "name";
-	const body = ((pr.value.data as ProgramData).programStmts[0].data as ActorDeclData).actorBody;
+	const body = ((pr.value.data as ProgramData).programStmts[1].data as ActorDeclData).actorBody;
 	assert body[0].kind == NodeKind.PropertyDecl;
 	assert (body[0].data as PropertyDeclData).propInitializer != null;
 	assert body[1].kind == NodeKind.PropertyDecl;

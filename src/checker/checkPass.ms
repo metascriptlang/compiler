@@ -279,7 +279,7 @@ function checkClassStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (!claimLocalTypeName(ctx, node, "class")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
+	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
 	collectClass(ctx, node);
 	resolveClass(ctx, node);
 	checkClassDecl(ctx, node);
@@ -322,7 +322,7 @@ function checkActorStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (!claimLocalTypeName(ctx, node, "actor")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
+	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
 	collectActor(ctx, node);
 	resolveActor(ctx, node);
 	checkActorDecl(ctx, node);
@@ -356,7 +356,7 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
-	if (local && callDecoratorDefers(node)) after = applyNestedDecorators(ctx, node);
+	if (local && callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
 	if (node.kind == NodeKind.DecoratedDecl) {
 		const inner = (node.data as DecoratedDeclData).decoratedNode;
 		if (inner != null) checkStmt(ctx, inner);

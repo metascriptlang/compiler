@@ -6,7 +6,7 @@ import {
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
-import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, hasFlag, markUsed, classDeclNodeOf, SymbolFlag } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -64,35 +64,35 @@ interface TargetInfo {
 	isStatic: boolean;
 }
 
-function hasUserDecorator(decorators: Node[]): boolean {
+function hasUserDecorator(ctx: CheckerContext, decorators: Node[]): boolean {
 	for (const d of decorators) {
 		if (d.kind != NodeKind.MacroInvocation) continue;
 		const md = d.data as MacroInvocationData;
-		if (isBuiltinDirective(md.macroName) || isIntrinsicDecorator(md.macroName)) continue;
+		if (isBuiltinDirective(md.macroName) || isIntrinsicDecorator(ctx, md.macroName)) continue;
 		return true;
 	}
 	return false;
 }
 
-function memberCarriesDecorator(body: Node[]): boolean {
+function memberCarriesDecorator(ctx: CheckerContext, body: Node[]): boolean {
 	for (const m of body) {
 		if (m == null || m.kind != NodeKind.DecoratedDecl) continue;
-		if (hasUserDecorator((m.data as DecoratedDeclData).decorators)) return true;
+		if (hasUserDecorator(ctx, (m.data as DecoratedDeclData).decorators)) return true;
 	}
 	return false;
 }
 
-export function decoratorRewritesStmt(stmt: Node): boolean {
+export function decoratorRewritesStmt(ctx: CheckerContext, stmt: Node): boolean {
 	let node = stmt;
 	if (node != null && node.kind == NodeKind.DecoratedDecl) {
 		const dd = node.data as DecoratedDeclData;
-		if (hasUserDecorator(dd.decorators)) return true;
+		if (hasUserDecorator(ctx, dd.decorators)) return true;
 		node = dd.decoratedNode;
 	}
 	const decl = unwrapExport(node);
 	if (decl == null) return false;
-	if (decl.kind == NodeKind.ClassDecl) return memberCarriesDecorator((decl.data as ClassDeclData).classBody);
-	if (decl.kind == NodeKind.ActorDecl) return memberCarriesDecorator((decl.data as ActorDeclData).actorBody);
+	if (decl.kind == NodeKind.ClassDecl) return memberCarriesDecorator(ctx, (decl.data as ClassDeclData).classBody);
+	if (decl.kind == NodeKind.ActorDecl) return memberCarriesDecorator(ctx, (decl.data as ActorDeclData).actorBody);
 	return false;
 }
 
@@ -109,7 +109,7 @@ function applyStatementAt(ctx: CheckerContext, index: int32): void {
 	_pendingDone[index] = true;
 	const stmt = _pendingStmts[index];
 	const after: Node[] = [];
-	const deferred = decoratorRewritesStmt(stmt);
+	const deferred = decoratorRewritesStmt(ctx, stmt);
 	const originalName = deferred ? deferredDeclName(stmt) : "";
 	const rewritten = applyToStatement(ctx, stmt, after);
 	if (deferred) finishDeferredStatement(ctx, originalName, rewritten);
@@ -371,7 +371,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
 			plan.activeInits = null as unknown as MemberInits;
 			if (stmts.length > 0) plan.memberInits.push(inits);
-			const kept = intrinsicOnly(dd.decorators);
+			const kept = intrinsicOnly(ctx, dd.decorators);
 			if (kept.length == 0) {
 				body[i] = rewritten;
 			} else {
@@ -395,7 +395,7 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 		const dec = decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		const md = dec.data as MacroInvocationData;
-		if (isIntrinsicDecorator(md.macroName)) continue;
+		if (isIntrinsicDecorator(ctx, md.macroName)) continue;
 		if (plan == null || current == null || !decoratorPositionValid(current)) {
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
 			continue;
@@ -665,6 +665,7 @@ function resolveDecoratorSymbol(ctx: CheckerContext, name: string): Symbol {
 	const rest = name.slice(dot + 1, name.length);
 	const ns = lookupSymbol(ctx.table, head);
 	if (ns == null || ns.symbolKind != SymbolKind.Module) return null as unknown as Symbol;
+	markUsed(ns);
 	const info = findExportedSymbol(ctx.exportRegistry, ns.modulePath, rest);
 	if (info == null) return null as unknown as Symbol;
 	const sym = makeSymbol(rest, info.kind, info.symType, false);
@@ -685,6 +686,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		addError(ctx, `'${name}' is not callable as a decorator`, loc.line, loc.column);
 		return target;
 	}
+	markUsed(sym);
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	const isFactory = md.macroHasParens;
 	const regCtx = declaringCtx(ctx, sym);
