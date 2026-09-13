@@ -1232,6 +1232,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						&& fi < objChildren.length) {
 						fieldExpected = objChildren[fi];
 					}
+					if (fieldExpected == null) {
+						fieldExpected = engineNodeVirtualKeyType(objE, keyName);
+					}
 					// Engine (macro-body) view of Node.nodeType, write position: macros
 					// stamp type-AST Nodes into emitted literals (`nodeType: ft`), so the
 					// slot expects a Node VALUE — Ref<Node>, matching the read override in
@@ -2427,7 +2430,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, foldComptimeNodeAliasArgs, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

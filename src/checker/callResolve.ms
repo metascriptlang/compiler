@@ -3794,6 +3794,16 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 	return engineNodeDataField(recvType, key).fieldType != null;
 }
 
+export function engineNodeVirtualKeyType(recvType: Type | null, key: string): Type | null {
+	if (!isEngineCheckMode()) return null;
+	if (recvType == null || recvType.typeName != "Node") return null;
+	const locField = flattenedLocationFieldType(recvType, key);
+	if (locField != null) return locField;
+	const df = engineNodeDataField(recvType, key);
+	if (df.ambiguous) return null;
+	return df.fieldType;
+}
+
 function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
 	if (!isEngineCheckMode()) return null;
 	if (recvType.typeName != "Node") return null;
