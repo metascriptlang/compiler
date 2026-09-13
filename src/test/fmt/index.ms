@@ -31,6 +31,7 @@ import "./cases/unreachableStmt";
 import "./cases/testDeclEscape";
 import "./cases/propertyInit";
 import "./cases/inlineShortBlock";
+import "./cases/singleLineIfWithoutBraces";
 import "./cases/inlineImport";
 import "./cases/enumComment";
 import "./cases/standaloneComment";
