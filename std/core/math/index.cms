@@ -49,11 +49,11 @@ export function sign(this typeof Math, x: float64): float64 {
 	return x;
 }
 
-export function min(this typeof Math, a: float64, b: float64): float64 {
+export function min<T>(this typeof Math, a: T, b: T): T {
 	return a < b ? a : b;
 }
 
-export function max(this typeof Math, a: float64, b: float64): float64 {
+export function max<T>(this typeof Math, a: T, b: T): T {
 	return a > b ? a : b;
 }
 

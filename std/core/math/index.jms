@@ -29,8 +29,12 @@ export extern function log1p(this typeof Math, x: float64): float64 from "Math.l
 export extern function log2(this typeof Math, x: float64): float64 from "Math.log2(#)";
 export extern function log10(this typeof Math, x: float64): float64 from "Math.log10(#)";
 export extern function hypot(this typeof Math, x: float64, y: float64): float64 from "Math.hypot(#, #)";
-export extern function min(this typeof Math, a: float64, b: float64): float64 from "Math.min(#, #)";
-export extern function max(this typeof Math, a: float64, b: float64): float64 from "Math.max(#, #)";
+export function min<T>(this typeof Math, a: T, b: T): T {
+	return a < b ? a : b;
+}
+export function max<T>(this typeof Math, a: T, b: T): T {
+	return a > b ? a : b;
+}
 export extern function random(this typeof Math): float64 from "Math.random(@)";
 export extern function sin(this typeof Math, x: float64): float64 from "Math.sin(#)";
 export extern function cos(this typeof Math, x: float64): float64 from "Math.cos(#)";
