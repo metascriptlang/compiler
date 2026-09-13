@@ -64,3 +64,5 @@ import "./accessorAutoCall";
 import "./paramDestructure";
 import "./maybeGenericPayload";
 import "./genericReturnIntoMaybe";
+import "./extGenericFromArg";
+import "./arrowInGenericLiteral";

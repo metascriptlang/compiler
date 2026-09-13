@@ -174,3 +174,6 @@ import "./bug155ParamDestructure";
 import "./bug158BitSetOperandRules";
 import "./bug156MaybeGenericInstancePayload";
 import "./bug157GenericReturnIntoMaybe";
+import "./bug159JsxConverterNullableSlot";
+import "./bug160ArrayMap";
+import "./bug161ArrowInGenericLiteral";
