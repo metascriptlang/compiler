@@ -236,6 +236,20 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 }
 
 /**
+ * Calls a function on every element in order and returns the results as a new array.
+ * @param fn Mapper receiving the element and its index.
+ */
+export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
+	const out: U[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		out.push(fn(arr[i], i));
+		i = i + 1;
+	}
+	return out;
+}
+
+/**
  * Returns a copy of a section of an array.
  * Generic over element type — monomorphized per T, element-wise copy. The
  * number[]/string[] overloads above bind first and stay memcpy-fast.

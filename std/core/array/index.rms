@@ -91,6 +91,20 @@ export function join(this arr: string[], sep: string): string {
 
 // Bodies mirror the .cms generic tier (index.cms:245+) — monomorphized on C,
 // dynamic on the VM, same semantics either way.
+/**
+ * Calls a function on every element in order and returns the results as a new array.
+ * @param fn Mapper receiving the element and its index.
+ */
+export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
+	const out: U[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		out.push(fn(arr[i], i));
+		i = i + 1;
+	}
+	return out;
+}
+
 export function slice<T>(this arr: T[], start: number, end: number): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;

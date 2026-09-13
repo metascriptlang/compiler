@@ -19,6 +19,7 @@ export extern function sort(this arr: number[]): void from "#.sort((a, b) => a -
 export extern function sort(this arr: string[]): void from "#.sort()";
 export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
 export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
+export extern function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] from "#.map(#)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "#.splice(#, #, #)";
 // Truncate/extend in place, mirroring index.cms. Native `length =` shrinks
