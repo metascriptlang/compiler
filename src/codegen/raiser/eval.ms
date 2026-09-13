@@ -8,6 +8,7 @@ import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSe
 import { ExportRegistry, CheckerContext, CheckerError, Severity, setEngineCheckMode } from "../../checker/context";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
+import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
@@ -136,6 +137,7 @@ function freshEngine(): ComptimeEngine {
 	const funcMap: RaiserFuncMap = { items: [] };
 	const enumMap: RaiserFuncMap = { items: [] };
 	const vm = createVM(image, "arena");
+	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const seen: HashMap<string, int32> = new HashMap<string, int32>();
 	return { image, funcMap, enumMap, vm, seen };
 }
