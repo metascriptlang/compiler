@@ -3,6 +3,8 @@ import { Node } from "./node";
 export interface DecoratorMetadata {
 	keys: string[];
 	values: Node[];
+	inheritedKeys: string[];
+	inheritedValues: Node[];
 }
 
 export interface DecoratorAccess {
@@ -40,12 +42,18 @@ export function metadataHas(m: DecoratorMetadata, key: string): boolean {
 	for (const k of m.keys) {
 		if (k == key) return true;
 	}
+	for (const k of m.inheritedKeys) {
+		if (k == key) return true;
+	}
 	return false;
 }
 
 export function metadataGet(m: DecoratorMetadata, key: string): Node | null {
 	for (let i = 0; i < m.keys.length; i += 1) {
 		if (m.keys[i] == key) return m.values[i];
+	}
+	for (let i = 0; i < m.inheritedKeys.length; i += 1) {
+		if (m.inheritedKeys[i] == key) return m.inheritedValues[i];
 	}
 	return null;
 }

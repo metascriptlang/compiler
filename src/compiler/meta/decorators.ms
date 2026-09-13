@@ -6,7 +6,7 @@ import {
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
-import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -50,6 +50,9 @@ interface ClassPlan {
 	isActor: boolean;
 	metaKeys: string[];
 	metaValues: Node[];
+	inheritedKeys: string[];
+	inheritedValues: Node[];
+	seeded: boolean;
 	memberInits: MemberInits[];
 	activeInits: MemberInits;
 	staticInits: Node[];
@@ -93,20 +96,64 @@ export function decoratorRewritesStmt(stmt: Node): boolean {
 	return false;
 }
 
+let _pendingStmts: Node[] = [];
+let _pendingDone: boolean[] = [];
+let _pendingResults: Node[] = [];
+let _pendingExtras: Node[][] = [];
+let _nodeMetaNodes: Node[] = [];
+let _nodeMetaKeys: string[][] = [];
+let _nodeMetaValues: Node[][] = [];
+
+function applyStatementAt(ctx: CheckerContext, index: int32): void {
+	if (_pendingDone[index]) return;
+	_pendingDone[index] = true;
+	const stmt = _pendingStmts[index];
+	const after: Node[] = [];
+	const deferred = decoratorRewritesStmt(stmt);
+	const originalName = deferred ? deferredDeclName(stmt) : "";
+	const rewritten = applyToStatement(ctx, stmt, after);
+	if (deferred) finishDeferredStatement(ctx, originalName, rewritten);
+	_pendingResults[index] = rewritten;
+	_pendingExtras[index] = after;
+}
+
+function applyPendingClass(ctx: CheckerContext, name: string): void {
+	for (let i = 0; i < _pendingStmts.length; i += 1) {
+		if (_pendingDone[i]) continue;
+		if (deferredDeclName(_pendingStmts[i]) != name) continue;
+		applyStatementAt(ctx, i);
+		return;
+	}
+}
+
 export function applyDecorators(ctx: CheckerContext, program: Node): void {
 	if (program.kind != NodeKind.Program) return;
 	const pd = program.data as ProgramData;
+	const stmts = pd.programStmts;
+	const outerStmts = _pendingStmts;
+	const outerDone = _pendingDone;
+	const outerResults = _pendingResults;
+	const outerExtras = _pendingExtras;
+	_pendingStmts = stmts;
+	_pendingDone = [];
+	_pendingResults = [];
+	_pendingExtras = [];
+	for (const stmt of stmts) {
+		_pendingDone.push(false);
+		_pendingResults.push(stmt);
+		_pendingExtras.push([]);
+	}
+	for (let i = 0; i < stmts.length; i += 1) applyStatementAt(ctx, i);
 	const out: Node[] = [];
-	for (const stmt of pd.programStmts) {
-		const after: Node[] = [];
-		const deferred = decoratorRewritesStmt(stmt);
-		const originalName = deferred ? deferredDeclName(stmt) : "";
-		const rewritten = applyToStatement(ctx, stmt, after);
-		if (deferred) finishDeferredStatement(ctx, originalName, rewritten);
-		out.push(rewritten);
-		for (const s of after) out.push(s);
+	for (let i = 0; i < stmts.length; i += 1) {
+		out.push(_pendingResults[i]);
+		for (const s of _pendingExtras[i]) out.push(s);
 	}
 	pd.programStmts = out;
+	_pendingStmts = outerStmts;
+	_pendingDone = outerDone;
+	_pendingResults = outerResults;
+	_pendingExtras = outerExtras;
 }
 
 function deferredDeclOf(stmt: Node): Node {
@@ -137,6 +184,7 @@ export function applyDecoratedStmt(ctx: CheckerContext, stmt: Node, after: Node[
 	const rewritten = applyToStatement(ctx, stmt, after);
 	const decl = deferredDeclOf(rewritten);
 	if (decl != null && !replacementKeepsName(ctx, originalName, decl)) return stmt;
+	aliasPendingMetadata(decl, stmt);
 	return rewritten;
 }
 
@@ -206,6 +254,8 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 	const name = isActor ? (decl.data as ActorDeclData).actorName : (decl.data as ClassDeclData).className;
 	const metaKeys: string[] = [];
 	const metaValues: Node[] = [];
+	const inheritedKeys: string[] = [];
+	const inheritedValues: Node[] = [];
 	const memberInits: MemberInits[] = [];
 	const staticInits: Node[] = [];
 	return {
@@ -214,10 +264,81 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 		isActor: isActor,
 		metaKeys: metaKeys,
 		metaValues: metaValues,
+		inheritedKeys: inheritedKeys,
+		inheritedValues: inheritedValues,
+		seeded: false,
 		memberInits: memberInits,
 		activeInits: null as unknown as MemberInits,
 		staticInits: staticInits,
 	};
+}
+
+function pendingMetadataSlot(decl: Node): int32 {
+	for (let i = 0; i < _nodeMetaNodes.length; i += 1) {
+		if (_nodeMetaNodes[i] == decl) return i;
+	}
+	return -1;
+}
+
+function recordPendingMetadata(plan: ClassPlan): void {
+	const slot = pendingMetadataSlot(plan.classNode);
+	if (slot >= 0) {
+		_nodeMetaKeys[slot] = plan.metaKeys;
+		_nodeMetaValues[slot] = plan.metaValues;
+		return;
+	}
+	_nodeMetaNodes.push(plan.classNode);
+	_nodeMetaKeys.push(plan.metaKeys);
+	_nodeMetaValues.push(plan.metaValues);
+}
+
+function aliasPendingMetadata(from: Node, to: Node): void {
+	if (from == null || to == null || from == to) return;
+	const slot = pendingMetadataSlot(from);
+	if (slot < 0) return;
+	const existing = pendingMetadataSlot(to);
+	if (existing >= 0) {
+		_nodeMetaKeys[existing] = _nodeMetaKeys[slot];
+		_nodeMetaValues[existing] = _nodeMetaValues[slot];
+		return;
+	}
+	_nodeMetaNodes.push(to);
+	_nodeMetaKeys.push(_nodeMetaKeys[slot]);
+	_nodeMetaValues.push(_nodeMetaValues[slot]);
+}
+
+function addInheritedPair(plan: ClassPlan, key: string, value: Node): void {
+	for (const k of plan.inheritedKeys) {
+		if (k == key) return;
+	}
+	plan.inheritedKeys.push(key);
+	plan.inheritedValues.push(value);
+}
+
+function seedInheritedMetadata(ctx: CheckerContext, plan: ClassPlan): void {
+	if (plan == null || plan.seeded) return;
+	plan.seeded = true;
+	if (plan.isActor) return;
+	let parentName = (plan.classNode.data as ClassDeclData).classExtends;
+	let depth = 0;
+	while (parentName != "" && depth < 64) {
+		applyPendingClass(ctx, parentName);
+		const parentSym = lookupSymbol(ctx.table, parentName);
+		if (parentSym == null || parentSym.symbolKind != SymbolKind.Class) return;
+		for (let i = 0; i < parentSym.metaKeys.length; i += 1) {
+			addInheritedPair(plan, parentSym.metaKeys[i], parentSym.metaValues[i]);
+		}
+		const parentDecl = classDeclNodeOf(parentSym);
+		if (parentDecl == null || parentDecl.kind != NodeKind.ClassDecl) return;
+		const slot = pendingMetadataSlot(parentDecl);
+		if (slot >= 0) {
+			for (let i = 0; i < _nodeMetaKeys[slot].length; i += 1) {
+				addInheritedPair(plan, _nodeMetaKeys[slot][i], _nodeMetaValues[slot][i]);
+			}
+		}
+		parentName = (parentDecl.data as ClassDeclData).classExtends;
+		depth += 1;
+	}
 }
 
 function planBody(plan: ClassPlan): Node[] {
@@ -431,14 +552,14 @@ function wrapperSource(isMacro: boolean, paramList: string, shape: int32, arity:
 	const memberExprKind = NodeKind.MemberExpr as int32;
 	const binaryExprKind = NodeKind.BinaryExpr as int32;
 	const boolLitKind = NodeKind.BooleanLiteral as int32;
-	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], init: Node) {\n";
+	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], inheritedKeys: string[], inheritedValues: Node[], init: Node) {\n";
 	s = s + "\tconst sink: Node[] = [];\n";
 	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind}, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
 	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind}, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
 	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind}, line: recv.line, column: recv.column, boolValue: true });\n`;
 	if (isMacro) s = s + `\tconst __dec = (${paramList}) => {};\n`;
 	const contextArg = arity >= 2
-		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
+		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues, inheritedKeys: inheritedKeys, inheritedValues: inheritedValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
 		: "";
 	const call = "__callee__(value" + contextArg + ")";
 	if (shape == shapeTransformer) {
@@ -598,10 +719,15 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const vm = result.vm;
 	const objHeap = vm.objectHeap;
 	const arrHeap = vm.arrayHeap;
+	seedInheritedMetadata(ctx, plan);
 	const keysHandle = heapAllocArray(arrHeap);
 	for (const k of plan.metaKeys) heapArrayPush(arrHeap, keysHandle, raiserString(k));
 	const valuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.metaValues) heapArrayPush(arrHeap, valuesHandle, nodeToValue(v, objHeap, arrHeap));
+	const inheritedKeysHandle = heapAllocArray(arrHeap);
+	for (const k of plan.inheritedKeys) heapArrayPush(arrHeap, inheritedKeysHandle, raiserString(k));
+	const inheritedValuesHandle = heapAllocArray(arrHeap);
+	for (const v of plan.inheritedValues) heapArrayPush(arrHeap, inheritedValuesHandle, nodeToValue(v, objHeap, arrHeap));
 	let initVal = raiserNil();
 	if (target.kind == NodeKind.PropertyDecl) {
 		const pd = target.data as PropertyDeclData;
@@ -610,7 +736,8 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const args: RaiserValue[] = [
 		nodeToValue(target, objHeap, arrHeap),
 		raiserString(info.kind), raiserString(info.name), raiserBool(info.isStatic), raiserBool(false),
-		raiserArray(keysHandle), raiserArray(valuesHandle), initVal,
+		raiserArray(keysHandle), raiserArray(valuesHandle),
+		raiserArray(inheritedKeysHandle), raiserArray(inheritedValuesHandle), initVal,
 	];
 	pushActiveMetaCtx(ctx, loc.line, loc.column);
 	const res = vmCallFunction(vm, result.funcIdx, args);
@@ -752,7 +879,22 @@ function injectIntoConstructor(plan: ClassPlan, stmts: Node[]): void {
 	body.statements = merged;
 }
 
+function planClassSymbol(ctx: CheckerContext, plan: ClassPlan): Symbol {
+	const sym = plan.classNode.resolvedSym;
+	if (sym != null) return sym;
+	return lookupSymbol(ctx.table, plan.className);
+}
+
 function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
+	if (plan.metaKeys.length > 0) {
+		const sym = planClassSymbol(ctx, plan);
+		if (sym != null) {
+			sym.metaKeys = plan.metaKeys;
+			sym.metaValues = plan.metaValues;
+		} else {
+			recordPendingMetadata(plan);
+		}
+	}
 	if (plan.memberInits.length > 0) {
 		if (plan.isActor) {
 			addError(ctx, `addInitializer on actor members is not supported`, plan.classNode.location.line, plan.classNode.location.column);
