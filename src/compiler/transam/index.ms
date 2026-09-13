@@ -23,7 +23,7 @@ import {
 	TaDependencyStack,
 	createDependencyStack, pushFrame, popFrame, recordDependency, recordDurability,
 } from "./query";
-import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains } from "./cache";
+import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
 import {
 	TaFileInputStore, createFileInputStore,
 	setFileText, getFileText, getFileHash, getFileId, getFilePath, hasFile,
@@ -174,6 +174,14 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 	// Invalidate ExportRegistry for this file + transitive dependents
 	dbInvalidateExports(db, fileId);
 	return true;
+}
+
+export function dbForgetAllTypeChecks(db: TransAmDb): void {
+	for (let index = 0; index < getFileCount(db.fileInput); index = index + 1) {
+		const path = getFilePathByIndex(db.fileInput, index);
+		if (path == "" || isStdPathFor(db, path)) continue;
+		cacheRemove(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, path)));
+	}
 }
 
 // Remove ExportRegistry entries for a file and its transitive dependents
