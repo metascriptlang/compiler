@@ -156,7 +156,7 @@ function markClassMethodsExported(ctx: CheckerContext, classNode: Node): void {
 	}
 }
 
-function staticExtSymOf(decl: Node): Symbol | null {
+export function staticExtSymOf(decl: Node): Symbol | null {
 	if (decl.kind != NodeKind.FunctionDecl) return null;
 	const fd = decl.data as FunctionDeclData;
 	if (!isStaticExtensionFlag(fd.fnFlags)) return null;

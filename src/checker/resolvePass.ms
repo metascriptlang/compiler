@@ -12,7 +12,7 @@ import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScop
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
-import { getDeclName, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
+import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
 import { monoTypeKey } from "../monomorphize/registry";
 
@@ -1187,6 +1187,11 @@ export function resolveAttachedStatics(ctx: CheckerContext, sym: Symbol): void {
 export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
+		const staticMember = staticExtSymOf(stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt);
+		if (staticMember != null) {
+			ensureShaped(staticMember, ctx);
+			continue;
+		}
 		const name = getDeclName(stmt);
 		if (name != "") {
 			const sym = lookupSymbol(ctx.table, name);
