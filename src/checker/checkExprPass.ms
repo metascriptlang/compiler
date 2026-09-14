@@ -1809,7 +1809,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (resolved.kind == TypeKind.GenericParam) { node.nodeType = int32Type(); return; }
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
-			node.data = { value: size } as unknown as NodeData;
+			node.data = { value: size as number, isFloat: false, intVal: size as int64 };
 			node.nodeType = int32Type(); return;
 		},
 		NodeKind.HiddenDeref => {
