@@ -258,6 +258,9 @@ export function monoConcreteTypeName(t: Type | null): string {
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,
+		TypeKind.EnumLiteral => t.typeNames.length > 0 ? `${t.typeName}.${t.typeNames[0]}` : t.typeName,
+		TypeKind.Distinct => t.typeName,
+		TypeKind.BigInt => "bigint",
 		TypeKind.GenericInstance => {
 			let name = t.typeName;
 			let i = 0;
