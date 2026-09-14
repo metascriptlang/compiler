@@ -3402,6 +3402,8 @@ export function isIndexableMapType(t: Type | null): boolean {
 	return getBuiltinKind(t) == "IndexableMap";
 }
 
+const SIZE_NOT_COMPUTABLE: int32 = -3;
+
 // alignTo — round up offset to alignment boundary
 function alignTo(offset: int32, align: int32): int32 {
 	if (align <= 1) return offset;
@@ -3416,17 +3418,29 @@ export function alignOfType(t: Type): int32 {
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
 		return alignOfStruct(t);
 	}
-	if (t.kind == TypeKind.Distinct && t.typeReturn != null) {
+	if (t.kind == TypeKind.Union) {
+		return alignOfUnion(t);
+	}
+	if (t.kind == TypeKind.GenericInstance) {
+		if (isAwaitable(t)) return ps;
+		const body = instanceLayoutBody(t);
+		if (body != null && body != t) return alignOfType(body);
+	}
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
 		return alignOfType(t.typeReturn);
 	}
+	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
+		return alignOfType(t.typeChildren[0]);
+	}
 	return match (t.kind) {
-		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
+		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
 		TypeKind.Number | TypeKind.Float64 => ps,
 		TypeKind.Int64 | TypeKind.Uint64 => ps,
-		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => ps,
-		TypeKind.String | TypeKind.Array | TypeKind.Span => ps,
+		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Function | TypeKind.Null => ps,
+		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => ps,
+		TypeKind.BigInt => ps,
 		_ => 0,
 	};
 }
@@ -3451,19 +3465,31 @@ export function sizeOfType(t: Type): int32 {
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
 		return sizeOfStruct(t);
 	}
-	if (t.kind == TypeKind.Distinct && t.typeReturn != null) {
+	if (t.kind == TypeKind.Union) {
+		return sizeOfUnion(t);
+	}
+	if (t.kind == TypeKind.GenericInstance) {
+		if (isAwaitable(t)) return ps;
+		const body = instanceLayoutBody(t);
+		if (body != null && body != t) return sizeOfType(body);
+	}
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
 		return sizeOfType(t.typeReturn);
 	}
+	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
+		return sizeOfType(t.typeChildren[0]);
+	}
 	return match (t.kind) {
-		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
+		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => ps,
-		TypeKind.String => ps * 2,
-		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr => ps,
+		TypeKind.String | TypeKind.StringLiteral => ps * 2,
+		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Null => ps,
 		TypeKind.Function => ps * 2,
 		TypeKind.Array | TypeKind.Span => ps * 2,
-		_ => 0,
+		TypeKind.BigInt => ps,
+		_ => SIZE_NOT_COMPUTABLE,
 	};
 }
 
@@ -3473,16 +3499,72 @@ function sizeOfStruct(t: Type): int32 {
 	if (t.typeChildren != null) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			const fieldSize = sizeOfType(t.typeChildren[i]);
-			const fieldAlign = alignOfType(t.typeChildren[i]);
-			if (fieldAlign > maxAlign) maxAlign = fieldAlign;
-			offset = alignTo(offset, fieldAlign);
-			offset = offset + fieldSize;
+			const field = t.typeChildren[i];
+			if (field != null && field.kind != TypeKind.Void) {
+				const fieldSize = sizeOfType(field);
+				if (fieldSize < 0) return fieldSize;
+				const fieldAlign = alignOfType(field);
+				if (fieldAlign > maxAlign) maxAlign = fieldAlign;
+				offset = alignTo(offset, fieldAlign);
+				offset = offset + fieldSize;
+			}
 			i = i + 1;
 		}
 	}
 	if (offset == 0) return 0;
 	return alignTo(offset, maxAlign);
+}
+
+function instanceLayoutBody(t: Type): Type | null {
+	if (t.typeReturn != null) return t.typeReturn;
+	const base = peelToStructOrUnion(t.typeExtra);
+	if (base == null) return null;
+	if (base.kind != TypeKind.Struct && base.kind != TypeKind.Union) return null;
+	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
+	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return null;
+	const names: string[] = [];
+	const args: Type[] = [];
+	for (let pi = 0; pi < paramNames.length; pi += 1) {
+		names.push(paramNames[pi].trim());
+		args.push(t.typeChildren[pi]);
+	}
+	return substituteAllParams(base, names, args);
+}
+
+function unionTagType(t: Type): Type | null {
+	return t.typeExtra != null && t.typeExtra.kind == TypeKind.Enum ? t.typeExtra : null;
+}
+
+function sizeOfUnion(t: Type): int32 {
+	const tag = unionTagType(t);
+	const tagSize = tag != null ? sizeOfType(tag) : 4;
+	if (tagSize < 0) return tagSize;
+	const tagAlign = tag != null ? alignOfType(tag) : 4;
+	let payload = 0;
+	let payloadAlign = 1;
+	if (t.typeChildren != null) {
+		for (const variant of t.typeChildren) {
+			const vs = sizeOfType(variant);
+			if (vs < 0) return vs;
+			if (vs > payload) payload = vs;
+			const va = alignOfType(variant);
+			if (va > payloadAlign) payloadAlign = va;
+		}
+	}
+	const maxAlign = tagAlign > payloadAlign ? tagAlign : payloadAlign;
+	return alignTo(alignTo(tagSize, payloadAlign) + payload, maxAlign);
+}
+
+function alignOfUnion(t: Type): int32 {
+	const tag = unionTagType(t);
+	let maxAlign = tag != null ? alignOfType(tag) : 4;
+	if (t.typeChildren != null) {
+		for (const variant of t.typeChildren) {
+			const va = alignOfType(variant);
+			if (va > maxAlign) maxAlign = va;
+		}
+	}
+	return maxAlign;
 }
 
 // ===== Tests =====
@@ -3831,6 +3913,54 @@ test "sizeOfType object tail padding" {
 
 test "sizeOfType function closure" {
 	assert sizeOfType(createFunction([], [], numberType())) == 16;
+}
+
+test "sizeOfType bigint is a pointer" {
+	setTargetSizes(8, 8);
+	assert sizeOfType(createPrimitive(TypeKind.BigInt)) == 8;
+}
+
+test "sizeOfType literal discriminants carry their base width" {
+	setTargetSizes(8, 8);
+	assert sizeOfType(createBooleanLiteral(true)) == 1;
+	assert sizeOfType(createStringLiteral("circle")) == 16;
+	assert alignOfType(createBooleanLiteral(false)) == 1;
+	assert alignOfType(createStringLiteral("rect")) == 8;
+}
+
+test "sizeOfType union is tag plus widest variant" {
+	setTargetSizes(8, 8);
+	const v0 = createStruct("", ["ok", "value"], [createPrimitive(TypeKind.Boolean), createPrimitive(TypeKind.Int32)], true);
+	const v1 = createStruct("", ["ok", "error"], [createPrimitive(TypeKind.Boolean), stringType()], true);
+	const u = createUnion([v0, v1]);
+	assert sizeOfType(v0) == 8;
+	assert sizeOfType(v1) == 24;
+	assert alignOfType(u) == 8;
+	assert sizeOfType(u) == 32;
+}
+
+test "sizeOfType follows a generic instance to its substituted body" {
+	setTargetSizes(8, 8);
+	const v0 = createStruct("", ["ok", "value"], [createBooleanLiteral(true), createPrimitive(TypeKind.Int32)], true);
+	const v1 = createStruct("", ["ok", "error"], [createBooleanLiteral(false), stringType()], true);
+	const named = createUnion([v0, v1]);
+	const inst = createGenericInstance(named, [createPrimitive(TypeKind.Int32), stringType()]);
+	inst.typeReturn = named;
+	assert sizeOfType(inst) == 32;
+}
+
+test "sizeOfType gives an awaitable the width of its future handle" {
+	setTargetSizes(8, 8);
+	assert sizeOfType(createPromise(createPrimitive(TypeKind.Int32))) == 8;
+	assert alignOfType(createPromise(stringType())) == 8;
+}
+
+test "sizeOfType reports a sizeless type instead of zero" {
+	assert sizeOfType(voidType()) < 0;
+	assert sizeOfType(unknownType()) < 0;
+	assert sizeOfType(createGenericParam("T")) < 0;
+	const holder = createStruct("Holder", ["v"], [unknownType()], true);
+	assert sizeOfType(holder) < 0;
 }
 
 test "alignOfType" {

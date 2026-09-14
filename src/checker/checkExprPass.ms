@@ -1808,6 +1808,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Generic operand: leave unfolded so mono substitutes sizeofType→concrete, then the instance re-check folds the real size.
 			if (resolved.kind == TypeKind.GenericParam) { node.nodeType = int32Type(); return; }
 			const size = sizeOfType(resolved);
+			if (size < 0) {
+				addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,
+					node.location.line, node.location.column);
+				node.nodeType = int32Type(); return;
+			}
 			node.kind = NodeKind.NumberLiteral;
 			node.data = { value: size as number, isFloat: false, intVal: size as int64 };
 			node.nodeType = int32Type(); return;
