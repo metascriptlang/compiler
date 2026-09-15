@@ -193,6 +193,10 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
 	}
+	if (t.kind == TypeKind.Set && tr != null) {
+		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
+		return;
+	}
 	// Named user types — Struct (interface/class), Enum, Distinct (type alias).
 	// Cross-module body re-check needs the concrete type symbol injected so
 	// `resolveAnnotation("Color[]")` resolves to ColorArray instead of falling

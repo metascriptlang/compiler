@@ -1419,6 +1419,10 @@ function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
 	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn);
+	if (elem.kind == TypeKind.Set) {
+		const sr = setRepr(elem);
+		if (sr != null) return elemArrayCName(sr);
+	}
 	if (elem.kind == TypeKind.Enum) return mangle(elem.typeName);
 	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? mangle(elem.typeReturn.typeName) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
