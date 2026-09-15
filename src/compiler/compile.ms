@@ -28,7 +28,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { setTargetSizes, isAwaitable } from "../checker/types";
+import { isAwaitable } from "../checker/types";
 import { lookupSymbol, SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -939,7 +939,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
-	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
 	const outDir = outputDir != "" ? outputDir : "out";
@@ -1167,7 +1166,6 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
-	setTargetSizes(8, 8);
 	_renderErrorMax = opts.errorMax;
 	resolveTargetGcMode(opts);
 	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
@@ -1189,7 +1187,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
 	registerCoreParsers();
-	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
 	// checker needs the resolved mode (freestanding async gate) — applyGcMode
@@ -1230,13 +1227,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// WASM: force release mode, use zig cc with wasm32-wasi target
 	if (opts.targetOs == "wasm") {
 		if (opts.mode == 0) opts.mode = 1;  // Release (smaller .wasm)
-		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 	}
 
 	// Emscripten (browser WASM): use emcc, 32-bit pointers
 	if (opts.targetOs == "emcc") {
 		if (opts.mode == 0) opts.mode = 1;  // Release (smaller .wasm)
-		setTargetSizes(4, 4);  // WASM32: 32-bit pointers and ints
 		opts.ccBinary = "emcc";  // emcc for compile + link
 	}
 
@@ -1778,7 +1773,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
 	registerCoreParsers();
-	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	// Same compiler resolution as cmdBuildC: a test build emits and links C with
 	// the same flags, so it needs the same --cc normalization and the same
@@ -2075,7 +2069,6 @@ export interface JsTreeResult {
 }
 
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
-	setTargetSizes(8, 8);
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
@@ -2386,7 +2379,6 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 // ===== Raiser (Bytecode VM) Run =====
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
-	setTargetSizes(8, 8);
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
