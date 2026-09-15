@@ -178,3 +178,4 @@ import "./bug159JsxConverterNullableSlot";
 import "./bug160ArrayMap";
 import "./bug161ArrowInGenericLiteral";
 import "./bug162QuoteConverterBoundary";
+import "./bug163BitSetSlots";

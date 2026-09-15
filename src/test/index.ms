@@ -67,6 +67,7 @@ import "./c/bigintChecker";
 import "./c/rangeCheckPolicy";
 import "./c/nominalFit";
 import "./c/bitSetWidth";
+import "./c/bitSetAlgebra";
 import "./c/sizeofFold";
 import "./c/numericNarrowing";
 import "./c/voidValue";
