@@ -109,6 +109,31 @@ export extern function isDisjointFrom<E>(this self: BitSet<E>, other: BitSet<E>)
 @builtin("SetSize")
 export extern function size<E>(this self: BitSet<E>): int32;
 
+export function toItems<E>(this self: BitSet<E>): E[] {
+	const result: E[] = [];
+	const bits = sizeof(BitSet<E>) * 8;
+	let i = 0;
+	while (i < bits) {
+		const m = i as E;
+		if (self.has(m)) { result.push(m); }
+		i = i + 1;
+	}
+	return result;
+}
+
+export function toString<E>(this self: BitSet<E>): string {
+	const items = self.toItems();
+	let out = "{";
+	let i = 0;
+	while (i < items.length) {
+		if (i > 0) { out = out + ", "; }
+		out = out + items[i].toString();
+		i = i + 1;
+	}
+	return out + "}";
+}
+
+
 export function msSetCard32(v: uint32): int32 {
 	let n: uint32 = v;
 	let c: int32 = 0;

@@ -935,3 +935,26 @@ export extern function size<E>(this self: BitSet<E>): int32;
 @builtin("SetHash")
 export extern function hash<E>(this self: BitSet<E>): int64;
 
+export function toItems<E>(this self: BitSet<E>): E[] {
+	const result: E[] = [];
+	const bits = sizeof(BitSet<E>) * 8;
+	let i = 0;
+	while (i < bits) {
+		const m = i as E;
+		if (self.has(m)) { result.push(m); }
+		i = i + 1;
+	}
+	return result;
+}
+
+export function toString<E>(this self: BitSet<E>): string {
+	const items = self.toItems();
+	let out = "{";
+	let i = 0;
+	while (i < items.length) {
+		if (i > 0) { out = out + ", "; }
+		out = out + items[i].toString();
+		i = i + 1;
+	}
+	return out + "}";
+}
