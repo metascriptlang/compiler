@@ -58,6 +58,7 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { rewriteCallAsMacroInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
@@ -1401,16 +1402,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 					cd.arguments[i] = rewriteCallExprToMacroInvocation(cd.arguments[i], ctx);
 					i = i + 1;
 				}
-				// Mutate in place: CallExpr → MacroInvocation. Read the bound sym
-				// BEFORE replacing node.data — the old CallExprData (and its
-				// callee) is destroyed by the assignment.
-				const boundSym = calleeBound ? cd.callee.resolvedSym : null;
-				node.kind = NodeKind.MacroInvocation;
-				node.data = { macroName: calleeName, macroArgs: cd.arguments, macroHasParens: true };
-				if (boundSym != null) {
-					node.resolvedSym = boundSym;
-					node.flags = node.flags.incl(NodeFlag.BoundSym);
-				}
+				rewriteCallAsMacroInvocation(node);
 				return node;
 			}
 		}

@@ -424,9 +424,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// bindSym: the macro pre-bound this identifier in its own module's
 			// scope — the user's scope must not re-resolve (or hijack) it.
-			const sym = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null
-				? node.resolvedSym
-				: lookupSymbol(ctx.table, d.name);
+			const sym = resolveCalleeIdent(ctx, node);
 			if (sym == null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
@@ -1867,11 +1865,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// (defer convention), return inferredType — let the next mono level
 			// or post-mono expand pass handle it.
 			if (ctx.macroBodyRegistry.has(md.macroName)) {
-				if (ctx.macroExpansionDepth >= 16) {
-					addError(ctx, "macro expansion depth limit (16) exceeded for '" + md.macroName + "' — possible recursive macro",
-						node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
+				if (macroDepthExceeded(ctx, md.macroName, node)) return;
 				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
 				const expanded = callExpandMacroInvocation(node, ctx, 0);
@@ -2434,7 +2428,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

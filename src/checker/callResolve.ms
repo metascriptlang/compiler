@@ -250,6 +250,32 @@ export function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): vo
 	}
 }
 
+export function resolveCalleeIdent(ctx: CheckerContext, callee: Node): Symbol {
+	if (callee.flags.has(NodeFlag.BoundSym) && callee.resolvedSym != null) return callee.resolvedSym;
+	return lookupSymbol(ctx.table, (callee.data as IdentifierData).name);
+}
+
+export function macroDepthExceeded(ctx: CheckerContext, name: string, node: Node): boolean {
+	if (ctx.macroExpansionDepth < 16) return false;
+	addError(ctx, "macro expansion depth limit (16) exceeded for '" + name + "' — possible recursive macro",
+		node.location.line, node.location.column);
+	node.nodeType = errorType();
+	return true;
+}
+
+export function rewriteCallAsMacroInvocation(node: Node): void {
+	const cd = node.data as CallExprData;
+	const bound = cd.callee.flags.has(NodeFlag.BoundSym) && cd.callee.resolvedSym != null
+		&& cd.callee.resolvedSym.symbolKind == SymbolKind.Macro;
+	const boundSym = bound ? cd.callee.resolvedSym : null as unknown as Symbol;
+	node.kind = NodeKind.MacroInvocation;
+	node.data = { macroName: (cd.callee.data as IdentifierData).name, macroArgs: cd.arguments, macroHasParens: true };
+	if (bound) {
+		node.resolvedSym = boundSym;
+		node.flags = node.flags.incl(NodeFlag.BoundSym);
+	}
+}
+
 // True iff any arg's nodeType still carries a GenericParam — the marker
 // for "this call lives inside an un-instantiated generic body". Drives
 // the SERIALIZE A3 defer convention: macro invocations with parametric
@@ -723,9 +749,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind == NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
-		const sym = d.callee.flags.has(NodeFlag.BoundSym) && d.callee.resolvedSym != null
-			? d.callee.resolvedSym
-			: lookupSymbol(ctx.table, calleeName);
+		const sym = resolveCalleeIdent(ctx, d.callee);
 		// Phase B+ eager: Bare-call macro invocation with inline expansion.
 		//
 		// When the callee resolves to a Macro symbol, run the macro RIGHT NOW
@@ -738,28 +762,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// The depth counter prevents infinite recursion when a macro returns
 		// a call to another macro that returns another, etc.
 		if (sym != null && sym.symbolKind == SymbolKind.Macro) {
-			if (ctx.macroExpansionDepth >= 16) {
-				addError(ctx, "macro expansion depth limit (16) exceeded for '" + calleeName + "' — possible recursive macro",
-					node.location.line, node.location.column);
-				node.nodeType = errorType();
-				return errorType();
-			}
+			if (macroDepthExceeded(ctx, calleeName, node)) return errorType();
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
 			checkJsxConsumed(ctx, macroArgsRef);
-			// Mutate node to MacroInvocation form so expandMacroInvocation can read it
-			// bindSym'd macro: read the bound symbol BEFORE node.data is replaced —
-			// the replacement destroys the old CallExprData and d.callee with it.
-			const boundCalleeSym = d.callee.flags.has(NodeFlag.BoundSym)
-				? d.callee.resolvedSym
-				: null as unknown as Symbol;
-			node.kind = NodeKind.MacroInvocation;
-			node.data = { macroName: calleeName, macroArgs: macroArgsRef, macroHasParens: true };
-			if (boundCalleeSym != null) {
-				node.resolvedSym = boundCalleeSym;
-				node.flags = node.flags.incl(NodeFlag.BoundSym);
-			}
+			rewriteCallAsMacroInvocation(node);
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
 			// persists through monomorphize (clone.ms:191 preserves it), where
