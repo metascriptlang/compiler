@@ -181,3 +181,4 @@ import "./bug162QuoteConverterBoundary";
 import "./bug163BitSetSlots";
 import "./bug164ValueOfProtocol";
 import "./bug165FloatArithInEngine";
+import "./bug166FnFormalArgFit";

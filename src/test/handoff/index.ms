@@ -67,3 +67,4 @@ import "./genericReturnIntoMaybe";
 import "./extGenericFromArg";
 import "./arrowInGenericLiteral";
 import "./functionValueMisuse";
+import "./fnFormalArgFit";
