@@ -15,13 +15,15 @@ import { callDecoratorDefers } from "./checkerCallbacks";
 
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
-	for (const stmt of stmts.programStmts) {
-		if (callDecoratorDefers(ctx, stmt)) {
-			collectDeclMint(ctx, stmt);
-			continue;
-		}
-		collectDecl(ctx, stmt);
+	for (const stmt of stmts.programStmts) collectTopLevelStmt(ctx, stmt);
+}
+
+export function collectTopLevelStmt(ctx: CheckerContext, stmt: Node): void {
+	if (callDecoratorDefers(ctx, stmt)) {
+		collectDeclMint(ctx, stmt);
+		return;
 	}
+	collectDecl(ctx, stmt);
 }
 
 function collectDeclMint(ctx: CheckerContext, stmt: Node): void {
@@ -213,6 +215,15 @@ export function collectVariable(ctx: CheckerContext, node: Node): void {
 	// DRC uses this for unique naming (s.loc.snippet equivalent).
 	// Note: checkPass overwrites this with the type-inferred symbol for checker-visited VarDecls.
 	node.resolvedSym = sym;
+	if (isComptimeNodeAliasDecl(d)) {
+		setFlag(sym, SymbolFlag.ComptimeNodeAlias);
+		sym.declNode = d.initializer;
+	}
+}
+
+export function isComptimeNodeAliasDecl(d: VariableDeclData): boolean {
+	return d.declKind == DeclKind.Const && d.initializer != null && d.declType == ""
+		&& (d.initializer.kind == NodeKind.JSXElement || d.initializer.kind == NodeKind.JSXFragment);
 }
 
 // ===== Decorator Handling =====

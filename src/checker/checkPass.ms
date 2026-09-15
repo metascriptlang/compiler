@@ -4,14 +4,14 @@
 import { CallingConvention, Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { inferredType, noneType, isUnresolvedType, charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
+import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, collectTypeAlias, collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
+import { collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
@@ -23,7 +23,8 @@ import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShape
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
-import { registerModuleCtx, registerCtorDefaults } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
+import { isBuiltinDirective } from "./decoratorHelpers";
 import { getGenericDecl } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -31,10 +32,10 @@ import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, stampCallSite } from "./callResolve";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
 import { parseSource } from "../parser/statements/validation";
@@ -593,8 +594,7 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.declKind == DeclKind.Const && d.initializer != null && d.declType == ""
-			&& (d.initializer.kind == NodeKind.JSXElement || d.initializer.kind == NodeKind.JSXFragment)) {
+	if (isComptimeNodeAliasDecl(d)) {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 		checkExpr(ctx, d.initializer, null);
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
@@ -1962,6 +1962,7 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	const _c0 = performance.now();
 	collectTopLevel(ctx, program);
 	ctx.decoratorsPending = true;
+	expandModuleStmtMacros(ctx, program);
 	callApplyDecorators(ctx, program);
 	ctx.decoratorsPending = false;
 	const _c1 = performance.now();
@@ -2022,6 +2023,98 @@ function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
 	forEachChild(node, (child: Node): void => {
 		markMacroBodyUsed(ctx, child);
 	});
+}
+
+function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
+	let name = "";
+	let sym: Symbol | null = null;
+	let bound = false;
+	if (call.kind == NodeKind.CallExpr) {
+		const callee = (call.data as CallExprData).callee;
+		if (callee.kind != NodeKind.Identifier) return null;
+		name = (callee.data as IdentifierData).name;
+		sym = resolveCalleeIdent(ctx, callee);
+		bound = callee.flags.has(NodeFlag.BoundSym) && callee.resolvedSym != null;
+	} else if (call.kind == NodeKind.MacroInvocation) {
+		name = (call.data as MacroInvocationData).macroName;
+		bound = call.flags.has(NodeFlag.BoundSym) && call.resolvedSym != null;
+		sym = bound ? call.resolvedSym : lookupSymbol(ctx.table, name);
+	} else {
+		return null;
+	}
+	if (sym == null || sym.symbolKind != SymbolKind.Macro || isBuiltinDirective(name)) return null;
+	let regCtx = ctx;
+	if (bound) {
+		const boundCtx = lookupModuleCtx(sym.modulePath);
+		if (boundCtx == null) return null;
+		regCtx = boundCtx;
+	}
+	if (!regCtx.macroBodyRegistry.has(name)) return null;
+	const declModule = regCtx.macroDeclModuleRegistry.get(name);
+	if (declModule == null || declModule == ctx.modulePath || lookupModuleCtx(declModule) == null) return null;
+	return sym;
+}
+
+function keepModuleStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted: boolean): void {
+	if (emitted && stmt.kind != NodeKind.ImportDecl) collectTopLevelStmt(ctx, stmt);
+	out.push(stmt);
+}
+
+function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted: boolean): void {
+	if (stmt.kind != NodeKind.ExprStmt) {
+		keepModuleStmt(ctx, stmt, out, emitted);
+		return;
+	}
+	const call = (stmt.data as ExprStmtData).expr;
+	const sym = call.flags.has(NodeFlag.Sem) ? null : importedStmtMacro(ctx, call);
+	if (sym == null) {
+		keepModuleStmt(ctx, stmt, out, emitted);
+		return;
+	}
+	markUsed(sym);
+	if (call.kind == NodeKind.CallExpr) {
+		const callee = (call.data as CallExprData).callee;
+		const calleeName = (callee.data as IdentifierData).name;
+		sgRecordSym(ctx, callee.location.line, callee.location.column, callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
+		rewriteCallAsMacroInvocation(call);
+	}
+	const md = call.data as MacroInvocationData;
+	for (const arg of md.macroArgs) markMacroBodyUsed(ctx, arg);
+	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
+	if (macroDepthExceeded(ctx, md.macroName, call)) {
+		call.flags = call.flags.incl(NodeFlag.Sem);
+		out.push(stmt);
+		return;
+	}
+	ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
+	const expanded = callExpandMacroInvocation(call, ctx, 0);
+	if (expanded.kind == NodeKind.MacroInvocation) {
+		call.nodeType = errorType();
+		call.flags = call.flags.incl(NodeFlag.Sem);
+		out.push(stmt);
+	} else if (expanded.kind == NodeKind.SpliceMany) {
+		for (const emittedStmt of (expanded.data as SpliceManyData).spliceNodes) {
+			stampCallSite(emittedStmt, stmt.location);
+			expandCollectStmt(ctx, emittedStmt, out, true);
+		}
+	} else {
+		call.kind = expanded.kind;
+		call.data = expanded.data;
+		if (expanded.location != null) call.location = expanded.location;
+		call.nodeType = null as unknown as Type;
+		call.resolvedSym = null;
+		call.flags = 0 as BitSet<NodeFlag>;
+		call.variantSlot = 0;
+		expandCollectStmt(ctx, stmt, out, emitted);
+	}
+	ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+}
+
+function expandModuleStmtMacros(ctx: CheckerContext, program: Node): void {
+	const pd = program.data as ProgramData;
+	const out: Node[] = [];
+	for (const stmt of pd.programStmts) expandCollectStmt(ctx, stmt, out, false);
+	pd.programStmts = out;
 }
 
 // Two-phase unused detection (reference parity).
