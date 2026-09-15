@@ -182,3 +182,4 @@ import "./bug163BitSetSlots";
 import "./bug164ValueOfProtocol";
 import "./bug165FloatArithInEngine";
 import "./bug166FnFormalArgFit";
+import "./bug167StringToSpan";
