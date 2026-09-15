@@ -2460,6 +2460,18 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			specific.push(e);
 		}
 		if (specific.length > 0 && specific.length < exts.length) { exts = specific; }
+		if (!isPointerShapedForUnknown(objType)) {
+			const shaped: ExtensionMethod[] = [];
+			for (const e of exts) {
+				const ft = getExtFnType(e);
+				if (!e.isStatic && ft.kind == TypeKind.Function && ft.typeChildren.length > 0
+						&& ft.typeChildren[0] != null && ft.typeChildren[0].kind == TypeKind.Unknown) {
+					continue;
+				}
+				shaped.push(e);
+			}
+			if (shaped.length > 0 && shaped.length < exts.length) { exts = shaped; }
+		}
 	}
 	// Dedup handled at registration (registerExtension rejects duplicate syms).
 	// Build candidate list: getExtFnType for authoritative type, stripReceiverParam for scoring.

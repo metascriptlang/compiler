@@ -902,6 +902,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// Bitwise NOT: integer/enum = ok, number = warn, other = error
 			if (d.unaryOp == "~") {
+				if (operandType != null && operandType.kind == TypeKind.Set) {
+					addError(ctx, "bitwise NOT '~' has no meaning on a set — use '.difference(other)' to remove members", node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
 				if (operandType != null && operandType.kind == TypeKind.Number) {
 					addWarning(ctx, "bitwise NOT '~' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
 					d.operand = wrapInConv(d.operand, createPrimitive(TypeKind.Int32));
