@@ -2357,79 +2357,6 @@ export function skipModifier(t: Type | null): Type | null {
 	return t;
 }
 
-// ===== Type Size Estimation (Reference: reference codegen utils parity) =====
-// Returns estimated C struct size in bytes for reference pointer introduction threshold.
-// Reference: size threshold = 24 bytes on 64-bit. Objects/tuples larger than this → pass by pointer.
-let _sizeDepth: int32 = 0;
-
-export function getTypeSize(t: Type): int32 {
-	if (t == null) return 0;
-	// Guard against recursive types (e.g. Type has Type[] fields)
-	if (_sizeDepth > 8) return 64; // assume large → pass by pointer
-	_sizeDepth = _sizeDepth + 1;
-	const result = getTypeSizeInner(t);
-	_sizeDepth = _sizeDepth - 1;
-	return result;
-}
-
-function getTypeSizeInner(t: Type): int32 {
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => 8,
-		TypeKind.Int8 | TypeKind.Uint8 => 1,
-		TypeKind.Int16 | TypeKind.Uint16 => 2,
-		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Char => 4,
-		TypeKind.Int64 | TypeKind.Uint64 => 8,
-		TypeKind.Boolean => 1,
-		TypeKind.String | TypeKind.StringLiteral => targetPtrSize + targetPtrSize, // msString: data ptr + length
-		TypeKind.CString => targetPtrSize,
-		TypeKind.Enum | TypeKind.EnumLiteral => 4, // C int
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => targetPtrSize,
-		TypeKind.Array => targetPtrSize + targetPtrSize, // msArray: data ptr + length
-		TypeKind.Function => targetPtrSize + targetPtrSize, // msClosure: fn ptr + env ptr
-		TypeKind.Struct => {
-			// Sum of field sizes
-			if (t.typeChildren == null) { return targetPtrSize; } else {
-				let size = 0;
-				for (const field of t.typeChildren) {
-					size = size + getTypeSize(field);
-				}
-				return size;
-			}
-		},
-		TypeKind.Tuple => {
-			if (t.typeChildren == null) { return 0; } else {
-				let size = 0;
-				for (const elem of t.typeChildren) {
-					size = size + getTypeSize(elem);
-				}
-				return size;
-			}
-		},
-		TypeKind.Union => {
-			// Union(Ref<T>, Null) collapses to bare T* in codegen (via unwrapRefNullUnion in
-			// getTypeDesc). Size must match the C representation — not the abstract
-			// tagged-union math — otherwise shouldIndirectParam misjudges struct fields
-			// containing `T | null` (sees them as larger than they actually are in C).
-			if (unwrapRefNullUnion(t) != null) return targetPtrSize;
-			// tag + max(member sizes)
-			let maxSize = 0;
-			if (t.typeChildren != null) {
-				for (const member of t.typeChildren) {
-					const ms = getTypeSize(member);
-					if (ms > maxSize) maxSize = ms;
-				}
-			}
-			return 4 + maxSize;
-		},
-		TypeKind.Span => targetPtrSize + targetPtrSize, // ptr + length
-		TypeKind.Set => {
-			const sr = setRepr(t);
-			return sr != null ? getTypeSize(sr) : 4;
-		},
-		_ => targetPtrSize, // conservative fallback
-	};
-}
-
 // ===== Generic Instantiation =====
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
@@ -3385,7 +3312,7 @@ export function isIndexableMapType(t: Type | null): boolean {
 	return getBuiltinKind(t) == "IndexableMap";
 }
 
-const SIZE_NOT_COMPUTABLE: int32 = -3;
+export const SIZE_NOT_COMPUTABLE: int32 = -3;
 
 // alignTo — round up offset to alignment boundary
 function alignTo(offset: int32, align: int32): int32 {

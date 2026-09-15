@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { genericInstanceAbiRepr, isStructType, getTypeSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -535,11 +535,11 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (t.kind == TypeKind.Var) return false;
 	const inner = skipModifier(t);
 	if (inner == null) return false;
-	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (isStructType(inner)) return sizeOfType(inner) > PTR_THRESHOLD;
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
 	return match (inner.kind) {
-		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
+		TypeKind.Tuple => sizeOfType(inner) > PTR_THRESHOLD,
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
 		TypeKind.GenericInstance => {
@@ -562,7 +562,7 @@ export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolea
 	const inner = paramAbiType(paramType);
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
-		return getTypeSize(inner) > PTR_THRESHOLD;
+		return sizeOfType(inner) > PTR_THRESHOLD;
 	}
 	if (isMutated && inner != null && (inner.kind == TypeKind.Function || inner.kind == TypeKind.Tuple)) return true;
 	return ccgIntroducedPtr(paramType);

@@ -6,7 +6,7 @@
 import "./helpers";
 import "./checkerTypes";
 import "./ccgIntroducedPtr";
-import "./getTypeSize";
+import "./sizeOfType";
 import "./classCodegen";
 import "./interfaceLifecycle";
 import "./classLifecycle";
