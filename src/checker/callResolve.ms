@@ -1269,34 +1269,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
 				}
 			}
-			// Function-typed args ARE relation-checked (Nim paramTypesMatch checks
-			// every arg) EXCEPT literal lambdas — their params/return are typed
-			// CONTEXTUALLY from this formal at their own check site, and re-checking
-			// against a generic-containing formal false-positives (ec38c20 family).
-			const argIsFnValue = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
-				&& pi < d.arguments.length && d.arguments[pi] != null
-				&& d.arguments[pi].kind != NodeKind.ArrowFunction
-				&& d.arguments[pi].kind != NodeKind.FunctionExpr;
-			const paramFnShape = peelTransparentInstance(paramType);
-			const fnPairCheckable = argIsFnValue
-				&& paramFnShape.kind == TypeKind.Function
-				&& !hasGenericParams(paramType);
-			const fnKindMismatch = argIsFnValue
-				&& paramFnShape.kind != TypeKind.Function && !isUnresolvedType(paramType)
-				&& paramType.kind != TypeKind.GenericParam && !isMaybeType(paramType)
-				&& !unionHasMemberOfKind(paramType, TypeKind.Function)
-				&& !hasGenericParams(paramType);
-			if (fnKindMismatch) {
-				const calleeName = getCalleeName(d.callee);
-				addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
-			}
-			if ((!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
-				&& paramType.kind != TypeKind.Function
+			const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
+				|| peelTransparentInstance(paramType).kind == TypeKind.Function;
+			if (!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
 				&& !isUnresolvedType(argTypes[pi]) && argTypes[pi].kind != TypeKind.Error
-				&& (argTypes[pi].kind != TypeKind.Function
-					|| (isMaybeType(paramType) && findFirstGenericParamName(paramType) == "")
-					|| (unionHasMemberOfKind(paramType, TypeKind.Function) && !hasGenericParams(paramType))))
-				|| fnPairCheckable) {
+				&& !(fnShaped && hasGenericParams(paramType))) {
 				// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
 				// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
 				// call args go through this site instead of fitNode. Applied

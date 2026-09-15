@@ -2502,4 +2502,4 @@ function createSyntheticToken(loc: SourceLocation): Token {
 
 
 // Register callback at module load time
-registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type): void => { checkExpr(ctx, node, expectedType); });
+registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });

@@ -398,14 +398,14 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return false;
 	}
 
-	// null assignable to legacy nullable kinds (value-struct/array/function/span).
+	// null assignable to legacy nullable kinds (value-struct/array/span).
 	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
 	// `T | null` (handled by the Union-target check above) to opt into nullability.
 	// Cursor<T> is the deliberate exception (allowsNil arm at function entry).
 	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
 	if (source.kind == TypeKind.Null) {
 		return match (target.kind) {
-			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Void => true,
+			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Void => true,
 			_ => false,
 		};
 	}
