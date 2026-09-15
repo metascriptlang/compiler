@@ -907,3 +907,31 @@ export extern function excl<E>(this self: BitSet<E>, member: E): BitSet<E>;
 
 @builtin("SetIsEmpty")
 export extern function isEmpty<E>(this self: BitSet<E>): boolean;
+
+@builtin("SetUnion")
+export extern function union<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetIntersection")
+export extern function intersection<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetDifference")
+export extern function difference<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetSymmetricDifference")
+export extern function symmetricDifference<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetIsSubsetOf")
+export extern function isSubsetOf<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetIsSupersetOf")
+export extern function isSupersetOf<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetIsDisjointFrom")
+export extern function isDisjointFrom<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetSize")
+export extern function size<E>(this self: BitSet<E>): int32;
+
+@builtin("SetHash")
+export extern function hash<E>(this self: BitSet<E>): int64;
+

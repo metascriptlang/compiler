@@ -3,7 +3,7 @@ import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../che
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool } from "../util";
+import { makeBinary, makeUnary, makeNumber, makeIdent, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { DeclKind } from "../../ast/node";
 
@@ -53,13 +53,39 @@ function isSetBinaryOp(op: string): boolean {
 
 // ===== word class (uint32 / uint64) =====
 
+function isSetArgOp(name: string): boolean {
+	return name == "SetUnion" || name == "SetIntersection" || name == "SetDifference"
+		|| name == "SetSymmetricDifference" || name == "SetIsSubsetOf"
+		|| name == "SetIsSupersetOf" || name == "SetIsDisjointFrom";
+}
+
+function setWordOperator(name: string): string {
+	if (name == "SetUnion") return "|";
+	if (name == "SetIntersection" || name == "SetDifference") return "&";
+	if (name == "SetSymmetricDifference") return "^";
+	return "";
+}
+
+function complementOf(operand: Node, t: Type, loc: SourceLocation): Node {
+	const c = makeUnary("~", operand, loc);
+	c.nodeType = t;
+	return c;
+}
+
+function isZero(expr: Node, t: Type, loc: SourceLocation): Node {
+	return typedBinary(expr, "==", typedNumber(0, t, loc), booleanType(), loc);
+}
+
 function lowerWordCall(node: Node, name: string, recv: Node, repr: Type): Node {
 	const d = node.data as CallExprData;
 	const loc = node.location;
 	if (name == "SetIsEmpty" && d.arguments.length == 1) {
 		return typedBinary(recv, "==", typedNumber(0, repr, loc), booleanType(), loc);
 	}
+	if (name == "SetSize" && d.arguments.length == 1) return lowerWordCard(recv, repr, loc);
+	if (name == "SetHash" && d.arguments.length == 1) return lowerWordHash(recv, repr, loc);
 	if (d.arguments.length != 2) return node;
+	if (isSetArgOp(name)) return lowerWordSetOp(node, name, recv, d.arguments[1], repr, loc);
 	const bit = shiftMember(d.arguments[1], repr);
 	if (name == "SetHas") {
 		const masked = typedBinary(recv, "&", bit, repr, loc);
@@ -78,6 +104,57 @@ function lowerWordBinary(node: Node, repr: Type): Node {
 	const d = node.data as BinaryExprData;
 	if (isEnumOperand(d.left)) { d.left = shiftMember(d.left, repr); }
 	if (isEnumOperand(d.right)) { d.right = shiftMember(d.right, repr); }
+	return node;
+}
+
+function cardCall(word: Node, loc: SourceLocation): Node {
+	const call = makeCall(makeIdent("msSetCard32", loc), [word], loc);
+	call.nodeType = int32Type();
+	return call;
+}
+
+function asUint32(operand: Node, loc: SourceLocation): Node {
+	const cast = createNodeAt(NodeKind.TypeAssertion, { asExpr: operand, asType: "uint32" } as NodeData, loc);
+	cast.nodeType = createPrimitive(TypeKind.Uint32);
+	return cast;
+}
+
+function hashWordInto(acc: Node, word: Node, loc: SourceLocation): Node {
+	const call = makeCall(makeIdent("msSetHashWord", loc), [acc, word], loc);
+	call.nodeType = createPrimitive(TypeKind.Int64);
+	return call;
+}
+
+function foldWordHashes(words: Node[], loc: SourceLocation): Node {
+	let acc = typedNumber(0, createPrimitive(TypeKind.Int64), loc);
+	for (const word of words) acc = hashWordInto(acc, word, loc);
+	return acc;
+}
+
+function lowerWordHash(recv: Node, repr: Type, loc: SourceLocation): Node {
+	if (repr.kind != TypeKind.Uint64) return foldWordHashes([recv], loc);
+	const shifted = typedBinary(recv, ">>", typedNumber(32, int32Type(), loc), repr, loc);
+	return foldWordHashes([asUint32(recv, loc), asUint32(shifted, loc)], loc);
+}
+
+function lowerWordCard(recv: Node, repr: Type, loc: SourceLocation): Node {
+	if (repr.kind != TypeKind.Uint64) return cardCall(recv, loc);
+	const low = cardCall(asUint32(recv, loc), loc);
+	const shifted = typedBinary(recv, ">>", typedNumber(32, int32Type(), loc), repr, loc);
+	const high = cardCall(asUint32(shifted, loc), loc);
+	return typedBinary(low, "+", high, int32Type(), loc);
+}
+
+function lowerWordSetOp(node: Node, name: string, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
+	const setType = recv.nodeType;
+	const op = setWordOperator(name);
+	if (op != "") {
+		const right = name == "SetDifference" ? complementOf(other, repr, loc) : other;
+		return typedBinary(recv, op, right, setType, loc);
+	}
+	if (name == "SetIsSubsetOf") return isZero(typedBinary(recv, "&", complementOf(other, repr, loc), repr, loc), repr, loc);
+	if (name == "SetIsSupersetOf") return isZero(typedBinary(other, "&", complementOf(recv, repr, loc), repr, loc), repr, loc);
+	if (name == "SetIsDisjointFrom") return isZero(typedBinary(recv, "&", other, repr, loc), repr, loc);
 	return node;
 }
 
@@ -137,8 +214,19 @@ function lowerArrayCall(node: Node, name: string, recv: Node, repr: Type): Node 
 		for (let i = 1; i < n; i += 1) acc = typedBinary(acc, "|", wordAt(recv, i, loc), byteType(), loc);
 		return typedBinary(acc, "==", typedNumber(0, byteType(), loc), booleanType(), loc);
 	}
+	if (name == "SetHash" && d.arguments.length == 1) {
+		const words: Node[] = [];
+		for (let i = 0; i < n; i += 1) words.push(wordAt(recv, i, loc));
+		return foldWordHashes(words, loc);
+	}
+	if (name == "SetSize" && d.arguments.length == 1) {
+		let total = cardCall(wordAt(recv, 0, loc), loc);
+		for (let i = 1; i < n; i += 1) total = typedBinary(total, "+", cardCall(wordAt(recv, i, loc), loc), int32Type(), loc);
+		return total;
+	}
 	if (d.arguments.length != 2) return node;
 	const member = d.arguments[1];
+	if (isSetArgOp(name)) return lowerArraySetOp(node, name, recv, member, repr, loc);
 	if (name == "SetHas") {
 		const word = wordAtIndex(recv, memberWordIndex(member, loc), loc);
 		const masked = typedBinary(word, "&", memberBitInWord(member, loc), byteType(), loc);
@@ -159,6 +247,33 @@ function lowerArrayCall(node: Node, name: string, recv: Node, repr: Type): Node 
 		return arrayLiteral(elements, repr, loc);
 	}
 	return node;
+}
+
+function arrayPredicateWord(name: string, recv: Node, other: Node, i: int32, loc: SourceLocation): Node {
+	const t = byteType();
+	if (name == "SetIsSupersetOf") return isZero(typedBinary(wordAt(other, i, loc), "&", complementOf(wordAt(recv, i, loc), t, loc), t, loc), t, loc);
+	if (name == "SetIsDisjointFrom") return isZero(typedBinary(wordAt(recv, i, loc), "&", wordAt(other, i, loc), t, loc), t, loc);
+	return isZero(typedBinary(wordAt(recv, i, loc), "&", complementOf(wordAt(other, i, loc), t, loc), t, loc), t, loc);
+}
+
+function lowerArraySetOp(node: Node, name: string, recv: Node, other: Node, repr: Type, loc: SourceLocation): Node {
+	const n = wordCount(repr);
+	const op = setWordOperator(name);
+	if (op != "") {
+		const elements: Node[] = [];
+		for (let i = 0; i < n; i += 1) {
+			const right = name == "SetDifference"
+				? complementOf(wordAt(other, i, loc), byteType(), loc)
+				: wordAt(other, i, loc);
+			elements.push(typedBinary(wordAt(recv, i, loc), op, right, byteType(), loc));
+		}
+		return arrayLiteral(elements, repr, loc);
+	}
+	let acc = arrayPredicateWord(name, recv, other, 0, loc);
+	for (let i = 1; i < n; i += 1) {
+		acc = typedBinary(acc, "&&", arrayPredicateWord(name, recv, other, i, loc), booleanType(), loc);
+	}
+	return acc;
 }
 
 function lowerArrayBinary(node: Node, repr: Type): Node {

@@ -112,6 +112,20 @@ void msThrow(msString msg);
 void msTestErrorFlag(void);
 void msExit(int32_t code);
 
+static inline int64_t msSetHashWord(int64_t acc, uint32_t word) {
+	uint64_t h = ((uint64_t)acc ^ (uint64_t)word) * 2654435761ULL;
+	h = (h ^ (h >> 16)) & 0xFFFFFFFFULL;
+	if (h == 0) h = 314159265ULL;
+	return (int64_t)h;
+}
+
+static inline int32_t msSetCard32(uint32_t v) {
+	v = v - ((v >> 1) & 0x55555555U);
+	v = (v & 0x33333333U) + ((v >> 2) & 0x33333333U);
+	v = (v + (v >> 4)) & 0x0F0F0F0FU;
+	return (int32_t)((v * 0x01010101U) >> 24);
+}
+
 /* Check-and-clear the pending-exception flag. Emitted by the `try await X catch Y`
  * lowering immediately after the await read (which sets msErr on a rejected
  * future) to route to the catch value. */
