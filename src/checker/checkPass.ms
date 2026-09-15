@@ -31,7 +31,7 @@ import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, estimateExprEndCol, stampCallSite } from "./callResolve";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, stampCallSite } from "./callResolve";
 import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -1554,7 +1554,12 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			if (unwrapped != null) returnExpected = unwrapped;
 		}
 	}
-	checkExpr(ctx, d.argument, returnExpected);
+	const errSentinel = engineIsCompileErrorSentinel(d.argument);
+	if (errSentinel) {
+		checkExpr(ctx, d.argument, null);
+	} else {
+		checkExpr(ctx, d.argument, returnExpected);
+	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
 	// Returning a affine Promise from a function lets its lifetime leak past the await,
@@ -1568,7 +1573,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
 	// or synthesize `as<TargetType>()` coercion via the protocol.
-	if (returnExpected != null) {
+	if (returnExpected != null && !errSentinel && !engineReturnMarshalsToNode(retType, returnExpected)) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
 	// Re-read the post-fitNode type so coercion-protocol substitutions
@@ -1591,6 +1596,8 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& !isUnresolvedType(finalRetType)
 		&& finalRetType.kind != TypeKind.Error
 		&& !isNominalMismatch(finalRetType, returnExpected)
+		&& !errSentinel
+		&& !engineReturnMarshalsToNode(finalRetType, returnExpected)
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);
 		const expected = formatTypeBrief(returnExpected);

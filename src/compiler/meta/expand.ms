@@ -1627,13 +1627,14 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 		pti = pti + 1;
 	}
 	const emptyDefaults: Node[] = [];
+	const nodeInScope = lookupSymbol(regCtx.table, "Node") != null;
 	const macroFn = createNode(NodeKind.FunctionDecl, {
 		fnName: "__macroBody",
 		params: params,
 		fnParamTypes: paramTypes,
 		fnBody: fnBody,
 		fnFlags: "",
-		fnReturnType: "",
+		fnReturnType: nodeInScope ? "Node" : "",
 		fnDefaults: emptyDefaults,
 		nameLocation: loc,
 	}, synthToken(loc));

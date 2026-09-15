@@ -3816,6 +3816,27 @@ export function engineNodeVirtualKeyType(recvType: Type | null, key: string): Ty
 	return df.fieldType;
 }
 
+export function engineReturnMarshalsToNode(actual: Type | null, expected: Type | null): boolean {
+	if (!isEngineCheckMode()) return false;
+	if (actual == null || expected == null) return false;
+	const wanted = unwrapRef(expected);
+	if (typeNameOf(expected) != "Node" && (wanted == null || typeNameOf(wanted) != "Node")) return false;
+	if (isNumeric(actual) || isStringLike(actual)) return true;
+	if (actual.kind == TypeKind.Boolean || actual.kind == TypeKind.Null) return true;
+	const bare = unwrapRef(actual);
+	return bare != null && (bare.kind == TypeKind.Array || bare.kind == TypeKind.SizedArray);
+}
+
+export function engineIsCompileErrorSentinel(node: Node | null): boolean {
+	if (node == null) return false;
+	if (!isEngineCheckMode()) return false;
+	if (node.kind != NodeKind.ObjectLiteral) return false;
+	const d = node.data as ObjectLiteralData;
+	if (d.keys == null) return false;
+	if (d.keys.length == 0) return false;
+	return d.keys[0] == "__compileError";
+}
+
 function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop: string, node: Node): Type | null {
 	if (!isEngineCheckMode()) return null;
 	if (recvType.typeName != "Node") return null;
