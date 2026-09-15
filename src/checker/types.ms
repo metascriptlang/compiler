@@ -3395,8 +3395,18 @@ function alignTo(offset: int32, align: int32): int32 {
 	return offset + (align - rem);
 }
 
+let _layoutDepth: int32 = 0;
+
 // alignOfType — natural alignment for C ABI (target-aware)
 export function alignOfType(t: Type): int32 {
+	if (_layoutDepth > 16) return 0;
+	_layoutDepth = _layoutDepth + 1;
+	const r = alignOfTypeInner(t);
+	_layoutDepth = _layoutDepth - 1;
+	return r;
+}
+
+function alignOfTypeInner(t: Type): int32 {
 	const ps = targetPtrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
 		return alignOfStruct(t);
@@ -3451,6 +3461,14 @@ function alignOfStruct(t: Type): int32 {
 // sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
 export function sizeOfType(t: Type): int32 {
+	if (_layoutDepth > 16) return SIZE_NOT_COMPUTABLE;
+	_layoutDepth = _layoutDepth + 1;
+	const r = sizeOfTypeInner(t);
+	_layoutDepth = _layoutDepth - 1;
+	return r;
+}
+
+function sizeOfTypeInner(t: Type): int32 {
 	const ps = targetPtrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
 		return sizeOfStruct(t);
