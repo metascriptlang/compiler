@@ -103,12 +103,6 @@ export interface RaiserBuiltinMap {
 	items: RaiserBuiltinEntry[];
 }
 
-// --- Float register tracking ---
-
-export interface RaiserRegFlags {
-	isFloat: int32[];
-}
-
 // --- Compiler state ---
 // Enum tracking reuses RaiserFuncMap: entries encoded as "EnumName.MemberName" → index.
 
@@ -128,7 +122,6 @@ export interface RaiserCompState {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	builtins: RaiserBuiltinMap;
-	regFlags: RaiserRegFlags;
 }
 
 export function createCompState(): RaiserCompState {
@@ -144,10 +137,7 @@ export function createCompState(): RaiserCompState {
 	const enumMap: RaiserFuncMap = { items: enumItems };
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
-	const floatFlags: int32[] = [];
-	for (let i = 0; i < 256; i = i + 1) { floatFlags.push(0); }
-	const regFlags: RaiserRegFlags = { isFloat: floatFlags };
-	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack, funcMap, enumMap, builtins, regFlags };
+	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack, funcMap, enumMap, builtins };
 }
 
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
@@ -364,17 +354,6 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 			if (slice == prefix) return true;
 		}
 	}
-	return false;
-}
-
-// --- Float register helpers ---
-
-export function markRegFloat(s: RaiserCompState, reg: int32): void {
-	if (reg >= 0 && reg < 256) { s.regFlags.isFloat[reg] = 1; }
-}
-
-export function isRegFloat(s: RaiserCompState, reg: int32): boolean {
-	if (reg >= 0 && reg < 256) { return s.regFlags.isFloat[reg] != 0; }
 	return false;
 }
 

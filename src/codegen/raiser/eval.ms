@@ -13,6 +13,7 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
+import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmCallFunction } from "../../raiser/vm";
@@ -319,13 +320,13 @@ test "engine: shift right on uint32 is logical" {
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
-	assert vm.exitValue.intVal == 7;
+	assert unboxFloat(vm.exitValue) == 7;
 }
 
 test "orc: dead objects in loop are reclaimed (free-list grows)" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 1 }; } let i = 0; let s = 0; while (i < 40) { const o = mk(); s = s + o.x; i = i + 1; } return s;");
 	assert vm.error == "";
-	assert vm.exitValue.intVal == 40;
+	assert unboxFloat(vm.exitValue) == 40;
 	// arena would grow objectHeap ~40 with empty free-list; orc recycles dead objects
 	assert vm.objectHeap.freeList.length > 0;
 }
@@ -351,7 +352,7 @@ test "orc: reference cycles are collected (bounded heap)" {
 test "orc: shared ref survives (stored in array)" {
 	const vm = evalOrcVM("const a: number[] = []; let i = 0; while (i < 5) { a.push(i); i = i + 1; } let sum = 0; for (const v of a) { sum = sum + v; } return sum;");
 	assert vm.error == "";
-	assert vm.exitValue.intVal == 10;
+	assert unboxFloat(vm.exitValue) == 10;
 }
 
 // --- Phase 3 Integration Tests ---
@@ -427,7 +428,7 @@ test "function call through transform" {
 
 test "nested function call (full pipeline)" {
 	const ctx = evalFull("function dbl(x) { return x * 2; } return dbl(dbl(3));");
-	assert ctx.lastResult.intVal == 12;
+	assert unboxFloat(ctx.lastResult) == 12;
 }
 
 test "objects through transform" {
@@ -446,32 +447,32 @@ test "build.ms pattern through transform" {
 
 test "sum 1..100" {
 	const ctx = evalFull("function sum(n: number, acc: number): number { if (n <= 0) { return acc; } return sum(n - 1, acc + n); } return sum(100, 0);");
-	assert ctx.lastResult.intVal == 5050;
+	assert unboxFloat(ctx.lastResult) == 5050;
 }
 
 test "arrow no captures" {
 	const ctx = evalFull("const f = (x: number): number => x * 2; return f(21);");
-	assert ctx.lastResult.intVal == 42;
+	assert unboxFloat(ctx.lastResult) == 42;
 }
 
 test "arrow block body no captures" {
 	const ctx = evalFull("const f = (a: number, b: number): number => { return a + b; }; return f(10, 20);");
-	assert ctx.lastResult.intVal == 30;
+	assert unboxFloat(ctx.lastResult) == 30;
 }
 
 test "arrow used in expression" {
 	const ctx = evalFull("const dbl = (x: number): number => x * 2; return dbl(3) + dbl(4);");
-	assert ctx.lastResult.intVal == 14;
+	assert unboxFloat(ctx.lastResult) == 14;
 }
 
 test "arrow passed to function" {
 	const ctx = evalFull("function apply(f: (x: number) => number, x: number): number { return f(x); } const dbl = (x: number): number => x * 2; return apply(dbl, 5);");
-	assert ctx.lastResult.intVal == 10;
+	assert unboxFloat(ctx.lastResult) == 10;
 }
 
 test "multiple arrows" {
 	const ctx = evalFull("const add1 = (x: number): number => x + 1; const dbl = (x: number): number => x * 2; return dbl(add1(3));");
-	assert ctx.lastResult.intVal == 8;
+	assert unboxFloat(ctx.lastResult) == 8;
 }
 
 // --- Continue inside for-of / for-stmt — regression tests ---

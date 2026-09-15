@@ -19,21 +19,9 @@ import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	markRegFloat, isRegFloat, callRaiserOnDemand, queueRaiserCompileError,
+	callRaiserOnDemand, queueRaiserCompileError,
 	callRaiserStmtCompiler, emitTrapNil
 } from "./context";
-
-// --- Float detection ---
-// Check if a number has a fractional part by examining its string representation.
-// "3.14" contains "." → float, "2" does not → int, "2.0" → "2" (no dot) → int (correct: same value)
-
-function numberIsFloat(v: number): boolean {
-	const s = "" + v;
-	for (let i = 0; i < s.length; i = i + 1) {
-		if (s.slice(i, i + 1) == ".") return true;
-	}
-	return false;
-}
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -126,6 +114,29 @@ function isBitwiseOp(op: string): boolean {
 
 function peelDistinct(t: Type): Type {
 	return t.kind == TypeKind.Distinct && t.typeReturn != null ? peelDistinct(t.typeReturn) : t;
+}
+
+function isFloatType(t: Type | null): boolean {
+	if (t == null) return false;
+	return match (peelDistinct(t).kind) {
+		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => true,
+		_ => false,
+	};
+}
+
+// The checked type decides. Before the checker has run — the parse-only harness in
+// rgen.ms — the parser's own `isFloat` flag on a literal is the remaining declaration.
+function isFloatExpr(n: Node): boolean {
+	if (n.nodeType != null) return isFloatType(n.nodeType);
+	return match (n.kind) {
+		NodeKind.NumberLiteral => (n.data as NumberLiteralData).isFloat,
+		NodeKind.BinaryExpr => {
+			const b = n.data as BinaryExprData;
+			return isFloatExpr(b.left) || isFloatExpr(b.right);
+		},
+		NodeKind.UnaryExpr => isFloatExpr((n.data as UnaryExprData).operand),
+		_ => false,
+	};
 }
 
 function intBandBits(t: Type | null): int32 {
@@ -225,11 +236,10 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
 			const reg = allocReg(s);
-			if (numberIsFloat(d.value)) {
+			if (isFloatExpr(node)) {
 				emitLoadConst(s, reg, raiserFloat(d.value));
-				markRegFloat(s, reg);
 			} else {
-				emitLoadConst(s, reg, raiserInt(d.value as int64));
+				emitLoadConst(s, reg, raiserInt(d.intVal));
 			}
 			return reg;
 		},
@@ -510,7 +520,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const lReg = compileExpr(s, d.left);
 	const rReg = compileExpr(s, d.right);
 	const dest = allocReg(s);
-	const useFloat = isRegFloat(s, lReg) || isRegFloat(s, rReg);
+	const useFloat = isArithmeticOp(op)
+		? isFloatExpr(node)
+		: (isFloatExpr(d.left) || isFloatExpr(d.right));
 
 	// Bitwise operators
 	if (isBitwiseOp(op)) {
@@ -557,7 +569,6 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (isArithmeticOp(op)) {
 		if (useFloat) {
 			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, lReg, rReg));
-			markRegFloat(s, dest);
 		} else {
 			emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
 		}
@@ -576,9 +587,8 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 	const dest = allocReg(s);
 
 	if (d.unaryOp == "-") {
-		if (isRegFloat(s, srcReg)) {
+		if (isFloatExpr(node)) {
 			emitInst(s, raiserABC(RaiserOpcode.NegF64, dest, srcReg, 0));
-			markRegFloat(s, dest);
 		} else {
 			emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
 		}

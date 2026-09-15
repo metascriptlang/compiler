@@ -25,6 +25,7 @@ import {
 	clearObjectHeap, clearArrayHeap, RaiserValueKind,
 } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
+import { unboxFloat } from "../../raiser/marshal";
 import { valueToNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
 import { CheckerContext, addError } from "../../checker/context";
@@ -454,7 +455,7 @@ test "comptime CallHost msProcessGetEnv missing var" {
 test "comptime smoke harness pure MS" {
 	const ctx = _smokeCallHost("function add(a: number, b: number): number { return a + b; } return add(10, 32);");
 	assert ctx.lastError == "";
-	assert ctx.lastResult.intVal == 42;
+	assert unboxFloat(ctx.lastResult) == 42;
 }
 
 // --- Phase 7 smoke tests: wrapper-inline pattern ---
