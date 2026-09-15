@@ -116,13 +116,14 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 		addLine(sec(g, CSection.ProcHeaders), `typedef struct ${typeName} ${typeName};`);
 	}
 	const isSeqHook = typeName.endsWith("Array");
+	const hookPtr = typeCacheGet(g.typeCache, "hookptr:" + bareName) == "1" ? "*" : "";
 
 	const proto = match (suffix) {
 		"Destroy" => `void ${callee}(${typeName}* self)`,
 		"WasMoved" => `void ${callee}(${typeName}* self)`,
 		"Copy" | "Sink" => `void ${callee}(${typeName}* dest, ${typeName}* src)`,
 		"Dup" => `${typeName} ${callee}(${typeName}* src)`,
-		"Eq" => `MS_BOOL ${callee}(${typeName} a, ${typeName} b)`,
+		"Eq" => `MS_BOOL ${callee}(${typeName}${hookPtr} a, ${typeName}${hookPtr} b)`,
 		"Trace" => `void ${callee}(${typeName}* self, void* callback)`,
 		_ => { return; },
 	};

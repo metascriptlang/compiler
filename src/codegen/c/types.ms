@@ -1075,6 +1075,7 @@ function genEnumType(g: CGen, t: Type): string {
 	if (t.typeName != "") {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
+		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 
 	if (isImportedType(t)) { useImportedTypeHeader(g, t); return name; }
@@ -1116,6 +1117,7 @@ function genObjectType(g: CGen, t: Type): string {
 	if (!isAnonTypeName(t.typeName) && t.typeName != "") {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, cTypeName);
 		typeCacheSet(g.typeCache, "bare:" + cTypeName, t.typeName);
+		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 
 	// Ensure forward declaration
@@ -1204,6 +1206,7 @@ function genUnionType(g: CGen, t: Type): string {
 	if (t.typeName.length > 0) {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
+		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 	ensureForwardDecl(g, name);
 	unionsInProgress.push(name);
