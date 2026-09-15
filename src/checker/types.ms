@@ -2499,6 +2499,8 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 			TypeKind.Ref => rebuildRefLike(t, substituteType(refSubstInner(t), paramName, concrete)),
 			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Var => createVar(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Cursor => createCursor(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
 			TypeKind.GenericInstance => {
 				// Substitute typeChildren and typeReturn (the instantiated body
@@ -2586,6 +2588,8 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParams(refSubstInner(t), names, concretes)),
 			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Var => createVar(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Cursor => createCursor(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes),
 			TypeKind.GenericInstance => {
 				// typeExtra intentionally NOT walked — same rationale as
@@ -2709,6 +2713,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
 		bindings.types.push(withoutReadonlyView(concrete));
+		return;
+	}
+	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor) && formal.typeReturn != null) {
+		unifyType(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
 	}
 	// Array/Span/Ref/Ptr: unify element types
