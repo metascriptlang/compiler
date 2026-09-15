@@ -5,6 +5,7 @@ import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
+import { setTargetSizes, getTargetPtrSize } from "../checker/types";
 
 // -- Types --
 
@@ -62,6 +63,43 @@ export interface CliOptions {
 }
 
 // -- Argument parsing --
+
+const HOST_POINTER_BYTES: int32 = 8;
+
+function cpuPointerBytes(cpu: string): int32 {
+	if (cpu == "amd64" || cpu == "x86_64" || cpu == "arm64" || cpu == "aarch64"
+			|| cpu == "riscv64" || cpu == "mips64" || cpu == "mips64el"
+			|| cpu == "powerpc64" || cpu == "powerpc64el" || cpu == "sparc64"
+			|| cpu == "s390x" || cpu == "ia64" || cpu == "alpha" || cpu == "e2k"
+			|| cpu == "loongarch64") return 8;
+	if (cpu == "i386" || cpu == "386" || cpu == "arm" || cpu == "wasm32"
+			|| cpu == "riscv32" || cpu == "mips" || cpu == "mipsel"
+			|| cpu == "powerpc" || cpu == "sparc" || cpu == "hppa"
+			|| cpu == "m68k" || cpu == "esp") return 4;
+	if (cpu == "avr" || cpu == "msp430") return 2;
+	return 0;
+}
+
+function targetCpuName(targetOs: string, cpuTarget: string): string {
+	if (cpuTarget != "") return cpuTarget;
+	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
+	return "";
+}
+
+export function resolveTargetSizes(targetOs: string, cpuTarget: string): void {
+	const cpu = targetCpuName(targetOs, cpuTarget);
+	if (cpu == "") {
+		setTargetSizes(HOST_POINTER_BYTES, HOST_POINTER_BYTES);
+		return;
+	}
+	const bytes = cpuPointerBytes(cpu);
+	if (bytes == 0) {
+		console.log(`${error("error")}: unknown --cpu target: ${bold(cpu)}`);
+		console.log(`  Valid: amd64, arm64, i386, arm, wasm32, riscv32, riscv64, mips, mips64, powerpc, powerpc64, sparc, sparc64, s390x, loongarch64, avr, msp430`);
+		exit(1);
+	}
+	setTargetSizes(bytes, bytes);
+}
 
 export function parseArgs(): CliOptions {
 	// argv[0] = executable, argv[1] = script (or command when self-hosted binary)
@@ -274,5 +312,29 @@ export function parseArgs(): CliOptions {
 		exit(0);
 	}
 
+	resolveTargetSizes(opts.targetOs, opts.cpuTarget);
+
 	return opts;
+}
+
+// ===== Tests =====
+
+test "pointer width follows the target cpu, not the host" {
+	resolveTargetSizes("macos", "");
+	assert getTargetPtrSize() == 8;
+	resolveTargetSizes("wasm", "");
+	assert getTargetPtrSize() == 4;
+	resolveTargetSizes("emcc", "");
+	assert getTargetPtrSize() == 4;
+	resolveTargetSizes("bare", "i386");
+	assert getTargetPtrSize() == 4;
+	resolveTargetSizes("linux", "arm64");
+	assert getTargetPtrSize() == 8;
+	resolveTargetSizes("macos", "");
+}
+
+test "an explicit cpu outranks the os-implied one" {
+	resolveTargetSizes("wasm", "amd64");
+	assert getTargetPtrSize() == 8;
+	resolveTargetSizes("macos", "");
 }
