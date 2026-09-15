@@ -12,6 +12,7 @@
 // Fix:        a generic instance is keyed by its full instance key (typeKey), like a function type.
 
 type Acc156<T> = distinct (() => T);
+export function valueOf<T>(this a: Acc156<T>): T { return a(); }
 interface Q156 { a?: Acc156<number> | null; b?: Acc156<string> | null; }
 type Th156<T> = () => T;
 interface R156 { a?: Th156<number> | null; b?: Th156<string> | null; }

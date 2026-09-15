@@ -14,6 +14,7 @@
 //             payload binds `T`; a nominal (distinct-backed) instance requires identical arguments.
 
 type Acc157<T> = distinct (() => T);
+export function valueOf<T>(this a: Acc157<T>): T { return a(); }
 function accessor157<T>(f: () => T): Acc157<T> { return f as Acc157<T>; }
 interface P157 { a?: Acc157<number> | null; s?: Acc157<string> | null; }
 

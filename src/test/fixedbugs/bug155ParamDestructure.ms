@@ -15,6 +15,7 @@
 interface P155 { a: number; b: string; }
 interface P2_155 { a?: number | null; b: string; }
 type Acc155<T> = distinct (() => T);
+export function valueOf<T>(this a: Acc155<T>): T { return a(); }
 interface Q155 { count: Acc155<number>; label: string; }
 
 function f155({ a, b }: P155): string { return b + a.toString(); }

@@ -567,3 +567,59 @@ test "E2E C: generic protocol private extension — check-time error with instan
 	assert cCode.contains("in instantiation of");
 }
 
+// ===== valueOf: a value read chosen by a failed resolution — docs/PROTOCOLS.md Part IV =====
+
+test "E2E C: valueOf cross-module — a bare read through an imported accessor compiles" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export type Accessor<T> = distinct (() => T);
+			export function valueOf<T>(this a: Accessor<T>): T { return a(); }
+			export function createSig(v: number): Accessor<number> { return (() => v) as Accessor<number>; }
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { createSig } from "./lib";
+			function main(): void {
+				const c = createSig(3);
+				const d: number = c * 2;
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert !cCode.contains("ERROR:");
+}
+
+test "E2E C: valueOf is not visible through a module that does not import or re-export it" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `
+			export type Accessor<T> = distinct (() => T);
+			export function valueOf<T>(this a: Accessor<T>): T { return a(); }
+			export function createSig(v: number): Accessor<number> { return (() => v) as Accessor<number>; }
+		` },
+		{ entryPath: "src/mid.ms", entrySource: `
+			import { Accessor, createSig } from "./lib";
+			export function sig(): Accessor<number> { return createSig(3); }
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { sig } from "./mid";
+			function main(): void {
+				const d: number = sig() * 2;
+			}
+		` },
+	];
+	const cCode = compileProjectToC(entries, "src/main.ms");
+	assert cCode.contains("ERROR:");
+}
+
+test "E2E C: an explicit valueOf call compiles" {
+	const src = `
+type Accessor<T> = distinct (() => T);
+export function valueOf<T>(this a: Accessor<T>): T { return a(); }
+function main(): void {
+	const c = (() => 4) as Accessor<number>;
+	const d: number = c.valueOf();
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+}
+

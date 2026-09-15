@@ -4,9 +4,11 @@
 // Root cause: same as bug154 — the read is rewritten by the checker, so every body (arrow, function expression,
 //             nested declaration) gets it; nothing in lambda lifting had to change (the callee identifier is still
 //             the captured variable).
-// Fix: see bug154.
+// Fix: the valueOf protocol (bug163) is inserted by the checker, so every body gets it.
 
 type Acc151<T> = distinct (() => T);
+
+export function valueOf<T>(this a: Acc151<T>): T { return a(); }
 
 function makeSignal151<T>(v: T): [Acc151<T>, (n: T) => void] {
 	let cur = v;

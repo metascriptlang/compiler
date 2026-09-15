@@ -2,7 +2,7 @@
 
 import { strictErrorCount, hasError } from "./helpers";
 
-const ACC = "type Acc<T> = distinct (() => T);\nfunction accessor<T>(f: () => T): Acc<T> { return f as Acc<T>; }\n"
+const ACC = "type Acc<T> = distinct (() => T);\nexport function valueOf<T>(this a: Acc<T>): T { return a(); }\nfunction accessor<T>(f: () => T): Acc<T> { return f as Acc<T>; }\n"
 	+ "interface P { a?: Acc<number> | null; s?: Acc<string> | null; }\ninterface Solo { a: Acc<number>; }\n";
 
 test "a generic call in a nullable slot binds its parameter from the slot's payload" {

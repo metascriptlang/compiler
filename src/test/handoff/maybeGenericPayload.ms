@@ -3,7 +3,7 @@
 import { strictErrorCount, hasError } from "./helpers";
 
 const NEEDS = "function needsStr(s: string): string { return s; }\nfunction needsNum(n: number): number { return n; }\n";
-const ACC = "type Acc<T> = distinct (() => T);\ninterface Q { a?: Acc<number> | null; b?: Acc<string> | null; }\n";
+const ACC = "type Acc<T> = distinct (() => T);\nexport function valueOf<T>(this a: Acc<T>): T { return a(); }\ninterface Q { a?: Acc<number> | null; b?: Acc<string> | null; }\n";
 const ALIAS = "type Th<T> = () => T;\ninterface R { a?: Th<number> | null; b?: Th<string> | null; }\n";
 
 test "two nullable accessor fields keep their own payloads" {

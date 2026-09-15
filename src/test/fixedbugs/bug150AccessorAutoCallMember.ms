@@ -2,10 +2,12 @@
 // Symptom: `props.count * 2`, `props.items.length`, `const { count } = props; count + 1` and a callback
 //          `(item: Acc<T>, i: Acc<number>) => item + i` were type errors — the member read was the closure.
 // Root cause: same as bug154 on the MemberExpr read path (checkMemberExpr returns the field type untouched).
-// Fix: autoCallIfAccessor runs after checkMemberExpr as well; the object of a member expression is read with the
-//      suppression reset, so `count.toString()` becomes `count().toString()`.
+// Fix: the valueOf protocol (bug163) — a member read whose resolution fails (an operand, a value slot, a missing
+//      member on the object) is rewritten into `x.valueOf()`, so `count.toString()` reads `count.valueOf()` first.
 
 type Acc150<T> = distinct (() => T);
+
+export function valueOf<T>(this a: Acc150<T>): T { return a(); }
 
 function makeSignal150<T>(v: T): [Acc150<T>, (n: T) => void] {
 	let cur = v;

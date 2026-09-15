@@ -11,12 +11,14 @@
 //             Identifier underneath was checked through the HiddenStdConv arm, so it no longer
 //             matched the hold and was rewritten into a call.
 //
-// Fix:        autoCallIfAccessor compares the hold peeled through hidden conversions and derefs
-//             (peelHidden), so a callee stays a callee however many hidden nodes wrap it.
+// Fix:        superseded by the valueOf protocol (bug163): a callee is never a valueOf site, so
+//             no hold exists and a re-checked callee stays a callee however many hidden nodes wrap it.
 
 import { Node } from "std/meta";
 
 type Acc153<T> = distinct (() => T);
+
+export function valueOf<T>(this a: Acc153<T>): T { return a(); }
 
 export macro firstExpr153(n: Node): Node { return n.jsxChildren[0].jsxExpr; }
 

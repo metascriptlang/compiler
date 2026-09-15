@@ -1,11 +1,14 @@
 // bug152 — the positions where an accessor must stay an accessor
-// Symptom: (pin) with the implicit call of bug154 in place, a function-typed slot, a callable parameter, an explicit
+// Symptom: (pin) with an implicit value read in place, a function-typed slot, a callable parameter, an explicit
 //          call, an Accessor slot, a nullable Accessor field, an overloaded call and a generic parameter must keep
-//          today's meaning — this file is the contract the rewrite must not cross.
+//          the accessor — this file is the contract the rewrite must not cross.
 // Root cause: n/a (pin).
-// Fix: autoCallIfAccessor consults the expected type (expectsCallable) and the suppression counter.
+// Fix: the valueOf protocol (bug163) fires only where resolution fails — a slot that can hold the accessor, a
+//      callee, a generic formal and overload scoring never read it, so a generic parameter binds to the accessor.
 
 type Acc152<T> = distinct (() => T);
+
+export function valueOf<T>(this a: Acc152<T>): T { return a(); }
 
 function makeSignal152<T>(v: T): [Acc152<T>, (n: T) => void] {
 	let cur = v;
@@ -41,12 +44,15 @@ test "a callable parameter receives the accessor itself" {
 test "an overloaded call follows the winning formal" {
 	const [c, setC] = makeSignal152<number>(1);
 	assert on152(c, "ab") === 3;
-	assert on152(c, 10) === 11;
+	assert on152(c(), 10) === 11;
 }
 
-test "a generic parameter binds to the value" {
+test "a generic parameter binds to the accessor and the value read follows" {
 	const [c, setC] = makeSignal152<number>(1);
+	const a: Acc152<number> = id152(c);
 	const v: number = id152(c);
+	setC(3);
+	assert a() === 3;
 	assert v === 1;
 }
 

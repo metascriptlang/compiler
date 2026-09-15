@@ -4,11 +4,12 @@
 //          read a signal without parentheses.
 // Root cause: the checker had no implicit call — a value read of an accessor type stayed a function value in every
 //             position, including the ones whose expected type can never take a function.
-// Fix: autoCallIfAccessor — an Identifier or MemberExpr read whose type is a distinct over a zero-parameter function
-//      is rewritten into a call (through checkCallExpr, so the distinct peel applies on both backends) at every value
-//      position whose expected type is not callable; callee, assignment target and overload pass 1 are suppressed.
+// Fix: the valueOf protocol (bug163) replaced the source-typed implicit call — a read is rewritten into
+//      `x.valueOf()` only where resolution fails, and only when the accessor's type declares valueOf.
 
 type Acc154<T> = distinct (() => T);
+
+export function valueOf<T>(this a: Acc154<T>): T { return a(); }
 
 function makeSignal154<T>(v: T): [Acc154<T>, (n: T) => void] {
 	let cur = v;

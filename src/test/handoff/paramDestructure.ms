@@ -5,7 +5,7 @@ import { strictErrorCount, hasError } from "./helpers";
 const P = "interface P { a: number; b: string; }\n";
 const P2 = "interface P2 { a?: number | null; b: string; }\n";
 const NEEDS = "function needsStr(s: string): string { return s; }\nfunction needsNum(n: number): number { return n; }\n";
-const ACC = "type Accessor<T> = distinct (() => T);\n";
+const ACC = "type Accessor<T> = distinct (() => T);\nexport function valueOf<T>(this a: Accessor<T>): T { return a(); }\n";
 const NUM_INTO_STRING = "got number, expected string";
 const STR_INTO_NUM = "got string, expected number";
 
