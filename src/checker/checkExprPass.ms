@@ -1809,7 +1809,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const resolved = resolveAnnotation(d.sizeofType, ctx, 0, 0);
 			resolveTypeExpr(node.typeExpr, ctx);
 			// Generic operand: leave unfolded so mono substitutes sizeofType→concrete, then the instance re-check folds the real size.
-			if (resolved.kind == TypeKind.GenericParam) { node.nodeType = int32Type(); return; }
+			if (resolved.kind == TypeKind.GenericParam || hasGenericParams(resolved)) { node.nodeType = int32Type(); return; }
 			const size = sizeOfType(resolved);
 			if (size < 0) {
 				addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,

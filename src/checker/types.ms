@@ -3421,6 +3421,13 @@ export function alignOfType(t: Type): int32 {
 	if (t.kind == TypeKind.Union) {
 		return alignOfUnion(t);
 	}
+	if (t.kind == TypeKind.Set) {
+		const sr = setRepr(t);
+		if (sr != null) return alignOfType(sr);
+	}
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
+		return alignOfType(t.typeReturn);
+	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
 		const body = instanceLayoutBody(t);
@@ -3467,6 +3474,13 @@ export function sizeOfType(t: Type): int32 {
 	}
 	if (t.kind == TypeKind.Union) {
 		return sizeOfUnion(t);
+	}
+	if (t.kind == TypeKind.Set) {
+		const sr = setRepr(t);
+		if (sr != null) return sizeOfType(sr);
+	}
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
+		return sizeOfType(t.typeReturn) * t.typeValue;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
