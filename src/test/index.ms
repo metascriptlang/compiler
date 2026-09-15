@@ -59,6 +59,7 @@ import "./c/json";
 import "./c/protocols";
 import "./c/typeIntrospection";
 import "./c/multidecl";
+import "./c/importedStmtMacroDiagnostics";
 import "./c/toycodec";
 import "./c/structuralPrefix";
 import "./c/drcLifecycle";

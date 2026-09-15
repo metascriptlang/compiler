@@ -288,6 +288,34 @@ function isEntryPath(entries: MapEntry[], modPath: string): boolean {
 // checking/macros but are not emitted, mirroring compileToCWithStd. expandMacros
 // runs post-mono in BOTH loops so macro-emitted callees (e.g. bindSym targets)
 // reach the alive set.
+export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string): string[] {
+	resetAllSideChannels();
+	const canonEntries: MapEntry[] = [];
+	for (const e of entries) {
+		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
+	}
+	entryPath = canonicalModulePath(entryPath);
+	const provider = createMapProvider(canonEntries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root != "" ? join(root, "std") : "std";
+	const graph = loadModuleGraphWithConfig(entryPath, provider, createDefaultConfig(Backend.C, stdPath));
+	const messages: string[] = [];
+	for (const e of graph.errors) messages.push(`${e}`);
+	if (messages.length > 0) return messages;
+	const registry = checkModuleGraph(graph, stdPath);
+	const mod = findModule(graph, entryPath);
+	if (mod == null) return messages;
+	const pr = parseSource(mod.source);
+	if (!pr.ok) {
+		messages.push(`${pr.error}`);
+		return messages;
+	}
+	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, getPreludeContext());
+	for (const err of ctx.errors) messages.push(err.message);
+	return messages;
+}
+
 export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string): string {
 	resetAllSideChannels();
 	const canonEntries: MapEntry[] = [];
