@@ -2831,34 +2831,39 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 }
 
-// Cycle-safe: named Object/Union types don't contain GenericParams after resolution
-let _hasGenericDepth = 0;
 export function hasGenericParams(t: Type | null): boolean {
-	if (t == null) return false;
-	if (t.kind == TypeKind.GenericParam) return true;
-	if (_hasGenericDepth > 20) return false;
-	_hasGenericDepth = _hasGenericDepth + 1;
-	const result = hasGenericParamsInner(t);
-	_hasGenericDepth = _hasGenericDepth - 1;
-	return result;
+	const found = genericScanMark(t);
+	genericScanClear(t);
+	return found;
 }
 
-function hasGenericParamsInner(t: Type): boolean {
-	// GenericInstance: check type args for GenericParam (e.g., HashMap<K,V> has GenericParam children)
+function genericScanMark(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.GenericParam) return true;
+	if (t.typeFlags.has(TypeFlag.GenericScan)) return false;
+	t.typeFlags = t.typeFlags.incl(TypeFlag.GenericScan);
 	if (t.kind == TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-			if (hasGenericParams(t.typeChildren[gi])) return true;
+			if (genericScanMark(t.typeChildren[gi])) return true;
 		}
 		return false;
 	}
-	// Named types can't contain GenericParams (they're resolved) — skip to avoid cycles
-	if ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && t.typeName != "") return false;
-	if (t.typeReturn != null && hasGenericParams(t.typeReturn)) return true;
-	if (t.typeExtra != null && hasGenericParams(t.typeExtra)) return true;
+	if (genericScanMark(t.typeReturn)) return true;
+	if (genericScanMark(t.typeExtra)) return true;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		if (hasGenericParams(t.typeChildren[i])) return true;
+		if (genericScanMark(t.typeChildren[i])) return true;
 	}
 	return false;
+}
+
+function genericScanClear(t: Type | null): void {
+	if (t == null || !t.typeFlags.has(TypeFlag.GenericScan)) return;
+	t.typeFlags = t.typeFlags.excl(TypeFlag.GenericScan);
+	genericScanClear(t.typeReturn);
+	genericScanClear(t.typeExtra);
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		genericScanClear(t.typeChildren[i]);
+	}
 }
 
 // ===== Type Query Helpers =====

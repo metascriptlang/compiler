@@ -2023,15 +2023,20 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		if (substituted.kind == TypeKind.Union && arg.nodeType != null) {
 			const uw = widenVariantToUnion(arg, substituted, arg.nodeType);
-			if (uw != null as unknown as Node) cd.arguments[pi] = uw;
+			if (uw != null as unknown as Node) {
+				cd.arguments[pi] = uw;
+				if (pi < argTypes.length) argTypes[pi] = substituted;
+			}
 			continue;
 		}
 		if (!isMaybeType(substituted) || substituted.typeReturn == null) continue;
 		if (arg.kind == NodeKind.NullLiteral) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType!);
+			if (pi < argTypes.length) argTypes[pi] = substituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
 				&& isAssignable(arg.nodeType, substituted.typeReturn)) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+			if (pi < argTypes.length) argTypes[pi] = substituted;
 		}
 	}
 
