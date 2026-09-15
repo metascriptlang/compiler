@@ -4,6 +4,7 @@
 //
 // Array -> Span: ObjectLiteral(SpanType, { data: arr.p->data, len: arr.len })
 // SizedArray -> Span: ObjectLiteral(SpanType, { data: arr.data, len: N })
+// String -> Span<char>: ObjectLiteral(SpanType, { data: str.p->data, len: str.len })
 //
 // Also handles:
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
@@ -59,8 +60,9 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						const lenExpr = makeNumber(srcType.typeValue, loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
-						// String -> Span<char>: { data: str.data, len: str.len }
-						const dataExpr2 = makeMember(d.convExpr, "data", loc);
+						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
+						const dataExpr2 = makeCall(makeIdent("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						dataExpr2.nodeType = createPtr(spanTarget.typeReturn);
 						const lenExpr2 = makeMember(d.convExpr, "len", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
 					}
@@ -217,8 +219,8 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		// Stack array or span: arr.data + start
 		dataBase = makeMember(d.array, "data", loc);
 	} else if (arrType.kind == TypeKind.String) {
-		// String: str.data + start (nativeLower rewrites .data to .p->data for Strings)
-		dataBase = makeMember(d.array, "data", loc);
+		// String: msArrDataOr0(str.p) + start — msString holds the bytes in its payload
+		dataBase = makeCall(makeIdent("msArrDataOr0", loc), [makeMember(d.array, "p", loc)], loc);
 	} else {
 		return node;
 	}
