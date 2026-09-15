@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType } from "./types";
+import { isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -362,19 +362,35 @@ export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: 
 	}
 }
 
+function operandShape(t: Type): Type | null {
+	let s = skipModifier(t);
+	for (let depth = 0; depth < PEEL_MAX_DEPTH; depth += 1) {
+		const body = distinctBody(s);
+		if (body == null) return s;
+		s = skipModifier(body);
+	}
+	return s;
+}
+
 function relationalNeedsOperator(t: Type): boolean {
-	const s = skipModifier(t);
+	const s = operandShape(t);
+	if (s == null) return false;
 	if (s.kind == TypeKind.Struct) return !isMaybeType(s);
 	return s.kind == TypeKind.Array || s.kind == TypeKind.SizedArray
 		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function || s.kind == TypeKind.Set;
 }
 
+export function relationalOperandsFail(ctx: CheckerContext, op: string, leftType: Type, rightType: Type): boolean {
+	if (op != "<" && op != ">" && op != "<=" && op != ">=") return false;
+	if (leftType == null || rightType == null) return false;
+	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return false;
+	if (!relationalNeedsOperator(leftType) && !relationalNeedsOperator(rightType)) return false;
+	return ctx.extensionRegistry == null
+		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) == null;
+}
+
 export function checkRelationalOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
-	if (leftType == null || rightType == null) return;
-	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return;
-	if (!relationalNeedsOperator(leftType) && !relationalNeedsOperator(rightType)) return;
-	if (ctx.extensionRegistry != null
-		&& resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) != null) return;
+	if (!relationalOperandsFail(ctx, op, leftType, rightType)) return;
 	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
 		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
 		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + "): boolean`",
@@ -411,7 +427,6 @@ function arithOperandsOk(op: string, a: Type, b: Type): boolean {
 	if (op == "+" && (isStringLike(a) || isStringLike(b))) return true;
 	if (a.kind == TypeKind.Ptr || b.kind == TypeKind.Ptr) return true;
 	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
-	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
 	return false;
 }
 
@@ -430,7 +445,6 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
 	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
 	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
-	if (a.kind == TypeKind.Distinct || b.kind == TypeKind.Distinct) return true;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
@@ -450,18 +464,70 @@ export function widensToBase(ctx: CheckerContext, from: Type | null, to: Type | 
 	return targetSym != null && targetSym.symbolKind == SymbolKind.Class;
 }
 
-export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
-	const cls = binaryOperandClass(op);
+function compoundBase(op: string): string {
+	if (op.length < 2 || !op.endsWith("=") || op == "==" || op == "!=" || op == "<=" || op == ">="
+		|| op == "===" || op == "!==") return op;
+	return op.slice(0, op.length - 1);
+}
+
+export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Type, rightType: Type): boolean {
+	const bop = compoundBase(op);
+	const cls = binaryOperandClass(bop);
 	if (cls == "") return false;
 	if (leftType == null || rightType == null) return false;
-	if (binaryOperandSkip(leftType) || binaryOperandSkip(rightType)) return false;
-	const a = skipModifier(leftType);
-	const b = skipModifier(rightType);
-	if (a == null || b == null) return false;
-	const ok = cls == "arith" ? arithOperandsOk(op, a, b) : equalityOperandsOk(a, b);
+	const a = operandShape(leftType);
+	const b = operandShape(rightType);
+	if (a == null || b == null || binaryOperandSkip(a) || binaryOperandSkip(b)) return false;
+	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(a, b);
 	if (ok) return false;
-	if (ctx.extensionRegistry != null
-		&& resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) != null) return false;
+	return ctx.extensionRegistry == null
+		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
+}
+
+export function isFunctionShaped(t: Type | null): boolean {
+	if (t == null) return false;
+	const s = operandShape(t);
+	return s != null && s.kind == TypeKind.Function;
+}
+
+function numericLikeOperand(s: Type): boolean {
+	return isNumeric(s) || s.kind == TypeKind.Enum || s.kind == TypeKind.EnumLiteral || s.kind == TypeKind.Char;
+}
+
+export function unaryArithFails(ctx: CheckerContext, op: string, t: Type | null): boolean {
+	if (t == null) return false;
+	const s = operandShape(t);
+	if (s == null || binaryOperandSkip(s) || numericLikeOperand(s)) return false;
+	return ctx.extensionRegistry == null || resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [t]) == null;
+}
+
+export function arrayIndexFails(arrType: Type | null, index: Node): boolean {
+	if (arrType == null || index == null as unknown as Node || index.nodeType == null) return false;
+	const k = arrType.kind;
+	if (k != TypeKind.Array && k != TypeKind.SizedArray && k != TypeKind.Span && !isStringLike(arrType)) return false;
+	if (index.kind == NodeKind.BinaryExpr) {
+		const rop = (index.data as BinaryExprData).operator;
+		if (rop == ".." || rop == "...") return false;
+	}
+	const s = operandShape(index.nodeType);
+	return s != null && !binaryOperandSkip(s) && !numericLikeOperand(s);
+}
+
+export function refuseFunctionTruthiness(ctx: CheckerContext, expr: Node): void {
+	if (expr == null as unknown as Node || !isFunctionShaped(expr.nodeType) || valueOfInPlace(ctx, expr)) return;
+	addError(ctx, "a function is always truthy — call it to test its result", expr.location.line, expr.location.column);
+}
+
+export function checkSwitchCase(ctx: CheckerContext, disc: Node, test: Node): void {
+	if (disc.nodeType == null || test.nodeType == null) return;
+	if (!binaryOperandsFail(ctx, "===", disc.nodeType, test.nodeType)) return;
+	if (valueOfInPlace(ctx, disc) && disc.nodeType != null && !binaryOperandsFail(ctx, "===", disc.nodeType, test.nodeType)) return;
+	addError(ctx, "case of type '" + typeDisplayName(test.nodeType) + "' is not comparable to the switch value of type '"
+		+ typeDisplayName(disc.nodeType!) + "'", test.location.line, test.location.column);
+}
+
+export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
+	if (!binaryOperandsFail(ctx, op, leftType, rightType)) return false;
 	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
 		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
 		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + ")`",
@@ -632,6 +698,66 @@ export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType
 	if (synthCall.nodeType.kind == TypeKind.Error) return null as unknown as Node;
 	if (isUnresolvedType(synthCall.nodeType)) return null as unknown as Node;
 	return synthCall;
+}
+
+export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
+	if (t == null || ctx.extensionRegistry == null) return false;
+	let src = withoutReadonlyView(t);
+	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return false;
+	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
+	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return false;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
+	if (exts.length == 0) return false;
+	const ext = findFirstMatchingExt(exts, src);
+	if (ext == null) return false;
+	const srcName = typeNameOf(src);
+	return srcName != "" && srcName == ext.receiverTypeName;
+}
+
+export function slotTakesValue(exprType: Type, formal: Type): boolean {
+	if (isAssignable(exprType, formal) && !isNominalMismatch(exprType, formal)) return true;
+	if (formal.kind == TypeKind.Function) {
+		const widened = distinctWidenBody(exprType);
+		if (widened != null && isAssignable(widened, formal)) return true;
+	}
+	if (isMaybeType(formal) && formal.typeReturn != null) return slotTakesValue(exprType, formal.typeReturn);
+	if (formal.kind == TypeKind.Union) {
+		for (const member of formal.typeChildren) {
+			if (member.kind != TypeKind.Null && slotTakesValue(exprType, member)) return true;
+		}
+	}
+	return false;
+}
+
+export function operandReadsValue(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, selfIsLeft: boolean): boolean {
+	if (leftType == null || rightType == null) return false;
+	const self = selfIsLeft ? leftType : rightType;
+	const other = selfIsLeft ? rightType : leftType;
+	if (!hasValueOfProtocol(ctx, self)) return false;
+	if (compoundBase(op) == "+" && isStringLike(other) && !isStringLike(self)) return true;
+	return relationalOperandsFail(ctx, op, leftType, rightType) || binaryOperandsFail(ctx, op, leftType, rightType);
+}
+
+export function valueOfInPlace(ctx: CheckerContext, node: Node): boolean {
+	if (node == null as unknown as Node || node.flags.has(NodeFlag.ProtocolCall)) return false;
+	if (!hasValueOfProtocol(ctx, node.nodeType)) return false;
+	const inner = createNodeAt(node.kind, node.data, node.location);
+	inner.nodeType = node.nodeType;
+	inner.resolvedSym = node.resolvedSym;
+	inner.typeExpr = node.typeExpr;
+	inner.flowNode = node.flowNode;
+	inner.variantSlot = node.variantSlot;
+	inner.flags = node.flags.incl(NodeFlag.Sem);
+	const member = createNodeAt(NodeKind.MemberExpr, { object: inner, property: "valueOf", isOptional: false }, node.location);
+	node.kind = NodeKind.CallExpr;
+	node.data = { callee: member, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 };
+	node.flags = node.flags.excl(NodeFlag.Sem);
+	node.nodeType = null;
+	node.resolvedSym = null;
+	node.flowNode = null;
+	callCheckExpr(ctx, node, null);
+	node.flags = node.flags.incl(NodeFlag.Sem).incl(NodeFlag.ProtocolCall);
+	return true;
 }
 
 
@@ -869,6 +995,9 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		addError(ctx, "type 'void' is not assignable to type '" + typeDisplayName(formal)
 			+ "' — a void call produces no value", expr.location.line, expr.location.column);
 		return expr;
+	}
+	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr)) {
+		return fitNode(ctx, expr, formal, expr.nodeType);
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;

@@ -8,9 +8,9 @@ import { mangleMonoName } from "../monomorphize/registry";
 import { findCallTypeArg, getGenericDecl } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
+import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, trySynthesizeAsCoercion, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -20,8 +20,8 @@ import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, autoCallTarget, expectsCallable, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, peelHidden } from "./sendable";
+import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -700,10 +700,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
-	const outerHold = ctx.autoCallHold;
-	ctx.autoCallHold = d.callee;
 	callCheckExpr(ctx, d.callee, null);
-	ctx.autoCallHold = outerHold;
 	// Phase 5: super(args) call — type-check args against parent class
 	// constructor signature. resolveSuper set callee.resolvedSym to the parent
 	// class symbol. Reuse getCtorParamTypes which returns user-only params (no
@@ -1109,6 +1106,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					&& (argTypes[ci].kind == TypeKind.String || argTypes[ci].kind == TypeKind.StringLiteral)) {
 				d.arguments[ci] = synthCStringConv(d.arguments[ci], cpt);
 				argTypes[ci] = cpt;
+			} else if (cpt != null && ci < argTypes.length && argTypes[ci] != null && !hasGenericParams(cpt)
+					&& (!isAssignable(argTypes[ci], cpt) || isNominalMismatch(argTypes[ci], cpt))
+					&& valueOfInPlace(ctx, d.arguments[ci]) && d.arguments[ci].nodeType != null) {
+				d.arguments[ci] = fitNode(ctx, d.arguments[ci], cpt, d.arguments[ci].nodeType);
+				argTypes[ci] = d.arguments[ci].nodeType!;
 			}
 		}
 		// Static class methods need mono-instantiation
@@ -1354,8 +1356,15 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							d.arguments[pi] = coerced;
 							if (coerced.nodeType != null) { argTypes[pi] = coerced.nodeType; }
 						} else {
-							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
+							const readAsValue = !hasGenericParams(paramType) && valueOfInPlace(ctx, d.arguments[pi]) && d.arguments[pi].nodeType != null;
+							if (readAsValue) { argTypes[pi] = d.arguments[pi].nodeType!; }
+							if (readAsValue && (isAssignable(argTypes[pi], paramType) || needsStdConv(argTypes[pi], paramType))) {
+								d.arguments[pi] = fitNode(ctx, d.arguments[pi], paramType, argTypes[pi]);
+								argTypes[pi] = d.arguments[pi].nodeType!;
+							} else {
+								const calleeName = getCalleeName(d.callee);
+								addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
+							}
 						}
 					}
 				}
@@ -2210,13 +2219,8 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 			argTypes.push(null as unknown as Type);
 			skipMask.push(true);
 		} else {
-			const outerHold = ctx.autoCallHold;
-			ctx.autoCallHold = arg;
-			const argType = checkArgWithExpected(ctx, arg, null as unknown as Type);
-			ctx.autoCallHold = outerHold;
-			const deferred = autoCallTarget(argType) != null;
-			argTypes.push(deferred ? null as unknown as Type : argType);
-			skipMask.push(deferred);
+			argTypes.push(checkArgWithExpected(ctx, arg, null as unknown as Type));
+			skipMask.push(false);
 		}
 	}
 
@@ -2320,8 +2324,6 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 			if (!skipMask[ai]) continue;
 			if (isContextSensitive(args[ai])) {
 				callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
-			} else {
-				autoCallIfAccessor(ctx, args[ai], args[ai].nodeType, winnerType.typeChildren[ai]);
 			}
 			const refinedArgType = args[ai].nodeType;
 			if (refinedArgType != null) { argTypes[ai] = refinedArgType; }
@@ -2937,26 +2939,6 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 	callCheckExpr(ctx, outer, createFunction(paramTypes, names, inferredType()));
 	args[0] = createNodeAt(NodeKind.CallExpr, { callee: outer, arguments: moveArgs, isDirectCall: false, resolvedOverloadIdx: -1 }, thunk.location);
 	return movedKeys;
-}
-
-export function autoCallIfAccessor(ctx: CheckerContext, node: Node, readType: Type | null, expectedType: Type | null): void {
-	if (peelHidden(ctx.autoCallHold) == node || ctx.initTracker.leftPartOfAsgn > 0) return;
-	if (autoCallTarget(readType) == null || expectsCallable(expectedType)) return;
-	const callee = createNodeAt(node.kind, node.data, node.location);
-	callee.nodeType = node.nodeType;
-	callee.resolvedSym = node.resolvedSym;
-	callee.typeExpr = node.typeExpr;
-	callee.flowNode = node.flowNode;
-	callee.variantSlot = node.variantSlot;
-	callee.flags = node.flags.incl(NodeFlag.Sem);
-	node.kind = NodeKind.CallExpr;
-	node.data = { callee: callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 };
-	node.flags = node.flags.excl(NodeFlag.Sem);
-	node.nodeType = null;
-	node.resolvedSym = null;
-	node.flowNode = null;
-	node.nodeType = checkCallExpr(ctx, node, expectedType);
-	node.flags = node.flags.incl(NodeFlag.Sem).incl(NodeFlag.AutoCall);
 }
 
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
@@ -3589,6 +3571,15 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 
+	if (isUnresolvedType(propType)
+			&& !isUnresolvedType(resolvedObjType)
+			&& resolvedObjType.kind != TypeKind.Error
+			&& d.property != "valueOf"
+			&& ctx.initTracker.leftPartOfAsgn == 0
+			&& !d.isOptional
+			&& valueOfInPlace(ctx, d.object)) {
+		return checkMemberExpr(ctx, node, expectedType);
+	}
 	// Universal .toString() — every type has a compiler-provided default.
 	// builtinLower resolves to the correct C function per type.
 	// Return the function type (not string) so CallExpr extracts the return type.

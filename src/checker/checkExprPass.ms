@@ -27,7 +27,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, unwrapAsUnknown, widenVariantToUnion, wrapInConv } from "./fit";
+import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, slotTakesValue, unwrapAsUnknown, valueOfInPlace, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -479,7 +479,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			const flowType = getFlowTypeOfReference(node, readType);
 			node.nodeType = capturedView ? createReadonlyView(flowType) : flowType;
-			autoCallIfAccessor(ctx, node, flowType, expectedType); return;
+			return;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -494,7 +494,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 			}
 			checkExpr(ctx, d.left, null);
-			const leftType = d.left.nodeType;
+			let leftType = d.left.nodeType;
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 			}
@@ -537,6 +537,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.right, rightExpected);
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
+			if (!isAsgn && d.operator != "??") {
+				if (d.operator == "&&" || d.operator == "||") {
+					refuseFunctionTruthiness(ctx, d.left);
+					leftType = d.left.nodeType;
+				}
+				if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
+				if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
+			} else if (isAsgn && operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
+				rightType = d.right.nodeType;
+			}
 			if (d.operator == "=" && isObjectShapeMismatch(rightType, leftType)) {
 				addError(ctx,
 					"Type '" + typeDisplayName(rightType) + "' is not assignable to type '" + typeDisplayName(leftType) + "'"
@@ -888,6 +898,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				return;
 			}
 			checkExpr(ctx, d.operand, unaryExpected);
+			if (d.unaryOp == "!") {
+				refuseFunctionTruthiness(ctx, d.operand);
+			} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)
+				&& !valueOfInPlace(ctx, d.operand)) {
+				addError(ctx, "unary '" + d.unaryOp + "' needs a numeric operand, got '" + typeDisplayName(d.operand.nodeType!) + "'",
+					node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			} else if (d.unaryOp == "~" && d.operand.nodeType != null && d.operand.nodeType.kind != TypeKind.Number
+				&& !isBitwiseAllowed(d.operand.nodeType)) {
+				valueOfInPlace(ctx, d.operand);
+			}
 			const operandType = d.operand.nodeType;
 			if (d.unaryOp == "!" && operandType != null && operandType.kind == TypeKind.Void) {
 				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
@@ -927,10 +948,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			const updateHold = ctx.autoCallHold;
-			ctx.autoCallHold = d.updateArg;
 			checkExpr(ctx, d.updateArg, null);
-			ctx.autoCallHold = updateHold;
 			reportSharedWrite(ctx, d.updateArg);
 			if (d.updateArg.kind == NodeKind.MemberExpr) {
 				const umd = d.updateArg.data as MemberExprData;
@@ -953,7 +971,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => {
 			node.nodeType = checkMemberExpr(ctx, node, expectedType);
-			autoCallIfAccessor(ctx, node, node.nodeType, expectedType); return;
+			return;
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
@@ -964,6 +982,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = errorType(); return;
 			}
 			checkExpr(ctx, d.array, null);
+			const arrayIsFunction = isFunctionShaped(d.array.nodeType) && !valueOfInPlace(ctx, d.array);
 			let arrType = d.array.nodeType;
 			// The index is a READ even when the ArrayAccess is on an assignment
 			// LHS (`a[i] = v`). leftPartOfAsgn suppresses flow narrowing for the
@@ -975,6 +994,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				ctx.initTracker.leftPartOfAsgn = 0;
 				checkExpr(ctx, d.index, null);
 				ctx.initTracker.leftPartOfAsgn = savedLpa;
+			}
+			if (arrayIsFunction) {
+				addError(ctx, "a function value cannot be indexed — call it first", node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
 			}
 			// Array sub-expr may have null nodeType when a macro expansion
 			// returns an Identifier whose lookup hasn't repopulated the
@@ -1039,6 +1062,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				drefNode.nodeType = arrType.typeReturn;
 				d.array = drefNode;
 				arrType = arrType.typeReturn;
+			}
+			if (arrayIndexFails(arrType, d.index)) {
+				const lpaAtIndex = ctx.initTracker.leftPartOfAsgn;
+				ctx.initTracker.leftPartOfAsgn = 0;
+				const indexRead = valueOfInPlace(ctx, d.index);
+				ctx.initTracker.leftPartOfAsgn = lpaAtIndex;
+				if (!indexRead || arrayIndexFails(arrType, d.index)) {
+					addError(ctx, "an array index must be a number, got '" + typeDisplayName(d.index.nodeType!) + "'",
+						node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
 			}
 			const idxType = d.index.nodeType;
 			// Implicit number → int64 cast for array index (C requires integer subscript)
@@ -1626,6 +1660,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			checkExpr(ctx, d.ternaryCondition, null);
+			refuseFunctionTruthiness(ctx, d.ternaryCondition);
 			const ternCondT = d.ternaryCondition.nodeType;
 			if (ternCondT != null && ternCondT.kind == TypeKind.Void) {
 				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
@@ -1693,6 +1728,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					srcType = innerExpr.nodeType;
 				}
 			}
+			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
+				&& !slotTakesValue(srcType, targetType) && valueOfInPlace(ctx, d.asExpr)) {
+				srcType = d.asExpr.nodeType;
+			}
 			// Nil typing: collapse `null as T` into typed NullLiteral.
 			if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
 			if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
@@ -1736,6 +1775,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
+			if (isFunctionShaped(d.spreadArg.nodeType) && !valueOfInPlace(ctx, d.spreadArg)) {
+				addError(ctx, "a function value cannot be spread — call it first", node.location.line, node.location.column);
+			}
 			node.nodeType = inferredType(); return;
 		},
 		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
@@ -2428,7 +2470,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, autoCallIfAccessor, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

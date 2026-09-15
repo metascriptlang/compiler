@@ -33,7 +33,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite } from "./callResolve";
-import { fitNode, joinBranchTypes, fitJoinedBranch } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -1129,6 +1129,7 @@ function isDefiniteExit(node: Node): boolean {
 
 function refuseVoidCondition(ctx: CheckerContext, cond: Node): void {
 	if (cond == null as unknown as Node) return;
+	refuseFunctionTruthiness(ctx, cond);
 	const t = cond.nodeType;
 	if (t != null && t.kind == TypeKind.Void) {
 		addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
@@ -1252,6 +1253,9 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
+	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable)) {
+		elemType = iterableElemType(d.forOfIterable.nodeType);
+	}
 	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
 	// The checker creates and type-checks the call — generic instantiation happens naturally.
 	// (Reference: semFor → implicitIterator("items", collection) → semExpr)
@@ -1665,7 +1669,10 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		if (cd.caseTests.length == 0) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
 		restoreConsumeState(ctx.affineTracker, oldAffine);
-		for (const t of cd.caseTests) { checkExpr(ctx, t, null); }
+		for (const t of cd.caseTests) {
+			checkExpr(ctx, t, null);
+			checkSwitchCase(ctx, d.switchDisc, t);
+		}
 		const savedInSwitch = ctx.inSwitch;
 		ctx.inSwitch = true;
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }

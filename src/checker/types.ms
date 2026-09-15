@@ -430,7 +430,7 @@ export const PEEL_DISTINCT: int32 = 2;
 export const PEEL_ALL: int32 = 3;
 // Maximum peel depth — guards against malformed cyclic/deeply-nested types.
 // 8 covers any realistic chain (Ref<GI<Ref<GI<...>>>> is already 4 levels).
-const PEEL_MAX_DEPTH = 8;
+export const PEEL_MAX_DEPTH = 8;
 
 // Universal peeler: strip transparent wrappers per the mask.
 // Does NOT peel GenericInstance — for shape queries, GenericInstance IS the answer
@@ -1666,24 +1666,6 @@ export function distinctWidenBody(t: Type | null): Type | null {
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
 	if (!isBrandDistinct(wrapper)) return null;
 	return distinctBody(t);
-}
-
-export function autoCallTarget(t: Type | null): Type | null {
-	if (t == null) return null;
-	const fn = distinctCallTarget(withoutReadonlyView(t));
-	return fn != null && fn.typeChildren.length == 0 ? fn : null;
-}
-
-export function expectsCallable(t: Type | null): boolean {
-	if (t == null) return false;
-	const shape = peelTransparentInstance(t);
-	if (shape.kind == TypeKind.Function || distinctCallTarget(shape) != null) return true;
-	if (shape.kind == TypeKind.Union) {
-		for (const member of shape.typeChildren) { if (expectsCallable(member)) return true; }
-		return false;
-	}
-	if (isMaybeType(shape)) return expectsCallable(shape.typeChildren[0]);
-	return false;
 }
 
 export function createGenericParam(name: string): Type {

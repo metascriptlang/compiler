@@ -847,6 +847,12 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
 	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
+	if (formal.kind == TypeKind.Function && actual.kind != TypeKind.Function) {
+		const widened = distinctWidenBody(actual);
+		if (widened != null && widened.kind == TypeKind.Function) {
+			return typeRelation(formal, widened) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
+		}
+	}
 	// Same kind: dispatch on type-specific rules
 	if (formal.kind == actual.kind) {
 		return match (formal.kind) {

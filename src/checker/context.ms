@@ -1178,7 +1178,6 @@ export class CheckerContext {
 	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
-	autoCallHold: Node;
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
@@ -1243,7 +1242,6 @@ export function createContext(): CheckerContext {
 		localTypeNames: new HashMap<string, boolean>(),
 		pendingLocalTypeDecls: [],
 		condEvalDepth: 0,
-		autoCallHold: null as unknown as Node,
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
