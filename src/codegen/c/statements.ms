@@ -312,8 +312,12 @@ function genStaticStorageVar(g: CGen, p: CProc, node: Node, d: VariableDeclData)
 	emitStmtsLine(p, `}`);
 }
 
+export function isComptimeOnlyVarDecl(node: Node): boolean {
+	return node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias);
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
+	if (isComptimeOnlyVarDecl(node)) return;
 	const d = node.data as VariableDeclData;
 	if (p != null && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
 		genStaticStorageVar(g, p, node, d);

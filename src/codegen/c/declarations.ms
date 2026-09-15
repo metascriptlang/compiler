@@ -11,7 +11,7 @@ import {
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, markTypeInfoSkipped,
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
-import { genStmt, resolveEmitArgs } from "./statements";
+import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
@@ -594,6 +594,7 @@ function emitToSection(g: CGen, code: string): void {
 function genTopLevelStmt(g: CGen, node: Node): void {
 	// Global variable declarations go to GlobalVars section
 	if (node.kind == NodeKind.VariableDecl) {
+		if (isComptimeOnlyVarDecl(node)) return;
 		genGlobalVar(g, node);
 		return;
 	}
