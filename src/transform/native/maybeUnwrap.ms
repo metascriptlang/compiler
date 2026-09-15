@@ -55,6 +55,7 @@ function unwrapMaybeNode(node: Node): Node {
 			}
 			// x.value → x  (native value IS the payload once null-collapsed)
 			if (d.property == "value") {
+				if (node.nodeType != null) d.object.nodeType = node.nodeType;
 				return d.object;
 			}
 		}
