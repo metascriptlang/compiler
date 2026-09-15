@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
-import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
+import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule } from "../codegen/c/context";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { SymbolKind, Type } from "../ast/node";
@@ -540,6 +540,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	_progCacheKeys = [];
 	_progCacheVals = [];
 	nameIndexBuild(_modIdx);
+	aliveSetAddModule(_aliveSet, entryPath);
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {

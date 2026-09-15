@@ -550,6 +550,10 @@ export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string
 	aliveSet._modules.add(modulePath);
 }
 
+export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void {
+	aliveSet._modules.add(modulePath);
+}
+
 export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string): boolean {
 	const key = modulePath + ":" + name;
 	return aliveSet._set.has(key);
