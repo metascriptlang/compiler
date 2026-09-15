@@ -56,15 +56,16 @@ import { getGenericDecl } from "../parser/context";
 // Module-level state set once at startup. Defaults to 64-bit.
 
 let targetPtrSize: int32 = 8;
-let targetIntSize: int32 = 8;
+let targetFloatSize: int32 = 8;
 
-export function setTargetSizes(ptrSize: int32, intSize: int32): void {
+export function setTargetSizes(ptrSize: int32, floatSize: int32): void {
 	targetPtrSize = ptrSize;
-	targetIntSize = intSize;
+	targetFloatSize = floatSize;
 }
 
 export function getTargetPtrSize(): int32 { return targetPtrSize; }
-export function getTargetIntSize(): int32 { return targetIntSize; }
+
+export function getTargetFloatSize(): int32 { return targetFloatSize; }
 
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -3825,7 +3826,7 @@ test "sizeOfType primitives 64-bit" {
 }
 
 test "sizeOfType primitives 32-bit" {
-	setTargetSizes(4, 4);
+	setTargetSizes(4, 8);
 	assert sizeOfType(numberType()) == 8;
 	assert sizeOfType(stringType()) == 8;
 	assert sizeOfType(createArray(numberType())) == 8;
@@ -3912,7 +3913,7 @@ test "alignOfType" {
 }
 
 test "alignOfType 32-bit" {
-	setTargetSizes(4, 4);
+	setTargetSizes(4, 8);
 	assert alignOfType(numberType()) == 4;
 	assert alignOfType(createPrimitive(TypeKind.Ref)) == 4;
 	assert alignOfType(createPrimitive(TypeKind.Int32)) == 4;

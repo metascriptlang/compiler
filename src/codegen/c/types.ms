@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { genericInstanceAbiRepr, isStructType, sizeOfType, getTargetFloatSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -523,9 +523,9 @@ export function isNilableValueType(t: Type): boolean {
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
 // Determines if a param type should be passed by pointer in C.
 // Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
-// Object types with size > 24 bytes, tuple same threshold,
+// Object types over the threshold, tuple same threshold,
 // Result/Union/Span always by pointer.
-const PTR_THRESHOLD: number = 24;
+function ptrThreshold(): int32 { return getTargetFloatSize() * 3; }
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t == null) return false;
@@ -535,11 +535,11 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (t.kind == TypeKind.Var) return false;
 	const inner = skipModifier(t);
 	if (inner == null) return false;
-	if (isStructType(inner)) return sizeOfType(inner) > PTR_THRESHOLD;
+	if (isStructType(inner)) return sizeOfType(inner) > ptrThreshold();
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
 	return match (inner.kind) {
-		TypeKind.Tuple => sizeOfType(inner) > PTR_THRESHOLD,
+		TypeKind.Tuple => sizeOfType(inner) > ptrThreshold(),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
 		TypeKind.GenericInstance => {
@@ -562,7 +562,7 @@ export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolea
 	const inner = paramAbiType(paramType);
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
-		return sizeOfType(inner) > PTR_THRESHOLD;
+		return sizeOfType(inner) > ptrThreshold();
 	}
 	if (isMutated && inner != null && (inner.kind == TypeKind.Function || inner.kind == TypeKind.Tuple)) return true;
 	return ccgIntroducedPtr(paramType);
@@ -1779,9 +1779,19 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple, setTargetSizes } from "../../checker/types";
 import { createCGen } from "./context";
 import { CheckerContext, GcMode, addError } from "../../checker/context";
+test "the pointer threshold follows the target float width" {
+	const pair = createStruct("Pair", ["a", "b"], [createPrimitive(TypeKind.Float64), createPrimitive(TypeKind.Float64)], true);
+	assert sizeOfType(pair) == 16;
+	setTargetSizes(8, 8);
+	assert !ccgIntroducedPtr(pair);
+	setTargetSizes(2, 4);
+	assert ccgIntroducedPtr(pair);
+	setTargetSizes(8, 8);
+}
+
 test "primitive keys" {
 	assert typeKey(createPrimitive(TypeKind.Number)) == "number";
 	assert typeKey(createPrimitive(TypeKind.String)) == "string";

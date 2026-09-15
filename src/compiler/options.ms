@@ -5,7 +5,7 @@ import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
-import { setTargetSizes, getTargetPtrSize } from "../checker/types";
+import { setTargetSizes, getTargetPtrSize, getTargetFloatSize } from "../checker/types";
 
 // -- Types --
 
@@ -65,6 +65,7 @@ export interface CliOptions {
 // -- Argument parsing --
 
 const HOST_POINTER_BYTES: int32 = 8;
+const HOST_FLOAT_BYTES: int32 = 8;
 
 function cpuPointerBytes(cpu: string): int32 {
 	if (cpu == "amd64" || cpu == "x86_64" || cpu == "arm64" || cpu == "aarch64"
@@ -80,6 +81,11 @@ function cpuPointerBytes(cpu: string): int32 {
 	return 0;
 }
 
+function cpuFloatBytes(cpu: string): int32 {
+	if (cpu == "avr" || cpu == "msp430") return 4;
+	return 8;
+}
+
 function targetCpuName(targetOs: string, cpuTarget: string): string {
 	if (cpuTarget != "") return cpuTarget;
 	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
@@ -89,7 +95,7 @@ function targetCpuName(targetOs: string, cpuTarget: string): string {
 export function resolveTargetSizes(targetOs: string, cpuTarget: string): void {
 	const cpu = targetCpuName(targetOs, cpuTarget);
 	if (cpu == "") {
-		setTargetSizes(HOST_POINTER_BYTES, HOST_POINTER_BYTES);
+		setTargetSizes(HOST_POINTER_BYTES, HOST_FLOAT_BYTES);
 		return;
 	}
 	const bytes = cpuPointerBytes(cpu);
@@ -98,7 +104,7 @@ export function resolveTargetSizes(targetOs: string, cpuTarget: string): void {
 		console.log(`  Valid: amd64, arm64, i386, arm, wasm32, riscv32, riscv64, mips, mips64, powerpc, powerpc64, sparc, sparc64, s390x, loongarch64, avr, msp430`);
 		exit(1);
 	}
-	setTargetSizes(bytes, bytes);
+	setTargetSizes(bytes, cpuFloatBytes(cpu));
 }
 
 export function parseArgs(): CliOptions {
@@ -330,6 +336,18 @@ test "pointer width follows the target cpu, not the host" {
 	assert getTargetPtrSize() == 4;
 	resolveTargetSizes("linux", "arm64");
 	assert getTargetPtrSize() == 8;
+	resolveTargetSizes("macos", "");
+}
+
+test "float width follows the target cpu too" {
+	resolveTargetSizes("macos", "");
+	assert getTargetFloatSize() == 8;
+	resolveTargetSizes("wasm", "");
+	assert getTargetFloatSize() == 8;
+	resolveTargetSizes("bare", "avr");
+	assert getTargetFloatSize() == 4;
+	resolveTargetSizes("bare", "msp430");
+	assert getTargetFloatSize() == 4;
 	resolveTargetSizes("macos", "");
 }
 
