@@ -1115,10 +1115,21 @@ function vmHandleNewArray(vm: RaiserVM, inst: RaiserInstruction): void {
 	vmMaybeCollect(vm);
 }
 
+function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expected: string): int64 {
+	if (v.kind == kind) return v.intVal;
+	if (v.kind == RaiserValueKind.Nil) {
+		vmError(vm, "attempt to access a nil address");
+	} else {
+		vmError(vm, `expected ${expected}, got value kind ${v.kind}`);
+	}
+	return -1;
+}
+
 function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.b);
 	const idxVal = getReg(vm, vm.baseReg + inst.c);
-	const handle = arrVal.intVal;
+	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
 	const idx = idxVal.intVal;
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
@@ -1139,7 +1150,8 @@ function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.a);
 	const idxVal = getReg(vm, vm.baseReg + inst.b);
 	const val = getReg(vm, vm.baseReg + inst.c);
-	const handle = arrVal.intVal;
+	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
 	const idx = idxVal.intVal;
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
@@ -1155,7 +1167,8 @@ function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.b);
-	const handle = arrVal.intVal;
+	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
@@ -1167,7 +1180,8 @@ function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.a);
 	const val = getReg(vm, vm.baseReg + inst.b);
-	const handle = arrVal.intVal;
+	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
@@ -1178,7 +1192,8 @@ function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.a);
 	const lenVal = getReg(vm, vm.baseReg + inst.b);
-	const handle = arrVal.intVal;
+	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
@@ -1199,7 +1214,8 @@ function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
 	const objVal = getReg(vm, vm.baseReg + inst.b);
-	const handle = objVal.intVal;
+	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
+	if (vm.halted) return;
 	if (handle < 0 || handle >= vm.objectHeap.objects.length) {
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
@@ -1248,7 +1264,8 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 
 function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
 	const objVal = getReg(vm, vm.baseReg + inst.a);
-	const handle = objVal.intVal;
+	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
+	if (vm.halted) return;
 	if (handle < 0 || handle >= vm.objectHeap.objects.length) {
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
@@ -2348,6 +2365,127 @@ test "object handle out of bounds" {
 	));
 	assert vm.error.length > 0;
 	assert vm.halted;
+}
+
+test "a field read through nil is a nil access, not a read of a live object" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.StoreField, 0, 0, 1),
+			raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+			raiserABC(RaiserOpcode.LoadField, 3, 2, 0),
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		],
+		[raiserString("kind"), raiserInt(7)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "a field write through nil is a nil access" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
+			raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABC(RaiserOpcode.StoreField, 1, 0, 2),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("kind"), raiserInt(7)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "an integer is not an object handle" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.LoadField, 2, 1, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("kind"), raiserInt(0)]
+	));
+	assert vm.halted;
+	assert vm.error.indexOf("expected an object", 0) >= 0;
+}
+
+test "an element read through nil is a nil access, not a read of a live array" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.NewArray, 0, 1, 0),
+			raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 3, 1),
+			raiserABC(RaiserOpcode.LoadIndex, 4, 2, 3),
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(10), raiserInt(0)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "an element write through nil is a nil access" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.NewArray, 0, 1, 0),
+			raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 3, 1),
+			raiserABC(RaiserOpcode.StoreIndex, 2, 3, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(10), raiserInt(0)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "length of nil is a nil access" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+			raiserABC(RaiserOpcode.ArrayLen, 2, 1, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(0)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "push onto nil is a nil access" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 0),
+			raiserABC(RaiserOpcode.ArrayPush, 1, 2, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(5)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
+}
+
+test "setLength on nil is a nil access" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABC(RaiserOpcode.LoadNil, 1, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 1, 2, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3)]
+	));
+	assert vm.halted;
+	assert vm.error == "attempt to access a nil address";
 }
 
 test "constant index out of bounds" {
