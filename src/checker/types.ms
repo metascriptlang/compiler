@@ -3480,7 +3480,7 @@ export function sizeOfType(t: Type): int32 {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
-		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => ps,
+		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => 8,
 		TypeKind.String | TypeKind.StringLiteral => ps * 2,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Null => ps,
 		TypeKind.Function => ps * 2,
@@ -3881,13 +3881,13 @@ test "sizeOfType primitives 64-bit" {
 
 test "sizeOfType primitives 32-bit" {
 	setTargetSizes(4, 4);
-	assert sizeOfType(numberType()) == 4;
+	assert sizeOfType(numberType()) == 8;
 	assert sizeOfType(stringType()) == 8;
 	assert sizeOfType(createArray(numberType())) == 8;
 	assert sizeOfType(createFunction([], [], numberType())) == 8;
 	assert sizeOfType(createPrimitive(TypeKind.Ref)) == 4;
 	assert sizeOfType(createPrimitive(TypeKind.Int32)) == 4;
-	assert sizeOfType(createPrimitive(TypeKind.Int64)) == 4;
+	assert sizeOfType(createPrimitive(TypeKind.Int64)) == 8;
 	setTargetSizes(8, 8);
 }
 
