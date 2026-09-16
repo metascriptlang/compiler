@@ -1035,7 +1035,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.YieldExpr) return { yieldArg: nd(f[0].parseInt() as int32, nodes) as Node, isDelegate: f[1] == "1" } as NodeData;
 	if (kind == NodeKind.MoveExpr) return { moveArg: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.OutExpr) return { outArg: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
-	if (kind == NodeKind.SizeofExpr) return { sizeofType: unescapeP(f[0]) } as NodeData;
+	if (kind == NodeKind.SizeofExpr) return { sizeofType: unescapeP(f[0]), sizeofResolved: tp(f[1].parseInt() as int32, types) as Type } as NodeData;
 	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) return { convExpr: nd(f[0].parseInt() as int32, nodes) as Node, convType: tp(f[1].parseInt() as int32, types) as Type } as NodeData;
 	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) return { expr: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAnnotation) return { annotationType: unescapeP(f[0]) } as NodeData;

@@ -1867,8 +1867,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (resolved.kind == TypeKind.GenericParam || hasGenericParams(resolved)) { node.nodeType = int32Type(); return; }
 			const size = sizeOfType(ctx.targetInfo, resolved);
 			if (size < 0) {
-				addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,
-					node.location.line, node.location.column);
+				if (resolved.kind == TypeKind.Void || isUnresolvedType(resolved) || isUnknownType(resolved)) {
+					addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,
+						node.location.line, node.location.column);
+					node.nodeType = int32Type(); return;
+				}
+				d.sizeofResolved = resolved;
 				node.nodeType = int32Type(); return;
 			}
 			node.kind = NodeKind.NumberLiteral;

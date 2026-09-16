@@ -138,7 +138,7 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind == NodeKind.YieldExpr) { const d = n.data as YieldExprData; return { yieldArg: X.node(d.yieldArg) as Node, isDelegate: X.bool(d.isDelegate) } as NodeData; }
 	if (kind == NodeKind.MoveExpr) { const d = n.data as MoveExprData; return { moveArg: X.node(d.moveArg) as Node } as NodeData; }
 	if (kind == NodeKind.OutExpr) { const d = n.data as OutExprData; return { outArg: X.node(d.outArg) as Node } as NodeData; }
-	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; return { sizeofType: X.str(d.sizeofType) } as NodeData; }
+	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; return { sizeofType: X.str(d.sizeofType), sizeofResolved: X.typ(d.sizeofResolved) as Type } as NodeData; }
 	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; return { convExpr: X.node(d.convExpr) as Node, convType: X.typ(d.convType) as Type } as NodeData; }
 	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; return { expr: X.node(d.expr) as Node } as NodeData; }
 	if (kind == NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; return { annotationType: X.str(d.annotationType) } as NodeData; }
@@ -233,7 +233,7 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind == NodeKind.YieldExpr) { const d = n.data as YieldExprData; V.node("yieldArg", d.yieldArg); V.bool("isDelegate", d.isDelegate); return; }
 	if (kind == NodeKind.MoveExpr) { const d = n.data as MoveExprData; V.node("moveArg", d.moveArg); return; }
 	if (kind == NodeKind.OutExpr) { const d = n.data as OutExprData; V.node("outArg", d.outArg); return; }
-	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; V.str("sizeofType", d.sizeofType); return; }
+	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; V.str("sizeofType", d.sizeofType); V.typ("sizeofResolved", d.sizeofResolved); return; }
 	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) { const d = n.data as HiddenStdConvData; V.node("convExpr", d.convExpr); V.typ("convType", d.convType); return; }
 	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) { const d = n.data as ExprStmtData; V.node("expr", d.expr); return; }
 	if (kind == NodeKind.TypeAnnotation) { const d = n.data as TypeAnnotationData; V.str("annotationType", d.annotationType); return; }

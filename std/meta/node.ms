@@ -391,7 +391,7 @@ export type NodeData =
 	| { yieldArg: Node, isDelegate: boolean }                      // YieldExpr
 	| { moveArg: Node }                                            // MoveExpr
 	| { outArg: Node }                                             // OutExpr
-	| { sizeofType: string }                                       // SizeofExpr
+	| { sizeofType: string, sizeofResolved: Type }                 // SizeofExpr
 	| { convExpr: Node, convType: Type }                           // HiddenStdConv, HiddenSubConv
 	| { expr: Node }                                               // HiddenDeref, HiddenAddr
 	| { annotationType: string }                                   // TypeAnnotation
@@ -614,7 +614,7 @@ export type AwaitExprData = { awaitArg: Node };
 export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
 export type MoveExprData = { moveArg: Node };
 export type OutExprData = { outArg: Node };
-export type SizeofExprData = { sizeofType: string };
+export type SizeofExprData = { sizeofType: string, sizeofResolved: Type };
 export type HiddenStdConvData = { convExpr: Node, convType: Type };
 export type TypeAnnotationData = { annotationType: string };
 
