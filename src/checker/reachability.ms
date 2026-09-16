@@ -172,6 +172,14 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	if (k == NodeKind.Identifier) {
 		const id = node.data as IdentifierData;
 		const sym = node.resolvedSym;
+		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
+			markAndWalk(modulePath, sym.name);
+			const hookMod = nameIndexLookup(sym.name);
+			if (hookMod != "" && hookMod != modulePath) {
+				markAndWalk(hookMod, sym.name);
+			}
+			return;
+		}
 		if (sym != null) {
 			// Use the symbol's home module + original declared name.
 			// originalName handles aliases: import { printNode as printAstNode }

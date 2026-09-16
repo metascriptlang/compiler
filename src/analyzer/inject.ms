@@ -15,7 +15,7 @@ import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
-	makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
+	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
@@ -440,7 +440,7 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 				: makeIdentResolved(tmpSym, loc);
 			const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 			addPre(dctx, makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
+				makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
 		}
 	} else {
 		// Simple refcounted (Ref, Closure): shallow copy + unary incref.
@@ -831,7 +831,7 @@ function needsDestAddr(rcInfo: RcInfo): boolean {
 function makeRcCallStmt(fnName: string, varName: string, sym: Symbol | null, loc: SourceLocation): Node {
 	if (fnName == "") return makeExprStmt(makeNull(loc), loc);
 	return makeExprStmt(
-		makeCall(makeIdent(fnName, loc), [makeVarRef(varName, sym, loc)], loc), loc);
+		makeCall(hookRef(fnName, loc), [makeVarRef(varName, sym, loc)], loc), loc);
 }
 
 // Reference parity: all hooks take var T (pointer).
@@ -843,7 +843,7 @@ function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, s
 			return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
 		}
 		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.destroyFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
+			makeCall(hookRef(rcInfo.destroyFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
 	return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
 }
@@ -857,7 +857,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, 
 		}
 		// Named structs + generated array hooks: pointer arg
 		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
+			makeCall(hookRef(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
 	return makeRcCallStmt(rcInfo.wasMovedFn, varName, sym, loc);
 }
@@ -886,7 +886,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 		const srcArg = isCopySrcByValue(rcInfo)
 			? srcRef
 			: makeHiddenAddr(srcRef, loc);
-		return makeExprStmt(makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+		return makeExprStmt(makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 	}
 	// Unary incref: msIncref(dest), msClosureCopy(dest), etc.
 	return makeRcCallStmt(rcInfo.copyFn, destName, destSym, loc);
@@ -903,17 +903,17 @@ function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: Sour
 		// src: value for seqLike runtime macros, pointer for generated hooks and Named structs
 		const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.sinkFn, loc), [destArg, srcArg], loc), loc);
+			makeCall(hookRef(rcInfo.sinkFn, loc), [destArg, srcArg], loc), loc);
 	}
 	return makeExprStmt(
-		makeCall(makeIdent(rcInfo.sinkFn, loc), [makeVarRef(destName, sym, loc), srcExpr], loc), loc);
+		makeCall(hookRef(rcInfo.sinkFn, loc), [makeVarRef(destName, sym, loc), srcExpr], loc), loc);
 }
 
 // RC call on arbitrary expression (for field/element wasMoved)
 function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): Node {
 	if (fnName == "") return makeExprStmt(makeNull(loc), loc);
 	return makeExprStmt(
-		makeCall(makeIdent(fnName, loc), [argExpr], loc), loc);
+		makeCall(hookRef(fnName, loc), [argExpr], loc), loc);
 }
 
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
@@ -924,7 +924,7 @@ function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation):
 			return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
 		}
 		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
+			makeCall(hookRef(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
 	}
 	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
 }
@@ -1005,7 +1005,7 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 		const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
 		const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
 		const copyCall = makeExprStmt(
-			makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+			makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 		if ((flags & MOC_IS_DECL) != 0) {
 			if (destName != "") {
 				return makeBlock([stmt, makeWasMovedCall(destName, rcInfo, loc, destSym), copyCall], loc);
@@ -1032,7 +1032,7 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 		saveTmp.nodeType = saveType;
 		saveTmp.resolvedSym = tmpSym;
 		const increfCall = makeExprStmt(
-			makeCall(makeIdent(rcInfo.copyFn, loc), [increfTarget], loc), loc);
+			makeCall(hookRef(rcInfo.copyFn, loc), [increfTarget], loc), loc);
 		return makeBlock([saveTmp, stmt, increfCall, makeDestroyCall(tmpName, rcInfo, loc, tmpSym)], loc);
 	}
 	return stmt;
@@ -1104,7 +1104,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 					srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
 				}
 				const opCall = makeExprStmt(
-					makeCall(makeIdent(opFn, loc), [destArg, srcArg], loc), loc);
+					makeCall(hookRef(opFn, loc), [destArg, srcArg], loc), loc);
 				const hoisted: Node[] = [];
 				hoisted.push(callTmpDecl);
 				hoisted.push(opCall);

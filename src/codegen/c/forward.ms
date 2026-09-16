@@ -5,8 +5,10 @@
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
 import { Type, TypeKind, Symbol } from "../../ast/node";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, typeCacheGet, } from "./context";
-import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam } from "./types";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
+import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam, ccgIntroducedPtr, lookupHookSym } from "./types";
+import { safeName } from "./names";
 import { findExportedSymbol } from "../../checker/context";
 
 // ===== DRC forward prototypes =====
@@ -19,42 +21,6 @@ function findSuffix(name: string, suffixes: string[]): string {
 		if (name.endsWith(suffix)) return suffix;
 	}
 	return "";
-}
-
-// A generated DRC hook whose mangled name starts with "ms" — i.e. a per-type NESTED
-// value-array walker (msNumberArrayArrayDestroy, msStringArrayArrayDestroy, …). These
-// collide by prefix with the runtime-provided ms* hooks, so distinguish by the CLOSED
-// runtime base set, never by the prefix alone.
-function isGeneratedMsArrayHook(name: string): boolean {
-	if (!(name.length > 2 && name.byteAt(0) == "m".code && name.byteAt(1) == "s".code)) return false;
-	const suffix = findSuffix(name, DRC_SUFFIXES);
-	if (suffix == "") return false;
-	const base = name.slice(0, name.length - suffix.length);
-	// Runtime ms* array hooks are all single-level (msArray, msNumberArray, msStringArray,
-	// msRefArray, msUint8Array, msClosureArray); a generated nested value-array walker is
-	// array-OF-array ("ArrayArray") and a ref-array-element walker ends "star_Array"
-	// (elemIsRefArray per-type struct). Either ending discriminates — no denylist.
-	return base.endsWith("ArrayArray") || base.endsWith("star_Array");
-}
-
-// Generated tuple hook (msTuple_<hash>{Destroy,Copy,Sink,WasMoved}) for a structural tuple.
-// Runtime ms* families never carry a "_<hash>" segment, so the msTuple_ base discriminates.
-function isGeneratedMsTupleHook(name: string): boolean {
-	if (!(name.length > 2 && name.byteAt(0) == "m".code && name.byteAt(1) == "s".code)) return false;
-	const suffix = findSuffix(name, DRC_SUFFIXES);
-	if (suffix == "") return false;
-	const base = name.slice(0, name.length - suffix.length);
-	return base.length > 8 && base.slice(0, 8) == "msTuple_";
-}
-
-// Generated anon-struct hook (msAnon_<hash>{Destroy,Copy,Sink,WasMoved}) — same
-// discrimination as msTuple_: runtime ms* families never carry a "_<hash>" segment.
-function isGeneratedMsAnonHook(name: string): boolean {
-	if (!(name.length > 2 && name.byteAt(0) == "m".code && name.byteAt(1) == "s".code)) return false;
-	const suffix = findSuffix(name, DRC_SUFFIXES);
-	if (suffix == "") return false;
-	const base = name.slice(0, name.length - suffix.length);
-	return base.length > 7 && base.slice(0, 7) == "msAnon_";
 }
 
 export function isDrcLifecycleName(name: string): boolean {
@@ -80,54 +46,41 @@ export function isDrcLifecycleName(name: string): boolean {
 	return true;
 }
 
-// Emit forward prototype for DRC lifecycle functions called cross-module.
-// Signatures are known by convention (suffix determines parameter pattern).
-export function ensureDrcProto(g: CGen, callee: string): void {
-	if (callee == null || callee == "") return;
-	const suffix = findSuffix(callee, DRC_SUFFIXES);
-	if (suffix == "") return;
-	// Skip built-in runtime ms* hooks (defined in C headers) — but NOT generated nested
-	// value-array walkers (msNumberArrayArrayDestroy …) or tuple hooks (msTuple_<hash>Destroy …),
-	// which are emitted by destructorLifting and need a forward proto.
-	if (callee.length > 2 && callee.byteAt(0) == "m".code && callee.byteAt(1) == "s".code
-		&& !isGeneratedMsArrayHook(callee) && !isGeneratedMsTupleHook(callee)
-		&& !isGeneratedMsAnonHook(callee)) return;
+export function procHeader(g: CGen, name: string, fnType: Type, paramNames: string[] | null, mutBits: int32, hookAbi: boolean): string {
+	let cRetType = getTypeDesc(g, fnType.typeReturn);
+	if (fnType.typeReturn == null) cRetType = "void";
+	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
+	const named = paramNames != null;
+	const names: string[] = paramNames != null ? paramNames : [];
+	const count = named ? names.length : fnType.typeChildren.length;
+	let paramList = "";
+	if (nrvo) {
+		paramList = cRetType + "* __result";
+		if (count > 0) paramList = paramList + ", ";
+	}
+	for (let i = 0; i < count; i += 1) {
+		if (i > 0) paramList = paramList + ", ";
+		const typed = i < fnType.typeChildren.length;
+		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
+		const mut = (mutBits & (1 << (i as int32))) != 0;
+		const promote = typed && (hookAbi ? ccgIntroducedPtr(fnType.typeChildren[i]) : shouldIndirectParam(fnType.typeChildren[i], mut));
+		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
+			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
+		}
+		paramList = named ? paramList + `${pType} ${safeName(names[i])}` : paramList + pType;
+	}
+	if (paramList == "") paramList = "void";
+	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;
+}
+
+export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): void {
+	const hook = sym != null ? sym : lookupHookSym(callee);
+	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
+	const fnType = hook.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function) return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
-
-	// Extract type name prefix: "TypeNameDestroy" → "TypeName"
-	const bareName = callee.slice(0, callee.length - suffix.length);
-	// Hook names keep the checker-level spelling, but the C struct they take is
-	// module-qualified (mangledTypeName). The gen* emitters register the mapping;
-	// a TU that never materializes the type falls back to the bare opaque name.
-	const mapped = typeCacheGet(g.typeCache, "cname:" + bareName);
-	const typeName = mapped != "" ? mapped : bareName;
-	// The full typedef block only exists in TUs where getTypeDesc ran for the
-	// type — a TU referencing just the hook (anon consumer, or the defining
-	// module whose TypeInfo cites the hook without otherwise using the type)
-	// needs an opaque forward so `X*` in the proto is a known type (identical
-	// typedef redeclaration is legal C11). By-value suffixes (Eq, Dup) are
-	// excluded: an opaque type cannot appear by value, so their TUs must have
-	// materialized the full type already.
-	const userNamed = !(callee.length > 2 && callee.byteAt(0) == "m".code && callee.byteAt(1) == "s".code);
-	const pointerSuffix = suffix == "Destroy" || suffix == "WasMoved"
-		|| suffix == "Copy" || suffix == "Sink" || suffix == "Trace";
-	if (isGeneratedMsAnonHook(callee) || (userNamed && pointerSuffix)) {
-		addLine(sec(g, CSection.ProcHeaders), `typedef struct ${typeName} ${typeName};`);
-	}
-	const isSeqHook = typeName.endsWith("Array");
-	const hookPtr = typeCacheGet(g.typeCache, "hookptr:" + bareName) == "1" ? "*" : "";
-
-	const proto = match (suffix) {
-		"Destroy" => `void ${callee}(${typeName}* self)`,
-		"WasMoved" => `void ${callee}(${typeName}* self)`,
-		"Copy" | "Sink" => `void ${callee}(${typeName}* dest, ${typeName}* src)`,
-		"Dup" => `${typeName} ${callee}(${typeName}* src)`,
-		"Eq" => `MS_BOOL ${callee}(${typeName}${hookPtr} a, ${typeName}${hookPtr} b)`,
-		"Trace" => `void ${callee}(${typeName}* self, void* callback)`,
-		_ => { return; },
-	};
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, callee, fnType, null, 0, true) + ";");
 }
 
 // ===== Cross-module function prototypes =====
@@ -151,40 +104,17 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		}
 	}
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	// DRC hooks: use ensureDrcProto instead (correct fixed-convention signatures)
-	if (isDrcLifecycleName(calleeName)) {
-		ensureDrcProto(g, calleeName);
+	const hook = sym != null ? sym : lookupHookSym(calleeName);
+	if (hook != null && hasFlag(hook, SymbolFlag.GeneratedOp)) {
+		ensureDrcProto(g, calleeName, hook);
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;
 	const protoKey = "proto:" + calleeName;
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
-	const retType = getTypeDesc(g, fnType.typeReturn);
-	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
-	let paramList = "";
-	if (nrvo) {
-		paramList = retType + "* __result";
-		if (fnType.typeChildren != null && fnType.typeChildren.length > 0) paramList = paramList + ", ";
-	}
-	if (fnType.typeChildren != null) {
-		const fwdMutBits: int32 = sym != null ? sym.mutatedParams : 0;
-		let i = 0;
-		while (i < fnType.typeChildren.length) {
-			if (i > 0) paramList = paramList + ", ";
-			let pType = getTypeDesc(g, fnType.typeChildren[i]);
-			const fwdMut = (fwdMutBits & (1 << (i as int32))) != 0;
-			if (shouldIndirectParam(fnType.typeChildren[i], fwdMut) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) != "*") {
-				pType = shouldConstParam(fnType.typeChildren[i], fwdMut) ? "const " + pType + "*" : pType + "*";
-			}
-			paramList = paramList + pType;
-			i += 1;
-		}
-	}
-	if (paramList == "") paramList = "void";
-	let cRetType = retType;
-	if (nrvo) cRetType = "void";
-	addLine(sec(g, CSection.ProcHeaders), `${cRetType} ${calleeName}(${paramList});`);
+	const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, isDrcLifecycleName(calleeName)) + ";");
 }
 
 // useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.

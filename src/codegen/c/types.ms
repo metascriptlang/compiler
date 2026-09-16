@@ -12,7 +12,7 @@ import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKi
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, isTypeInfoSkipped } from "./context";
-import { SymbolFlag, hasFlag, lookupSymbol } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, lookupSymbol, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext } from "../../checker/context";
 
@@ -80,18 +80,42 @@ function structIdentityName(g: CGen, t: Type): string {
 }
 import { useHeader } from "./context";
 
-// ===== Generated destroy-hook registry (Nim graph.attachedOps[attachedDestructor] analog) =====
+// ===== Generated lifecycle hook symbols (attachedOps analog) =====
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
 // unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
-// Nim instead keeps attached ops in a GLOBAL table keyed by type identity. Mirror that: record the
-// mangled type name whenever a real destroy hook is generated, and let `ensureTypeInfoDef` consult
-// it by name to wire `.destroyFn` for monomorphized instances (whose objType carries no op).
+// The ops therefore live in one GLOBAL table keyed by hook name: a generated hook's symbol is
+// registered before its body exists, references carry it, and `ensureTypeInfoDef` asks it whether
+// a monomorphized instance has a destroy hook.
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
-let _genDestroyHooks: NameSet = createNameSet();
-export function recordGenDestroyHook(typeName: string): void { nameSetAdd(_genDestroyHooks, typeName); }
-export function genHasDestroyHook(typeName: string): boolean { return nameSetHas(_genDestroyHooks, typeName); }
-export function resetGenDestroyHooks(): void { _genDestroyHooks = createNameSet(); }
+let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function resetHookSyms(): void {
+	_hookSyms = new HashMap<string, Symbol>();
+}
+
+export function lookupHookSym(name: string): Symbol | null {
+	return _hookSyms.get(name);
+}
+
+export function hookPrototype(name: string, fnType: Type | null): Symbol {
+	const existing = _hookSyms.get(name);
+	if (existing != null) return existing;
+	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
+	setFlag(sym, SymbolFlag.GeneratedOp);
+	_hookSyms.set(name, sym);
+	return sym;
+}
+
+export function hookComplete(name: string, fnType: Type | null): Symbol {
+	const sym = hookPrototype(name, fnType);
+	sym.symbolType = fnType;
+	return sym;
+}
+export function genHasDestroyHook(typeName: string): boolean {
+	return _hookSyms.get(typeName + "Destroy") != null;
+}
+
 
 // ===== Type Resolution =====
 // All types are fully resolved PType objects by codegen time.
@@ -1075,7 +1099,6 @@ function genEnumType(g: CGen, t: Type): string {
 	if (t.typeName != "") {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
-		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 
 	if (isImportedType(t)) { useImportedTypeHeader(g, t); return name; }
@@ -1117,7 +1140,6 @@ function genObjectType(g: CGen, t: Type): string {
 	if (!isAnonTypeName(t.typeName) && t.typeName != "") {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, cTypeName);
 		typeCacheSet(g.typeCache, "bare:" + cTypeName, t.typeName);
-		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 
 	// Ensure forward declaration
@@ -1206,7 +1228,6 @@ function genUnionType(g: CGen, t: Type): string {
 	if (t.typeName.length > 0) {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
-		typeCacheSet(g.typeCache, "hookptr:" + t.typeName, ccgIntroducedPtr(t) ? "1" : "0");
 	}
 	ensureForwardDecl(g, name);
 	unionsInProgress.push(name);

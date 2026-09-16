@@ -16,7 +16,7 @@ import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledG
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName, ensureDrcProto } from "./forward";
+import { isDrcLifecycleName, ensureDrcProto, procHeader } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -160,12 +160,6 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	if (fnType.typeReturn == null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
-	// Build parameter list — NRVO adds out-param as first parameter
-	let paramList = "";
-	if (nrvo) {
-		paramList = cRetType + "* __result";
-		if (d.params.length > 0) paramList = paramList + ", ";
-	}
 	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion.
 	// Detection: (1) name pattern (TypeNameDestroy etc.) for user-named types;
 	// (2) GeneratedOp flag for compiler-synthesized hooks whose name clashes
@@ -175,19 +169,6 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const isDrcHookFn = isDrcLifecycleName(name)
 		|| (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp));
 	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
-	for (let i = 0; i < d.params.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
-		const protoMut = (protoMutBits & (1 << (i as int32))) != 0;
-		// DRC hooks: use ccgIntroducedPtr only (skip struct-aware mutation logic)
-		// Regular functions: use shouldIndirectParam (struct-aware + mutation)
-		const promote = i < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[i]) : shouldIndirectParam(fnType.typeChildren[i], protoMut));
-		if (promote && pType.charAt(pType.byteLength - 1) != "*") {
-			pType = (!isDrcHookFn && shouldConstParam(fnType.typeChildren[i], protoMut)) ? "const " + pType + "*" : pType + "*";
-		}
-		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
-	}
-	if (paramList == "") paramList = "void";
 
 	// Generic instance deduplication (reference parity).
 	// First module to codegen an instance emits the body; others get forward decl only.
@@ -207,16 +188,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
-	const proto = `${prefix}${actualRetType} ${name}(${paramList})`;
+	const proto = prefix + procHeader(g, name, fnType, d.params, protoMutBits, isDrcHookFn);
 
 	// Extern functions with 'from' clause bind to existing C functions — header provides declaration.
 	// Extern functions without 'from' use mangled name and need our prototype.
 	const hasNativeName = (sym != null && sym.nativeName != "") || (d.nativeName != null && d.nativeName != "");
 	if (isExternFn && hasNativeName) return;
 
-	// DRC hooks: ensureDrcProto handles their forward decls with correct pointer convention.
-	// genFunctionDecl's proto may have wrong param types for union variant hooks.
-	if (!alreadyDeclared && !isDrcHookFn) {
+	if (!alreadyDeclared) {
 		addLine(sec(g, CSection.ProcHeaders), proto + ";");
 	}
 
@@ -805,7 +784,7 @@ function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx:
 	const arrCType = cType.slice(0, cType.length - 1);
 	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
 	const cellName = refArrayCellName(destroyFn, arrCType);
-	ensureDrcProto(g, destroyFn);
+	ensureDrcProto(g, destroyFn, null);
 	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
 	// symbol does not exist there - take the null slot like msBoxRefArray does.

@@ -19,7 +19,7 @@ import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, 
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
-import { ensureDrcProto, ensureCrossModuleProto, isDrcLifecycleName } from "./forward";
+import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, addError, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
@@ -712,11 +712,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		// When the defining module's TypeInfo references hooks that live in another
 		// TU (consumer claimed hook ownership first via split-ownership design),
 		// emit extern forward prototypes so the linker resolves them.
-		// Filter by resolvedSym===null to skip enum members like `TokenKind_Eq`
-		// that happen to match the "Eq" suffix.
-		if (node.resolvedSym == null && isDrcLifecycleName(d.name)) {
-			ensureDrcProto(g, d.name);
-		}
+		ensureDrcProto(g, d.name, node.resolvedSym);
 		// Built-in numeric constants → C99 macros
 		if (d.name == "NaN") { ctx.results.push("NAN"); return; }
 		if (d.name == "Infinity") { ctx.results.push("INFINITY"); return; }
@@ -1941,7 +1937,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cName)};`);
 				if (memberValue.typeName != "" && hasAsgnFlag(memberValue)) {
 					const hookName = hookBaseCName(memberValue.typeName, memberValue, g.checkerCtx) + "Copy";
-					ensureDrcProto(g, hookName);
+					ensureDrcProto(g, hookName, null);
 					emitStmtsLine(p, `${hookName}(${tmp}, &((${inner}).v${pvi}));`);
 				} else {
 					emitStmtsLine(p, `*${tmp} = (${inner}).v${pvi};`);
@@ -2575,7 +2571,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	const protoType = protoSym != null && protoSym.symbolType != null ? protoSym.symbolType : calleeType;
 	ensureCrossModuleProto(g, callee, protoType, protoSym);
 	// DRC hooks — emit forward declaration on-demand
-	ensureDrcProto(g, callee);
+	ensureDrcProto(g, callee, protoSym);
 
 	// msBoxStruct(val) → msBoxStruct(&val, sizeof(TypeName))
 	// spawnLower emits this for struct returns. nodeType carries the type.
@@ -2624,7 +2620,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const elemT = cd.arguments[0].nodeType.typeReturn;
 		const destroyFn = refArrayDestroyFn(elemT, arrCType);
 		const cellName = refArrayCellName(destroyFn, arrCType);
-		ensureDrcProto(g, destroyFn);
+		ensureDrcProto(g, destroyFn, null);
 		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
 		const tiArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
 		const valTmp = getTemp(p, arrCType);

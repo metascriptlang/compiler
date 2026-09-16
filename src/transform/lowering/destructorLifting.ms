@@ -23,14 +23,14 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
+import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, recordGenDestroyHook, resetGenDestroyHooks, arrayCTypeName, hookBaseCName } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
-import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -54,7 +54,7 @@ let _globalTypeInfoOwners: NameSet = createNameSet();
 export function setGlobalHookOwners(owners: NameSet): void {
 	_globalHookOwners = owners;
 	_globalTypeInfoOwners = createNameSet();
-	resetGenDestroyHooks();
+	resetHookSyms();
 }
 
 function isGloballyOwned(typeName: string): boolean {
@@ -190,9 +190,7 @@ function hookSuffix(hook: string): string {
 // Reference parity (sfGeneratedOp): mark a generated function node so DRC skips injection.
 // Reference sets sfGeneratedOp on the symbol in produceSym/symPrototype.
 function markGeneratedOp(fnNode: Node, name: string): void {
-	const sym = makeSymbol(name, SymbolKind.Function, fnNode.nodeType, false);
-	setFlag(sym, SymbolFlag.GeneratedOp);
-	fnNode.resolvedSym = sym;
+	fnNode.resolvedSym = hookComplete(name, fnNode.nodeType);
 }
 
 // Set hook function param/return types to concrete Types.
@@ -259,9 +257,9 @@ function clonePath(node: Node, loc: SourceLocation): Node {
 // Emit runtime call — unary (destroy/wasMoved) or binary (copy/sink)
 function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "destroy" || hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeCall(makeIdent(name, loc), [x], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [x], loc), loc));
 	} else {
-		buf.items.push(makeExprStmt(makeCall(makeIdent(name, loc), [x, y], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [x, y], loc), loc));
 	}
 }
 
@@ -290,9 +288,9 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 		: increfFn == "msClosureIncref" ? "msClosureDecref"
 		: increfFn == "msMapIncref" ? "msMapDecref"
 		: "";
-	buf.items.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [clonePath(y, loc)], loc), loc));
+	buf.items.push(makeExprStmt(makeCall(hookRef(increfFn, loc), [clonePath(y, loc)], loc), loc));
 	if (decrefFn != "") {
-		buf.items.push(makeExprStmt(makeCall(makeIdent(decrefFn, loc), [clonePath(x, loc)], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(decrefFn, loc), [clonePath(x, loc)], loc), loc));
 	}
 	buf.items.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
 }
@@ -496,7 +494,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "sink") {
 		// Inline sink: destroy(&xf) + assign(xf = yf)
-		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "Destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(typeName + "Destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
 		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 		return;
 	}
@@ -504,12 +502,12 @@ function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Nod
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeCall(makeIdent(name, loc), [ax], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax], loc), loc));
 	} else if (hook == "trace") {
-		buf.items.push(makeExprStmt(makeCall(makeIdent(name, loc), [ax, yf], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax, yf], loc), loc));
 	} else {
 		const ay = makeHiddenAddr(yf, loc);
-		buf.items.push(makeExprStmt(makeCall(makeIdent(name, loc), [ax, ay], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax, ay], loc), loc));
 	}
 }
 
@@ -939,7 +937,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Sy
 		emitTagCopy(buf, s1, s2, loc);
 		const copyChain = buildVariantDispatch("copy", typeName, objType, s1, s2, false, lctx, loc);
 		if (copyChain != null) buf.items.push(copyChain);
-		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "Destroy", loc),
+		buf.items.push(makeExprStmt(makeCall(hookRef(typeName + "Destroy", loc),
 			[makeHiddenAddr(makeIdent(blobName, loc), loc)], loc), loc));
 		return;
 	}
@@ -1007,7 +1005,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const callArgs: Node[] = (isUnary && hook != "trace")
 				? [a1]
 				: [a1, a2];
-				const callStmt = makeExprStmt(makeCall(makeIdent(helperName, loc), callArgs, loc), loc);
+				const callStmt = makeExprStmt(makeCall(hookRef(helperName, loc), callArgs, loc), loc);
 				chain = makeIf(cond, makeBlock([callStmt], loc), chain != null ? chain : makeNull(loc), loc);
 			}
 		}
@@ -1275,9 +1273,9 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 // Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
 function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
-	const traceFn = hasCycles ? makeIdent(cName + "Trace", loc) : makeNull(loc);
+	const traceFn = hasCycles ? hookRef(cName + "Trace", loc) : makeNull(loc);
 	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(cName + "Destroy", loc)];
+	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, hookRef(cName + "Destroy", loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1304,7 +1302,7 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
 		dupStmts.push(resultDecl);
-		dupStmts.push(makeExprStmt(makeCall(makeIdent(cName + "Copy", loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
+		dupStmts.push(makeExprStmt(makeCall(hookRef(cName + "Copy", loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	}
 	const dupNode = makeFnDecl(cName + "Dup", [srcSym.name], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
@@ -1420,10 +1418,6 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 		generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
 		generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
 		setAttachedOp(objType, AttachedOp.AttachedDestructor, cName + "Destroy");
-		// Record in the codegen global registry (Nim graph.attachedOps analog): for mono'd generic
-		// instances, setAttachedOp lands on this throwaway objType and never reaches the type codegen
-		// resolves, so codegen's ensureTypeInfoDef reads this by-name registry to wire .destroyFn.
-		recordGenDestroyHook(cName);
 		setAttachedOp(objType, AttachedOp.AttachedAsgn,       cName + "Copy");
 		setAttachedOp(objType, AttachedOp.AttachedSink,       cName + "Sink");
 		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   cName + "WasMoved");
@@ -1490,14 +1484,14 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
 	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
 		ensureEq(fieldType.typeName, lctx, loc);
-		return makeCall(makeIdent(fieldType.typeName + "Eq", loc), [aField, bField], loc);
+		return makeCall(hookRef(fieldType.typeName + "Eq", loc), [aField, bField], loc);
 	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
 	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
 	if (fieldType.kind == TypeKind.Tuple) {
 		const tn = tupleTypeName(fieldType);
 		ensureTupleEq(tn, fieldType, lctx, loc);
-		return makeCall(makeIdent(tn + "Eq", loc), [aField, bField], loc);
+		return makeCall(hookRef(tn + "Eq", loc), [aField, bField], loc);
 	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
@@ -2223,6 +2217,7 @@ function liftWithChecker(input: string): Node {
 	// matching setGlobalHookOwners so cross-test state doesn't leak).
 	_globalHookOwners = createNameSet();
 	_globalTypeInfoOwners = createNameSet();
+	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
@@ -2256,6 +2251,7 @@ function generatedFnCount(input: string): number {
 function liftWithCompare(input: string): Node {
 	_globalHookOwners = createNameSet();
 	_globalTypeInfoOwners = createNameSet();
+	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);

@@ -5,6 +5,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
+import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -164,6 +165,12 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 	n.resolvedSym = sym;
 	n.nodeType = sym.symbolType;
 	return n;
+}
+
+export function hookRef(hookName: string, loc: SourceLocation): Node {
+	const sym = lookupHookSym(hookName);
+	if (sym == null) return makeIdent(hookName, loc);
+	return makeTypedIdentResolved(sym, null, loc);
 }
 
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {

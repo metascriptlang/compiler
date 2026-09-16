@@ -18,6 +18,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
+import { hookPrototype } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance } from "../../checker/types";
@@ -160,6 +161,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
+		callee.resolvedSym = hookPrototype(typeName + "Eq", fnType);
 		return makeCall(callee, [left, right], loc);
 	}
 	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
@@ -361,6 +363,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			const eqFnType = createFunction([carrierType, carrierType], ["x", "y"], booleanType());
 			const eqCallee = makeIdent(carrierName + "Eq", loc);
 			eqCallee.nodeType = eqFnType;
+			eqCallee.resolvedSym = hookPrototype(carrierName + "Eq", eqFnType);
 			const eqCall = makeCall(eqCallee, [eqLeft, eqRight], loc);
 			eqCall.nodeType = booleanType();
 			if (isNotEqual) return makeUnary("!", eqCall, loc);
@@ -416,6 +419,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
+		callee.resolvedSym = hookPrototype(typeName + "Eq", fnType);
 		return makeCall(callee, [d.left, d.right], loc);
 	}
 
