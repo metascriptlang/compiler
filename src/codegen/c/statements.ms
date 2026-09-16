@@ -3,8 +3,9 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
+import { addError } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
@@ -126,7 +127,7 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 		NodeKind.ThrowStmt => { genThrowStmt(g, p, node); },
 		NodeKind.TryCatchStmt => { genTryCatchStmt(g, p, node); },
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
-		NodeKind.AssertStmt => { genAssertStmt(g, p, node); },
+		NodeKind.AssertStmt => { addError(g.checkerCtx, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
 		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
 	};
@@ -738,15 +739,6 @@ function emitErrorGoto(p: CProc): void {
 	emitStmtsLine(p, "goto BeforeRet_;");
 }
 
-function emitPendingErrorGoto(p: CProc): void {
-	if (p.errorTargets.length > 0) {
-		emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
-		return;
-	}
-	p.beforeRetNeeded = true;
-	emitStmtsLine(p, "if (msErr) goto BeforeRet_;");
-}
-
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	// `throw new Error(msg)` is sugar over the string-based exception runtime
@@ -1013,30 +1005,6 @@ function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
 		emitStmtsLine(p, `fprintf(stderr, "unreachable: %s\\n", ${msg});`);
 	}
 	emitStmtsLine(p, "__builtin_trap();");
-}
-
-function genAssertStmt(g: CGen, p: CProc, node: Node): void {
-	const d = node.data as AssertStmtData;
-	const cond = genExpr(g, p, d.assertExpr);
-
-	let preamble = "";
-	let postamble = "";
-	let msg = "";
-	if (d.assertMessageExpr != null) {
-		preamble = `msString __am = ${genExpr(g, p, d.assertMessageExpr)}; `;
-		msg = "msStringToCString(__am)";
-		postamble = " msStringDestroy(__am);";
-	} else {
-		const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
-		msg = `"${escapeForC(raw)}"`;
-	}
-
-	const onFail = g.isTestBuild
-		? `msTestCheckFail(${msg}, __FILE__, __LINE__);${postamble} msErr = MS_TRUE;`
-		: `fprintf(stderr, "assert failed: %s\\n", ${msg});${postamble} abort();`;
-
-	emitStmtsLine(p, `if (!(${cond})) { ${preamble}${onFail} }`);
-	if (g.isTestBuild) emitPendingErrorGoto(p);
 }
 
 // ===== Tests =====

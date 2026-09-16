@@ -69,6 +69,9 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		if (ctx != null && ctx.targetOs == "android") {
 			addLine(sec(g, CSection.Headers), "#define MSOS_ANDROID");
 		}
+		if (g.isTestBuild) {
+			addLine(sec(g, CSection.Headers), "#define MS_TEST_BUILD 1");
+		}
 		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
 		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	}

@@ -106,6 +106,11 @@ static inline void msTestCheckFail(const char* msg, const char* file, int line) 
     __ms_last_assert_line = line;
 }
 
+static inline void msAssertFail(const char* msg, const char* file, int line) {
+    msTestCheckFail(msg, file, line);
+    msErr = MS_TRUE;
+}
+
 /* ---- Power Assert runtime ---- */
 
 #define MS_PA_MAX_ENTRIES 32

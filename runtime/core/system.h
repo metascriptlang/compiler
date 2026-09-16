@@ -112,6 +112,13 @@ void msThrow(msString msg);
 void msTestErrorFlag(void);
 void msExit(int32_t code);
 
+#ifndef MS_TEST_BUILD
+static inline void msAssertFail(const char* msg, const char* file, int line) {
+	fprintf(stderr, "assert failed: %s (%s:%d)\n", msg, file, line);
+	abort();
+}
+#endif
+
 static inline int64_t msSetHashWord(int64_t acc, uint32_t word) {
 	uint64_t h = ((uint64_t)acc ^ (uint64_t)word) * 2654435761ULL;
 	h = (h ^ (h >> 16)) & 0xFFFFFFFFULL;
