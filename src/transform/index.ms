@@ -47,6 +47,7 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerStringTruthiness } from "./coercion/stringTruthiness";
 import { eraseBrandTypes } from "./coercion/brandErase";
+import { lowerImplicitConv } from "./coercion/implicitConvLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerObjectSpread } from "./desugar/objectSpreadLower";
@@ -99,6 +100,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
 	let result = eraseBrandTypes(program);
+	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);

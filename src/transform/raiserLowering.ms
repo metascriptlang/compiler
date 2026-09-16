@@ -10,6 +10,7 @@ import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
+import { lowerImplicitConv } from "./coercion/implicitConvLower";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
@@ -27,7 +28,8 @@ import { lowerBitSet } from "./lowering/bitSetLower";
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-	let result = lowerDefer(program, ctx);
+	let result = lowerImplicitConv(program, ctx);
+	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);

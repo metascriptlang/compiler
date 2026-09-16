@@ -4,7 +4,7 @@
 // starting from roots (main, top-level stmts, test decls, exported symbols).
 // Cross-module references traced via ImportDecl source paths.
 
-import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, ImportDeclData,
+import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, ImportDeclData, HiddenStdConvData,
 	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -12,7 +12,8 @@ import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule } from "../codegen/c/context";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { SymbolKind, Type } from "../ast/node";
+import { isMaybeType } from "./types";
+import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
 
@@ -713,6 +714,14 @@ function bakeableEmptyArrayLiteral(init: Node): boolean {
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
 
+export function isClosureThunkConv(node: Node): boolean {
+	if (node.kind != NodeKind.HiddenStdConv) return false;
+	const cv = node.data as HiddenStdConvData;
+	return cv.convType.kind == TypeKind.Function && cv.convType.callConv == CallingConvention.CcClosure
+		&& cv.convExpr.nodeType != null && cv.convExpr.nodeType.kind == TypeKind.Function
+		&& cv.convExpr.nodeType.callConv != CallingConvention.CcClosure;
+}
+
 export function isBakeableAggregateConst(node: Node): boolean {
 	const d = node.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return false;
@@ -720,6 +729,15 @@ export function isBakeableAggregateConst(node: Node): boolean {
 	const init = d.initializer;
 	if (init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) {
 		return bakeableEmptyArrayLiteral(init);
+	}
+	if (init.kind == NodeKind.HiddenStdConv) {
+		const cv = init.data as HiddenStdConvData;
+		if (!isMaybeType(cv.convType)) return false;
+		return match (cv.convExpr.kind) {
+			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
+			NodeKind.HiddenStdConv => isClosureThunkConv(cv.convExpr),
+			_ => false,
+		};
 	}
 	if (init.kind != NodeKind.ObjectLiteral) return false;
 	if (init.flags.has(NodeFlag.Closure)) return false;

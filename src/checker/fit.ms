@@ -248,9 +248,9 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 	return conv;
 }
 
-// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
-// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
-// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
+// Direct function → closure auto-wrap: a named function (CcDefault) flowing into a
+// closure-typed slot (CcClosure) is a hidden conversion; the transform entry
+// materializes it as the `{fn, env}` closure pair.
 export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.kind != TypeKind.Function || exprType.kind != TypeKind.Function
 		|| formal.callConv != CallingConvention.CcClosure
@@ -258,16 +258,9 @@ export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Nod
 		return null as unknown as Node;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
-	const nullNode = createNode(NodeKind.NullLiteral, { nullPlaceholder: true } as NodeData, wrapTok);
-	nullNode.nodeType = nullType();
-	nullNode.flags = nullNode.flags.incl(NodeFlag.Sem);
-	const wrapped = createNode(NodeKind.ObjectLiteral, {
-		properties: [expr, nullNode],
-		keys: ["fn", "env"],
-		keyLocations: [expr.location, expr.location],
-	} as NodeData, wrapTok);
+	const wrapped = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal } as NodeData, wrapTok);
 	wrapped.nodeType = formal;
-	wrapped.flags = wrapped.flags.incl(NodeFlag.Closure).incl(NodeFlag.Sem);
+	wrapped.flags = wrapped.flags.incl(NodeFlag.Sem);
 	return wrapped;
 }
 
@@ -282,14 +275,7 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 		if (thunk != null as unknown as Node) payload = thunk;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
-	const presentLit = createNode(NodeKind.BooleanLiteral, { boolValue: true } as NodeData, wrapTok);
-	presentLit.nodeType = booleanType();
-	presentLit.flags = presentLit.flags.incl(NodeFlag.Sem);
-	const wrapped = createNode(NodeKind.ObjectLiteral, {
-		properties: [payload, presentLit],
-		keys: ["value", "present"],
-		keyLocations: [expr.location, expr.location],
-	} as NodeData, wrapTok);
+	const wrapped = createNode(NodeKind.HiddenStdConv, { convExpr: payload, convType: formal } as NodeData, wrapTok);
 	wrapped.nodeType = formal;
 	wrapped.flags = wrapped.flags.incl(NodeFlag.Sem);
 	return wrapped;

@@ -1896,7 +1896,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
-			checkExpr(ctx, d.convExpr, null);
+			checkExpr(ctx, d.convExpr, isMaybeType(d.convType) ? d.convType.typeReturn : null);
 			node.nodeType = d.convType; return;
 		},
 		NodeKind.MacroInvocation => {
