@@ -891,6 +891,24 @@ test "bug6: invalidateCompileCache drops the .cfp and keeps the .o" {
 	bug6_clearArtifacts(modPath, fp);
 }
 
+test "writeCSource writes an absent .c and heals a corrupted one" {
+	const modPath = "test/bug6/probe_csource_heal.ms";
+	const cCode = "int main(){return 0;}";
+	const fp = moduleCompileFp(cCode, "cc -O0");
+	bug6_clearArtifacts(modPath, fp);
+	// Absent: written.
+	writeCSource(modPath, fp, cCode);
+	const fresh = try readFile(stableCFileFp(modPath, fp)) catch "";
+	assert fresh == cCode;
+	// Corrupted at the fp path (a host that died mid-flush leaves NULs of the
+	// right length): must be REWRITTEN, not trusted because the path exists.
+	writeFile(stableCFileFp(modPath, fp), "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
+	writeCSource(modPath, fp, cCode);
+	const healed = try readFile(stableCFileFp(modPath, fp)) catch "";
+	assert healed == cCode;
+	bug6_clearArtifacts(modPath, fp);
+}
+
 test "bug6: failed-compile sequence yields no cache hit on retry" {
 	// End-to-end invariant: simulate the cmdBuildC sequence on cc failure.
 	//   1. writeCSource (always)
