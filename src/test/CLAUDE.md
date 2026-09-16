@@ -385,9 +385,12 @@ done
 | Touched **DRC hooks, lifetimes, ownership** | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` | ~10 min |
 | Same, targeted lifecycle invariants | + `src/test/guard/run.sh` | ~2 min |
 | Touched **std/** or anything users compile against | rebuild + `tools/sync-local-binary.sh` first, then re-run the above | — |
-| Before shipping / after a risky refactor | the full ladder below | ~35 min |
+| Cutting a release (`docs/GIT-FLOW.md`) / a refactor across phases | the full ladder below | ~35 min |
 
-**Pre-ship ladder** — run in this order, stop at the first red:
+**Release ladder** — "ship" means a release cut per `docs/GIT-FLOW.md`. A land
+on `main` or a `sync-local-binary.sh` publish is not a ship: it runs only the
+rows above that name what the change touched. Run in this order, stop at the
+first red:
 
 ```bash
 msc build src/index.ms --gc=drc --danger --cc=clang --output=msc  # 0. build the candidate → ./msc
@@ -402,8 +405,9 @@ src/test/guard/run.sh                                             # 5. lifecycle
 The two corpus lanes are **deliberately two separate runs**, not one merged
 invocation (same split as the reference frame's plain/sanitized lanes):
 they assert different things, and they run on different cadences — the SAN
-lane is a ship gate, while the RSS cells are the slow backstop that may run
-in the background (§T1.1 in `docs/TESTGAP.md`). Both must be green to ship.
+lane is a release gate, while the RSS cells are the slow backstop that may run
+in the background (§T1.1 in `docs/TESTGAP.md`). Both must be green to cut a
+release; per land, the table above decides which of them runs at all.
 
 ### Which compiler is under test — the two-tree convention
 
