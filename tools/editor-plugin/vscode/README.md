@@ -1,6 +1,6 @@
 # MetaScript for Visual Studio Code
 
-Language support for [MetaScript](https://github.com/nickhatzz/metascript) -- a systems programming language with TypeScript syntax, compile-time macros, match expressions, Rust-style error handling, and three backends (C, JavaScript, Erlang).
+Language support for [MetaScript](https://github.com/metascriptlang/metascript) -- a systems programming language with TypeScript syntax, compile-time macros, match expressions, Rust-style error handling, and multiple backends (C, JavaScript, Erlang experimental).
 
 ## Features
 
@@ -134,9 +134,8 @@ Search for "MetaScript" in the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`) 
 To install the MetaScript compiler:
 
 ```bash
-git clone https://github.com/nickhatzz/metascript
+git clone https://github.com/metascriptlang/metascript
 cd metascript
-zig build install
 ```
 
 ## Server Discovery
@@ -144,18 +143,9 @@ zig build install
 The extension searches for `msc` in the following order:
 
 1. `metascript.serverPath` setting (supports `~` expansion)
-2. Workspace directory: `./zig-out/bin/msc`, `./bin/msc`, `./node_modules/.bin/msc`
-3. Extension directory: `./bin/msc`
+2. Workspace directory: `./zig-out/bin/ms`, `./bin/ms`, `./node_modules/.bin/ms`
+3. Extension directory: `./bin/ms`
 4. System PATH
-
-## Known Issues
-
-**`.mts` extension conflict**: The `.mts` extension is also used by TypeScript for ES module files. If you have both MetaScript and TypeScript files in a project, VS Code may misidentify `.mts` files. Workarounds:
-- Use `.ms` as the primary MetaScript extension (recommended)
-- Add a `files.associations` override in your workspace settings:
-  ```json
-  { "files.associations": { "*.mts": "metascript" } }
-  ```
 
 ## Troubleshooting
 
@@ -169,7 +159,7 @@ The extension searches for `msc` in the following order:
 
 ## Contributing
 
-Contributions are welcome. Please file issues and pull requests at [github.com/nickhatzz/metascript](https://github.com/nickhatzz/metascript).
+Contributions are welcome. Please file issues and pull requests at [github.com/metascriptlang/metascript](https://github.com/metascriptlang/metascript).
 
 ## License
 

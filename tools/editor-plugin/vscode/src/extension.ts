@@ -1,11 +1,11 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as vscode from 'vscode';
 import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
-  TransportKind,
   State,
 } from 'vscode-languageclient/node';
 
@@ -14,6 +14,41 @@ let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
 let restartCount = 0;
 const MAX_RESTARTS = 5;
+
+
+// ---------------------------------------------------------------------------
+// Material Icon Theme integration
+// ---------------------------------------------------------------------------
+
+// Per-extension icon colors (Material Design palette)
+// .ms = blue (primary), .cms = orange (C backend), .jms = yellow (JS backend),
+// .ems = purple (Erlang backend), .wms = teal (WASM), .rms = red (runtime)
+const MS_ICON_CLONES = [
+  { name: 'metascript',     base: 'typescript', color: 'deep-orange-400', lightColor: 'deep-orange-700', fileExtensions: ['ms'] },
+  { name: 'metascript-cms', base: 'typescript', color: 'gray-700',        lightColor: 'gray-900',        fileExtensions: ['cms'] },
+  { name: 'metascript-jms', base: 'typescript', color: 'amber-500',      lightColor: 'amber-800',       fileExtensions: ['jms'] },
+  { name: 'metascript-ems', base: 'typescript', color: 'purple-300',     lightColor: 'purple-600',      fileExtensions: ['ems'] },
+  { name: 'metascript-wms', base: 'typescript', color: 'teal-300',       lightColor: 'teal-600',        fileExtensions: ['wms'] },
+  { name: 'metascript-rms', base: 'typescript', color: 'red-400',        lightColor: 'red-700',         fileExtensions: ['rms'] },
+];
+
+function configureMaterialIcons(): void {
+  const materialIcons = vscode.extensions.getExtension('PKief.material-icon-theme');
+  if (!materialIcons) return;
+
+  const config = vscode.workspace.getConfiguration('material-icon-theme');
+  const clones = config.get<any[]>('files.customClones') || [];
+
+  // Check if already configured
+  if (clones.some((c: any) => c.name === 'metascript')) return;
+
+  for (const clone of MS_ICON_CLONES) {
+    clones.push(clone);
+  }
+
+  config.update('files.customClones', clones, vscode.ConfigurationTarget.Global);
+  log('Configured Material Icon Theme with MetaScript file icons');
+}
 
 // ---------------------------------------------------------------------------
 // Activation
@@ -26,6 +61,9 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem = createStatusBarItem();
   context.subscriptions.push(statusBarItem);
   context.subscriptions.push(outputChannel);
+
+  // --- Auto-configure file icons for Material Icon Theme ---
+  configureMaterialIcons();
 
   // --- Register commands ---
 
@@ -56,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
-        e.affectsConfiguration('metascript.serverPath') ||
+        e.affectsConfiguration('metascript.path') ||
         e.affectsConfiguration('metascript.trace.server')
       ) {
         log('Configuration changed, restarting server...');
@@ -79,48 +117,25 @@ export function deactivate(): Thenable<void> | undefined {
 // Client lifecycle
 // ---------------------------------------------------------------------------
 
-function startClient(context: vscode.ExtensionContext): void {
-  const serverPath = findServerPath(context);
-
-  if (!serverPath) {
-    const msg =
-      'MetaScript language server (msc) not found. ' +
-      'Install it and ensure it is on your PATH, or set metascript.serverPath in settings.';
-    log(msg);
-    vscode.window
-      .showErrorMessage(msg, 'Open Settings')
-      .then((choice) => {
-        if (choice === 'Open Settings') {
-          vscode.commands.executeCommand(
-            'workbench.action.openSettings',
-            'metascript.serverPath',
-          );
-        }
-      });
-    setStatus('error', 'Server not found');
-    return;
-  }
-
-  log(`Using language server: ${serverPath}`);
-
-  // --- Server options ---
+async function startClient(context: vscode.ExtensionContext): Promise<void> {
+  const serverPath = findServerPath();
+  const config = vscode.workspace.getConfiguration();
+  const lspArgs = config.get<string[]>('metascript.lsp.args') || ['lsp'];
+  log(`Command: ${serverPath} ${lspArgs.join(' ')}`);
 
   const serverOptions: ServerOptions = {
     run: {
       command: serverPath,
-      args: ['lsp'],
-      transport: TransportKind.stdio,
+      args: lspArgs,
     },
     debug: {
       command: serverPath,
-      args: ['lsp', '--debug'],
-      transport: TransportKind.stdio,
+      args: [...lspArgs, '--debug'],
     },
   };
 
   // --- Client options ---
 
-  const config = vscode.workspace.getConfiguration('metascript');
   const semanticHighlighting = config.get<boolean>('semanticHighlighting.enable', true);
 
   const clientOptions: LanguageClientOptions = {
@@ -129,7 +144,7 @@ function startClient(context: vscode.ExtensionContext): void {
       { scheme: 'untitled', language: 'metascript' },
     ],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{ms,mts}'),
+      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{ms,cms,jms,ems,wms,rms}'),
     },
     outputChannel,
     traceOutputChannel: outputChannel,
@@ -179,12 +194,22 @@ function startClient(context: vscode.ExtensionContext): void {
     () => {
       log('Language client connected');
     },
-    (error: Error) => {
+    async (error: Error) => {
       log(`Failed to start language client: ${error.message}`);
       setStatus('error', 'Failed to start');
-      vscode.window.showErrorMessage(
+      const choice = await vscode.window.showErrorMessage(
         `Failed to start MetaScript language server: ${error.message}`,
+        'Install msc',
+        'Open Settings',
       );
+      if (choice === 'Install msc') {
+        const installed = await downloadMsc();
+        if (installed) {
+          startClient(context);
+        }
+      } else if (choice === 'Open Settings') {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'metascript.path');
+      }
     },
   );
 }
@@ -295,71 +320,37 @@ async function expandMacroAtCursor(): Promise<void> {
 // Server discovery
 // ---------------------------------------------------------------------------
 
-function findServerPath(context: vscode.ExtensionContext): string | undefined {
-  // 1. User-configured path (highest priority)
+function findServerPath(): string {
+  // 1. User setting (always wins)
   const config = vscode.workspace.getConfiguration('metascript');
-  const configuredPath = config.get<string>('serverPath');
+  const configuredPath = config.get<string>('path', '');
 
-  if (configuredPath && configuredPath.length > 0) {
+  if (configuredPath.length > 0) {
     const resolved = resolveHome(configuredPath);
-    if (fs.existsSync(resolved)) {
-      log(`Server found via settings: ${resolved}`);
-      return resolved;
-    }
-    log(`Configured server path not found: ${resolved}`);
+    log(`Using configured path: ${resolved}`);
+    return resolved;
   }
 
-  // 2. Workspace-relative paths (for development)
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (workspaceFolders) {
-    for (const folder of workspaceFolders) {
-      const candidates = [
-        path.join(folder.uri.fsPath, 'zig-out', 'bin', 'msc'),
-        path.join(folder.uri.fsPath, 'zig-out', 'bin', 'msc.exe'),
-        path.join(folder.uri.fsPath, 'bin', 'msc'),
-        path.join(folder.uri.fsPath, 'bin', 'msc.exe'),
-        path.join(folder.uri.fsPath, 'node_modules', '.bin', 'msc'),
-      ];
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          log(`Server found in workspace: ${p}`);
-          return p;
-        }
-      }
-    }
+  // 2. ~/.metascript/bin/msc — the canonical install location
+  //    (install.sh on mac/linux, install.ps1 on windows both write here)
+  const installed = canonicalInstallPath();
+  if (fs.existsSync(installed)) {
+    log(`Found msc at canonical install location: ${installed}`);
+    return installed;
   }
 
-  // 3. Relative to extension directory (bundled or sibling build)
-  const extensionCandidates = [
-    path.join(context.extensionPath, 'bin', 'msc'),
-    path.join(context.extensionPath, 'bin', 'msc.exe'),
-    path.join(context.extensionPath, '..', 'zig-out', 'bin', 'msc'),
-    path.join(context.extensionPath, '..', 'zig-out', 'bin', 'msc.exe'),
-  ];
-  for (const p of extensionCandidates) {
-    if (fs.existsSync(p)) {
-      log(`Server found relative to extension: ${p}`);
-      return p;
-    }
-  }
+  // 3. Fallback: msc on PATH (for users who manage PATH manually)
+  log('Using default: msc');
+  return 'msc';
+}
 
-  // 4. System PATH
-  const pathDirs = (process.env.PATH || '').split(path.delimiter);
-  for (const dir of pathDirs) {
-    const exeNames = process.platform === 'win32'
-      ? ['msc.exe', 'msc.cmd', 'msc']
-      : ['msc'];
-    for (const exe of exeNames) {
-      const p = path.join(dir, exe);
-      if (fs.existsSync(p)) {
-        log(`Server found on PATH: ${p}`);
-        return p;
-      }
-    }
-  }
-
-  log('Server not found in any location');
-  return undefined;
+/**
+ * The single canonical install location written by install.sh / install.ps1.
+ */
+function canonicalInstallPath(): string {
+  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  const binName = process.platform === 'win32' ? 'msc.exe' : 'msc';
+  return path.join(home, '.metascript', 'bin', binName);
 }
 
 /**
@@ -371,6 +362,44 @@ function resolveHome(filePath: string): string {
     return path.join(home, filePath.slice(1));
   }
   return filePath;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-download msc
+// ---------------------------------------------------------------------------
+
+
+async function downloadMsc(): Promise<string | undefined> {
+  const isWindows = process.platform === 'win32';
+  const installCommand = isWindows
+    ? 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://metascriptlang.org/install.ps1 | iex"'
+    : 'curl -fsSL https://metascriptlang.org/install.sh | sh';
+
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Installing MetaScript compiler...' },
+    async (progress) => {
+      try {
+        progress.report({ message: 'Running install script...' });
+        const { execSync } = require('child_process');
+        const output = execSync(installCommand, { encoding: 'utf-8', timeout: 180000 });
+        log(`install script output: ${output}`);
+
+        const installed = canonicalInstallPath();
+        if (fs.existsSync(installed)) {
+          log(`Installed msc to ${installed}`);
+          vscode.window.showInformationMessage('MetaScript compiler installed successfully.');
+          return installed;
+        }
+
+        throw new Error(`msc binary not found at ${installed} after installation`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`Installation failed: ${msg}`);
+        vscode.window.showErrorMessage(`Failed to install msc: ${msg}`);
+        return undefined;
+      }
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

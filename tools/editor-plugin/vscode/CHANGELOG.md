@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Publisher updated to `metascript-lang`
 - Display name capitalized to `MetaScript`
-- Repository URL updated to `https://github.com/nickhatzz/metascript`
+- Repository URL updated to `https://github.com/metascriptlang/metascript`
 
 ## [0.1.0] - 2025-12-01
 

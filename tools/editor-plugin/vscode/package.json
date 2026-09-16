@@ -1,19 +1,19 @@
 {
   "name": "metascript",
   "displayName": "MetaScript",
-  "description": "Language support for MetaScript — TypeScript syntax with compile-time macros, match expressions, Result types, and three backends (C, JavaScript, Erlang)",
-  "version": "0.2.0",
-  "publisher": "metascript-lang",
+  "description": "Language support for MetaScript — TypeScript syntax with compile-time macros, match expressions, Result types, and multiple backends (C, JavaScript, Erlang experimental)",
+  "version": "0.2.10",
+  "publisher": "metascript",
   "license": "MIT",
-  "icon": "icons/metascript-icon.svg",
+  "icon": "icons/metascript.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nickhatzz/metascript"
+    "url": "https://github.com/metascriptlang/metascript"
   },
   "bugs": {
-    "url": "https://github.com/nickhatzz/metascript/issues"
+    "url": "https://github.com/metascriptlang/metascript/issues"
   },
-  "homepage": "https://github.com/nickhatzz/metascript#readme",
+  "homepage": "https://github.com/metascriptlang/metascript#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,10 +30,18 @@
     "compile-time"
   ],
   "activationEvents": [
-    "onLanguage:metascript"
+    "onLanguage:metascript",
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "[metascript]": {
+        "editor.formatOnSave": false,
+        "editor.formatOnPaste": false,
+        "editor.formatOnType": false
+      }
+    },
     "languages": [
       {
         "id": "metascript",
@@ -44,12 +52,16 @@
         ],
         "extensions": [
           ".ms",
-          ".mts"
+          ".cms",
+          ".jms",
+          ".ems",
+          ".wms",
+          ".rms"
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icons/metascript-light.svg",
-          "dark": "./icons/metascript-dark.svg"
+          "light": "./icons/metascript.png",
+          "dark": "./icons/metascript.png"
         }
       }
     ],
@@ -70,10 +82,17 @@
       "type": "object",
       "title": "MetaScript",
       "properties": {
-        "metascript.serverPath": {
+        "metascript.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the MetaScript language server executable (msc). Leave empty to auto-detect from workspace or PATH.",
+          "description": "Path to the msc compiler. Leave empty to auto-detect from workspace or PATH.",
+          "scope": "machine-overridable"
+        },
+        "metascript.lsp.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lsp"],
+          "description": "Arguments passed to the compiler to start the language server. For Bun dev: [\"/path/to/run.ts\", \"lsp\"]",
           "scope": "machine-overridable"
         },
         "metascript.trace.server": {
@@ -145,9 +164,11 @@
           "parameter": ["variable.parameter.metascript"],
           "variable": ["variable.other.metascript"],
           "variable.readonly": ["variable.other.constant.metascript"],
+          "variable.defaultLibrary": ["support.variable.builtin.metascript"],
           "property": ["variable.other.property.metascript"],
           "enumMember": ["variable.other.enummember.metascript"],
           "function": ["entity.name.function.metascript"],
+          "function.defaultLibrary": ["support.function.builtin.metascript"],
           "method": ["entity.name.function.method.metascript"],
           "macro": ["entity.name.function.macro.metascript"],
           "keyword": ["keyword.control.metascript"],
