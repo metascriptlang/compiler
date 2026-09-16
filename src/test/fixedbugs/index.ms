@@ -184,3 +184,5 @@ import "./bug165FloatArithInEngine";
 import "./bug166FnFormalArgFit";
 import "./bug167StringToSpan";
 import "./bug170GenericVarParam";
+import "./bug169NamedFnIntoCarrier";
+import "./bug171FnValueInferredStorage";
