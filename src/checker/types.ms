@@ -3411,6 +3411,7 @@ function alignOfStruct(tg: TargetInfo, t: Type): int32 {
 // sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
 export function sizeOfType(tg: TargetInfo, t: Type): int32 {
+	if (tg.ptrSize < 4) return SIZE_NOT_COMPUTABLE;
 	if (_layoutDepth > 16) return SIZE_NOT_COMPUTABLE;
 	_layoutDepth = _layoutDepth + 1;
 	const r = sizeOfTypeInner(tg, t);
@@ -3954,6 +3955,12 @@ test "alignOfType i386 packs int64 and float64 at 4 outside windows" {
 	assert alignOfType(linux, createPrimitive(TypeKind.Int64)) == 4;
 	assert alignOfType(windows, numberType()) == 8;
 	assert alignOfType(windows, createPrimitive(TypeKind.Int64)) == 8;
+}
+
+test "sizeOfType declines to lay out a 16-bit target" {
+	const avr: TargetInfo = { ptrSize: 2, floatSize: 4, cpu: "avr", os: "bare" };
+	assert sizeOfType(avr, createPrimitive(TypeKind.Int32)) < 0;
+	assert sizeOfType(avr, createStruct("Head", ["c", "x"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int64)], true)) < 0;
 }
 
 test "sizeOfType char before int64 follows the target alignment rule" {

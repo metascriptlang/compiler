@@ -1809,7 +1809,7 @@ import { GcMode, addError } from "../../checker/context";
 test "the pointer threshold follows the target float width" {
 	const pair = createStruct("Pair", ["a", "b"], [createPrimitive(TypeKind.Float64), createPrimitive(TypeKind.Float64)], true);
 	const wide: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	const narrow: TargetInfo = { ptrSize: 2, floatSize: 4 };
+	const narrow: TargetInfo = { ptrSize: 4, floatSize: 4 };
 	assert sizeOfType(wide, pair) == 16;
 	assert !ccgIntroducedPtr(wide, pair);
 	assert ccgIntroducedPtr(narrow, pair);
