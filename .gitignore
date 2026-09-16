@@ -62,6 +62,7 @@ docs/*
 !docs/BARE.md
 !docs/BUILD-PERF.md
 !docs/FEATURES.md
+!docs/GIT-FLOW.md
 !docs/KNOWN-ISSUES.md
 !docs/LSP.md
 !docs/PIPELINE.md
