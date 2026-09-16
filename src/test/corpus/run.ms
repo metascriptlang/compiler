@@ -20,15 +20,21 @@
 // Programs WITHOUT @maxrss are parity programs: run through C and (unless
 // @skip-js) JS-on-node, outputs byte-compared. No golden files.
 //
-// Scheduling: msc builds are STRICTLY SERIAL (concurrent msc builds race the
-// shared out/ object cache), but each build overlaps with already-built cells
-// running in background slots (shell `&` + sentinel files — no PARALOCK
-// surface in the runner itself). Progress streams to stderr unbuffered;
-// stdout carries the final summary.
+// Scheduling: builds run BUILD_SLOTS-wide on the spawn pool and each finished
+// binary runs in a background slot (shell `&` / a detached .bat plus sentinel
+// files, so there is no PARALOCK surface in the runner itself). Builds were
+// serial until the fp-keyed artifact cache stopped letting sibling msc
+// processes fight over one shared std module: they swapped the .c under each
+// other's cc and deleted each other's .o (cache.ms writeCSource /
+// invalidateCompileCache, cc.ms compileCFile). A wave is joined IN INPUT
+// ORDER, so progress lines, the tally and the parity grouping are byte-for-
+// byte what the serial loop produced; only the wall clock moves. Progress
+// streams to stderr unbuffered; stdout carries the final summary.
 //
 //   MSC=./msc msc run src/test/corpus/run.ms
 //   MSCORPUS_FILTER=leak MSC=./msc msc run src/test/corpus/run.ms
-//   MSCORPUS_JOBS=4  # parallel run slots (default 4)
+//   MSCORPUS_BUILD_JOBS=N  # parallel builds     (default: CPU count)
+//   MSCORPUS_JOBS=N        # parallel run slots  (default: 4, unchanged)
 //
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
@@ -95,7 +101,48 @@ const MSC = resolveMsc();
 // sees (header, exists() probe); MSC_CMD is the one that goes on a command line.
 const MSC_CMD = IS_WIN ? "\"" + winPath(MSC) + "\"" : MSC;
 const FILTER = envOr("MSCORPUS_FILTER", "");
-const RUN_SLOTS = envOr("MSCORPUS_JOBS", "4").parseInt() as int32;
+// std/os exports cpuCount(), but importing it here fails on Windows: msc's
+// header inliner does not evaluate preprocessor conditionals, so the
+// POSIX-only and Apple-only includes inside runtime/os.h's #ifdef _WIN32
+// #else arm get resolved anyway ('unistd.h' file not found, 'mach/mach.h'
+// file not found). Probe the way the rest of this file probes its host, and
+// fall back to 4 rather than guessing high.
+function detectCpus(): int32 {
+	if (IS_WIN) {
+		const n = envOr("NUMBER_OF_PROCESSORS", "0").parseInt() as int32;
+		return n > 0 ? n : 4;
+	}
+	const n = shellOut("getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null").parseInt() as int32;
+	return n > 0 ? n : 4;
+}
+const CPUS: int32 = detectCpus();
+
+// BUILD_SLOTS is derived from the core count rather than fixed: a build is
+// ~90% single-threaded front-end work (graph load, check, transform,
+// codegen), so one build leaves a many-core box almost idle. It stops AT the
+// core count because the spawn pool has exactly that many workers -- asking
+// for more only queues, it adds no concurrency -- and because every child msc
+// opens a pool of its own. Measured on 16C/32T: 60 one-lane builds on a cold
+// cache went 93.1s serial, 19.4s at 16, 14.8s at 32, and 48 regressed into
+// build failures.
+//
+// RUN_SLOTS deliberately keeps its historical default of 4. Run cells are
+// whole processes under measurement and @maxrss asserts a bound on one; how
+// many of them share the machine is a separate axis from how many BUILDS run,
+// and it should be changed on its own evidence, not as a side effect of this.
+// A probe at 4 vs 16 moved the two RSS cells in the `string` subset by less
+// than the run-to-run noise, so raising it looks safe -- but the corpus has 71
+// @maxrss programs and that probe covered two.
+function slotDefault(name: string, dflt: int32, cap: int32): int32 {
+	const v = env.get(name);
+	if (v != "") { return v.parseInt() as int32; }
+	let n = dflt;
+	if (n < 1) { n = 1; }
+	if (n > cap) { n = cap; }
+	return n;
+}
+const BUILD_SLOTS = slotDefault("MSCORPUS_BUILD_JOBS", CPUS, CPUS);
+const RUN_SLOTS = slotDefault("MSCORPUS_JOBS", 4, CPUS);
 const SAN = envOr("MSCORPUS_SAN", "") == "1";
 // 8M ledger-set entries: ASan quarantines freed addresses (no reuse), so the
 // finalized-pointer set degrades to append-only under slab-off — the default
@@ -743,6 +790,43 @@ function planJobs(specs: Spec[]): BuildJob[] {
 
 // ---- scheduler ----
 
+// One build, as it runs on a pool worker. Everything here must be safe off
+// the main thread: exec() keeps its result in thread-local state (see the
+// _Thread_local block in runtime/process.h) and the only files touched are
+// this cell's own dir, so no two workers share a path.
+//
+// The verdict comes back as a plain int rather than an interface, matching
+// the compiler's own spawn dispatchers (compile.ms dispatchCompileJobs):
+//   0 = built        1 = built after a flake-retry        2 = build failed
+// Reporting stays on the main thread so progress lines keep input order.
+//
+// Readonly<BuildJob>, not BuildJob: a spawn thunk BORROWS what it captures
+// (PARALOCK), so the job arrives as a read-only view. That is the right
+// signature anyway -- this function reads the command and the cell dir and
+// writes only to the filesystem; every mutation of the Cell happens on the
+// main thread once the handle is joined.
+const BUILD_OK: int32 = 0;
+const BUILD_OK_RETRIED: int32 = 1;
+const BUILD_FAILED: int32 = 2;
+
+function buildOneJob(job: Readonly<BuildJob>): int32 {
+	let b = runCapture(job.cmd);
+	const jsLane = job.lane == "js" || job.lane == "esm";
+	let builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
+	let retried = false;
+	if (!builtOk && isToolchainRace(b.output)) {
+		retried = true;
+		b = runCapture(job.cmd);
+		builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
+	}
+	if (!builtOk) {
+		ensureDir(job.cell.dir);
+		writeFile(job.cell.dir + "build.log", b.output);
+		return BUILD_FAILED;
+	}
+	return retried ? BUILD_OK_RETRIED : BUILD_OK;
+}
+
 // same infra signatures guard/run.sh retries on — a toolchain race is not a verdict
 function nativeBuildOk(output: string): boolean {
 	return output.contains("Built") || output.contains("Up to date");
@@ -814,7 +898,7 @@ function main(): void {
 
 	progress("");
 	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
-	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", slots=" + RUN_SLOTS + ")");
+	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", build slots=" + BUILD_SLOTS + ", run slots=" + RUN_SLOTS + ")");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
 
@@ -837,36 +921,60 @@ function main(): void {
 	const pendingSerial: Cell[] = [];
 	const parityDone: Cell[] = [];
 
-	// builds run serially in the foreground (concurrent msc builds race the
-	// shared out/ cache); finished binaries run in background slots meanwhile.
+	// Builds run BUILD_SLOTS-wide on the spawn pool; finished binaries run in
+	// background slots meanwhile. Concurrent msc builds were serialised here
+	// until the fp-keyed artifact cache was made safe against sibling
+	// processes (cache.ms writeCSource / invalidateCompileCache, cc.ms
+	// compileCFile): before that, two builds racing one shared std module
+	// swapped the .c under each other's cc and deleted each other's .o.
+	//
+	// A wave is spawned, then JOINED IN INPUT ORDER, so every progress line,
+	// every tally and the parity grouping come out exactly as the serial loop
+	// produced them — only the wall clock changes. Awaiting the handles from
+	// an array (never a handle re-read across iterations) is the shape the
+	// affine-Promise rules ask for (PARALOCK R1/E40).
+	//
 	// "Up to date" = msc's self-skip when the cell binary is already fresh —
 	// a success, not a failure (unchanged reruns hit it on every native cell)
-	for (const job of jobs) {
-		let b = runCapture(job.cmd);
-		const jsLane = job.lane == "js" || job.lane == "esm";
-		let builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
-		if (!builtOk && isToolchainRace(b.output)) {
-			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilding");
-			b = runCapture(job.cmd);
-			builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
+	let waveStart = 0;
+	while (waveStart < jobs.length) {
+		let waveEnd = waveStart + BUILD_SLOTS;
+		if (waveEnd > jobs.length) { waveEnd = jobs.length; }
+		const futures: Promise<number>[] = [];
+		let qi = waveStart;
+		while (qi < waveEnd) {
+			const job = jobs[qi];
+			futures.push(spawn(() => buildOneJob(job) as number));
+			qi = qi + 1;
 		}
-		if (!builtOk) {
-			ensureDir(job.cell.dir);
-			writeFile(job.cell.dir + "build.log", b.output);
-			job.cell.pass = false;
-			job.cell.detail = "build failed — " + job.cell.dir + "build.log";
-			job.cell.finished = true;
-			reportCell(job.cell, t);
-			continue;
+		const codes: number[] = [];
+		for (const f of futures) { codes.push(await f); }
+
+		let ci = 0;
+		while (ci < codes.length) {
+			const job = jobs[waveStart + ci];
+			const code = codes[ci] as int32;
+			ci = ci + 1;
+			if (code == BUILD_FAILED) {
+				job.cell.pass = false;
+				job.cell.detail = "build failed — " + job.cell.dir + "build.log";
+				job.cell.finished = true;
+				reportCell(job.cell, t);
+				continue;
+			}
+			if (code == BUILD_OK_RETRIED) {
+				progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
+			}
+			progress("  · built " + job.spec.name + " [" + job.lane + "]");
+			if (job.cell.spec.serial) {
+				pendingSerial.push(job.cell);
+			} else {
+				waitForSlot(running, t, parityDone);
+				launchCell(job.cell);
+				running.push(job.cell);
+			}
 		}
-		progress("  · built " + job.spec.name + " [" + job.lane + "]");
-		if (job.cell.spec.serial) {
-			pendingSerial.push(job.cell);
-		} else {
-			waitForSlot(running, t, parityDone);
-			launchCell(job.cell);
-			running.push(job.cell);
-		}
+		waveStart = waveEnd;
 	}
 
 	// drain the parallel tail
