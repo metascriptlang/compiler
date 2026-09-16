@@ -40,6 +40,7 @@ import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS } from "./coercion/intConvJS";
 import { lowerIntArithJS } from "./coercion/intArithJS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
+import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
@@ -180,6 +181,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// stay unbound, or it resolves to the prelude's own `class Math` and gets
 	// mangled as a module global. The 64-bit pass runs first so the width
 	// passes below never see the nodes it consumed.
+	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
