@@ -180,5 +180,62 @@ else
   fi
 fi
 
+# `msc build` never runs a `test` block, so this can only be a gate: an inline
+# guard test here is green whatever the loader does.
+giname="preludeUserModule"
+mkdir -p "$TMP/gi"
+printf 'const config = {\n\tglobalImports: ["%s/fixtures/preludeUserModule"],\n};\nexport default config;\n' "$DIR" > "$TMP/gi/build.ms"
+printf 'console.log(neonGuardPreludeProbe());\n' > "$TMP/gi/main.ms"
+if ( cd "$TMP/gi" && "$MSC" run main.ms ) >"$TMP/$giname.log" 2>&1; then
+  if grep -qx '42' "$TMP/$giname.log"; then
+    echo "ok   $giname"
+  else
+    echo "FAIL $giname: globalImports symbol never reached the entry module"; fail=1
+  fi
+else
+  echo "FAIL $giname: exit=$?"; grep -iE '^error' "$TMP/$giname.log" | head -3; fail=1
+fi
+
+slname="preludeSymlinkedModule"
+mkdir -p "$TMP/gisym"
+ln -sf "$DIR/fixtures/preludeUserModule.ms" "$TMP/gisym/gi.ms"
+printf 'const config = {\n\tglobalImports: ["./gi"],\n};\nexport default config;\n' > "$TMP/gisym/build.ms"
+printf 'console.log(neonGuardPreludeProbe());\n' > "$TMP/gisym/main.ms"
+if ( cd "$TMP/gisym" && "$MSC" run main.ms ) >"$TMP/$slname.log" 2>&1; then
+  if grep -qx '42' "$TMP/$slname.log"; then
+    echo "ok   $slname"
+  else
+    echo "FAIL $slname: globalImports symbol never reached the entry module"; fail=1
+  fi
+else
+  echo "FAIL $slname: exit=$? — the entry was matched by spelling, not by module identity"
+  grep -iE '^error' "$TMP/$slname.log" | head -3; fail=1
+fi
+
+# A FRESH process is load-bearing: any earlier in-process prelude build warms
+# the memo and hides the recursion, so this cannot become an inline test.
+pmcname="preludeMacroCycle"
+PMC_TIMEOUT=""
+command -v timeout >/dev/null 2>&1 && PMC_TIMEOUT="timeout 240"
+[ -z "$PMC_TIMEOUT" ] && command -v gtimeout >/dev/null 2>&1 && PMC_TIMEOUT="gtimeout 240"
+mkdir -p "$TMP/pmc"
+printf 'const config = {\n\tglobalImports: ["%s/fixtures/preludeMacroCycle/gi"],\n};\nexport default config;\n' "$DIR" > "$TMP/pmc/build.ms"
+printf 'console.log(preludeMacroCycleProbe());\n' > "$TMP/pmc/main.ms"
+if ( cd "$TMP/pmc" && $PMC_TIMEOUT "$MSC" run main.ms ) >"$TMP/$pmcname.log" 2>&1; then
+  if grep -qx '42' "$TMP/$pmcname.log"; then
+    echo "ok   $pmcname"
+  else
+    echo "FAIL $pmcname: macro-emitted declaration never reached the entry module"; fail=1
+  fi
+else
+  rc=$?
+  if [ $rc -eq 124 ]; then
+    echo "FAIL $pmcname: hung — the engine rebuilt the user prelude it was already loading"
+  else
+    echo "FAIL $pmcname: exit=$rc"; grep -iE '^error' "$TMP/$pmcname.log" | head -3
+  fi
+  fail=1
+fi
+
 [ $fail -eq 0 ] && echo "nim-guard: ALL GREEN" || echo "nim-guard: FAILURES ABOVE"
 exit $fail
