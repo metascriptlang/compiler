@@ -29,8 +29,10 @@ vim.bo.iskeyword = vim.bo.iskeyword .. ",$"
 
 -- Fold method: use tree-sitter or expression-based folding.
 -- Tree-sitter folding is preferred if the parser is available.
-local parser_ok = pcall(vim.treesitter.language.inspect, "metascript")
+local metascript_ok, metascript = pcall(require, "metascript")
+local parser_ok = (metascript_ok and metascript.ensure_parser()) or pcall(vim.treesitter.language.inspect, "metascript")
 if parser_ok then
+  pcall(vim.treesitter.start, 0, "metascript")
   vim.wo.foldmethod = "expr"
   vim.wo.foldexpr = "v:lua.vim.treesitter.foldexpr()"
 else

@@ -29,6 +29,82 @@ local function plugin_root()
   return vim.fn.fnamemodify(source, ":p:h:h:h")
 end
 
+local _parser_ready = nil
+
+local function try_add_parser(opts)
+  pcall(vim.treesitter.language.add, "metascript", opts)
+  return (pcall(vim.treesitter.language.inspect, "metascript"))
+end
+
+local function find_c_compiler()
+  if vim.env.CC and vim.fn.executable(vim.env.CC) == 1 then
+    return vim.env.CC
+  end
+  for _, candidate in ipairs({ "cc", "clang", "gcc" }) do
+    if vim.fn.executable(candidate) == 1 then
+      return candidate
+    end
+  end
+  return nil
+end
+
+---@return boolean
+function M.ensure_parser()
+  if _parser_ready ~= nil then
+    return _parser_ready
+  end
+  local ts_dir = plugin_root() .. "/tree-sitter"
+  local bundled_so = ts_dir .. "/metascript.so"
+  if vim.loop.fs_stat(bundled_so) and try_add_parser({ path = bundled_so }) then
+    _parser_ready = true
+    return true
+  end
+
+  local src = ts_dir .. "/src"
+  local parser_c, scanner_c = src .. "/parser.c", src .. "/scanner.c"
+  local parser_stat, scanner_stat = vim.loop.fs_stat(parser_c), vim.loop.fs_stat(scanner_c)
+  if not (parser_stat and scanner_stat) then
+    _parser_ready = try_add_parser()
+    return _parser_ready
+  end
+
+  local out_dir = vim.fn.stdpath("data") .. "/site/parser"
+  local out_so = out_dir .. "/metascript.so"
+  local stamp_path = out_so .. ".stamp"
+  local stamp = string.format("%d:%d:%d:%d", parser_stat.size, parser_stat.mtime.sec, scanner_stat.size, scanner_stat.mtime.sec)
+  local stamp_file = io.open(stamp_path, "r")
+  local built_stamp = stamp_file and stamp_file:read("*a") or nil
+  if stamp_file then
+    stamp_file:close()
+  end
+
+  if built_stamp ~= stamp or not vim.loop.fs_stat(out_so) then
+    local cc = find_c_compiler()
+    if not cc then
+      vim.notify("[metascript] No C compiler (cc, clang or gcc) found to build the tree-sitter parser; highlighting falls back to Vim syntax.", vim.log.levels.WARN)
+      _parser_ready = try_add_parser()
+      return _parser_ready
+    end
+    vim.fn.mkdir(out_dir, "p")
+    local tmp_so = out_so .. ".tmp"
+    local result = vim.system({ cc, "-o", tmp_so, "-shared", "-fPIC", "-Os", "-I", src, parser_c, scanner_c }):wait()
+    if result.code ~= 0 then
+      vim.notify("[metascript] Building the tree-sitter parser failed:\n" .. (result.stderr or ""), vim.log.levels.ERROR)
+      _parser_ready = try_add_parser()
+      return _parser_ready
+    end
+    os.rename(tmp_so, out_so)
+    local out = io.open(stamp_path, "w")
+    if out then
+      out:write(stamp)
+      out:close()
+    end
+  end
+
+  _parser_ready = try_add_parser({ path = out_so })
+  return _parser_ready
+end
+
 --- Register the tree-sitter parser configuration so nvim-treesitter (or manual parsers) can
 --- locate the MetaScript grammar. Uses tree-sitter/ for the compiled .so,
 --- and tree-sitter-metascript/ (sibling) as the canonical grammar source.
@@ -51,6 +127,7 @@ local function register_treesitter()
   -- Register parser via vim.treesitter (Neovim 0.9+) regardless of nvim-treesitter presence.
   -- This enables built-in tree-sitter highlighting even without the nvim-treesitter plugin.
   pcall(vim.treesitter.language.register, "metascript", "metascript")
+  M.ensure_parser()
 
   -- Ensure our bundled queries are the definitive source.
   -- This overrides any globally installed queries so the plugin stays self-contained.
