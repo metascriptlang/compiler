@@ -2187,6 +2187,14 @@ function typeKey(t: Type): string {
 		TypeKind.SizedArray => {
 			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
 		},
+		TypeKind.Ref => {
+			const inner = refSubstInner(t);
+			return refWrapperName(t) + "Ref(" + (inner != null ? typeKey(inner) : "any") + ")";
+		},
+		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		_ => t.kind.toString(),
 	};
 }
