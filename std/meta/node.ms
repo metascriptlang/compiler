@@ -156,6 +156,7 @@ export enum SymbolKind {
 	Module,
 	Actor,
 	Macro,
+	Temp,
 }
 
 // ===== Symbol State (Lifecycle) =====

@@ -760,7 +760,7 @@ function findFrameValueRead(node: Node): Symbol {
 		const sym = node.resolvedSym;
 		if (sym == null) return none;
 		if (sym.symbolKind == SymbolKind.Parameter) return sym;
-		if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global)) return sym;
+		if ((sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global)) return sym;
 		return none;
 	}
 	const kids: Node[] = [];

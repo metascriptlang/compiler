@@ -1216,6 +1216,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	// emitting `f_1_(10)` instead of dispatching through genClosureCall.
 	if (sym != null && sym.nativeName != ""
 		&& sym.symbolKind != SymbolKind.Variable
+		&& sym.symbolKind != SymbolKind.Temp
 		&& sym.symbolKind != SymbolKind.Parameter
 		&& sym.symbolKind != SymbolKind.Property) {
 		useHeader(g, sym);

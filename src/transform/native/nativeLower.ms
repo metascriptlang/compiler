@@ -108,6 +108,7 @@ function rewriteExternArrayReturn(node: Node): Node {
 	const sym = node.resolvedSym;
 	if (sym == null || sym.nativeName == ""
 			|| sym.symbolKind == SymbolKind.Variable
+			|| sym.symbolKind == SymbolKind.Temp
 			|| sym.symbolKind == SymbolKind.Parameter
 			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;

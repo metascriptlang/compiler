@@ -164,7 +164,7 @@ function detectAllWalk(node: Node | null): void {
 			// Only for Variable/Parameter — these have the Global flag set correctly.
 			// Functions and other symbols use name-based check (existing behavior).
 			const sym = node.resolvedSym;
-			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter))
+			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter))
 				? hasFlag(sym, SymbolFlag.Global)
 				: isModuleLevelVar(_detectAllSS, d.name);
 			if (!isModLevel) {

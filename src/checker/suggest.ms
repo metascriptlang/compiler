@@ -445,6 +445,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Actor => "actor",
 		SymbolKind.Module => "module",
 		SymbolKind.Macro => "macro",
+		SymbolKind.Temp => "variable",
 	};
 }
 

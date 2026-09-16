@@ -414,7 +414,7 @@ function collectCaptures(node: Node): void {
 				}
 			}
 			const sym = node.resolvedSym;
-			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter))
+			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter))
 				? hasFlag(sym, SymbolFlag.Global)
 				: isModuleLevelVar(_captureSS, d.name);
 			if (!isModLevel) {
@@ -1143,7 +1143,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
 		const symOrig = (orig != null) ? orig.resolvedSym : null;
 		const isModLevel = (symOrig != null
-				&& (symOrig.symbolKind == SymbolKind.Variable || symOrig.symbolKind == SymbolKind.Parameter))
+				&& (symOrig.symbolKind == SymbolKind.Variable || symOrig.symbolKind == SymbolKind.Temp || symOrig.symbolKind == SymbolKind.Parameter))
 			? hasFlag(symOrig, SymbolFlag.Global)
 			: isModuleLevelVar(state.ss, name);
 		if (isParam || isModLevel) {

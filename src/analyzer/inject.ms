@@ -1720,7 +1720,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	} else {
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, d.declName);
 		// Only use symbol if it's a Variable/Parameter — avoid name collisions with extension methods
-		if (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter)) {
+		if (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter)) {
 			varType = sym.symbolType;
 		} else if (sym != null && sym.symbolKind == SymbolKind.Function) {
 			// Name collision: local variable shadowed by function — skip RC

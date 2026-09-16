@@ -490,7 +490,7 @@ function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
 			for (const m of w.moveNames) { if (m == name) return true; }
 			const sym = p.resolvedSym != null ? p.resolvedSym : lookupSymbol(w.ctx.table, name);
 			if (sym == null) return true;
-			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return true;
+			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp && sym.symbolKind != SymbolKind.Parameter) return true;
 			return !typeCarriesRef(sym.symbolType);
 		},
 		NodeKind.ObjectLiteral => {
