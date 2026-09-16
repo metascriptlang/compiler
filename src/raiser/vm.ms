@@ -2,13 +2,13 @@
 // If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
-	RaiserOpcode, RaiserInstruction,
+	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned,
 	raiserABC, raiserABx, raiserAx,
 	getBx, getSignedAx
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
+	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
 	raiserFuture,
@@ -866,6 +866,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			const rhs = getReg(vm, base + inst.c);
 			const count = (rhs.intVal & 63) as uint64;
 			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) >> count) as int64));
+		} else if (op == RaiserOpcode.Conv) {
+			vmHandleConv(vm, inst);
 		// --- Complex ops (previously handled in MetaScript fallback) ---
 		} else if (op == RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);
@@ -1401,6 +1403,32 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 function asNum(val: RaiserValue): number {
 	if (val.kind == RaiserValueKind.Float) return val.floatVal;
 	return val.intVal;
+}
+
+function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
+	const src = getReg(vm, vm.baseReg + inst.b);
+	const cls = inst.c as RaiserConvClass;
+	if (cls == RaiserConvClass.F64) {
+		setReg(vm, vm.baseReg + inst.a, raiserFloat(asNum(src)));
+		return;
+	}
+	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
+	const bits = convClassBits(cls);
+	if (bits == 64) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
+		return;
+	}
+	if (convClassSigned(cls)) {
+		const hi: int64 = ((1 as int64) << ((bits - 1) as int64)) - 1;
+		const lo: int64 = -hi - 1;
+		if (whole < lo || whole > hi) {
+			vmError(vm, `value ${whole} not in range ${lo} .. ${hi}`);
+			return;
+		}
+		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
+		return;
+	}
+	setReg(vm, vm.baseReg + inst.a, raiserInt(whole & (((1 as int64) << (bits as int64)) - 1)));
 }
 
 // --- Float arithmetic handlers ---

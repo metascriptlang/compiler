@@ -142,6 +142,35 @@ export enum RaiserOpcode {
 	NarrowU,          // AB: R[A] = R[A] & ((1 << B) - 1)
 	SignExtend,       // AB: R[A] = sign-extend the low B bits of R[A]
 	ShiftRightU,      // ABC: R[A] = R[B] >>> R[C]
+	Conv,             // ABC: R[A] = R[B] converted to the numeric class RaiserConvClass C
+}
+
+export enum RaiserConvClass {
+	F64,
+	I64,
+	I32,
+	I16,
+	I8,
+	U64,
+	U32,
+	U16,
+	U8,
+}
+
+export function convClassBits(cls: RaiserConvClass): int32 {
+	return match (cls) {
+		RaiserConvClass.I32 | RaiserConvClass.U32 => 32,
+		RaiserConvClass.I16 | RaiserConvClass.U16 => 16,
+		RaiserConvClass.I8 | RaiserConvClass.U8 => 8,
+		_ => 64,
+	};
+}
+
+export function convClassSigned(cls: RaiserConvClass): boolean {
+	return match (cls) {
+		RaiserConvClass.I64 | RaiserConvClass.I32 | RaiserConvClass.I16 | RaiserConvClass.I8 => true,
+		_ => false,
+	};
 }
 
 // --- Instruction ---

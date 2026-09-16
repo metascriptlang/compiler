@@ -556,6 +556,37 @@ function _bridgeMsStringParseFloat(args: RaiserValue[]): RaiserValue {
 	return boxFloat(unboxString(args[0]).parseFloat());
 }
 
+// --- Math bridges ---
+
+function _bridgeFabs(args: RaiserValue[]): RaiserValue { return boxFloat(Math.abs(unboxFloat(args[0]))); }
+function _bridgeCeil(args: RaiserValue[]): RaiserValue { return boxFloat(Math.ceil(unboxFloat(args[0]))); }
+function _bridgeFloor(args: RaiserValue[]): RaiserValue { return boxFloat(Math.floor(unboxFloat(args[0]))); }
+function _bridgeTrunc(args: RaiserValue[]): RaiserValue { return boxFloat(Math.trunc(unboxFloat(args[0]))); }
+function _bridgeSqrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sqrt(unboxFloat(args[0]))); }
+function _bridgeCbrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cbrt(unboxFloat(args[0]))); }
+function _bridgePow(args: RaiserValue[]): RaiserValue { return boxFloat(Math.pow(unboxFloat(args[0]), unboxFloat(args[1]))); }
+function _bridgeExp(args: RaiserValue[]): RaiserValue { return boxFloat(Math.exp(unboxFloat(args[0]))); }
+function _bridgeExpm1(args: RaiserValue[]): RaiserValue { return boxFloat(Math.expm1(unboxFloat(args[0]))); }
+function _bridgeLog(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log(unboxFloat(args[0]))); }
+function _bridgeLog1p(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log1p(unboxFloat(args[0]))); }
+function _bridgeLog2(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log2(unboxFloat(args[0]))); }
+function _bridgeLog10(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log10(unboxFloat(args[0]))); }
+function _bridgeHypot(args: RaiserValue[]): RaiserValue { return boxFloat(Math.hypot(unboxFloat(args[0]), unboxFloat(args[1]))); }
+function _bridgeSin(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sin(unboxFloat(args[0]))); }
+function _bridgeCos(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cos(unboxFloat(args[0]))); }
+function _bridgeTan(args: RaiserValue[]): RaiserValue { return boxFloat(Math.tan(unboxFloat(args[0]))); }
+function _bridgeAsin(args: RaiserValue[]): RaiserValue { return boxFloat(Math.asin(unboxFloat(args[0]))); }
+function _bridgeAcos(args: RaiserValue[]): RaiserValue { return boxFloat(Math.acos(unboxFloat(args[0]))); }
+function _bridgeAtan(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atan(unboxFloat(args[0]))); }
+function _bridgeAtan2(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atan2(unboxFloat(args[0]), unboxFloat(args[1]))); }
+function _bridgeSinh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sinh(unboxFloat(args[0]))); }
+function _bridgeCosh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cosh(unboxFloat(args[0]))); }
+function _bridgeTanh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.tanh(unboxFloat(args[0]))); }
+function _bridgeAsinh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.asinh(unboxFloat(args[0]))); }
+function _bridgeAcosh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.acosh(unboxFloat(args[0]))); }
+function _bridgeAtanh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atanh(unboxFloat(args[0]))); }
+function _bridgeFmod(args: RaiserValue[]): RaiserValue { return boxFloat(unboxFloat(args[0]) % unboxFloat(args[1])); }
+
 function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
 	return boxString(fromCodePoint(unboxInt(args[0])));
 }
@@ -804,6 +835,35 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes);
 	registerHostFn("msAsString",            _bridgeMsAsString);
+	// math (std/core/math externs + the float `%` / `**` lowerings)
+	registerHostFn("fabs",  _bridgeFabs);
+	registerHostFn("ceil",  _bridgeCeil);
+	registerHostFn("floor", _bridgeFloor);
+	registerHostFn("trunc", _bridgeTrunc);
+	registerHostFn("sqrt",  _bridgeSqrt);
+	registerHostFn("cbrt",  _bridgeCbrt);
+	registerHostFn("pow",   _bridgePow);
+	registerHostFn("exp",   _bridgeExp);
+	registerHostFn("expm1", _bridgeExpm1);
+	registerHostFn("log",   _bridgeLog);
+	registerHostFn("log1p", _bridgeLog1p);
+	registerHostFn("log2",  _bridgeLog2);
+	registerHostFn("log10", _bridgeLog10);
+	registerHostFn("hypot", _bridgeHypot);
+	registerHostFn("sin",   _bridgeSin);
+	registerHostFn("cos",   _bridgeCos);
+	registerHostFn("tan",   _bridgeTan);
+	registerHostFn("asin",  _bridgeAsin);
+	registerHostFn("acos",  _bridgeAcos);
+	registerHostFn("atan",  _bridgeAtan);
+	registerHostFn("atan2", _bridgeAtan2);
+	registerHostFn("sinh",  _bridgeSinh);
+	registerHostFn("cosh",  _bridgeCosh);
+	registerHostFn("tanh",  _bridgeTanh);
+	registerHostFn("asinh", _bridgeAsinh);
+	registerHostFn("acosh", _bridgeAcosh);
+	registerHostFn("atanh", _bridgeAtanh);
+	registerHostFn("fmod",  _bridgeFmod);
 	markHostRegistryInitialized();
 }
 

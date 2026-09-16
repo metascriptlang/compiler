@@ -37,8 +37,6 @@ export extern function asinh(this typeof Math, x: float64): float64 from "asinh"
 export extern function acosh(this typeof Math, x: float64): float64 from "acosh";
 export extern function atanh(this typeof Math, x: float64): float64 from "atanh";
 
-// C rounds half away from zero, JS rounds half toward +Infinity: round(-2.5) is
-// -3 there and -2 here. Emitting floor(x + 0.5) keeps the two backends equal.
 export function round(this typeof Math, x: float64): float64 {
 	return Math.floor(x + 0.5);
 }
@@ -55,20 +53,4 @@ export function min<T>(this typeof Math, a: T, b: T): T {
 
 export function max<T>(this typeof Math, a: T, b: T): T {
 	return a > b ? a : b;
-}
-
-extern function time(slot: int64): int64 from "time";
-
-let randState: uint64 = 0;
-
-export function random(this typeof Math): float64 {
-	if (randState == 0) {
-		randState = ((time(0) as uint64) * 6364136223846793005) | 1;
-	}
-	let x = randState;
-	x = x ^ (x << 13);
-	x = x ^ (x >> 7);
-	x = x ^ (x << 17);
-	randState = x;
-	return ((x >> 11) as float64) / 9007199254740992.0;
 }

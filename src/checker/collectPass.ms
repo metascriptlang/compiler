@@ -400,7 +400,7 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 			for (const raw of d.classBody) {
 				const member = classMemberDecl(raw);
 				const pdm = member.data as PropertyDeclData;
-				const staticSym = makeSymbol(d.className + "." + pdm.propName, SymbolKind.Variable, inferredType(), true);
+				const staticSym = makeSymbol(d.className + "." + pdm.propName, SymbolKind.Variable, inferredType(), !pdm.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				staticSym.modulePath = existing.modulePath;
@@ -455,7 +455,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), true);
+				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
 				sym.staticFields.push(staticSym);

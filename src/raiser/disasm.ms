@@ -70,6 +70,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.NarrowU => "NarrowU",
 		RaiserOpcode.SignExtend => "SignExtend",
 		RaiserOpcode.ShiftRightU => "ShiftRightU",
+		RaiserOpcode.Conv => "Conv",
 		RaiserOpcode.CallHost => "CallHost",
 		RaiserOpcode.Yield => "Yield",
 		RaiserOpcode.Spawn => "Spawn",

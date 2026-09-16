@@ -9,9 +9,9 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData
 } from "../../ast/node";
-import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { SymbolFlag } from "../../checker/symbol";
@@ -55,7 +55,6 @@ function arithmeticOpcodeF64(op: string): RaiserOpcode {
 		"-" => RaiserOpcode.SubF64,
 		"*" => RaiserOpcode.MulF64,
 		"/" => RaiserOpcode.DivF64,
-		"%" => RaiserOpcode.ModI64,
 		_ => RaiserOpcode.AddF64,
 	};
 }
@@ -163,6 +162,35 @@ function shiftCountBits(bits: int32): int32 {
 		16 => 4,
 		_ => 5,
 	};
+}
+
+function convClassOf(t: Type | null): int32 {
+	if (t == null) return -1;
+	return match (peelDistinct(t).kind) {
+		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => RaiserConvClass.F64 as int32,
+		TypeKind.Int64 => RaiserConvClass.I64 as int32,
+		TypeKind.Int32 => RaiserConvClass.I32 as int32,
+		TypeKind.Int16 => RaiserConvClass.I16 as int32,
+		TypeKind.Int8 => RaiserConvClass.I8 as int32,
+		TypeKind.Uint64 => RaiserConvClass.U64 as int32,
+		TypeKind.Uint32 => RaiserConvClass.U32 as int32,
+		TypeKind.Uint16 => RaiserConvClass.U16 as int32,
+		TypeKind.Uint8 => RaiserConvClass.U8 as int32,
+		_ => -1,
+	};
+}
+
+function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32): int32 {
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Conv, dest, srcReg, cls));
+	return dest;
+}
+
+function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
+	const fromCls = convClassOf(from);
+	const toCls = convClassOf(to);
+	if (fromCls < 0 || toCls < 0 || fromCls == toCls) return reg;
+	return emitConvTo(s, reg, toCls);
 }
 
 function bitwiseOpcode(op: string): RaiserOpcode {
@@ -338,7 +366,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.ConditionalExpr => { return compileConditionalExpr(s, node); },
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			return compileExpr(s, d.asExpr);
+			const reg = compileExpr(s, d.asExpr);
+			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
 		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node); },
 		NodeKind.ArrayLiteral => { return compileArrayLiteral(s, node); },
@@ -370,7 +399,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const hd = node.data as HiddenStdConvData;
-			return compileExpr(s, hd.convExpr);
+			const reg = compileExpr(s, hd.convExpr);
+			return emitNumericConv(s, reg, hd.convExpr.nodeType, hd.convType);
 		},
 		// Statement-list-in-expression position: run n-1 statements, the last
 		// ExprStmt is the value — the reference VM's stmt-list-expr shape.
@@ -565,6 +595,18 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		return dest;
 	}
 
+	if (op == "**" || (op == "%" && useFloat)) {
+		const a1 = allocReg(s);
+		const a2 = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, a1, lReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, a2, rReg, 0));
+		const nameIdx = addConst(s, raiserString(op == "**" ? "pow" : "fmod"));
+		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 2));
+		const resultCls = convClassOf(node.nodeType);
+		if (resultCls >= 0 && resultCls != (RaiserConvClass.F64 as int32)) return emitConvTo(s, dest, resultCls);
+		return dest;
+	}
+
 	// Arithmetic
 	if (isArithmeticOp(op)) {
 		if (useFloat) {
@@ -575,8 +617,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		return dest;
 	}
 
-	emitLoadConst(s, dest, raiserInt(0));
-	return dest;
+	const msg = `cannot evaluate operator '${op}' at comptime`;
+	queueRaiserCompileError(msg, node.location.line, node.location.column);
+	return emitTrapNil(s, msg);
 }
 
 // --- Unary ---
@@ -1082,6 +1125,13 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 
 function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
+
+	const sym = node.resolvedSym;
+	if (sym != null && sym.symFlags.has(SymbolFlag.Static) && !sym.symFlags.has(SymbolFlag.Mutable)
+		&& sym.declNode != null && sym.declNode.kind == NodeKind.PropertyDecl) {
+		const pd = sym.declNode.data as PropertyDeclData;
+		if (pd.propInitializer != null) return compileExpr(s, pd.propInitializer);
+	}
 
 	// Enum member access: Color.Red → integer constant (codegen-only path; the
 	// checked AST carries this as an Identifier, handled in compileExpr).
