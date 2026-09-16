@@ -253,18 +253,15 @@ This is the standard pattern for C modules: header declares API, source implemen
 
 ---
 
-## Mechanism 4: `@cImport` Decorator (Function-Level, DCE-Safe)
+## Mechanism 4: Per-Symbol Headers (DCE-Safe)
 
-Unlike module-level `@include`, function-level `@cImport` is tree-shaken — the header is only included if the decorated function is reachable from `main()`.
+There is no function-level `@cImport` decorator. The name came from the previous compiler, never had a handler in this one, and was removed on 2026-09-12. Measured before the removal, `@cImport("does-not-exist.h") function f(): int32` built and ran with no `#include` emitted (silent no-op); after it, the decorator is rejected like any other decorator on a function:
 
-```ms
-@cImport("<curl/curl.h>")
-export function fetchUrl(url: string): string {
-    // ... uses curl internally
-}
+```
+error: Decorators are not valid here
 ```
 
-If `fetchUrl` is never called, `<curl/curl.h>` is never included. This is critical for library modules that declare many FFI functions but users only use a subset.
+Tree-shaken headers are attached to symbols, not modules: `extern function ... from "header.h"` and `import { x } from "./lib.h"` record the header on the symbol (`headerPath`) and C codegen emits the `#include` only when that symbol is used. Module-level `@include` is always emitted; pick platform headers with one entry module per platform (Void: `iosEntry.ms` and `androidEntry.ms` each `@include("bridge.h")`) and link system frameworks with `@passL("-framework Metal")`.
 
 ---
 
@@ -274,7 +271,6 @@ If `fetchUrl` is never called, `<curl/curl.h>` is never included. This is critic
 |-----------|:---:|---|
 | `@include("foo.h")` | No | Always (module-level) |
 | `@link("lib.a")` | No | Always (module-level) |
-| `@cImport("<header>")` on function | Yes | Only if function is reachable |
 | `extern function ... from "header.h"` | Yes | Only if extern is used |
 | `import { x } from "./lib.h"` | Yes | Only if `x` is used |
 
@@ -313,13 +309,15 @@ This allows modules to provide different implementations per backend. The buffer
 
 ## Self-Hosted Implementation Status
 
+⚠ **This table is stale and was believed long after it stopped being true.** Two rows were disproved by probe on 2026-08-10 and are corrected below; the rows still marked NOT YET have **not** been re-probed and may be equally stale — verify before planning around them. `msc run` on a 15-line file settles each of these in under a minute.
+
 | Feature | Status | Notes |
 |---------|:---:|---|
-| `extern function` parsing | PARTIAL | Parses kind+name only, no params/return type |
-| `extern class/enum` parsing | PARTIAL | Parsed as ExternDecl, no struct/enum fields |
-| `from "header.h"` pragma | NOT YET | Parser doesn't recognize `from` after extern |
-| `compile "file.c"` pragma | NOT YET | Parser doesn't recognize `compile` after extern |
-| `@include`/`@link`/`@passC`/`@passL` | NOT YET | Parser sees decorator but doesn't extract as CompileSource |
+| `extern function` parsing | **DONE** | Params + return type parse and emit a correct call. Verified 2026-08-10: `extern function stdb_add(a: int32, b: int32): int32;` against an `@emit`-ed C definition returned the right value at runtime. |
+| `extern class/enum` parsing | PARTIAL | Parsed as ExternDecl, no struct/enum fields. Not re-probed. |
+| `from "header.h"` pragma | NOT YET | Parser doesn't recognize `from` after extern. Not re-probed. |
+| `compile "file.c"` pragma | NOT YET | Parser doesn't recognize `compile` after extern. Not re-probed — but note `@compile` (decorator form) is used in production to build vendored mbedtls, so this row is suspect. |
+| `@include`/`@link`/`@passC`/`@passL` | **DONE** | Handled as checker directives at `src/checker/checkPass.ms:1695-1721`. `@passC` verified reaching the C compiler 2026-08-10 (a `-D` define set by `@passC` was observed by an `@emit`-ed `#ifndef`/`#error` guard). `@include`/`@link`/`@passL` share the same code path but were not individually probed. |
 | `import { x } from "./file.h"` | NOT YET | Module resolver doesn't handle .h |
 | C header parsing | NOT YET | **Planned: ARO via FFI** |
 | CompileSource on Program node | NOT YET | ProgramData has no compile_sources field |

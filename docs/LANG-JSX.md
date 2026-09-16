@@ -89,7 +89,7 @@ attributes:  name '=' '{' expr '}'     ->  JSXAttribute
 
 children:    JSXElement                ->  nested element (recurse)
              '{' expr '}'             ->  JSXExpressionContainer
-             raw text                  ->  JSXText (whitespace-trimmed)
+             raw text                  ->  JSXText (raw slice; consuming macro applies any whitespace rules)
 ```
 
 ### Disambiguation: `<` as less-than vs JSX
@@ -120,6 +120,32 @@ const app = @jsx <View><Text>hello</Text></View>;
 
 See `LANG-METAPROGRAMMING.md` Tier 2 for the full JSX transform macro implementation.
 
+### Reading JSX nodes inside a macro body (typed — 2026-07-26)
+
+Macro params are typed from the macro declaration, and flat Node-field reads are
+checked against the `NodeData` union by the DU access rule (LANG.md "unique field
+name"): unique across variants → typed direct read; same name with different
+types → must narrow; unknown field → compile error surfaced at the invocation
+site as `Macro '<name>' body: ...`.
+
+```ms
+export macro element(n: Node): Node {
+    n.jsxTag;                                  // string (unique → typed)
+    n.line; n.column;                          // number (wire-universal)
+    for (const a of n.jsxAttrs) {              // Node[]
+        if (a.kind === NodeKind.JSXAttribute) {
+            a.jsxAttrName.startsWith("on");    // string methods dispatch correctly
+        }
+    }
+    n.bogusField;                              // ERROR: does not exist on type 'Node'
+    n.value;                                   // ERROR: different types across variants — narrow first
+}
+```
+
+The macro VM's wire format is FLAT: `n.data` is NOT populated inside macro bodies
+— read payload fields directly on the node. Construction literals
+(`{ kind, line, column, value }`) are key-checked against the same table.
+
 ### Component convention
 
 Uppercase tag = component (user function), lowercase tag = platform element. The macro decides how to distinguish and compile them:
@@ -140,15 +166,70 @@ function Counter(props: { initial: number }): Element {
 const app = @jsx <Counter initial={0} />;
 ```
 
+## Boundary Lowering via Converter (IMPLEMENTED 2026-07-31 — main `9ce47eb`, guards in `src/test/c/converter.ms`; build.ms global-import tier awaits build.ms globalImports wiring)
+
+Decided 2026-07-30. JSX remains a free compile-time value —
+held in consts, passed through macros, produced by macros — and is implicitly lowered ONLY when
+it reaches a runtime-typed boundary. Mechanism: the `converter` routine kind (LANG.md
+"Converter Declarations").
+
+```ms
+// UI library side — element becomes a converter instead of a plain macro:
+export converter element(node: Node): VNode { ... }
+
+// user code — React-style, no explicit element() anywhere:
+function Counter(props: CounterProps): VNode {
+  return <p>n = {props.count()}</p>;   // return type VNode -> converter applies
+}
+const view: VNode = <div/>;            // annotated decl -> applies
+render(<App/>, host, root);            // resolved param type -> applies
+
+const ui = <h1>raw</h1>;               // no boundary -> stays a compile-time Node
+const ok = validateA11y(ui);           // macros still receive RAW JSX (param type Node)
+```
+
+- **Trigger** = expression of compile-time Node kind at a settled expected-runtime-type
+  position. Not name-based; no framework type is hardcoded — the expansion is re-checked
+  normally, so whatever the in-scope converter produces must fit the position.
+- **Nullable slots** (2026-09-13): a converter declared for `T` also serves a `T | null` position (optional field, nullable parameter or declaration); the expansion is re-checked against the full slot, so the value wraps like any `T → T | null` flow.
+- **Precedence**: explicit call > module-imported converter (scope shadowing) > build.ms
+  global import > none -> today's "unconsumed JSX" error, message extended with an import hint.
+- **Component convention** (uppercase tag -> component) is the converter body's job, unchanged.
+- **What gets emitted** (VNode tree vs direct host calls) is the converter body's decision,
+  not the language's. A V1 UI library emits the VNode layer (host-agnostic: dom/terminal/void/mock +
+  renderToString); direct-emit is a named later optimization tier (per-target converter via
+  build.ms).
+- **V1 limit**: splicing a held JSX const INSIDE other JSX (`<div>{header}</div>` with
+  `header: Node`) is not covered — the converter sees an identifier child and emits the
+  runtime path. nodeType-aware splice is V2 (unlocked by A4 `nodeType` reads).
+
+Status: design locked; implementation sequenced after a thunk-field closure miscompile that
+blocked component props (2026-07-30).
+
 ## Implementation Status
 
-```
-DONE    NodeKind planned: JSXElement, JSXFragment, JSXText, JSXExpressionContainer
-        Design: attribute nodes, expression containers, fragment syntax
-        Design: Node as compile-time-only type, macro consumption model
+JSX is wired end-to-end: `.ms` source → tokens → AST → checker → macro-expand → native binary.
+Verified natively 2026-07-10 (`jsxMacroNative.ms` / `jsxDomNative.ms` both `PASS`).
 
-TODO    Parser: JSX lexer mode, parseJSXElement, parseJSXFragment
-        AST: Add 6 NodeKind members + NodeData variants + *Data type aliases
-        Checker: recognize Node as compile-time only (tfTriggersCompileTime equivalent)
-        Macro expansion: Node const inlining + erasure (see LANG-METAPROGRAMMING.md Phase B)
 ```
+DONE    AST: 6 NodeKind + NodeData variants + *Data aliases + createNodeAt overloads (std/meta/node.ms)
+        Printer: 6 exhaustive arms (src/ast/printer.ms) — verified rendering a tree at runtime
+        Node walkers: visitor.ms, walker.ms, hash.ms all handle the 6 kinds
+        Lexer: src/lexer/jsx.ms mode machine — 3 JSX tokens + `<` disambiguation (26 tests)
+        Parser: src/parser/expressions/jsx.ms — all 6 JSX kinds (18 parser tests)
+        Checker: src/checker/checkExprPass.ms — JSX typed compile-time Node, unconsumed JSX
+                 rejected ("consumed by a macro"), jsxMacroArgDepth leak guard, tag-name LSP symbols
+        Bridge: nodeToValue / valueToNode round-trip (src/compiler/meta/bridge.ms)
+        Macro walker: expand.ms addKindFields + nodeKindOrdinal table; macro bodies navigate JSX
+                      array fields (for..of, indexing, .length)
+        Reference macro + examples: std/meta/jsxDom.ms (JSX → el()/txt()/attr()) + 4 native
+                      programs (jsxLex/Parse/Macro/DomNative) in the native manifest
+        Design: attribute nodes, expression containers, fragments, compile-time-only Node model
+
+TODO    Editor/compiler parity CI corpus (Phase 8) — the compiler-side corpus exists; only the
+        tree-sitter↔compiler cross-check that fails on divergence is still open
+```
+
+> Note: the compiler binary shipped at `bin/msc` may lag the source — if `msc dump-ast`
+> reports "Unexpected token: <", rebuild via `rm -rf out && msc test src/index.ms`
+> and use the freshly built `./msc` (or copy it to `bin/msc`).

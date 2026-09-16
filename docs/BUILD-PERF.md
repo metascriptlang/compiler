@@ -1,425 +1,388 @@
-# BUILD-PERF — Build Speed: Findings, Architecture, Roadmap
+# Build Performance — Roadmap
 
-> Tracking doc for the build-performance workstream. Agreed 2026-09-01.
-> Update §8 as phases land. All measurements below were taken on the Windows
-> host, warm caches, tree at `82f4e5d6`-era HEAD, unless noted otherwise.
+## Re-measured 2026-07-28 (supersedes the tables below)
 
----
+Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
+Phases 3–10 landed: **Phase A is 6.3s, not 24.7s** — it beat its own
+~12–14s target, and the roadmap below is stale from that row down.
 
-## 1. Problem statement (measured)
-
-| Workload | Cost today | Where it goes |
-|---|---|---|
-| corpus parity lane | ~15–19 min | ~140 programs × 4 lanes ≈ 560 cells, serial subprocess builds |
-| warm single build (`msc build prog.ms`) | ~1.5 s wall / 1357 ms internal | see §1.1 |
-| self-host full build (`--danger`) | 17.65 s | front end dominates (same class as the ~21 s suite floor) |
-
-### 1.1 Warm build decomposition (`--time`, corpus program `011-truthy` — 15 LOC, ZERO imports)
-
-| phase | ms | share | note |
+| Phase | Then (plan) | Now | Note |
 |---|---|---|---|
-| graph load+check | 702 | 52% | **the bottleneck — re-done from scratch every process** |
-| phase D link | 306 | 23% | per-cell binary, not cacheable |
-| phase A parse+check+transform | 288 | 21% | the program's own modules (xform=204ms) |
-| phase B DCE | 8 | 1% | |
-| phase C codegen + clang | 52 | 4% | **object cache works — codegen is NOT the problem** |
-| process spawn (outside timers) | ~150 | — | ×560 on corpus |
+| graph load + check | ~8s | **5.8s** | module graph load |
+| A — parse + check + transform | 24.7s | **6.3s** | check 3.5s, xform 1.3s, analyze 0.8s |
+| B — DCE | 0.7s | **0.4s** | |
+| C — codegen + clang | 9.6s | **19.0s** | codegen 1.3s, **clang 13.7s** |
+| D — link | 2.1s | **21.4s** | thin-LTO does whole-program codegen at link |
+| total | 45–50s | **52.8s** | |
 
-Toolchain-stamp cost (hashes msc binary + runtime/ + vendor/ every invocation,
-added 2026-09-01): ~30–70 ms — negligible; correctness worth it.
+**The MetaScript half is now ~8s; the C toolchain is ~35s of the 53s.**
+Optimising the compiler further buys little — the remaining lever is LTO
+strategy. `--lto` is an axis separate from opt level (`off|thin|full`,
+`cc.ms` `ltoFlags`); `--danger` defaults to thin. Measured cold, thin and
+off finish within 0.2s of each other (55.6s vs 55.8s on a cold global
+object cache) because the work just moves between compile and link — so
+LTO choice is not the win it looks like. What actually moves the number
+is cache state: the same cold-`out/` build costs **~32s** once
+`~/.metascript/cache/objects/` is warm, and a rebuild after touching one
+file lands **20–35s**.
 
-### 1.2 Full decomposition of the 708–828 ms graph load+check (Phase 0, 2026-09-01)
+Beware of comparing single runs: build wall time in this tree swings
+20s→65s purely on cache state. Two measurements taken minutes apart
+suggested a fresh binary was 2.3× slower than the installed one; a
+controlled A/B (`rm -rf out` for both) showed **32.47s vs 32.25s** —
+identical. Always re-measure both sides under the same cache state before
+attributing a regression.
 
-Instrumented run (`--time`, same program; loader-half timer added in
-`loadAndCheckGraph`, orchestrator PROFILE under `-t`):
+### Test suite — the real dev-loop cost, and where it went
 
-| block | ms | what it is |
-|---|---|---|
-| `graphLoad: preludeMods` | **236** | loader parses all 45 std modules into the graph — **stdlib parse #1** — of which **`inlineHeader`=175 ms (74%)** is C-header translation (`inlineHeaderImports`, runs over every module) |
-| `prelude` | **303** | `buildPreludeContext` → `loadPreludeOne` ×15: read + **inlineHeaderImports AGAIN** + parse + threePasses + ensureShaped — **parse #2, check #1** |
-| Phase 1 (`p1parse+p1collect`) | **61** | orchestrator parses ALL graph modules again — **parse #3** |
-| Phase 2 (`p2parse`…`p2exports`) | **190** | parses all modules a 4th time + inject + the real per-module check + exports — **parse #4, check #2** |
-| misc (report, finalize) | ~10 | |
+`msc test src/index.ms` test-execution time: **419.6s → 17-19s (~23×)**,
+3342/3342 unchanged. Wall clock for the whole command is ~40s, because
+compiling the test binary (~21s warm) is now the larger half. Full cost
+model, entry-by-entry, lives in `src/test/CLAUDE.md` §5.1 — including the
+consequence that the full battery is now CHEAPER than most single-module
+entries, which inverts the old "run the smallest loop" advice.
 
-**The finding: the stdlib is parsed 4× and checked 2× per process — for a
-15-LOC program whose own entry tree costs 0.19 ms.** The single largest
-line-item is `inlineHeaderImports` (175 ms in the loader + a large share of
-the 303 ms prelude block — it runs again there): a PURE string transform
-(source + `.h` contents → source with extern decls inlined) paid twice per
-build, every build. Also notable: `checkCallExpr` n=3856 → 44 ms inside the
-checker (hot-loop track); `node.ms` alone 114 ms in phase A (transform half
-of `xform=204 ms`).
+Root cause was not codegen or clang: `checkProgram()` — the convenience
+wrapper every inline test uses — called `buildPreludeContext()` on
+**every** invocation, re-parsing and re-checking the whole std prelude
+(~1s each). `checkPass.ms` alone has 213 such tests → 219.7s, 52% of the
+suite. The three other prelude call sites (`eval.ms` `_raiserPreludeCtx`,
+transam `db.preludeCtx`, orchestrator's per-compile `baseCtx`) already
+cached; `checkProgram` was the lone outlier. Fixed by a
+`standalonePreludeCtx()` accessor matching the `raiserPreludeCtx()` idiom.
 
-### 1.3 Root cause: fat implicit prelude × zero cross-process reuse
+Do NOT push that cache down into `buildPreludeContext` itself: the
+orchestrator stamps `targetOs` onto its base context, so a shared
+instance would leak one build's target into the next.
 
-- `defaultGlobalImports()` (`src/checker/prelude.ms:11`) injects **15 std
-  modules into every program**, including the heavy ones: `fetch`,
-  `websocket`, `json`, `bigint`, `date`, `performance`…
-- Transitive closure for a **zero-import 15-LOC program = 45 modules
-  (~500 KB)**: json tree (10 modules), fetch (7 — pulls crypto 54 KB, net,
-  tls), websocket (6 — 113 KB), meta (`node.ms` 50 KB).
-- DCE discards them right after check (`skip (dead)`) — but everything in
-  §1.2 was already paid.
-- Batch `msc build` runs the classic pipeline; **only the LSP uses TransAm**.
-  No cross-process caching exists.
-- Corpus: 560 serial subprocesses × ~0.8 s front end ≈ **7 min/lane of pure
-  redundancy**. Plus ~560 × 150 ms spawn ≈ 1.4 min.
-- Model check: 560 × 1.5 s + cold passes + runs ≈ 15–19 min ✓ matches.
+Note this does **not** speed up `msc build` — the build path checks
+through `checkProgramWithRegistry`, which never touches the wrapper
+(controlled A/B above confirms: 32.47s vs 32.25s).
 
----
-
-## 2. Directions considered
-
-| Direction | Verdict | Why |
-|---|---|---|
-| Slim `defaultGlobalImports` | **rejected by product decision** | implicit stdlib surface is a language promise (user rejected). Keep as documented fallback if this whole plan fails |
-| Lazy name-scan prelude selection | rejected | no reference precedent; false-negative risk (comptime-generated names, extensions) |
-| Whole-context snapshot | rejected | persisting whole contexts has repeatedly failed to become the default elsewhere; it is the graveyard |
-| Daemon / persistent worker (Bazel worker protocol) | superseded | disk persistence + `--batch` give the same wins without IPC; a daemon would be built then obsoleted |
-| Checker hot-loop profiling | **keep as parallel track (cheap)** | `node.ms` 2.4 ms/KB vs graph avg 1.4 ms/KB suggests quadratic spots; current `--time` does not even decompose the 702 ms |
-
-Product constraints honored: implicit surface stays; subprocess-per-cell
-stays available (two-tree convention: `MSC=` subject, bisect/A-B, isolation).
+Suite time after the fix is dominated by `lsp/handlers/lifecycle.ms`
+(35s ≈ 65% of what remains), then `orchestrator.ms` 9s and
+`transam/index.ms` 5.4s. The harness itself is in the C runtime
+(`runtime/core/test.h`) and runs one linked binary serially (~150% CPU) —
+parallelising it is the next lever if the suite needs to get faster still.
 
 ---
 
-## 3. Chosen architecture: batch on TransAm + persisted std interfaces
+## Context & Current State
 
-TransAm (`src/compiler/transam/`, 11 files) is a complete in-RAM Salsa engine
-(red-green, content-addressed `hashNode`, LRU + permanent High-durability
-cache for stdlib, queries through `dbAnalyze`). LSP-only today. The plan is
-to finish the two missing pieces rather than invent anything:
+Self-build timings on a typical dev laptop (Apple Silicon, 8-core, warm OS cache) as of this plan:
 
-### Phase 0 — Instrument the 702 ms (prerequisite, hours)
-
-Add fine-grained `printTiming` to `loadPreludeOne` / orchestrator prelude path
-so the graph-load cost decomposes per module and per sub-phase. De-risks A
-and feeds the hot-loop track.
-
-### Phase A0 — disk cache for `inlineHeaderImports` (NEW 2026-09-01, do FIRST)
-
-Measured: 175 ms in the loader half + a second pass inside
-`buildPreludeContext` — the single biggest redundant line-item, and it is a
-**pure function** `(module source, referenced .h contents) → inlined source`.
-Cache its output on disk, content-hash keyed
-(hash of module source + of every referenced header), namespaced by
-toolchainStamp (headers under runtime/ + vendor/ are already stamped —
-today's plumbing). String-in/string-out — zero semantic risk, no symbol
-serialization, no IC trap. Expected: −250…−300 ms per build; corpus
-−2…−3 min/lane; benefits every build including self-host.
-Implementation: wrap `inlineHeaderImports` (loader.ms) — key → read cache →
-hit: return; miss: compute + atomic publish. Kill-switch env
-`MSC_NO_HEADER_CACHE=1`.
-
-**Prior art (nothing invented):** a compiler with hand-written FFI declarations
-and no header-translation step never pays this cost. The mechanism itself is the established
-"cache a pure transform's output, content-hash keyed" family:
-Zig `@cImport` (translate-c output cached in the content-addressed local/
-global cache, keyed by header hashes + options — the closest analog: C
-header → translated source, cached), ccache (hash of preprocessed input +
-compiler + flags → cached object), clang/GCC PCH (cached header
-pre-processing), and the same principle we already ported from the
-reference's extccomp json build-instructions for the `.o` object cache.
-A0 applies that principle to the one transform we have that the reference
-doesn't.
-
-### Phase A — Disk interface cache for std modules (the immediate lever)
-
-Persist, per std module, the **interface artifact downstream actually
-consumes** — NOT a whole `CheckerContext`:
-
-```
-~/.metascript/cache/iface/<moduleContentHash>.if
-  header   : magic + toolchainStamp + module path + counts
-  symbols  : exported syms; flat Type interface (kind/typeName/typeChildren/
-             typeReturn/typeExtra/typeFlags) serializes naturally
-  exts     : extension registrations
-  macros   : LAZY markers (source path + span) — do NOT serialize AST in v1
-  names    : string table; re-intern into IdentCache on load (rustc model)
-```
-
-- **Format: custom flat binary, not JSON.** Load target ≤50 ms for all 46
-  modules; JSON parse eats the win and drags number-fidelity risk
-  (cf. corpus `512-jsonInt64`). Binary is industry norm for hot compiler
-  caches (rustc rmeta, clang PCM, GCC PCH).
-- **No format versioning needed**: namespace = `toolchainStamp` (contains msc
-  binary hash) — any compiler rebuild invalidates automatically.
-- Publish with existing `atomicWriteFile`/`renameReplace` (same
-  concurrency-safe mechanism as the `.o` cache, e9ba1ef2).
-- Lifecycle rides the existing `.version` marker wipe (GC) — zero new code.
-- Cold path = today's behavior + writes blobs ("warm the cache").
-- Fallback: stamp/parse miss → full check, regenerate.
-- Generic instantiation / `@comptime` / const-fold need bodies → v1 re-parses
-  the defining module source lazily on demand.
-- Debug affordance: `--dump-iface` emits JSON for humans; binary stays the
-  hot path.
-
-### Phase B — Route batch build onto TransAm
-
-`compile.ms` pipeline (through analyze) executes as TransAm queries in the
-batch `msc build` path too. This is what attacks the **21 s self-host
-floor** (persist/extend beyond stdlib: unchanged user modules also skip).
-Queries must be parameterized by the options that stamp prelude contexts
-(`targetOs` at least — see orchestrator notes; Salsa input-keys handle this).
-
-### Phase C — `--batch` CLI (corpus sugar, thin wrapper over B)
-
-`msc build --batch manifest` → one subject process builds a whole lane:
-spawn 560→4, prelude checked once in RAM. Corpus default becomes batch with
-per-cell fallback preserved for bisect/isolation. Accept the trade-off: a
-compiler segfault kills the batch, not one cell.
-
-### Economics
-
-```
-today      560 × (150 spawn + 702 prelude + …) ≈ 8 min overhead/lane
-after A    560 × (150 spawn +  50 load   + …) ≈ 2 min overhead/lane
-after C      4 × (150 spawn + 702 once)       ≈ seconds overhead/lane
-```
-
-Who benefits (A alone): user builds (any size), corpus, `msc test`, LSP
-startup (§10 of transam/CLAUDE.md anticipated exactly this). B additionally:
-self-host/suite floor.
-
----
-
-## 4. Reference lineage (read before building)
-
-| Concept | Reference |
+| Workload | Time |
 |---|---|
-| in-RAM query engine | Salsa / rust-analyzer (TransAm already ports it; transam/CLAUDE.md has file:line cross-refs) |
-| batch compiler ON the engine | rustc — batch is query-driven by design; our batch-off-engine is the divergence |
-| disk persistence of query results | rustc incremental compilation (rustc-dev-guide, "Queries" + "Incremental compilation" chapters) |
-| interface artifact at library boundary | rustc `rmeta`/`rlib` (rustc-dev-guide "Libraries and metadata" — verified 2026-09-01); TypeScript `.d.ts` same family |
-| invalidation | content hashes (`hashNode` exists) + SVH-analog = `toolchainStamp` (hardened + marker GC, 2026-09-01) |
-| anti-reference | persisting whole contexts; also Zig's laziness = different axis, not retrofittable |
+| User `msc run hello.ms` — first run on machine (cold) | **2.4s** |
+| User `msc run hello.ms` — global cache hit | **1.0s** |
+| User build, fresh project (global cache hit) | **2.1s** |
+| Compiler self-build — native `msc build src/index.ms --gc=drc` cold | **45–50s** |
+| Compiler self-build — native incremental (no source change) | **8.7s** |
+
+### Already shipped (don't re-plan)
+
+- **Phase 1 — Global `.o` cache** at `~/.metascript/cache/objects/` (content-addressed, VERSION-stamped, safe across upgrades). Hits for all `@compile` runtime/vendor `.c` files.
+- **Phase 2 — Parallel `@compile` directives** via `spawn`/`waitFor` (`processCompileDirectives` gather → dispatch → collect). Real thread-level parallelism on the C backend.
+- **Lambda-lifting loop-escape fix** — closures created inside a loop body now allocate a per-closure env with a snapshot of captures. Unblocks spawn/.then/actor/stored-callback-in-loop correctness. Prerequisite for any further parallelization.
+
+### Where the remaining time goes (native cold, per `--time` breakdown)
+
+| Phase | Time | % | Dominant cost |
+|---|---|---|---|
+| A — parse + check + transform (251 modules) | **24.7s** | 55% | **DRC refcount overhead on AST infrastructure** |
+| B — DCE | 0.7s | 2% | — |
+| C — codegen + clang | 9.6s (codegen 4.6s, clang **only 2.5s**) | 21% | codegen walks |
+| D — link | 2.1s | 5% | single clang invocation |
+| startup / misc | ~8s | 17% | module graph load, project cache check |
+
+Validated via `--gc=none` A/B: rebuilt msc without DRC, re-ran self-build.
+Phase A dropped **24.7s → 14.6s** — confirms **~10s of Phase A is pure RC refcount ops**.
+
+**We cannot ship `msc` with `--gc=none`** because `msc lsp` is long-running and would leak. The target is to reclaim that ~10s via smarter data structures and eliminated allocations, not by turning off DRC.
 
 ---
 
-## 5. Verification ladder (per phase)
+## Goal — MET, by other means. Re-justify before working the phases below.
 
-1. `msc test src/index.ms` — baseline 3515/3513-era, 174 files, 0 fail.
-2. corpus parity (Windows host: llvm-mingw PATH prepended): 698/0/5 target,
-   SAN lane 158/0/1 (as of 2026-09-01 with the danger-lane flags fix).
-3. self-host fixpoint: gen-N vs gen-N+1 emitted-C 0 differ.
-4. Phase A specific: interface-cache cold/warm/flip matrix — flip a std
-   header → stamp moves → blob regenerated (mirror of today's vendor-stamp
-   proven-red methodology).
+| | Plan's target | Actual 2026-07-28 |
+|---|---|---|
+| Native cold self-build | ~15s | **32s** (`rm -rf out`, warm object cache); ~20s warm |
+| Native Phase A | ~12–14s | **6.3s** — beat the target by 2× |
 
-## 6. Phase A design (v1 — settled 2026-09-01, implementation pending)
+**Phases 3, 4 and 5 never shipped** — checked on the tree: `syntheticToken`
+still has 12 call sites, `createNode` still assigns `comments = []`, and
+`SourceLocation` is still an `interface`. Phase A got fast anyway. So every
+saving estimate below is attributed to work that did not happen, against a
+baseline that no longer exists.
 
-### 6.1 Consumption contract — what the blob must reconstruct
+Do NOT pick up a phase because this file lists it. Re-measure Phase A first
+(`msc build src/index.ms --time`); at 6.3s out of a 53s build it is no
+longer where the time is. The remaining cost is the C toolchain — clang
+13.7s + link 21.4s under thin-LTO — which none of these phases touch.
 
-Derived by reading the consumers (not invented): `injectPrelude`
-(checkPass.ms:2483-2541) is THE downstream contract for the prelude context;
-the loader (`loadPreludeModules`, compile.ms:368) and P2 exports
-(`buildExportInfo`, context.ms:195-324) are the contracts for A2/A3.
+---
 
-The pack must rebuild, exactly:
-1. `table.current.symbols` — exported Symbols (name, symbolKind, flags,
-   type, overloads, declModule). NOTE `Scope.symbols` is `Map<int32, Symbol>`
-   keyed by IdentCache nameId — ids are per-session, pack stores names.
-2. macro registries (`macroBodyRegistry`/`macroParamsRegistry` = AST,
-   `macroParamTypesRegistry`, `macroDeclModuleRegistry`) — see lazy rule
-3. converter pairs (`converterTargetByName`/`converterTargetTypes`)
-4. `extensionRegistry.methods` — ExtMethod{methodName, receiverTypeName,
-   sourcePath, fnType, isStatic, sym, depth=0}
-5. `includeDirectives` + `compilerFlags` (the @passC/-I strings — load-bearing
-   for the build, cf. the 32767-char dedup fix)
-6. targetOs — part of the KEY, not the payload
-7. (A2) per-module dep-list + topo order; (A3) per-module ExportedSymInfo
+## Phase 3 — Eliminate synthetic Token allocation in transforms
 
-**AST-carrying exports (rmeta pattern, already in `buildExportInfo`)**:
-cross-module symbols carry selective AST — generic FunctionDecl/MethodDecl
-bodies (mono), EnumDecl, non-generic fn bodies (Raiser @comptime walker),
-`defaultParams` exprs. A prelude pack that skips source must either
-serialize this subset or fall back to source for the roots that need it.
-**Open empirical question (census before impl)**: which of the 15 roots
-export AST-carrying syms, and how big that subset is. Type↔Symbol is
-bidirectional (`Type.sym` ↔ `Symbol.symbolType`) — sections reference each
-other by u32 index (planned), cycles are fine.
+**Problem**: every `makeIdent`, `makeBlock`, `makeNumber`, `makeNull`, `makeBool`, `makeString`, and similar transform helper calls `createNode(kind, data, syntheticToken(loc))`. `syntheticToken(loc)` allocates a throwaway `Token` (heap + msRefHeader) used only to pass `.line` / `.column` into `createNode`, then immediately discarded.
 
-### 6.2 One pack, not per-module files (v1)
+`createNodeAt(kind, data, loc: SourceLocation)` already exists with 80+ per-kind overloads in `std/meta/node.ms:552+` — takes SourceLocation directly, no Token round-trip.
 
-The prelude loads all-or-nothing (15 roots always together) → a single
-`prelude pack` is simpler and loads in one read.
-Key = hash(toolchainStamp ‖ targetOs ‖ backendExt ‖ Σ contentHash(46 std
-sources)). Any std/vendor/compiler change → new key → regenerate. Per-module
-granularity deferred until proven needed.
+**Scope**:
+- Replace every `createNode(K, D, syntheticToken(loc))` with `createNodeAt(K, D, loc)`
+- Audit hot call sites in `src/transform/util.ms` + the lowering passes
+- Delete `syntheticToken` once unused
 
-### 6.3 Layout — custom flat binary
+**Files to touch**: `src/transform/util.ms`, `src/transform/lowering/*.ms`, `src/transform/native/*.ms` (grep for `syntheticToken`)
 
-```
-~/.metascript/cache/prelude/<keyHash>.ifp      (atomic publish, marker-GC'd)
-[header] magic "MSIF", fmt=1, stamp, keyHash, section counts
-[strtab] deduped name/source strings (→ re-intern into IdentCache on load)
-[types] flat Type records; typeChildren as u32 indices into this section
-[syms]  {nameIdx, kind, flags, typeIdx, overloads[u32→syms/types], declModuleIdx}
-[exts]  ExtMethod records (fnType → types idx)
-[macros] {nameIdx, definingModulePathIdx, span}   ← LAZY, see 6.4
-[conv]  converter pairs
-[dirs]  includeDirectives, compilerFlags
-[mods]  (A2) per std module {pathIdx, sourceHash, deps[pathIdx]}
-[exports] (A3) per module ExportedSymInfo list
-```
+**Expected win**: **~2–3s** off Phase A.
 
-### 6.4 Lazy rules (v1)
+**Risk**: low. Mechanical grep-replace. `createNodeAt` is the documented transform-builder path.
 
-- Macro bodies: if the pack lists ANY exported macro, re-parse the defining
-  module source (parse-only, ~10 ms) to recover bodies. Census first — if
-  std exports zero macros this path is dead code and stays unexercised.
-- Mono instantiation / const-fold of std bodies: unaffected in A1/A2 (P1/P2
-  still run); A3 must design lazy program materialization (with TransAm B).
+**Verification**:
+- `msc check src/index.ms` — type-check green
+- Cold native self-build with `--time` — phase A delta vs baseline
+- Test suite — 2768 pass unchanged
 
-### 6.5 Flow
+---
 
-- `buildPreludeContext`: try `loadPack(key)` → miss → today's path, then
-  `writePack` at the end of a successful fresh build (serialize from the
-  live ctx; `atomicWriteFile`).
-- Names are stored as strings and re-interned at load (rustc model); numeric
-  ids never persist.
-- Type identity: downstream is structural (`isAssignable`), so fresh type
-  objects are fine — audit for pointer-keyed caches during impl.
+## Phase 4 — `Node.comments = null` instead of empty-array-per-node
 
-### 6.6 Staging (risk-ordered) and expected wins
+**Problem**: `createNode` / `createNodeAt` unconditionally set `n.comments = []`, allocating a fresh `msRefArray` (heap + RC header) per Node. Grep confirms `.comments` is read ONLY by `src/compiler/fmt/printer/*` during `msc fmt`. On `msc build` / `msc run`, `.comments` is 100% dead weight but pays the allocation cost for ~100K nodes per build.
 
-| Stage | Replaces | Saves (measured) | Risk |
-|---|---|---|---|
-| A1 pack for `buildPreludeContext` | prelude=314 ms block | −314 ms/build | contained — prelude ctx is a pure producer |
-| A2 loader seeds std graph from pack dep-lists | graphLoad=257 ms | −257 ms | loadOrder fidelity |
-| A3 skip P1/P2 + phase-A transform for cache-hit std modules | P1+P2=247 ms + ~180 ms transform | −427 ms | deep — lazy programs, do WITH TransAm B |
+**Scope**:
+- `createNode` / `createNodeAt` in `std/meta/node.ms`: init `n.comments = null as unknown as Token[]`
+- Parser `src/parser/util.ms:18` — lazy-init on first push:
+  `if (node.comments === null) { node.comments = []; } node.comments.push(...)`
+- Fmt readers — treat null as empty:
+  `if (node.comments !== null && node.comments.length > 0) { ... }` (grep `.comments.` in `src/compiler/fmt/`)
 
-A1+A2: warm build ~1.5 s → ~0.9 s; corpus −~4.5 min/lane. +A3 → ~0.6 s.
+**Files to touch**: `std/meta/node.ms`, `src/parser/util.ms`, `src/compiler/fmt/printer/*.ms` (small — ~6 call sites)
 
-### 6.7 Verification (A1/A2)
+**Expected win**: **~1–2s** off Phase A. Proportional to Node count (~100K empty-array allocs eliminated).
 
-- Byte-identical emitted C with pack ON vs OFF (kill-switch env
-  `MSC_NO_PRELUDE_PACK=1`) across a program set — fixpoint-style.
-- Flip a std header → stamp moves → pack regenerates (mirror of the
-  vendor-stamp proven-red methodology).
-- Full ladder (§5).
+**Risk**: low. Readers are few and localized to fmt.
 
-### 6.8 Still-open (settle during impl)
+**Verification**:
+- `msc fmt some_commented.ms` — comments still preserved (manual spot check)
+- Test suite green
+- Native phase A delta
 
-- Symbol/overload field census (read symbol.ms during impl; §6.1 list is
-  from consumers, verify against the definition).
-- Macro census: does std export any macros at all?
-- Type pointer-identity audit (any pointer-keyed caches in checker/mono).
-- `ExtMethod.fnType` exact shape.
+---
 
-### 6.9 Census (measured 2026-09-01, probe `preludeCensus.ms`, untracked)
+## Phase 5 — `SourceLocation` from `interface` to `struct`
 
-551 symbols in the prelude base ctx (427 exported). AST-carrying subset:
+**Problem**: `SourceLocation` in `std/meta/node.ms:213` is an `interface` (ref-counted, heap-allocated) despite being **16 bytes of plain int32** — `line`, `column`, `endLine`, `endColumn`. No reference fields inside. Every `Node.location = loc` under DRC does `msIncref(newLoc); msDecref(oldLoc)` — pure overhead.
 
-| root | syms | exported | generic | fnBodies |
-|---|---|---|---|---|
-| buffer | 138 | 70 | 0 | **137** |
-| struct | 49 | 24 | **27** | 9 |
-| math | 35 | 33 | 0 | 33 |
-| array/string/promise/system | ~71 | | 8 | 53 |
-| (sub-modules: json/fetch trees + meta) | 223 | 217 | 9+ | 173 (+7 enums, **4 macros**, 23 defP) |
-| TOTAL | 551 | 427 | 44 | 428 |
+Every Node has one. Every Token has line/column (not a SourceLocation directly, but the pattern compounds). ~100K+ SourceLocation instances per build.
 
-Conclusion: virtually every root carries AST (bodies for the Raiser walker,
-generics for mono) — a body-less symbol pack would break generic calls and
-macro expansion. **Full AST serialization = the IC trap → NOT v1.** Do A0
-(pure transform cache) first; the semantic pack (A1) only pays for the
-remaining ~150-200 ms and must wait for the lazy-body design (§6.4).
+**Scope**:
+- Change `export interface SourceLocation` → `export struct SourceLocation` in `std/meta/node.ms:213`
+- Audit consumers: anywhere that treats SourceLocation as nullable (`null as unknown as SourceLocation`) — struct can't be null; replace with a sentinel (e.g. `makeLoc(0, 0)`) or make callers handle it explicitly
+- `Node.location: SourceLocation` — field becomes inline value instead of pointer; bumps Node struct size by ~8 bytes (vs pointer + deref)
+- Verify no site that aliases the SourceLocation across lifetimes (e.g. stores a pointer somewhere and expects mutation visibility)
 
-## 7. Stale notes to fix when touching transam/CLAUDE.md
+**Files to touch**: `std/meta/node.ms`, audit `src/**/*.ms` for `SourceLocation` null assignments and mutation patterns
 
-§10 says "generics not monomorphized yet", "no macro system yet",
-"batch doesn't need persistence" — all outdated (mono + @comptime exist;
-persistence is now Phase A).
+**Expected win**: **~3–5s** off Phase A.
 
-## 8. Progress tracker
+**Risk**: medium. Struct semantics differ — no null, copy-by-value. Any code that mutates a `loc` after assignment and expects the shared Node to see it would break. Needs a quick audit pass.
 
-- [x] Phase 0 — decompose the 702 ms — DONE 2026-09-01 (§1.2). Includes the
-      inlineHeaderImports measurement (175 ms loader-half, timed inside the
-      function; accumulator + `graphLoad:` print, off by default).
-- [x] Phase A design note — DONE, §6 + census §6.9 (pack feasibility:
-      551 syms / 427 exported / 44 generic / 428 fn bodies / 4 macros /
-      7 enums — AST serialization is NOT v1; A0 first)
-- [x] Phase A0 impl + verify — DONE 2026-09-01. Disk cache for
-      `inlineHeaderImports` (cache.ms Layer 5 + loader wrapper via injected
-      callbacks — layering: loader can't import compiler/cache because
-      checker/context imports module/graph; same cycle-breaker pattern as
-      parser/callbacks.ms). Dep recording threaded cparse→cimport→emit so
-      user headers and #include transitive reads/absences are verified on
-      every hit; stamped-tree (runtime/, vendor/) deps skip re-verify.
-      Kill-switch `MSC_NO_HEADER_CACHE=1`; only error-free, output≠source
-      runs are stored; global dir `~/.metascript/cache/headers/` with the
-      same VERSION:stamp marker GC as objects/. Measured (011-truthy,
-      mscW2 self-host): inlineHeader 152→6.8 ms, preludeMods 205→60 ms,
-      warm build wall 1.5 s→1.1 s (−27%). Verified: emitted-C byte-identical
-      (0 new fp-keyed .c across ON/OFF/kill-switch), header-edit → miss →
-      heal → hit chain, suite 3523/3523, parity 776/0/3, SAN 161/0/1.
-      Note: single-slot last-writer-wins — editing a header flips its one
-      entry; a flip back needs one recompute run before hitting again
-      (observed, benign).
-- [x] Phase A1 impl — ATTEMPTED 2026-09-02, PARKED behind MSC_PRELUDE_PACK=1
-      (opt-in, default off). What was built: checker/preludePack.ms (symbol/
-      type/extension/converter/directive serializer, ~200KB pack, reader
-      ~7ms; key = toolStamp|stdTreeHash|backendExt sharing the object cache's
-      memoized stamp via registered callback) + lazy materializer in
-      checkPass (graph-donor first: orchestrator P2 registers every std
-      module ctx BEFORE user modules, so declNode recovery is one
-      lookupModuleCtx away; parse+re-check fallback for graph-less paths)
-      + ensure hooks at the 6 downstream declNode/defaultParams read sites.
-      What it achieved when working: prelude block 146ms → 14ms (−131ms),
-      suite green. Why parked: the identity traps §6.9 predicted — extension
-      registry syms are SEPARATE objects from scope syms (two S-rows), the
-      same-name extensions across receivers cross-patch (Map.set vs
-      HashMap.set), donor registries dedup back onto the very pack objects
-      being patched (registerExtension's logical-identity dedup), and extern
-      extensions never carry declNode. Three fix rounds each surfaced the
-      next class; corpus went 54→66 fails. Net lesson: a serialize+patch
-      prelude context needs the registry/symbol graph treated as ONE
-      identity-consistent closure, not scope+registry walks — i.e. the real
-      fix is TransAm-shaped (Phase B) or "serialize enough to never
-      materialize". All infra kept behind the opt-in flag; zero effect on
-      default builds (verified: suite 3531/3531, parity 784/0/3, SAN
-      162/0/1 with mscW10, pack off). Discovered en route (pre-existing,
-      NOT pack-related): buildPreludeContext's baseCtx silently carried 4
-      "Property 'set' does not exist on type 'Map'" errors that orchestrator
-      ignored — FIXED 2026-09-03 (`bacbdab6`): the shared prelude scope lets
-      a later module's overload land on an already-Shaped primary, where
-      ensureShaped's early-return skipped it; shaping now drains the whole
-      chain.
-- [x] Phase A1 v2 impl + verify — DONE 2026-09-03, DEFAULT ON. The pack is a
-      SELF-CONTAINED closure (rustc rmeta model): one
-      index-linked object graph of Symbols, Types AND Nodes (declNode,
-      defaultParams, macro bodies, nodeType/resolvedSym/typeExpr refs) — no
-      donor contexts, no lazy materializer, no downstream ensure-hooks;
-      identity falls out of "one row = one object". Numbers (danger build):
-      closure 3390 syms / 4320 types / 28014 nodes → 2.0 MB; HIT prelude
-      117→88 ms (load 81: split 3 / rows 48 / links 15; key 7). Two reader
-      traps fixed en route, both now documented in-code: (1) the pack is
-      FORCED ASCII (\xHH escapes) because char-indexed string ops re-walk
-      UTF-8 on non-ASCII input — a char-indexed scan of the 2 MB blob was
-      quadratic and hung the loader outright (97 std files carry non-ASCII);
-      (2) empty-list marker is "" not "0" — a bare "0" is a REAL one-element
-      list [nodes[0]]. Fast paths: unescapeP early-out (most fields carry no
-      escape), charCodeAt digit accumulation for int lists, slice-based CSV
-      split (the old char-concat builder allocated per character). Verified:
-      unit 644/644, std/process warm 352/352 (the v1 killer), emitted-C
-      ON≡OFF (single fingerprint reuse), suite 3531/3531, corpus parity
-      814/0/0, SAN 167/0/0 — all with the pack hot. Economics: re-measured
-      2026-09-03 on HEAD post-merge (9-round interleaved ON/OFF, 011-truthy,
-      unique --output each round): prelude 87.0 ms ON vs 136.3 ms OFF
-      (−49.3 ms), graph load+check 393.0 vs 439.7 ms, total 1097 vs
-      1152 ms. The earlier "−29 ms" claim used a warmer OFF baseline;
-      −49 ms is the honest current number. A binary format is the next
-      lever if more is needed (ASCII decode is ~80 of the 87 ms).
-- [ ] Phase A2 impl — loader seeds std graph from pack dep-lists (writer/
-      reader/wiring/kill-switch) — NOTE: A2's dep-list section needs NO
-      symbols/AST, so it does NOT inherit A1's identity traps; still viable
-      next.
-- [ ] Phase A verify — ladder + cold/warm/flip matrix
-- [ ] Phase B — batch pipeline on TransAm
-- [ ] Phase C — `--batch` CLI + corpus runner integration
-- [ ] Parallel: checker hot-loop profile (`checkCallExpr` 44 ms / n=3856;
-      `node.ms` 114 ms transform — both now measured, both worth a look)
-- [x] 2026-09-01 — measurement + root cause + architecture decision (this doc)
-- [x] 2026-09-01 — prerequisite plumbing already landed: vendor in
-      toolchainStamp, marker-GC of global cache, atomic object cache (e9ba1ef2)
+**Verification**:
+- Type-check green
+- Native phase A delta
+- Test suite — unchanged
+- Error location rendering correct (pick an example failing `msc run` and check that error messages still point to correct line/col)
+
+---
+
+## Phase 6 — Replace `NameSet` with `Set<string>`
+
+**Problem**: `src/transform/context.ms:42` defines `NameSet` as `{ items: string[] }` with O(n) `nameSetContains` (linear scan) and O(n²) `nameSetAdd` (contains-check then push). Used in hot transforms: `lambdaLifting.ms` (13 call sites), `destructorLifting.ms` (46 call sites), `dce.ms` (12), `analyzer/inject.ms` (9), `codegen/c/declarations.ms` (7), etc.
+
+Example load: lambda lifting's `rewriteOuterRef` calls `nameSetContains(capturedNames, d.name)` for every identifier in every statement. With 20 captured names × 10,000 identifiers per module × 251 modules = **50 million string comparisons**.
+
+`Set<string>` already exists in `std/core/struct.ms:243` — hash-based open addressing, proper O(1) avg.
+
+**Scope**:
+- Option A (safer): update `nameSetContains` / `nameSetAdd` implementations to back `NameSet` with a hash set internally, keeping the external API intact
+- Option B (cleaner): replace `NameSet` type with `Set<string>` at all call sites
+
+**Files to touch**: `src/transform/context.ms` + call-site files
+
+**Expected win**: **~2–4s** off Phase A (algorithmic).
+
+**Risk**: low-medium. Semantic equivalence of Set vs NameSet operations; iteration order may differ (audit where `items[]` is iterated in order and whether order matters).
+
+**Verification**: test suite, cold build timing.
+
+---
+
+## Phase 7 — `lookupVarType` / `lookupVarResolvedType` hashing
+
+**Problem**: `src/transform/lowering/lambdaLifting.ms:176-190` — backwards linear scan over `varTypes: VarTypeEntry[]` on every lookup. Same algorithmic anti-pattern as `NameSet`. Called during env-field type resolution for every captured var.
+
+**Scope**:
+- Add `varTypesByName: Map<string, VarTypeEntry>` alongside the ordered array (preserves insertion-order semantics for other callers if needed)
+- Rewrite `lookupVarType` / `lookupVarResolvedType` to use the map
+- Keep `varTypes: VarTypeEntry[]` for anything that needs ordered iteration
+
+**Files to touch**: `src/transform/lowering/lambdaLifting.ms`
+
+**Expected win**: **~0.5–1s** off Phase A (algorithmic).
+
+**Risk**: low.
+
+**Verification**: lambda lifting tests pass; spawn-in-loop repro still correct.
+
+---
+
+## Phase 8 — Per-scope symbol hash map
+
+**Problem**: `src/checker/symbol.ms:141` `lookupSymbol` does linear scan of each scope's `symbols: Symbol[]` up the parent chain. Uses `nameId: int32` (fast cmp) but iterates every symbol. Module scopes have hundreds of symbols; checker walks the chain per identifier.
+
+**Scope**:
+- Add `symbolsByName: Map<int32, Symbol>` to `Scope`
+- `lookupSymbol` / `lookupLocal` use the map
+- `symbols: Symbol[]` kept for ordered iteration where needed (e.g. codegen, export enumeration)
+
+**Files to touch**: `src/checker/symbol.ms`
+
+**Expected win**: **~1–2s** off Phase A (algorithmic, benefits both).
+
+**Risk**: low-medium. Need to keep both representations in sync on add/remove.
+
+**Verification**: test suite, native phase A delta.
+
+---
+
+## Phase 9 — `Symbol.{overloads,defaultParams,staticFields}` default to `null`
+
+**Problem**: `std/meta/node.ms:101` — Symbol always has three `Symbol[]` / `Node[]` fields that are empty for 95%+ of symbols (non-overloaded functions have 0 overloads, most functions have 0 default params, non-classes have 0 static fields). Every symbol allocates 3 empty `msRefArray` structs regardless.
+
+**Scope**:
+- Change default to `null`
+- Update `createSymbol` / wherever symbols are constructed
+- Readers null-check before iterate
+
+**Files to touch**: `std/meta/node.ms`, `src/checker/**/*.ms`, `src/transform/**/*.ms` (searchers: grep `.overloads`, `.defaultParams`, `.staticFields`)
+
+**Expected win**: **~0.5–1s**.
+
+**Risk**: low. ~10-20 reader sites to audit.
+
+**Verification**: test suite.
+
+---
+
+## Phase 10 — `Token` from `interface` to `struct`
+
+**Problem**: `src/lexer/token.ms:45` — Token is an interface. Contains `kind: TokenKind`, 2 strings (`value`, `rawValue`), 2 numbers (`line`, `column`). Strings under DRC are reference types, so the struct-with-refs pattern (struct containing string fields, compiler auto-generates destroy that decrefs strings) applies naturally.
+
+~100K tokens per module lex × 251 modules = ~25M tokens total across a self-build. Each is currently a heap alloc + msRefHeader + inherent RC traffic.
+
+**Scope**:
+- `export struct Token` (requires auto-derived destructor since it owns 2 strings)
+- Tokens become values in `tokens: Token[]` — array holds them by value
+- Copy / move semantics audit for existing Token consumers
+
+**Files to touch**: `src/lexer/token.ms` + `src/lexer/scanner.ms`, `src/parser/context.ms`, `src/parser/util.ms` (reads `.comments`), plus anywhere Token is passed around
+
+**Expected win**: **~1–2s** on native.
+
+**Risk**: medium. Token is used widely; copy-by-value semantics change.
+
+**Verification**: test suite (parse tests), `msc fmt` sanity check.
+
+---
+
+## Phase 11 — `NodeData` inline in Node (big refactor, biggest potential)
+
+**Problem**: Every Node has `data: NodeData`, which is always an object literal heap-allocated. `{name: "foo"}` for an Identifier, `{left, right, operator}` for a BinaryExpr, etc. ~100K allocations per build just for NodeData.
+
+One path: fold Node + NodeData into a single flat struct using a discriminant and a "fat" union of fields — trading Node struct size for zero-per-node data allocation.
+
+**Scope**: major. Affects every NodeData variant cast in the codebase (`node.data as BinaryExprData` patterns).
+
+**Expected win**: **~2–4s** on native (largest single allocation-elimination win).
+
+**Risk**: HIGH. This is a compiler-wide refactor.
+
+**Suggested deferral**: after Phases 3–10 are measured. If the target still isn't met, pursue this. Otherwise, skip.
+
+---
+
+## Phase 12 — Parallelize module clang compilation (P3 from earlier discussion)
+
+**Problem**: module compilation (`compile.ms:1017-1040`) serially invokes clang for each of 251 modules. Now measurable at only **~2.5s** cold because most modules hit the module-level cache (`isCCodeCached`). On a true-cold scenario (e.g. fresh CI checkout) this is ~50s serial → ~13s 4-way parallel.
+
+**Scope**: same gather → dispatch → collect pattern as the Phase 2 `processCompileDirectives` refactor.
+
+**Expected win**: **~1.5s** on warm cold-build, up to **~35s** on true-cold (CI / fresh checkout).
+
+**Risk**: low. Pattern already proven by Phase 2.
+
+**Priority**: lower than 3–10 — the clang work is already small in the common case.
+
+---
+
+## Phase 13 — DRC codegen optimizations (long-term)
+
+Optimize the native codegen to emit fewer RC ops:
+
+- **Escape analysis**: when an object doesn't escape its scope, skip incref/decref entirely (like Rust's borrow checker for the 80% case)
+- **Move elision**: detect `let x = expr; use(x)` where `x` isn't used after — emit move semantics (zero-RC)
+- **Coalesce dec/inc pairs**: consecutive incref-decref of same pointer in straight-line code cancels out
+- **Inline hot RC paths**: `msIncref`/`msDecref` become macros for small objects, not function calls
+
+**Expected win**: ~5–15s on the compiler self-build, but applies to **all user programs compiled with DRC**. Compound value across the ecosystem.
+
+**Risk**: HIGH. Each optimization needs correctness proof (no use-after-free, no double-free).
+
+**Priority**: after Phases 3–10. This is months of work; the infrastructure fixes above are hours each.
+
+---
+
+## Recommended execution order
+
+1. **Phase 3** (syntheticToken → createNodeAt) — mechanical, ~2-3s, no risk
+2. **Phase 4** (comments = null) — ~1-2s, localized
+3. **Phase 5** (SourceLocation → struct) — **~3-5s, the single biggest DRC win**, moderate audit
+4. **Phase 6** (NameSet → Set) — ~2-4s, algorithmic, benefits both backends
+5. **Phase 7** (lookupVarType hash) — ~0.5-1s
+6. **Phase 8** (lookupSymbol hash) — ~1-2s, benefits both
+7. **Phase 9** (Symbol arrays null) — ~0.5-1s
+8. **Phase 10** (Token → struct) — ~1-2s
+9. Measure. If native cold ≤ ~16s, stop here — target met.
+10. **Phase 11** (NodeData inline) — only if still gap remaining
+11. **Phase 13** (DRC codegen) — independent long-term project
+
+~~Phases 3–10 together: **~10–17s** savings on native Phase A. Phase A 24.7s → ~8–15s → native cold self-build ~15–25s.~~ **VOID** — Phase A reached 6.3s without any of them (see Goal). The projected savings exceed the phase's entire current cost; re-measure before believing any number in this section.
+
+## Verification common to every phase
+
+Each phase lands independently:
+
+1. `msc check src/index.ms` — type-check green
+2. `msc test src/index.ms` — test suite 2768 pass / 8 fail (baseline unchanged)
+3. Cold native self-build with `--time`: measure Phase A delta
+
+## Non-goals
+
+- Shipping `msc` compiled with `--gc=none` — breaks `msc lsp` (long-running, would leak)
+- Rewriting the compiler in a different language
+- External profilers / instrumentation harnesses — timing breakdown via `--time` is sufficient
+
+---
+
+## Measured 2026-09-05 — `toolchainStamp()` content-hashes ALL of `vendor/` on every invocation
+
+**Symptom**: any `msc` binary sitting in the dev tree pays a ~45-60s FIXED cost per invocation (hello build: 44-64s real, user 23-27s, sys 10-16s), while the installed `~/.metascript/bin/msc` does the same build in 2.5s. Measured on two independent dev-tree binaries (one from a clean worktree, one from the main tree) in fresh target dirs; binary sizes are equal (~11.3MB), so it is NOT an optimization-level difference. `sample` puts the time in `collectFilesSorted` (`src/compiler/cache.ms`) plus memmove/malloc churn.
+
+**Cause**: `toolchainStamp()` = hash(binary) + `stampTreeInto(runtime/)` + `stampTreeInto(vendor/)`, where `stampTreeInto` recursively content-hashes EVERY file under the tree, once per process (memoized in-process only). The tree root is the compiler-root (binary location), so a dev-tree binary scans the dev `vendor/` = **3.0GB** (rust 1.2G, zig 654M, typescript-go 507M, prettier 221M, biome 187M — reference clones, not C libs), while the installed root's `vendor/` is 51MB (argon2, mbedtls, miniz, monocypher).
+
+**Verified fix for test rigs**: prune the worktree's `vendor/` COPY down to the installed set → same probe drops 52s → **1.74s** (30x). Do NOT prune the main tree's vendor (dev reference clones are wanted there).
+
+**Downstream costs previously misattributed**: guard battery "~1.5 min/guard", corpus lane at ~105s/program (9h projection vs the documented ~19 min), worktree suite 228s vs 120s. All were this stamp scan, not slow binaries.
+
+**Real fix (pending, needs design sign-off)**: `toolchainStamp` should stamp only the trees that can invalidate compiled artifacts (runtime headers + the C-source vendor libs actually reachable by `@compile`), or read a manifest, instead of walking whatever happens to live under `vendor/`.

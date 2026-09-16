@@ -325,7 +325,7 @@ The compiler inserts conversions at call sites when a function expects `Span<T>`
 
 ### Restrictions
 
-- `Span<T>` **cannot be returned** from functions — dangling pointer risk (same as the reference model)
-- `Span<T>` **cannot be stored** in interfaces/classes — lifetime not tracked
+- `Span<T>` **cannot be returned** from functions — dangling pointer risk (checker-enforced since 2026-08-28, same rule as the reference model's openArray result ban)
+- `Span<T>` **can be stored** in struct/class/interface fields and globals (probed 2026-08-28; `BsatnReader.bytes` relies on it) — lifetime NOT tracked: the stored view must not outlive its buffer (writer's borrow contract, Zig-slice tier). Object-literal field init from `T[]`/`Vec` lacks the implicit Span coercion (raw C error) — initialize from an already-Span source
 - `T[N]` size must be a **compile-time constant** (literal or const generic)
 - `T[N]` **cannot be resized** — no `push`, `pop`, `splice`

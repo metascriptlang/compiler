@@ -34,7 +34,7 @@ New constructs designed from ground up for value-based types, optimized for C ba
 
 ```ms
 struct Point { x: float64; y: float64; }      // value type, stack-allocated
-distinct type UserId = number;                  // nominal value type
+type UserId = distinct number;                  // nominal value type
 ```
 
 Value-type features: `struct`, `ref`, `out`, `move`, `defer`.
@@ -231,9 +231,9 @@ Both backends behave identically — no surprises.
 
 ## Implementation Roadmap
 
-### Key Insight: Bun Runtime as Proof
+### Key Insight: JS Runtime as Proof
 
-The compiler runs correctly on Bun (JS runtime) where everything is reference-based.
+The compiler ran correctly on a JS runtime where everything is reference-based.
 This proves all existing code is correct under reference semantics. Making interface
 reference-based in the C backend aligns C with the proven-working JS behavior.
 
@@ -245,7 +245,7 @@ reference-based in the C backend aligns C with the proven-working JS behavior.
 
 ### ~~Phase 2: Interface to Reference Type in C Backend~~
 
-~~Align C backend with working Bun semantics by wrapping interface types in `Ref<Struct>`.~~
+~~Align C backend with working JS semantics by wrapping interface types in `Ref<Struct>`.~~
 
 **DONE.** Interface types now use `Ref<Struct>` internally (like class). Changes in collectPass (wrap in `createRef`), resolvePass (unwrap Ref before setting fields), destructorLifting (interface gets typeInfo + Ref-aware DRC hooks). All existing codegen paths for `Ref<>` types handle heap allocation, `->` access, pointer params, and RC automatically.
 
@@ -254,7 +254,30 @@ Current state:
   struct    →  TypeKind.Struct         (value, stack, copied)
   interface →  Ref<TypeKind.Struct>    (reference, heap, refcounted)
   class     →  Ref<TypeKind.Struct>    (reference, heap, refcounted)
+  Array<T>  →  TypeKind.Array          (value, {len, p} header on stack, payload on heap)
 ```
+
+### Array<T>: Value Type (same pattern as struct)
+
+Arrays follow the same value/reference split as struct/interface:
+
+- **`Array<T>`** — value type. The `{len, p}` header lives on the stack. Payload is heap-allocated. Copied on assign via `=copy` (deep copy of header + payload). Passed by pointer when mutated (same `mutatedParams` analysis as structs). This matches the standard reference's sequence type which is value-based 99% of the time.
+
+- **`Ref<Array<T>>`** — reference type. Heap-allocated, refcounted. For rare cases where multiple owners need to share/observe the same array. Not yet implemented — deferred until needed.
+
+```ms
+// Value semantics (default) — like the standard reference's seq[T]
+const a: number[] = [1, 2, 3];
+const b = a;          // deep copy — b is independent
+b.push(4);            // only b changes, a is unchanged
+
+// Mutation through function params — auto pointer passing
+function append(arr: number[], value: number): void {
+    arr.push(value);  // mutates caller's array (passed by T* due to mutation)
+}
+```
+
+**Why value-based**: The standard reference uses value-based sequences for 99% of code. Value semantics are predictable (no surprise aliasing), enable stack allocation of the header, and the compiler auto-selects pass-by-pointer when mutation is detected. `Ref<Array<T>>` can be added later for the rare shared-array case.
 
 ### Phase 2.5: Struct Parameter Semantics + Enhancements (partially done)
 
@@ -305,14 +328,14 @@ Implementation needed:
 - LSP: Error surfaces automatically via checker diagnostics
 - Codegen: Small → emit as `T v` (value). Big → emit as `const T* _v` + `T v = *_v` copy-on-entry.
 
-**GcMode auto-detect — DONE:**
+**GcMode — DONE:**
 
-`GcMode` enum (Auto/Orc/None) on CheckerContext. `analyzeProgram` in analyzer/index.ms uses match expression:
-- `GcMode.None` → skip DRC entirely
-- `GcMode.Orc` → always run DRC
-- `GcMode.Auto` → scan symbols via `needsRC()`, skip DRC if no RC types found
+`GcMode` enum on CheckerContext. `analyzeProgram` in analyzer/index.ms:
+- `GcMode.None` / `GcMode.Manual` → skip DRC entirely (bare/freestanding mode, see docs/BARE.md)
+- `GcMode.Drc` → ARC (incref/decref only)
+- `GcMode.Orc` → ARC + cycle collector (**default**)
 
-Pure struct code gets zero DRC overhead automatically, no `--gc:none` flag needed.
+GC mode is explicitly chosen via `--gc=drc|orc|none|manual` flag. Default is `--gc=orc`.
 
 **Other struct enhancements (not yet):**
 
@@ -388,7 +411,7 @@ struct Admin {
 | | — `ref` modifier | DONE |
 | | — `mutatedParams` analysis | DONE |
 | | — Auto-optimized param ABI | DONE (infrastructure) |
-| | — GcMode auto-detect | DONE |
+| | — GcMode explicit (`--gc=orc\|drc\|none\|manual`) | DONE |
 | | — `readonly` modifier | Not started |
 | | — Intersection syntax, method rejection | Not started |
 | ~~2.7~~ | ~~Discriminated unions (type = match)~~ | ~~DONE~~ |
@@ -403,4 +426,4 @@ struct Admin {
 - **struct** is MetaScript-only — opt-in value type for performance, data only, no methods, compiler-enforced
 - No behavioral difference across backends for reference types (Layer 1)
 - Value types (Layer 2) are the performance/control superset for C-targeting code
-- The working Bun runtime proves reference-first is correct — `struct` is an optimization, not a migration necessity
+- The working JS runtime proved reference-first is correct — `struct` is an optimization, not a migration necessity

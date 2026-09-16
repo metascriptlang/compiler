@@ -1,10 +1,18 @@
 # Transform Architecture
 
-Phase 3 of the compilation pipeline. Rewrites the typed AST before codegen.
+Phase 3 of the compilation pipeline. Rewrites the typed AST before the analyzer + codegen.
 
 ```
-Phase 2 (typed AST) --> [General Transforms] --> [C-Backend Transforms] --> Phase 4 (Analyzer)
+Phase 2 (typed AST) --> [ one ordered transform pipeline, per-step backend flags ] --> Phase 4 (Analyzer)
 ```
+
+The pipeline is a single fixed-order sequence in `src/transform/index.ms` (`transformProgram`).
+Each step is gated for the active backend — many lowerings are C/Raiser-only because the JS backend
+keeps high-level constructs native (`class`, `for..of`, ternary, etc.). The authoritative order +
+backend gating is the `result = lowerXxx(result, ctx)` sequence in `index.ms` — this doc tracks it;
+if they disagree, **`index.ms` wins**.
+
+---
 
 ## Infrastructure
 
@@ -12,221 +20,152 @@ Phase 2 (typed AST) --> [General Transforms] --> [C-Backend Transforms] --> Phas
 
 | Mode | Function | Use Case |
 |------|----------|----------|
-| **1:1 visitor** | `walkNode(node, visitor)` | Bottom-up: recurse children, then transform node. For coercions, folding. |
-| **1:N expansion** | `walkBlockExpanding(stmts, expander)` | Statement list expansion. One stmt becomes N stmts. |
-| **Block-expanding walk** | `walkExpandBlocks(node, expander, ctx)` | Combines 1:N expansion with recursive descent into function bodies/blocks. |
+| 1:1 visitor | `walkNode(node, visitor)` | Bottom-up: recurse children, then transform node. Coercions, folding. |
+| Children-only | `walkChildren(node, visitor)` | Recurse into children without transforming the node itself. |
+| 1:N expansion | `walkBlockExpanding(stmts, expander)` | Statement-list expansion — one stmt becomes N stmts. |
+| Block-expanding walk | `walkExpandBlocks(node, expander, ctx)` | 1:N expansion + recursive descent into function bodies/blocks. |
+| Hooked block walk | `walkExpandBlocksHooked(node, expander, ctx, hook)` | `walkExpandBlocks` with an enter/exit hook (scope tracking). |
 
 ### Shared Context (`src/transform/context.ms`)
 
 ```
-TransformContext { tempCounter, errors[], fnDeclNames[] }
+TransformContext { tempCounter, errors[], fnDeclNames[], jsBackend, keepBuiltinMemberCalls }
 ```
 
-- `freshTemp(ctx, prefix)` generates `$prefix_N` unique names
-- `fnDeclNames` collected by closureCallMarker for C codegen
+- `createTransformContextWithChecker(checkerCtx)` — build a context carrying the checker results.
+- `freshTemp(ctx, prefix)` — generate `$prefix_N` unique names.
+- `fnDeclNames` — collected by `closureCallMarker` for C codegen (closure vs direct call).
+- `keepBuiltinMemberCalls` — backends that resolve builtins natively (Raiser's opcodes for
+  `arr.push`/`console.*`/etc.) set this true so `extensionMethodLower` leaves those as member calls;
+  mangled-name backends (C) keep it false and rewrite to direct calls. **Shared lowerings must gate on
+  a capability flag like this, not a backend name** — a new backend just sets the flag, and a
+  Raiser-only skip never silently breaks the C pipeline (which is exactly what happened when the skip
+  was ungated).
 
 ### Utilities (`src/transform/util.ms`)
 
-Node builders: `makeIdent`, `makeNull`, `makeNumber`, `makeString`, `makeBool`, `makeBlock`, `makeVarDecl`, `makeExprStmt`, `makeReturn`, `makeIf`, `makeWhile`, `makeTryCatch`, `makeContinue`, `makeBinary`, `makeUnary`, `makeCall`, `makeMember`, `makeConditional`, `makeAssign`, `makeArrayAccess`, `makeSwitch`, `makeSwitchCase`, `makeFnDecl`, `makeInterfaceDecl`, `makeObjectLiteral`.
+Node builders: `makeIdent` / `makeTypedIdent` / `makeIdentResolved`, `makeNull`, `makeNumber`,
+`makeString`, `makeBool`, `makeDefaultValue`, `makeBlock`, `makeVarDecl`, `makeExprStmt`,
+`makeReturn`, `makeIf`, `makeWhile`, `makeTryCatch`, `makeContinue`, `makeBreak`, `makeBinary`,
+`makeUnary`, `makeMoveExpr`, `makeCall` / `makeCallResolved`, `makeMember`, `makeConditional`,
+`makeAssign`, `makeArrayAccess`, `makeSwitch` / `makeSwitchCase`, `makeFnDecl`,
+`makeInterfaceDeclFromTypes`, `makeObjectLiteral` / `makeTypedObjectLiteral`, and the C-backend
+hidden-node builders `makeHiddenAddr` / `makeHiddenDeref` / `makeHiddenStdConv` / `makeHiddenSubConv`.
 
-`evalOnce(expr, ctx, loc)` — capture expression in temp variable, returns `{ decl, ref }`.
-`extractBodyStmts(body)` — unwrap BlockStmt to statement array.
+- `evalOnce(expr, ctx, loc)` — capture an expression in a temp (`{ decl, ref }`) to prevent
+  double-evaluation. Used by `optionalChain`, `destructuringLower`, `matchLower`, etc.
+- `extractBodyStmts(body)` — unwrap a `BlockStmt` to a statement array.
+
+### Folders
+
+```
+src/transform/
+  index.ms              -- the ordered pipeline (transformProgram)
+  walker.ms context.ms util.ms
+  coercion/             -- type/operator coercions (fold, optional chain, truthiness, ...)
+  desugar/              -- syntactic sugar removal (destructuring, spread, result, ...)
+  lowering/             -- high-level → low-level (for, match, async, actor, closures, ...)
+  analysis/             -- non-rewriting analyses (dce)
+  native/               -- C/Raiser emission helpers (builtins, cstring, span params, ...)
+```
 
 ---
 
-## Implemented Transforms (24)
+## Transform Pipeline (43)
 
-### General Pipeline (`src/transform/index.ms`)
+Order is the exact `index.ms` sequence. **Backend**: `both` / `C` (C + Raiser, i.e. `!jsBackend`) /
+`JS`.
 
-Fixed order. Each may depend on results of earlier ones.
+| # | Transform | File | Backend | What It Does |
+|---|-----------|------|---------|-------------|
+| 1 | powerAssert | `powerAssert.ms` | JS | `assert(x === y)` → rewritten to report operand values on failure |
+| 2 | deferLower | `lowering/deferLower.ms` | both | `defer f()` → try/finally wrapping (LIFO at scope exit) |
+| 3 | constantFolding | `coercion/constantFolding.ms` | both | `2+3`→`5`, `"a"+"b"`→`"ab"`, `!true`→`false` |
+| 4 | stringConcatFlatten | `coercion/stringConcatFlatten.ms` | both | `"a"+x+"b"` → single `ms_string_concat(...)` chain |
+| 5 | optionalChain | `coercion/optionalChain.ms` | both | `a?.b` → `a != null ? a.b : null` |
+| 6 | nullishCoalesce | `coercion/nullishCoalesce.ms` | both | `x ?? y` → `x != null ? x : y` |
+| 7 | stringTruthiness | `coercion/stringTruthiness.ms` | both | `if (str)` → `if (str.length > 0)` |
+| 8 | restParamLower | `lowering/restParamLower.ms` | both | rest param `...args` → call-site varargs array packing |
+| 9 | destructuringLower | `desugar/destructuringLower.ms` | both | `const [a,b] = f()` → temp + indexed access |
+| 10 | spreadExpand | `desugar/spreadExpand.ms` | both | `fn(...[a,b])` → `fn(a,b)` (array-literal spread inline) |
+| 11 | arrayMethodInline | `desugar/arrayMethodInline.ms` | C | `arr.map/filter/reduce` → inline `while` loops |
+| 12 | forLoopLower | `lowering/forLoopLower.ms` | C | `for(init;cond;upd)` → `{ init; while(cond){ body; upd; } }` |
+| 13 | forOfLower | `lowering/forOfLower.ms` | C | `for (x of arr)` → `while` + iterator |
+| 14 | resultDesugar (tryExpr) | `desugar/resultDesugar.ms` | C | `const x = try f` → result check + value extraction |
+| 15 | resultConstructors | `desugar/resultDesugar.ms` | JS | `Result.ok()/err()` constructor shaping for JS |
+| 16 | resultFieldCheck | `desugar/resultFieldCheck.ms` | JS | `$r.value/.error` → checked access (C skips — BlockStmt invalid in C expr position) |
+| 17 | matchLower | `lowering/matchLower.ms` | both | `match (x) { ... }` → if/else chain |
+| 18 | tailCallLower | `lowering/tailCallLower.ms` | both | self-tail-recursion → `while (1)` + loop-carried locals (`__tcp_N`) + `continue`; JS included — no engine but JSC has proper tail calls; covers return-position ternary/`&&`/`\|\|`/match and final-class (`OpenClass`-gated) methods; scanner+transformer share `tailOpaque` (TryCatch/Defer/fn-boundary only) and default-recurse; tail calls inside loops continue the labeled wrapper `__tcl`; const-bound arrows/function-exprs lower like declarations (guards 633-641) |
+| 18b | paramReassignLower | `lowering/paramReassignLower.ms` | C | assigned params → owned shadow local (`__prs_N`); params are borrowed slots the analyzer never destroys |
+| 19 | actorPre | `lowering/actorLower.ms` | C | actor pre-pass: extract async actor methods, set `methodFlags` |
+| 20 | spawnGroupLower | `lowering/spawnGroupLower.ms` | C | `await Promise.all([spawn(f),spawn(g)])` → N-slot AwaitGroup |
+| 21 | asyncDesugar | `lowering/asyncDesugar.ms` | C | `await` → `yield`; flip `async` → generator flag |
+| 22 | asyncBridge | `lowering/asyncBridge.ms` | C | async functions → return `msFuture*` |
+| 23 | generatorLower | `lowering/generatorLower.ms` | C | `function*` → state-machine iterator object |
+| 24 | spawnLower | `lowering/spawnLower.ms` | C | box return values inside spawn closures |
+| 25 | awaitLower | `lowering/awaitLower.ms` | C | sync-context `await` → typed future read or AwaitGroup |
+| 26 | actorLower | `lowering/actorLower.ms` | C | `actor {}` → `msActorCreate`/`Register`/dispatch infrastructure |
+| 27 | varHoist | `lowering/varHoist.ms` | C | hoist `var` decls to function-scope top (JS hoisting semantics in C) |
+| 28 | extensionMethodLower | `lowering/extensionMethodLower.ms` | both | `obj.method(args)` → `method(obj, args)` (UFCS) |
+| 29 | methodToFunction | `lowering/methodToFunction.ms` | C | class/actor methods → top-level `FunctionDecl` (uniform codegen shape) |
+| 30 | lambdaLifting | `lowering/lambdaLifting.ms` | C | closures with captures → lifted functions + env structs |
+| 31 | callHoist | `lowering/callHoist.ms` | C | hoist a fresh RC-returning call out of a non-RC binding so the analyzer cleans it |
+| 32 | builtinLower | `native/builtinLower.ms` | both | `@builtin` calls + MemberExpr → direct call for extension methods |
+| 33 | cstringConvLower | `native/cstringConvLower.ms` | both | cstring conversion — C emits `ms*` helpers, JS emits `toJSStr`/`fromJSStr` |
+| 34 | operatorLower | `lowering/operatorLower.ms` | both | binary ops → function calls when an operator overload exists |
+| 35 | stringOpLower | `native/stringOpLower.ms` | both | string operators → runtime function calls |
+| 36 | subscriptLower | `lowering/subscriptLower.ms` | both | custom `obj[idx]` → `` `[]`(obj, idx) `` |
+| 37 | spanLower | `lowering/spanLower.ms` | C | `HiddenStdConv` (Array → Span) → explicit struct initializers |
+| 38 | spanParamExpand | `native/spanParamExpand.ms` | C | expand `Span<T>` params into `(ptr, len)` at call/decl sites |
+| 39 | conditionalExprLower | `lowering/conditionalExprLower.ms` | C | ternary in statement position → if/else |
+| 40 | updateExprLower | `lowering/updateExprLower.ms` | C | `x++` / `--x` in statement position → assignment |
+| 41 | nullableLower | `native/nullableLower.ms` | C | `Maybe<T>` structural rewrites |
+| 42 | dce | `analysis/dce.ms` | both | dead-code elimination — alive-symbol set (single-module stub: all alive) |
+| 43 | liftDestructors | `lowering/destructorLifting.ms` | C | per-type `_destroy`/`_copy`/`_sink`/`_wasMoved` generated from field types (cycle-aware) |
 
-| # | Transform | File | Strategy | What It Does |
-|---|-----------|------|----------|-------------|
-| 1 | deferLower | `lowering/deferLower.ms` | 1:N expand | `defer f()` → try/finally wrapping |
-| 2 | constantFolding | `coercion/constantFolding.ms` | 1:1 visitor | `2+3` → `5`, `"a"+"b"` → `"ab"`, `!true` → `false` |
-| 3 | stringConcatFlatten | `coercion/stringConcatFlatten.ms` | 1:1 visitor | `"a" + x + "b"` → `ms_string_concat("a", x, "b")` |
-| 4 | optionalChain | `coercion/optionalChain.ms` | 1:1 visitor | `a?.b` → `a != null ? a.b : null` |
-| 5 | nullishCoalesce | `coercion/nullishCoalesce.ms` | 1:1 visitor | `x ?? 42` → `x != null ? x : 42` |
-| 6 | typeCoercion | `coercion/typeCoercion.ms` | 1:1 visitor | `String(x)` → `x.toString()` |
-| 7 | stringTruthiness | `coercion/stringTruthiness.ms` | 1:1 visitor | `if (str)` → `if (str.length > 0)` |
-| 8 | destructuringLower | `desugar/destructuringLower.ms` | 1:N expand | `const [a,b] = f()` → temp + indexed access |
-| 9 | spreadExpand | `desugar/spreadExpand.ms` | 1:1 visitor | `fn(...[a,b])` → `fn(a,b)` (array literal inline) |
-| 10 | forLoopLower | `lowering/forLoopLower.ms` | 1:1 visitor | `for(init;cond;upd)` → `{ init; while(cond) { body; upd; } }` |
-| 11 | forOfLower | `lowering/forOfLower.ms` | 1:N expand | `for (x of arr)` → while loop with iterator |
-| 12 | resultDesugar | `desugar/resultDesugar.ms` | 1:N expand | `const x = try f` → result check + value extract |
-| 13 | resultFieldCheck | `desugar/resultFieldCheck.ms` | 1:1 visitor | `$result_N.value` → `{ check(r); r.value; }` |
-| 14 | matchLower | `lowering/matchLower.ms` | 1:N expand | `match (x) { ... }` → if/else chain |
-| 15 | tailCallLower | `lowering/tailCallLower.ms` | 1:1 visitor | Tail-recursive calls → while loop with param reassign |
-| 16 | asyncDesugar | `lowering/asyncDesugar.ms` | custom walk | `await` → `yield`, flip async → generator flag |
-| 17 | generatorLower | `lowering/generatorLower.ms` | custom walk | `function*` → state machine returning iterator object |
-| 18 | lambdaLifting | `lowering/lambdaLifting.ms` | custom walk | Closures with captures → lifted functions + env structs |
-| 19 | dce | `analysis/dce.ms` | stub | Dead code elimination (stub: all symbols alive) |
-| 20 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Generate per-type `_destroy`/`_copy` from field types |
-
-### C-Backend Pipeline (`src/transform/c/index.ms`)
-
-Run after general transforms, only for C target.
-
-| # | Transform | File | What It Does |
-|---|-----------|------|-------------|
-| 1 | closureCallMarker | `c/closureCallMarker.ms` | Collect function names into ctx.fnDeclNames |
-| 2 | pointerParam | `c/pointerParam.ms` | Exports `isPrimitiveTypeName` for C codegen |
-| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | Exports `makeRangeCheck` helper for C codegen |
-| 4 | optionalCoercion | `c/optionalCoercion.ms` | `return null` → `return ms_optional_null()` for T|null fns |
-
----
-
-## Pending Transforms: Architecture
-
-Two transforms are deferred. This section defines their architecture based on proven patterns from other compilers, adapted for MetaScript's self-hosted context.
-
-### 1. Dead Code Elimination (DCE)
-
-**What**: Compute the set of "alive" symbols so codegen can skip dead code.
-
-**Shape**: NOT an AST transform — it's an analysis pass that produces an `AliveSyms` set. Codegen queries `isAlive()` to skip dead symbols.
-
-**MetaScript reference**: `dce.zig` (990 LOC). Same architecture but more complex due to string-based module system and lifecycle hook proactive marking.
-
-#### Algorithm (worklist marking)
-
-1. **Seed**: Walk all top-level code in all modules. Mark `main()`, exports, `@runtime` functions.
-2. **Worklist**: For each alive symbol, walk its body. Any symbol it references → add to worklist.
-3. **Cross-module**: When module A references a symbol from module B, follow the reference and mark it alive in B.
-4. **Lifecycle hooks**: Mark ALL `_destroy`/`_copy`/`_was_moved` functions alive proactively (analyzer injection creates calls to them AFTER DCE runs).
-
-#### Self-Hosted Design Decisions
-
-- **NOT an AST transform**. Output is `AliveSyms: Set<string>` (or `Map<modulePath, Set<symbolName>>`). Codegen checks `isAlive(module, symbol)` before emitting.
-- **Runs after all transforms, before codegen**. Sees the final AST.
-- **Requires cross-module module graph**: Needs to follow imports/exports across modules. Deferred until multi-module pipeline lands.
-- **Conservative for single-module**: For now, mark everything alive (no dead code in single file). DCE becomes valuable only with multi-module.
-
-#### Dependencies
-
-- **Requires**: Multi-module loading pipeline
-- **Before**: Codegen (codegen queries alive set)
-- **Independent of**: Analyzer (runs before analyzer, proactively marks lifecycle hooks)
-
-#### Estimated Scope
-
-Single-module stub: ~20 LOC (everything alive). Multi-module: ~200 LOC (worklist + cross-module tracking). Total with lifecycle proactive marking: ~300 LOC.
+> `dce` and `liftDestructors` are not AST rewrites in the usual sense — `dce` produces an
+> alive-symbol set the codegen queries; `liftDestructors` emits per-type lifecycle hook functions
+> the Phase-4 analyzer wires up.
 
 ---
 
-### 2. evalOnce / Rvalue Lowering
+## What Phase 4 (Analyzer) needs from Phase 3
 
-**What**: Prevent double-evaluation of expressions with side effects.
+The analyzer (DRC injection) assumes these lowerings have already run:
 
-**Shape**: NOT a standalone pass — it's a utility function called ad-hoc by other transforms.
+| Requirement | Transform |
+|------------|-----------|
+| `defer` → try/finally | deferLower |
+| all `for` → `while` | forLoopLower, forOfLower |
+| `match` → if/else | matchLower |
+| destructuring → explicit accesses | destructuringLower |
+| `try` expressions → result checks | resultDesugar |
+| `async`/`await`/generators → state machines | asyncDesugar, generatorLower, asyncBridge, awaitLower |
+| actors → dispatch + suspend infra | actorPre, actorLower |
+| closures → (fn, env) pairs | lambdaLifting |
+| fresh RC calls hoisted into analysable position | callHoist |
+| per-type `_destroy`/`_copy`/`_sink` hook bodies | liftDestructors |
 
-```
-// Input (inside optionalChain transform):
-a.b?.c.d
-// Naive lowering would evaluate a.b twice:
-a.b !== null ? a.b.c.d : null
-// With evalOnce:
-const $tmp = a.b; $tmp !== null ? $tmp.c.d : null
-```
+## What Phase 5 (Codegen) needs from Phase 3
 
-#### Self-Hosted Design Decision
-
-**NOT a standalone transform pass**. It's a utility function in `transform/util.ms`:
-
-```typescript
-// Already partially implemented as freshTemp + makeVarDecl pattern.
-// Formalize as:
-export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { temp: Node, decl: Node } {
-    const name = freshTemp(ctx, "tmp");
-    return {
-        temp: makeIdent(name, loc),
-        decl: makeVarDecl(name, expr, true, loc),
-    };
-}
-```
-
-Transforms that need it (`optionalChain`, `destructuringLower`, `matchLower`) already use the `freshTemp + makeVarDecl` pattern manually. Formalizing into `evalOnce` is a DRY cleanup, not new functionality.
-
-#### Estimated Scope
-
-~10 LOC utility function. Used by 3+ existing transforms.
-
----
-
-## Phase Dependencies
-
-### Execution Order
-
-```
-                    ┌── General Transforms (20) ──────────┐
-Phase 2             │  1-15. (see table above)             │
-(typed AST)    ───► │  16. asyncDesugar ✓                  │
-                    │  17. generatorLower ✓                │
-                    │  18. lambdaLifting ✓                  │
-                    │  19. dce (stub) ✓                     │
-                    │  20. destructorLifting ✓              │
-                    └──────────────┬───────────────────────┘
-                                   │
-                    ┌── C-Backend (4) ──┐
-                    │  closureCallMarker │
-                    │  pointerParam      │  ◄── C target only
-                    │  rangeCheckInject  │
-                    │  optionalCoercion  │
-                    └────────┬──────────┘
-                             │
-              Phase 4: Analyzer       ◄── needs destructor hooks + alive set
-                             │
-              Phase 5: Codegen        ◄── reads AliveSyms, calls isPrimitiveTypeName, etc.
-```
-
-### What Phase 4 (Analyzer) Needs From Phase 3
-
-| Requirement | Transform | Status |
-|------------|-----------|--------|
-| All defer → try/finally | deferLower | Done |
-| All for → while | forLoopLower, forOfLower | Done |
-| All match → if/else | matchLower | Done |
-| All destructuring → explicit accesses | destructuringLower | Done |
-| All try expressions → result checks | resultDesugar | Done |
-| Closures converted to (fn, env) pairs | lambdaLifting | Done |
-| Per-type _destroy/_copy bodies | destructorLifting | Done |
-| Alive symbol set (for proactive marking) | DCE | Done (stub: all alive) |
-| Generators desugared to state machines | generatorLower | Done |
-
-### What Phase 5 (Codegen) Needs
-
-| Requirement | Source | Status |
-|------------|--------|--------|
-| Function name list (closure vs direct call) | closureCallMarker | Done |
-| Primitive type check utility | pointerParam | Done |
-| Range check helper | rangeCheckInject | Done |
-| Optional null coercion | optionalCoercion | Done |
-| Alive symbol set | DCE | Done (stub) |
+| Requirement | Source |
+|------------|--------|
+| function-name list (closure vs direct call) | closureCallMarker / `ctx.fnDeclNames` |
+| primitive-type check, range-check, optional-null helpers | `native/` emission helpers |
+| span params expanded to `(ptr, len)` | spanParamExpand |
+| alive-symbol set | dce |
 
 ---
 
 ## Skipped Transforms (with rationale)
 
-Compared against compilers that get by with a handful of essential transforms, these are overkill here:
+Other compilers carry transforms MetaScript deliberately does NOT:
 
 | Transform | Reason |
 |-----------|--------|
 | recordToMap | No `Record<K,V>` type in MetaScript |
 | dateLower | Too specialized — one type doesn't justify a transform |
-| subscriptLower | Needs custom `[]` infrastructure we don't have |
-| methodCallLower | UFCS belongs in the semantic phase, not in transforms |
-| arrayMethodInline | Needs type info for correctness, marginal benefit |
-| astValidator | Defensive — better to fix transforms than add post-validation |
+| astValidator | Defensive post-pass — better to fix transforms than validate after them |
 
----
-
-## Implementation Priority
-
-Based on Phase 4 requirements and dependencies:
-
-1. ~~**evalOnce utility**~~ — Done. 10 LOC in `util.ms`.
-2. ~~**Lambda lifting**~~ — Done. ~835 LOC in `lowering/lambdaLifting.ms`. Single-pass detect+lift with ScopeStack, 8 tests.
-3. ~~**Generator**~~ — Done. ~500 LOC in `lowering/generatorLower.ms`. State machine with yield splitting, while/if handling, 8 tests.
-4. ~~**DCE stub**~~ — Done. ~60 LOC in `analysis/dce.ms`. AliveSyms API, stub passthrough, 3 tests.
-5. ~~**Async**~~ — Done. ~200 LOC in `lowering/asyncDesugar.ms`. Thin transform: `await` → `yield`, flip async → generator. 6 tests.
-6. ~~**Destructor lifting**~~ — Done. ~250 LOC in `lowering/destructorLifting.ms`. Per-type `_destroy`/`_copy` generation from field types with cycle detection, 7 tests. Unblocked by threading CheckerContext through transform pipeline.
+(Earlier-skipped `subscriptLower`, `arrayMethodInline`, and method-call lowering have since been
+implemented — see the pipeline table above.)

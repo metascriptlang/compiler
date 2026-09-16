@@ -6,17 +6,17 @@
 
 ### Design: Single Source of Truth in `.ms` Files
 
-All builtins declared in `std/*.ms` files (auto-imported). Normal MetaScript code — `export`, `class`, `@runtime`, `@builtin`, static/instance extensions. The compiler handles auto-importing.
+All builtins declared in `std/*.ms` files (auto-imported standard library). Normal MetaScript code — `export`, `class`, `extern … from "c_name"`, `@builtin`, static/instance extensions. The compiler handles auto-importing.
 
 **3-tier system:**
 
 | Tier | Decorator | Use Case | Example |
 |------|-----------|----------|---------|
 | `@builtin("Name")` | Compiler-intercepted (inline codegen) | `len`, `sizeof` | `@builtin("LengthStr") export function len(s: string): number;` |
-| `@runtime("c_name")` | Maps to C runtime function | Math, string/array methods | `@runtime("ms_floor") export function floor(this typeof Math, x: number): number;` |
+| `extern function … from "c_name"` | Binds a C function under a MetaScript name | Math, string/array methods | `export extern function floor(this typeof Math, x: float64): float64 from "floor";` |
 | `extern function` | Raw C FFI | malloc, printf | `extern function malloc(size: number): Ptr<void>;` |
 
-**Checker sees normal signatures** — `@builtin`/`@runtime` are opaque decorators. Only `builtinLower` transform (C-backend, post-analyzer) reads them to rewrite calls.
+**Checker sees normal signatures** — `@builtin` is an opaque decorator. Only `builtinLower` transform (C-backend, post-analyzer) reads it to rewrite calls.
 
 ### Builtin Dispatch Strategy
 
@@ -35,23 +35,19 @@ All builtins declared in `std/*.ms` files (auto-imported). Normal MetaScript cod
 For global classes used as namespaces or type constructors:
 
 ```ms
-// std/math.ms — both class methods and static extensions work
+// std/core/math/index.cms
 
 export class Math {
-    pi: number = 3.141592653589793;
-    e: number = 2.718281828459045;
-
-    @runtime("ms_floor")
-    floor(x: number): number { unreachable; }
+    static PI: float64 = 3.141592653589793;
+    static E: float64 = 2.718281828459045;
 }
 
-// static extensions also work
-@runtime("ms_abs")
-export function abs(this typeof Math, x: number): number { unreachable; }
+export extern function abs(this typeof Math, x: float64): float64 from "fabs";
+export extern function floor(this typeof Math, x: float64): float64 from "floor";
 
-// Usage: Math.floor(3.7) → ms_floor(3.7)
-// Usage: Math.abs(-5) → ms_abs(-5)
-// Usage: Math.pi → 3.141592653589793
+// Usage: Math.floor(3.7) → floor(3.7)
+// Usage: Math.abs(-5) → fabs(-5)
+// Usage: Math.PI → 3.141592653589793
 ```
 
 ### Pipeline Flow
@@ -70,9 +66,9 @@ Tree-shaking: demand-driven codegen from `main()`. Unused builtins = zero C outp
 
 | Component | Priority | Notes |
 |-----------|----------|-------|
-| `std/core.ms`, `std/math.ms`, `std/console.ms`, etc. | 5a | Normal `.ms` files with `@builtin`/`@runtime` |
+| `std/core.ms`, `std/math.ms`, `std/console.ms`, etc. | 5a | Normal `.ms` files with `@builtin`/`extern … from` |
 | Auto-import in checker | 5a | Parse + type-check system modules before user code |
-| `@builtin`/`@runtime` handling in collectPass | 5a | Set Symbol.builtinKind / runtimeName |
+| `@builtin`/`@exportName`/`from "c_name"` handling in collectPass | 5a | Set Symbol.builtinKind / exportName / nativeName |
 | `this typeof Type` static extensions | 5a | Parser + checker + extension registry |
 | `transform/native/builtinLower.ms` | 5b | Rewrite builtin calls to C-compatible AST |
 
@@ -88,11 +84,11 @@ Both use `@` syntax with free-form args: `@name`, `@name("str", 42)`, `@name({..
 
 | Decorator | Applies To | Purpose | Status |
 |-----------|-----------|---------|--------|
-| `@runtime("c_name")` | function, method | Bind to C runtime function. Codegen emits `c_name` unmangled. | DONE |
+| `@exportName("c_name")` | module-level function with a body | Defines the C symbol `c_name`: unmangled, external linkage, kept by dead-code elimination. Bare `@exportName` keeps the MetaScript name. The import side is `extern function … from "c_name"`. | DONE |
 | `@builtin("Name")` | function, method | Compiler-intercepted op. Sets `Symbol.builtinKind` for special codegen. | DONE |
 | `@derive(Trait, ...)` | class, interface | Auto-generate methods (Eq, Hash, Clone, Debug, Serialize). | REF ONLY |
 | `@comptime` | block | Compile-time evaluation via Hermes VM. | REF ONLY |
-| `@target("c")` | block | Backend-conditional code — only emit for specified target. | DESIGN |
+| `when (c) { … }` | block | Backend-conditional code — first true branch is spliced, others are dropped at parse and never type-checked. | DONE |
 | `@emit("...")` | statement | Inline raw C/JS code into output. | DESIGN |
 | `@inline` | function | Hint to inline function body at call site. | DESIGN |
 
@@ -111,15 +107,15 @@ Both use `@` syntax with free-form args: `@name`, `@name("str", 42)`, `@name({..
 - Multiple decorators stack: `@a @b class Foo {}` → `DecoratedDecl { decorators: [a, b], decoratedNode }` (**DONE**)
 - Checker walks through `DecoratedDecl` to check the inner node (**DONE**)
 - JS codegen skips decorators, emits inner declaration (**DONE**)
-- `@runtime`/`@builtin` set Symbol metadata in collectPass (**DONE**)
+- `@exportName`/`@builtin` set Symbol metadata in collectPass (**DONE**)
 
 ### Implementation Plan
 
 **Phase 5a** (needed for C codegen):
-- `@runtime("c_name")` → collectPass sets `Symbol.runtimeName` (**DONE**)
+- `@exportName("c_name")` → collectPass sets `Symbol.exportName` (**DONE**)
 - `@builtin("Name")` → collectPass sets `Symbol.builtinKind` (**DONE**)
 - `@include("file.h")` → collected on Program node for build system
-- `@target("c")` → transform strips non-matching target blocks
+- `when (c) { … }` → parser splices the taken branch, drops the rest (`@target` retired)
 
 **Phase 5b+** (later):
 - `@derive` → Hermes VM macro expansion (or hardcoded for Eq/Hash)

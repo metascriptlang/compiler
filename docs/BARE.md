@@ -112,7 +112,7 @@ DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `runtime/manual.h` | ~300 | Two sub-modes: `MS_BARE` (static arena) vs desktop (malloc-backed, no RC). No-op RC, lifecycle stubs, locker/future stubs, `msPrintln` |
+| `runtime/manual.h` | ~300 | Two sub-modes: `MSOS_BARE` (static arena) vs desktop (malloc-backed, no RC). No-op RC, lifecycle stubs, locker/future stubs, `msPrintln` |
 | `src/codegen/c/index.ms` | +8 | Conditional include: `runtime/manual.h` when `gcMode === Manual`, `runtime/core/system.h` otherwise |
 | `src/analyzer/index.ms` | +1 | Skip DRC for `GcMode.Manual` (alongside existing `GcMode.None` skip) |
 | `src/checker/context.ms` | +2 | `GcMode.Manual` enum value |
@@ -131,26 +131,28 @@ MetaScript → Parse → Check → Transform → [Skip Analyzer] → Codegen →
                                                            binary (libc linked)
 ```
 
-**Verified working:** hello.ms, testStructParams (24/24), test_enum, testArrayPush, testJson, httpConcurrent.
+**Verified working:** `hello.ms` re-measured 2026-09-06 (mscF6, Windows/zig): `build --gc=manual`
+→ exit 0, binary runs, prints. **Not re-measured**: testStructParams (24/24), test_enum,
+testArrayPush, testJson, httpConcurrent — inherited from the original write-up.
 
-## Phase 2: `--os=bare` (Freestanding, no libc) — DONE
+## Phase 2: `--os=bare` (Freestanding, no libc) — mechanism DONE, end-to-end link RED on this host
 
 When `--os=bare` is combined with `--gc=manual`, the runtime uses a static arena instead of malloc. All runtime `.c` files route through the arena via preprocessor redirects. No libc dependency.
 
-**Approach:** Same `.c` files for all modes, behavior switches via preprocessor. `manual.h` defines `#define malloc → msArenaAlloc` when `MS_BARE` is set. The build system passes `-DMS_BARE -include runtime/manual.h` to clang, forcing arena redirects before each `.c` file's own headers.
+**Approach:** Same `.c` files for all modes, behavior switches via preprocessor. `manual.h` defines `#define malloc → msArenaAlloc` when `MSOS_BARE` is set. The build system passes `-DMSOS_BARE -include runtime/manual.h` to clang (`src/compiler/compile.ms:587-591`; `--os=solana` passes `-DMSOS_SOLANA -DMSOS_BARE`), forcing arena redirects before each `.c` file's own headers. Codegen additionally emits `#define MSOS_BARE` as line 6 of **every** generated module TU (`src/codegen/c/index.ms:46-55`) — verified by `--emit=c`, 9 of 10 emitted files carry it (`_dispatch.c` does not).
 
 **What was built:**
 
 | File | Change | Lines |
 |------|--------|-------|
-| `runtime/manual.h` | `MS_BARE` sub-mode: static arena buffer, `#define malloc/calloc/realloc/free → arena` | ~30 |
+| `runtime/manual.h` | `MSOS_BARE` sub-mode: static arena buffer, `#define malloc/calloc/realloc/free → arena` | ~30 |
 | `runtime/manual.h` | `MS_MANUAL_MODE` flag to skip `.c` function bodies (manual.h provides inline versions) | 1 |
-| `src/compiler/compile.ms` | `initCBuildState`: add `-DMS_BARE -include runtime/manual.h` when `--os=bare` | 3 |
+| `src/compiler/compile.ms` | `initCBuildState`: add `-DMSOS_BARE -include runtime/manual.h` when `--os=bare` | 3 |
 | `src/codegen/c/index.ms` | `genProjectDispatcher` takes `osTarget` param, generates per-OS entry points | ~30 |
-| `runtime/core/system.c` | Wrapped in `#ifndef MS_BARE` (manual.h provides all functions inline) | 2 |
-| `runtime/promise/dispatch.c` | Wrapped in `#ifndef MS_BARE` | 2 |
-| `runtime/promise/combinator.c` | Wrapped in `#ifndef MS_BARE` | 2 |
-| `runtime/promise/pool.c` | Wrapped in `#ifndef MS_BARE` | 2 |
+| `runtime/core/system.c` | Wrapped in `#ifndef MSOS_BARE` (manual.h provides all functions inline) | 2 |
+| `runtime/promise/dispatchFull.c` | Wrapped in `#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)` | 2 |
+| `runtime/promise/combinator.c` | Same three-way guard | 2 |
+| `runtime/promise/pool.c` | Same three-way guard | 2 |
 
 **Dynamic entry points per `--os`:**
 
@@ -160,14 +162,62 @@ When `--os=bare` is combined with `--gc=manual`, the runtime uses a static arena
 | `bare` | `main(void)` | Calls `MsMain()` → `MsPreMainInner()` + `MsMainInner()` |
 | `solana` | None (user provides `entrypoint()`) | `MsMain()` exposed, user calls it |
 
-**`MsMain()`** is the init function: calls `MsPreMainInner` (DatInit for all modules) then `MsMainInner` (Init for all modules + user's `main_()`).
+**`MsMain()`** is the init function: calls `MsPreMainInner` (DatInit for every alive module) then
+`MsMainInner` (Init for every alive module). It does **not** call the user's `main_()` — the
+implicit auto-call was removed 2026-08-16 (`15df69d`); see CONTRIBUTING.md "Entry point: there is no
+`main()` auto-call". Measured 2026-09-06, `--os=bare --emit=c` on a one-line `console.log` program:
 
-**Arena configuration:** Default 256KB (`MS_ARENA_SIZE`). Override via `--passC="-DMS_ARENA_SIZE=N"`.
+```c
+static void MsPreMainInner(void) {
+}
+static void MsMainInner(void) {
+  M…bare45probeZhelloOms__Init000();
+}
+void MsMain(void) { MsPreMainInner(); MsMainInner(); msTestErrorFlag(); msOrcCollect(); }
+int main(void) { MsMain(); return msProgramResult; }
+```
 
-**Verified all three modes:**
-- `build examples/hello.ms` → ORC (default), full main → "hello world"
-- `build --gc=manual examples/hello.ms` → malloc, no RC, full main → "hello world"
-- `build --gc=manual --os=bare examples/hello.ms` → arena, no malloc, minimal main → "hello world"
+`MsPreMainInner` is empty for this program and `MsMainInner` carries exactly one `__Init000()` —
+the entry module's. The program body IS that init function.
+
+⚠ **`_dispatch.c` is the one TU with no bare define**: the same emit shows it including
+`runtime/drc.h` + `runtime/core/system.h` and carrying no `#define MSOS_BARE`, while all 9 module
+TUs carry it at line 6. It compiles because `-DMSOS_BARE -include runtime/manual.h` is on the
+clang command line for every `.c`. Whether the dispatcher SHOULD emit the define (and the drc.h
+include under manual) was **not investigated** — recorded as observed, not as intended.
+
+**Arena configuration:** Default 256KB (`MS_ARENA_SIZE`, `runtime/manual.h:55-56`). Override via
+`--passC="-DMS_ARENA_SIZE=N"`.
+
+**Measured 2026-09-06 (mscF6, Windows/zig host) — the three modes are NOT equally green:**
+
+| Command (`hello.ms` = one `console.log`) | Result |
+|---|---|
+| `build hello.ms` (ORC default) | exit 0, runs, prints |
+| `build --gc=manual hello.ms` | **exit 0, runs, prints** |
+| `build --os=bare hello.ms` (implies `--gc=manual`) | **exit 1 — does not link** |
+| `build --os=bare --emit=c hello.ms` | exit 0, 10 TUs emitted |
+| `build --os=solana hello.ms` | exit 1 — `--os=solana requires a clang with the sbf target registered` (host gap, not a code gap) |
+
+The `--os=bare` failure is two stacked problems, both from the same cause — **a hello world's
+alive-module set still contains `std/net`, `std/crypto` and `std/core/websocket/*`** (10 emitted
+TUs, see the Phase 3b module-DCE TODO, which is the same gap):
+
+1. `runtime/io/engineSelect.c` `#include`s `engineIOCP.c` (line 14), which under the bare defines
+   loses the future-type machinery: 22 `error:` lines, `call to undeclared function
+   'msFutureCreateT'`, `unexpected type name 'msFuture_int32'`. The compiler's own freestanding
+   skip then drops the object — `skip @compile runtime/io/engineSelect.c (freestanding: no libc)`
+   — which is the designed behaviour and works.
+2. The link then dies on what survived: `lld-link: error: undefined symbol: BCryptGenRandom`,
+   referenced from `vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c:303`. That
+   object is on the link line only because `std/crypto/index.cms` `@compile`s mbedtls and std/crypto
+   is in the alive set.
+
+So Phase 2's mechanism (arena, defines, entry point, codegen) is real and emits correctly; what is
+**not** verified is an end-to-end bare binary on this host. The 2026-08-29 "hello world" claim for
+the third row is not reproducible here and is left standing only as history. **Not measured**: this
+same command on macOS/Linux, where the engine selection resolves to `engineSelect`/`engineUring`
+rather than IOCP — the failure may well be Windows-specific.
 
 ## Phase 3: Blockchain / Contract Mode
 
@@ -192,9 +242,9 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 
 | File | Change |
 |------|--------|
-| `runtime/manual.h` | `MS_SOLANA` sub-mode: `msPrintln` → `sol_log_()` syscall |
+| `runtime/manual.h` | `MSOS_SOLANA` sub-mode: `msPrintln` → `sol_log_()` syscall (`runtime/manual.h:142`, `:282`) |
 | `runtime/freestanding/` | Stub headers (stdio.h, string.h, math.h, ctype.h, stdarg.h, stdlib.h) for BPF |
-| `src/codegen/c/index.ms` | `#define MS_SOLANA`/`MS_BARE` in generated C; `entrypoint()` in dispatcher; skip libc headers |
+| `src/codegen/c/index.ms` | `#define MSOS_SOLANA`/`MSOS_BARE` in generated C (`:46-55`); `entrypoint()` in dispatcher; skip libc headers |
 | `src/codegen/c/literals.ms` | `static const` string literals (`.rodata`, COW-safe) — correctness fix for all targets |
 | `src/checker/context.ms` | `osTarget` field on CheckerContext |
 | `src/compiler/compile.ms` | Solana toolchain setup (auto-detect BPF clang + sbpf-linker), force `--gc=manual` + release mode, graceful @compile failures, LLVM bitcode pipeline, BPF validation via `llc` |
@@ -232,8 +282,8 @@ The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it o
 After these changes, `helloSolana.ms` generates:
 ```c
 #include <stdint.h>
-#define MS_SOLANA
-#define MS_BARE
+#define MSOS_SOLANA
+#define MSOS_BARE
 #include "runtime/manual.h"
 
 static const struct { int64_t cap; char data[13]; } STR_1 = { MS_STRLIT_FLAG | 12, "hello solana" };
@@ -277,17 +327,49 @@ These are hardware/VM limitations, not bugs in our toolchain:
 - 512-byte stack limit — large locals must use heap (arena)
 - 32KB heap (Solana) — arena size must respect this
 
-## Phase 4: Compile-Time Enforcement (optional)
+## Phase 4: Compile-Time Enforcement
 
-Warnings or errors when `--gc=manual` code uses patterns that waste arena space or won't work on constrained targets. Not a blocker — programs work without these checks.
+| Pattern | Status |
+|---------|--------|
+| `async` / `await` / `spawn` | **DONE — hard error, FREESTANDING E01** (below) |
+| Heavy string concat in loop | TODO — "repeated concat allocates from arena without free"; suggest a pre-sized buffer |
+| Very large arena usage | TODO — "estimated arena usage exceeds MS_ARENA_SIZE" |
 
-| Pattern | Warning | Suggestion |
-|---------|---------|------------|
-| Heavy string concat in loop | "repeated concat allocates from arena without free" | Pre-size buffer |
-| `async`/`await` | "async not available under --gc=manual" | Use synchronous code |
-| Very large arena usage | "estimated arena usage exceeds MS_ARENA_SIZE" | Increase size or restructure |
+The two TODO rows are advisory only; programs work without them.
 
-**Where:** `src/checker/checkPass.ms` — optional diagnostics when `gcMode === GcMode.Manual`.
+### FREESTANDING E01 — async is an error, not a warning
+
+The freestanding runtime carries no dispatcher, no thread pool and no await slots, so async
+constructs cannot lower there at all. Rather than let them reach codegen and fail as unreadable C,
+the compiler refuses in-pipeline with a line/col diagnostic per site:
+
+```
+error: async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher,
+no thread pool, no await slots (FREESTANDING E01)
+--> …/async.ms:1:16
+```
+
+Collection lives in `src/checker/freestanding.ms` (`collectFreestandingAsync`,
+`FREESTANDING_ASYNC_MSG`), driven from `src/compiler/compile.ms` — sites are collected pre-transform
+and reported post-DCE, so a module that is dead under the alive set costs nothing.
+
+**Measured 2026-09-06 (mscF6)** on a 3-site probe (`async function` at 1:16, `await` at 4:15,
+`await spawn` at 9:15):
+
+| Command | E01 errors | exit |
+|---|---:|---|
+| `build async.ms --gc=manual` | **3** (1:16, 4:15, 9:15) | 1 |
+| `build async.ms --os=bare` (gc implied) | **3** | 1 |
+| `build async.ms --os=bare --gc=drc` | 0 | 1 — proceeds to the pre-existing bare+drc engine gap |
+| `build async.ms` (host default) | 0 | 0, builds |
+
+An explicit `--gc=` always wins over the `--os` implication, which is what the third row pins: the
+gate keys on the effective gc mode, not on the platform.
+
+The language server reports the same sites as **warnings** (severity 2) when `build.ms` declares a
+freestanding target via `lsp = { os, gc }` — see docs/LANG-BUILD.md "LSP Target" for the measured
+matrix. A project with no `lsp` section resolves to the host os and never to `manual`, so it gets
+zero new diagnostics.
 
 ## Phase 5: Explicit Allocator (~2 weeks)
 
@@ -327,6 +409,11 @@ In C codegen terms:
 
 ## What Already Works (no changes needed)
 
+⚠ **Not re-measured 2026-09-06.** The 2026-09-06 pass measured the Phase 1 / Phase 2 / E01 rows
+only; every row below is inherited from the original write-up and none of them was individually
+probed. `console.log` + `string` are covered transitively by the green `--gc=manual` hello build
+(Phase 2 table); the rest are unverified.
+
 | Feature | Why it works under --gc=manual |
 |---------|------------------------------|
 | `Result<T,E> + try` | Value type, no allocation, same as Zig error unions |
@@ -356,8 +443,8 @@ In C codegen terms:
 | Game engines | `manual` | `auto` | Full runtime | Phase 1 (done) |
 | Cross-compile Linux | `orc`/`drc`/`manual` | `linux` | Full runtime | Already works |
 | Cross-compile Windows | `orc`/`drc`/`manual` | `windows` | Full runtime | Already works |
-| Embedded (ARM Cortex) | `manual` | `bare` | Freestanding | Phase 2 (done) |
-| Kernel modules | `manual` | `bare` | Freestanding | Phase 2 (done) |
+| Embedded (ARM Cortex) | `manual` | `bare` | Freestanding | Phase 2 (mechanism done, link unverified — see Phase 2) |
+| Kernel modules | `manual` | `bare` | Freestanding | Phase 2 (mechanism done, link unverified — see Phase 2) |
 | Solana/SBPF | `manual` | `solana` | Contract | Phase 3a (infra done), 3b (DCE TODO) |
 | WASM chains (NEAR, Cosmos) | `manual` | `wasm` | Contract | Phase 3b + WASM entry |
 | Move (Sui/Aptos) | — | — | New backend | Future |
@@ -384,7 +471,7 @@ All C runtime files live under `runtime/` (separated from `std/` which contains 
 ```
 runtime/
   drc.h / .c              ← ARC (--gc=drc) or ORC (--gc=orc, adds -DMSGC_ORC)
-  manual.h                ← no RC; MS_BARE=arena, else=malloc (--gc=manual)
+  manual.h                ← no RC; MSOS_BARE=arena, else=malloc (--gc=manual)
   types.h                 ← msRefHeader, msTypeInfo (shared by both)
   arena.h                 ← arena allocator implementation
   fs.h, process.h, os.h  ← single-file modules (flat, no subdirs)

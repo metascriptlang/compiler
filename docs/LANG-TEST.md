@@ -25,8 +25,8 @@ Rules:
 - `test` is **top-level only** — cannot appear inside functions, classes, or other tests
 - The name is a **string literal** (allows spaces, punctuation, any description)
 - The body is a block `{ ... }` with access to all module-scope declarations (including private)
-- In non-test builds (`bun run run-ms`), test blocks are **completely stripped** — not even parsed
-- In test builds (`bun run test-ms`), test blocks are collected and executed by the generated test runner
+- In non-test builds (`msc run` / `msc build`), test blocks are **completely stripped** — not even parsed
+- In test builds (`msc test`), test blocks are collected and executed by the generated native test runner
 
 ### No `testGroup` — File Is the Group
 
@@ -131,14 +131,16 @@ test "scanNumber integer" {
 
 ```bash
 # Run all tests (entry point's full import graph)
-bun run test-ms src/index.ms
+msc test src/index.ms
 
-# Run specific file's tests
-bun run test-ms src/lexer/scanner.ms
+# Run a specific file's tests (+ its transitive deps)
+msc test src/lexer/scanner.ms
 
-# Filter by test name (substring match)
-bun run test-ms src/index.ms --filter "isDigit"
+# Under the ORC cycle collector (drc is the default)
+msc test src/index.ms --gc=orc
 ```
+
+`msc test` does not support `--filter` or `--jobs`.
 
 Output format:
 ```
@@ -274,8 +276,8 @@ Could be a keyword modifier (`expect approx`) or a builtin function.
 Beyond `--filter "name"`, support file glob patterns:
 
 ```bash
-bun run test-ms src/index.ms --filter "src/lexer/*"     # all lexer tests
-bun run test-ms src/index.ms --filter "parse"            # name substring
+msc test src/index.ms --filter "src/lexer/*"     # all lexer tests
+msc test src/index.ms --filter "parse"            # name substring
 ```
 
 ### P6: Test Timeout
@@ -294,8 +296,8 @@ Default timeout: 30 seconds. Configurable via `--timeout` flag.
 Rust runs tests in parallel by default. For MetaScript's C backend:
 
 ```bash
-bun run test-ms src/index.ms --jobs 4        # 4 parallel workers
-bun run test-ms src/index.ms --jobs 1        # sequential (default)
+msc test src/index.ms --jobs 4        # 4 parallel workers
+msc test src/index.ms --jobs 1        # sequential (default)
 ```
 
 Requires test isolation (no shared mutable globals between tests).

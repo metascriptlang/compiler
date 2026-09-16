@@ -124,12 +124,15 @@ msWaitFor(msPromiseRace([msSpawn(workA), msSpawn(workB)]));
 
 ### Memory Ownership: Borrow by Default
 ```
-Default (bare):                     Explicit move:
-  spawn(() => process(data))          spawn(() => consume(move data))
+Default (bare):                     Explicit move (at the spawn site):
+  spawn(() => process(data))          spawn(() => consume(data), { move: [data] })
   ↓                                   ↓
-  Thread borrows data (readonly)      Thread OWNS data (exclusive)
-  Caller must await before exit       Caller can exit immediately
-  Zero-copy, NF_CURSOR protection     Zero-copy, wasMoved on source
+  Thread reads data at Readonly<T>    Thread OWNS data (exclusive, writable)
+  Writes through it: compile error    Parent's later use of data: compile error
+  Zero-copy, checker-enforced view    Zero-copy, source reset on the parent thread
+
+  `move data` INSIDE the thunk is refused: it would reset the parent's slot
+  from the child thread (measured 2026-09-10).
 ```
 
 ### Spawn Architecture: Malebolgia-Style Pool
@@ -220,7 +223,7 @@ Works with spawn, async, Promise.all — model-agnostic
    Promise<Result<T,E>> safety         V1: throw-ban + V2: unguarded await ban
 
 📋 NEXT:
-   Spawn borrow checker               ~100 lines — NF_CURSOR + must-await enforcement
+   Spawn borrow checker               ~100 lines — Readonly<T> captures, `{ move }` list, must-await enforcement
    std/thread prelude                  ~10 lines — import { spawn } from "std/thread"
    move in spawn closures             ~50 lines — MoveExpr + wasMoved per-variable
 

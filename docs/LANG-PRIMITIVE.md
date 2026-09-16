@@ -22,12 +22,42 @@ Comprehensive status of non-array/string primitive and compound types in MetaScr
 
 ---
 
+## Concurrency Semantics — Map / Set / HashMap / HashSet
+
+All four containers are **single-owner and not synchronized** — the same stance as Go. MetaScript
+runs *truly* concurrent (real OS threads via `spawn` and actors), so sharing one container across
+threads and mutating it concurrently is a genuine data race, not a theoretical one.
+
+Rather than pay locking overhead on every operation, each container carries a best-effort `writing`
+flag (Go's `hashWriting` model): set for the duration of every mutation, checked at the entry of
+every operation and at each iterator step. A detected overlap fails **loud and unrecoverable**:
+
+| Detected | Message (`exit 2`) |
+| :--- | :--- |
+| write ∥ write | `concurrent map writes` |
+| read ∥ write | `concurrent map read and map write` |
+| iterate ∥ write | `concurrent map iteration and map write` |
+
+The failure path is `msMapFatal` → `exit(2)`, **not** a catchable throw: a detected race means the
+table may already be corrupt, so unwinding past it would run user code on poisoned memory. The
+correct response is structural — don't share the container across threads, or guard it with a lock —
+never catch-and-continue.
+
+**Single-threaded mutate-during-iterate is allowed** (the flag clears between ops), exactly as Go:
+the iterator walks the pre-mutation snapshot, so the result is unspecified-but-safe, never a fault.
+This is deliberately *not* Java/Python iterator-invalidation. The check is non-atomic and
+best-effort — it catches the vast majority of races, not 100%, just like Go.
+
+Implementation: guards in `std/core/struct.ms`; `msMapFatal` in `runtime/core/system.c`.
+
+---
+
 ## The Map & Set Gap (Strategic Blocker)
 
 Currently, `Map<K, V>` and `Set<T>` are recognized by the checker but have **zero implementation** in the standard library and **zero support** in the C codegen.
 
 ### 1. Map<K, V> (HashMap)
-*   **The Issue**: The compiler itself uses Maps for scope tracking, but it runs on **Bun/JS** which provides them natively. A self-hosted MetaScript compiler cannot build its own scope table because it lacks a `Map` implementation that compiles to C.
+*   **The Issue**: The compiler itself uses Maps for scope tracking, but early bootstrap ran on a JS host which provided them natively. A self-hosted MetaScript compiler cannot build its own scope table because it lacks a `Map` implementation that compiles to C.
 *   **Strategy**: 
     1.  Implement `std/core/map.ms` using a flat `msRefArray` of entries.
     2.  Implement a hashing protocol (similar to standard reference hash procs).
@@ -130,7 +160,7 @@ Pieces, each verified by running:
 | `BitSet<E>` is a type kind of its own (`TypeKind.Set`, element in `typeReturn`), resolved beside `Span`/`Arc`/`Locked` | `checker/types.ms` `createBitSet` / `setRepr`, `resolvePass.ms` `resolveAnnotation` — the name-keyed registry it replaced (2026-09-11) is gone |
 | Mixed-enum operands rejected | `checker/fit.ms` — `reportBitSetMismatch` when one side is a `BitSet`, `reportOrdinalEnumMix` when both are bare ordinal-enum members |
 | Ordinal → bit lowering | `transform/lowering/bitSetLower.ms` |
-| `has`, `incl`, `excl`, `isEmpty` | `std/core/struct.ms` and `struct.jms` (prelude): `@builtin`-tagged `extern` declarations with no body, lowered by tag; `BitSet<E>` itself is resolved by the checker, there is no alias in the prelude (both since 2026-09-12) |
+| `has`, `incl`, `excl`, `isEmpty`, and the ES2025 family (`union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`, `size`) | `std/core/struct.ms` and `struct.jms` (prelude): `@builtin`-tagged `extern` declarations with no body, lowered by tag; `BitSet<E>` itself is resolved by the checker, there is no alias in the prelude (both since 2026-09-12) |
 | End-to-end test | `src/test/corpus/programs/757-bitSetOrdinalSet.ms` |
 
 **Only ordinal enums participate.** An enum with hand-assigned values (`A = 1, B = 2,
@@ -150,6 +180,22 @@ Flag.Used | Kind.Call          rejected (since dbb74612, re-measured 2026-09-11)
                                different enum sets"
 Flag.Used | Flag.Cursor        == 10   (bits 1 and 3, not the ordinals 1|3 == 3)
 compiler suite                 3652 / 3652
+```
+
+Re-audited against the reference's `set[T]` on 2026-09-12 (26 probes, C and JS); four operand
+rules had fallen through to the integer path and are now closed the way the reference types them:
+
+```
+Flag.Used | s                  a set, from either side of `|` `&` `^` (was int32 on the left)
+s == Flag.Used                 rejected: "operator '==' cannot be applied to types 'BitSet<Flag>' and 'Flag'"
+BitSet<Flag> == BitSet<Kind>   rejected the same way (was a silent word compare)
+s <= t, s < t                  rejected: "operator '<=' cannot be applied …" (was a word compare;
+                               the reference reads these as subset — see the deferred algebra below)
+BitSet<uint8>, BitSet<Holes>   rejected: "BitSet element must be an enum with ordinal members, got 'uint8'"
+                               (was a one-byte set whose `1 << 200` trapped at run time)
+0 as BitSet<E>                 the empty set; there is no literal for it
+match (s) { Flag.Used => … }   still compiles and never matches: match patterns are not checked
+                               against the scrutinee type for any type, a checker gap outside BitSet
 ```
 
 A distinct alias lowers to the bare underlying C type (`uint32_t`), so the set costs
@@ -237,8 +283,9 @@ taken by the ordered hash container in `std/core/struct.ms:713`, which is a muta
 reference type with `.has()` / `.add()` / `.delete()`.
 
 Because `BitSet` is a **value** type, it deliberately gets **no mutating methods**. The
-whole surface is `.has()` to ask, `|` to add, `& ~` to remove. A reader who sees no
-`.add()` will not expect in-place mutation.
+whole surface is `.has()` to ask, `|` (or `.incl()`) to add, `.excl()` to remove. A reader who
+sees no `.add()` will not expect in-place mutation. `& ~` is not a spelling of removal: `~member`
+is an `int32`, and a set against an `int32` is rejected as mixing enum sets (measured 2026-09-12).
 
 `.has()` and not `.contains()`: every other language in the survey below uses `contains`,
 but JS/TS — and this repo's own `Set<T>` — use `has`.
@@ -249,7 +296,7 @@ Not purely additive. Accounting, honestly:
 
 | | Effect |
 | :--- | :--- |
-| New syntax | **none** — `A \| B` is what is already written |
+| New syntax | **none** — `A \| B` is what is already written, and the rest of the algebra is methods |
 | `.has()`, `BitSet<E>` | pure addition, TS has no such names |
 | Ordinal enum values | moves **toward** TS — `enum K { A, B, C }` is 0,1,2 in TS; the hand-assigned powers of two were the deviation |
 | `E.A \| E.B` infers `BitSet<E>` | **diverges** from TS's `number` — in the stricter direction; TS accepts a combined value into a single-member slot, which is unsound and known to be |
@@ -285,7 +332,7 @@ not assumed: on the JS backend a two-word array ran **~20% slower** than the Big
 (0.253 s vs 0.209 s over 2M operations), because `int64` there goes through BigInt
 (`lowerBigIntJS`, wired at `src/transform/index.ms:180`) while an array pays element-wise work
 on every operation. Below 33 members nothing changes: `int32` stays a plain Number at zero cost,
-and the compiler's own sets — `NodeKind` 30, `TypeKind` 21, `SymbolKind` 14, `NodeFlag` 17,
+and the compiler's own sets — `NodeKind` 30, `TypeKind` 21, `SymbolKind` 14, `NodeFlag` 18,
 `TypeFlag` 14, `SymbolFlag` 30 — all land at or below it (`Node.flags`, `Type.typeFlags` and
 `FlowNode.flags` are 2-byte fields since 2026-09-12; `Symbol.symFlags` stays 4). The array band is exercised end-to-end by
 `src/test/corpus/programs/760-bitSetArray.ms` (100 members) and the 64-bit band by
@@ -310,9 +357,56 @@ implemented here, and the decision is **not to**, for these reasons:
   still has to be taught) for a form the audience does not expect.
 - **The range form is a hazard.** `{A..D}` couples a set's meaning to enum **declaration
   order**; inserting a member in the middle silently changes every range that spans it.
-- **Convenience that is rarely reached for is not worth a new construct to learn.** The
-  set algebra reduces to the bitwise operators the set already has (`|`, `&`, `& ~`), and
-  subset / cardinality have no caller in this repo.
+- **The algebra itself is implemented, under the names the TypeScript world already uses.**
+  ES2025 gave `Set` a method family, so the algebra needs no operator of its own:
+  `a.difference(b)`, `a.isSubsetOf(b)`, `a.size()` and the rest read the same in MetaScript
+  as they do in TypeScript. See the table below.
+
+### The algebra: operators are the shorthand, methods are the full set (2026-09-13)
+
+`|`, `&` and `^` stay what they are, the familiar three a TypeScript author already writes on
+flags. Everything else is a method named as ES2025 names it on `Set`, so there is one spelling
+per operation and no operator changes meaning between the two languages:
+
+| Operation | MetaScript | Lowered to | Reference |
+| :--- | :--- | :--- | :--- |
+| union | `a \| b` or `a.union(b)` | `a \| b` | `a + b` (`PlusSet`) |
+| intersection | `a & b` or `a.intersection(b)` | `a & b` | `a * b` (`MulSet`) |
+| symmetric difference | `a ^ b` or `a.symmetricDifference(b)` | `a ^ b` | not declared |
+| difference | `a.difference(b)` | `a & ~b` | `a - b` (`MinusSet`) |
+| subset | `a.isSubsetOf(b)` | `(a & ~b) == 0` | `a <= b` (`LeSet`) |
+| superset | `a.isSupersetOf(b)` | `(b & ~a) == 0` | `b <= a` |
+| disjoint | `a.isDisjointFrom(b)` | `(a & b) == 0` | `a * b == {}` |
+| cardinality | `a.size()` | `msSetCard32`, summed per word in the array band | `card(a)` |
+| membership | `a.has(x)` | `(a >> x) & 1` | `x in a` (`InSet`) |
+| add / remove | `a.incl(x)` / `a.excl(x)` | `a \| bit`, `a & ~bit` | `incl` / `excl` |
+| hash (C only) | `a.hash()` | `msSetHashWord` folded over the words | `hash(x: set[A])` mixes the members |
+
+Measured 2026-09-13 over all three storage bands, C and JS identical (corpus `767-bitSetAlgebra`):
+the four set-returning methods and the three predicates give `3,1,1,2,true,true,true,false` on a
+4-member enum, the same on a 40-member one, and `6,1,5,5,true,true,true,false` on a 100-member one.
+
+`~a` stays a type error: a complement would set the bits above the last member, which then break
+`isEmpty` and `==`. The reference has no complement either, and does not need one because it can
+spell the universe as the range literal `{low(T)..high(T)}` and subtract. The error now says so
+(`bitwise NOT '~' has no meaning on a set`) instead of reporting a mixed-enum bitwise operator.
+
+A set is a usable hash-map key since 2026-09-13. It was worse than the earlier note said: the
+program compiled and every lookup silently missed, because `hash()` takes no argument, so
+overload scoring could not separate the five `hash` declarations and the `unknown` catch-all won
+and folded the variable's ADDRESS. Two equal sets therefore hashed differently. The rule that
+already governs an `unknown` PARAMETER now governs an extension RECEIVER as well: a value-typed
+receiver drops the `void*` catch-all when another candidate exists. Measured after: equal sets
+hash equally on all three bands, and `HashMap<BitSet<E>, string>` stores and reads back.
+
+Hashing is a C-side surface. The JS backend has no `hash` for any type at all (`n.hash()` on an
+`int32` is a type error there) because it uses the native `Map`, so the prelude's JS overlay
+declares no set hash either.
+
+Still absent, and loud rather than silent (measured 2026-09-12): the reference's `items` iterator
+(`for (const m of s)` fails with `Property 'toItems' does not exist`) and its `$` (`console.log(s)`
+prints `<BitSet>`). Ordering operators are rejected rather than read as subset: `isSubsetOf` is
+the spelling.
 
 Status: **nice to have, revisit only after everything else about `BitSet` is solid**, and only
 with evidence from real code that `.has()` and `match` are not enough.
@@ -348,20 +442,23 @@ sets work over ordinary enums rather than only over hand-numbered flag enums.
   destination) it is `((((*self) >> ((uint32_t)member)) & 1U) != 0U)` — a leaf the C compiler
   inlines. The `|` path never had the problem: `bitSetLower` emits `(1U << a) | (1U << b)`
   directly.
-- Whether `in` can be overloaded as an operator (today it is only the `for..in` keyword,
-  `src/lexer/token.ms:45`).
+- ~~Whether `in` can be overloaded as an operator~~ — **moot since 2026-09-13**: the reference
+  spells membership `x in s`, but `s.has(x)` already spells it here, and two spellings for one
+  operation is the thing the method family was chosen to avoid. Not planned.
 - ~~How the prelude pack serializes enum values~~ — **answered**: a set serializes as its
   representation word, so `Node.flags` and `Symbol.symFlags` each stay one unsigned integer
   column, the same shape the old masks had. The format bump came from a separate column for
   the union-variant slot that used to be packed into a flag bit, not from the sets.
-- A macro's source-form `flags` takes **one** `NodeFlag` member, not a set expression: the
-  macro engine cannot construct a set value, so the bridge compares a single ordinal.
-  Re-measured 2026-09-11 on the installed compiler, inside a macro body over a user enum
-  `E { A, B, C }`: `const s: BitSet<E> = E.A | E.C; ${s as uint32 as int32}` evaluates to
-  **2** (the ordinals OR-ed, not `1<<0 | 1<<2 == 5`) — the set lowering never runs in the
-  macro evaluator, so the value is silently wrong; `s.has(E.C)` fails loud instead:
-  `helper 'BitSet_has__E_…': Unresolved type 'E' - missing import?`, reported against the
-  prelude file. The same over a std enum (`BitSet<NodeFlag>`) fails with
-  `cannot evaluate 'NodeFlag' at comptime`. Plain enum members (`E.B` → 1) and std
-  generic containers (`E[]`) evaluate correctly in the same position, so the gap is the
-  set lowering and the monomorphized set helpers, not enums or generics in general.
+- ~~Sets inside macro and `@comptime` bodies~~ — **fixed 2026-09-12**: the comptime pipeline now
+  runs the same set lowering as the backends. Measured on the candidate against the runtime value
+  of the same expressions, over a user enum: 8-bit band `E.A | E.C` → `5`, `has` / `incl` /
+  `excl` / `&` / `isEmpty` → `5,true,false,6,4,true,false` in a macro, in a `@comptime` block and
+  at run time alike; 16-bit band `M11 | M1` → `2050`; array band (100 members) `true,true,false,
+  true,false,true` = C = JS, and array-band `==` / `!=` / `&` / `|` / `^` between two sets match the
+  runtime as well (`true,false,false,true,true,false,true,true,true`, 2026-09-12). A std enum works in
+  the same position: `BitSet<NodeFlag> = NodeFlag.Sem | NodeFlag.Transf` then `has(Sem)`, `has(LL)`,
+  `has(ProtocolCall)`, `incl(ProtocolCall).has(ProtocolCall)` → `true,false,false,true` (the earlier report of a
+  std-enum failure used a member name that does not exist). The 64-bit band followed on the same
+  day: the engine's integer registers are now 64-bit and shifts narrow to the operand width like
+  the reference VM, so `(M39 | M1).has(M7)` is `false` at comptime as at run time and a plain
+  `shl(1 as int64, 39)` gives `549755813888` in both (KNOWN-ISSUES L19, fixed).

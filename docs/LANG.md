@@ -7,15 +7,57 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | Type | Description | C Mapping |
 |------|-------------|-----------|
 | `number` | IEEE 754 f64 (default numeric) | `double` |
-| `string` | Mutable UTF-8 with COW | `msString` |
+| `string` | Immutable UTF-8 (surface); COW + in-place-append engine internal | `msString` |
 | `boolean` | true/false | `bool` |
 | `char` | 8-bit character (numeric) | `char` / `int8_t` |
 | `cstring` | C-compatible string pointer | `const char*` |
 | `void` | No value | `void` |
 | `never` | Unreachable (bottom type) | N/A |
 | `null` | Null value | `NULL` |
-| `undefined` | Undefined (aliases to null) | `NULL` |
-| `unknown` | Type-safe any | `void*` |
+| `undefined` | Alias of `null` (warns — prefer `null`) | `NULL` |
+| `unknown` | Top type — opaque until cast | `void*` |
+
+**There is no `any`.** `unknown` is the sole top type: opaque, readable only
+through an explicit cast. A native target has no dynamic member lookup, so an
+annotation promising one would be a promise the backend cannot keep — the
+checker rejects it and names the alternative.
+
+#### `unknown` vs `Ptr<void>` — same C repr, opposite intent
+
+Both compile to `void*`, so it is tempting to treat them as one thing. They are
+not, and picking the wrong one hides a real bug:
+
+| | `unknown` | `Ptr<void>` |
+|---|---|---|
+| **Means** | "a value I must prove the type of before I touch it" | "a raw machine address" |
+| **Reads** (`x.field`, `x()`, `x + 1`) | rejected by the checker — narrow with `as` first | allowed where pointer arithmetic / FFI expects it |
+| **What flows in** | anything pointer-shaped (`Ref`, `Ptr`, `null`, `cstring`, another `unknown`); value types (`number`, a bare struct) are rejected — box them or pass a `Ref` | whatever the FFI/`malloc` boundary hands back |
+| **Use for** | the `null as unknown as T` nullable-field idiom; opaque handles crossing an API you re-narrow at the other end | C interop, allocator return values, deliberately untyped memory |
+
+Rule of thumb: reach for `Ptr<void>` **only** at an `extern`/FFI boundary or when
+you genuinely mean "an address." Everywhere else the opaque value wants
+`unknown`, because the checker's narrow-before-use discipline is the whole point
+— `Ptr<void>` gives you none of it (`p.field` compiles and reads garbage).
+
+`unknown` is **not** a universal top type in the TypeScript sense. TS `unknown`
+accepts every value because every JS value is already boxed; MS keeps values
+unboxed for native speed, so a value type has no `void*` form to reinterpret and
+is rejected on the way in. The discipline TS `unknown` actually buys —
+can't-touch-until-narrowed — is preserved in full; only the "literally any value
+fits" part is traded away, on purpose. If you need to hold "one of several
+concrete types," that is a discriminated union or a generic, not `unknown`.
+
+**`undefined` is accepted as an alias of `null`** for TypeScript
+backward-compatibility, and warns so the code can be migrated to `null`. MS has
+one absent value, not two.
+
+```ms
+function f(x: any): void {}          // ✗ 'any' is not a MetaScript type - use 'unknown' with an explicit cast
+let a: undefined = null;             // ⚠ 'undefined' is an alias of 'null' - prefer 'null'  (compiles)
+function g(s: string | undefined) {} // ⚠ same warning; behaves exactly as `string | null`
+function h(x: unknown): void {}      // ✓
+const t = null as unknown as Token;  // ✓ the nullable-field idiom
+```
 
 ### Sized Integer Types
 
@@ -25,7 +67,7 @@ Fixed-width integers for systems programming. These are true integer types in th
 |------|------|--------|-----------|-------|
 | `int8` | 8-bit | yes | `int8_t` | -128 to 127 |
 | `int16` | 16-bit | yes | `int16_t` | -32,768 to 32,767 |
-| `int32` / `int` | 32-bit | yes | `int32_t` | -2³¹ to 2³¹-1 |
+| `int32` | 32-bit | yes | `int32_t` | -2³¹ to 2³¹-1 |
 | `int64` | 64-bit | yes | `int64_t` | -2⁶³ to 2⁶³-1 |
 | `uint8` | 8-bit | no | `uint8_t` | 0 to 255 |
 | `uint16` | 16-bit | no | `uint16_t` | 0 to 65,535 |
@@ -49,10 +91,12 @@ const shifted = byte << 4;
 
 | Type | Size | C Mapping |
 |------|------|-----------|
-| `float32` / `float` | 32-bit | `float` |
-| `float64` / `double` | 64-bit | `double` |
+| `float32` | 32-bit | `float` |
+| `float64` | 64-bit | `double` |
 
-`number` is `float64` / `double`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision.
+`number` is `float64`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision.
+
+> **Reserved keywords**: `int`, `float`, and `double` are reserved by the lexer (they cannot be used as identifiers) but are **not currently usable as type names** — use the sized forms (`int32`, `float32`, `float64`). The unsized aliases are reserved for a future revision.
 
 ### Byte Arrays (`uint8[]`)
 
@@ -106,7 +150,8 @@ macro     quote     extern    sizeof
 test      assert
 int8      int16     int32     int64
 uint8     uint16    uint32    uint64
-float32   float64   int       float     double
+float32   float64
+int       float     double                       (reserved, not yet usable as type names)
 ```
 
 ## Operators
@@ -201,10 +246,55 @@ float32   float64   int       float     double
 0xFF            // Hex (0x prefix)
 0b1010          // Binary (0b prefix)
 0o777           // Octal (0o prefix)
-1e10            // Exponent
-1.5e-3          // Float with exponent
-123n            // BigInt (n suffix, integers only)
-```
+  1e10            // Exponent
+  1.5e-3          // Float with exponent
+  123n            // BigInt (n suffix, integers only)
+  0xFFn           // Hex/binary/octal BigInt (0x/0b/0o + n)
+  ```
+
+  ### Callable namespaces — `BigInt()` *and* `BigInt.asUintN(...)`
+
+  A small closed set of global names is BOTH a callable function AND a
+  namespace carrying static methods, like the JS primitive-wrapper globals:
+
+  | Name | Call form | Static members |
+  |---|---|---|
+  | `BigInt` | `BigInt("123")` (string → bigint) | `asIntN(bits, v)`, `asUintN(bits, v)` |
+  | `String` | `String(42)` | `fromCharCode(n)` |
+  | `Number` | `Number(x)` | `isInteger(x)` |
+  | `Boolean` | `Boolean(x)` | — |
+  | `Symbol`, `Object`, `Array` | — | namespace surface |
+  | `Buffer`, `JSON`, `Promise`, `Map`, `Set` | — | namespace only (not callable) |
+
+  Verified surface (C == JS, `msc_n5` 2026-09-01):
+
+  ```typescript
+  const a = BigInt("123") + 0xFFn;          // 378
+  a.toString(16);                            // "17a"
+  BigInt.asUintN(8, 255n + 1n);              // 0n  (wraps mod 2^8)
+  BigInt.asIntN(8, 255n);                    // -1n
+  Number.isInteger(5);                       // true
+  String.fromCharCode(72);                   // "H"  (one code unit per call)
+  ```
+
+  Rules:
+  - `bits` is an int; the value must be bigint. Mixed `bigint`/`number`
+    arithmetic is a type error — convert explicitly (`BigInt(n)`, `Number(b)`).
+  - A local shadowing the name wins for the CALL form; the namespace arm only
+    binds for function-kind symbols (`const BigInt = 5; BigInt.asUintN(1, 0n)`
+    is "Property does not exist on int32", not a namespace hit).
+  - Mechanism: `isTypeLevelAccess` in the checker (allowlist + `staticReceivers` cache).
+    Pinned by corpus `744-namespaceCallSurface`, `743-bigintOps`.
+
+  ### BigInt carriers & JSON
+
+  - `Buffer.readBigUInt64LE/BE` / `readBigInt64LE/BE` return **bigint** — exact
+    beyond 2^53 on both backends; `writeBig*` take bigint. Node parity.
+    Pinned by corpus `746-bufferSurface`.
+  - `JSON.stringify` **refuses bigint at compile time** (Node throws at
+    runtime): `bigint is not JSON-serializable — convert with .toString()
+    first`. `JSON.parse` never produces bigint.
+
 
 ### Strings & Characters
 ```typescript
@@ -238,6 +328,12 @@ null  undefined
 ```
 
 ## Declarations
+
+Declarations below are **module-level**: `class`, `interface`, `struct`, `enum`, `type`, `extern`,
+`actor` and `macro` must appear at the top level of a file. Writing one inside a function body,
+arrow body, bare block or `test` block is a compile error (`local <kind> 'X' is not supported yet -
+move the declaration to module level`). A nested `function` is the one exception — it is a closure
+and is fully supported. A declaration inside a module-level `when` block is module-level and works.
 
 ### Variables
 ```typescript
@@ -299,6 +395,14 @@ async function fetch(url: string): Promise<string> { ... }
 
 // Generator functions
 function* range(n: number): Generator<number> { ... }
+
+// Parameter destructuring — sugar for `const { label, count } = props;` at the top of
+// the body. The pattern needs a type: an annotation, or the slot's contextual type.
+interface Props { label: string; count: number; }
+function Counter({ label, count }: Props): string { return label + count.toString(); }
+const twice = ({ count }: Props): number => count * 2;
+items.forEach(({ label }) => console.log(label));   // typed from the callback slot
+function bad({ label }) { ... }                        // error: a destructured parameter needs a type annotation
 ```
 
 ### Extension Methods
@@ -386,6 +490,16 @@ interface Circle extends Shape {
 // Construction — object literals (heap-allocated, reference-counted)
 const p: Point = { x: 1.0, y: 2.0 };
 ```
+
+**Optional fields**: `label?: string` desugars to `label: (string) | null` — omitting the field at construction stores `null`, and a null check narrows back to the base type (verified 2026-08-13, corpus `015-optionalFieldNull`, C+JS):
+
+```typescript
+interface Handler { tag: int32; cb?: (x: int32) => int32; }
+const h: Handler = { tag: 1 };            // cb omitted → null
+if (h.cb !== null) { h.cb(7); }           // narrow, then call
+```
+
+A **bare** function-typed field (no `?`, no `| null`) must be initialized — a NULL function pointer has no safe default, so the checker rejects omission; `?` is the opt-out. `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
 **C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
 
@@ -476,12 +590,87 @@ enum Status {
 }
 ```
 
-### Type Aliases
+### BitSet&lt;E&gt;
+
+A set of enum members whose bit position is the member's **ordinal**. The representation
+follows the member count: `uint8` up to 8 members, `uint16` up to 16, `uint32` up to 32, `uint64`
+up to 64, and a byte array `uint8[⌈n/8⌉]` above that, up to 65536 members (`sizeof` is 1, 2, 8 and
+13 for 6, 15, 40 and 100 members). `Flag.A | Flag.B` infers `BitSet<Flag>` instead of widening to
+`int32`, so the enum identity survives and two different enums can never be mixed.
+
 ```typescript
+enum Flag { Mutable, Used, Consumed, Cursor }   // ordinal values
+
+const base: BitSet<Flag> = Flag.Used | Flag.Cursor;
+const g = base.incl(Flag.Mutable).excl(Flag.Used);
+if (g.has(Flag.Cursor)) { /* ... */ }
+
+const none = 0 as BitSet<Flag>;                  // the empty set; there is no literal
+const one = none.incl(Flag.Used);                // a one-member set
+const rest = base.difference(g);                 // no operator for the difference
+if (rest.isSubsetOf(base) && !rest.isEmpty()) { /* ... */ }
+
+for (const m of base) { console.log(m.toString()); }   // Used, Cursor: ordinal order
+console.log(base.toString());                          // {Used, Cursor}
+
+flags & TypeFlag.HasAsgn        // now a type error when `flags` is BitSet<NodeFlag>
+```
+
+`BitSet<E>` is a value type, so it has **no mutating methods**: every operation returns a new set,
+and adding in place is `s = s | Flag.Used` (`|=` does not lex, KNOWN-ISSUES L24). Only enums with
+ordinal values participate — an enum with hand-assigned values (`A = 1, B = 2`) is already a flag
+encoding and keeps its numeric meaning.
+
+| Member | Result | Notes |
+| :--- | :--- | :--- |
+| `has(m)` | `boolean` | |
+| `incl(m)`, `excl(m)` | `BitSet<E>` | |
+| `isEmpty()` | `boolean` | |
+| `union(o)`, `intersection(o)`, `symmetricDifference(o)` | `BitSet<E>` | also `\|`, `&`, `^`; a bare member joins from either side (`Flag.Used \| s`) |
+| `difference(o)` | `BitSet<E>` | no operator: `s & ~o` and `~s` are type errors |
+| `isSubsetOf(o)`, `isSupersetOf(o)`, `isDisjointFrom(o)` | `boolean` | `<=` and `<` are rejected |
+| `size()` | `int32` | |
+| `==`, `!=` | `boolean` | two sets over the same enum; `s == Flag.Used` is rejected |
+| `toItems()` | `E[]` | members in ordinal order; what `for..of` calls; allocates |
+| `toString()` | `string` | `{Used, Cursor}`, `{}` when empty; allocates |
+| `hash()` | `int64` | C only; what makes `HashMap<BitSet<E>, V>` work |
+
+Measured 2026-09-15 on the installed `v0.2.54`, identical on C and JS unless a row says otherwise.
+Three spellings look right and are not:
+
+- `Flag.Used as BitSet<Flag>` compiles and reads the **ordinal as the mask**: ordinal 1 becomes the
+  set `{Mutable}`. A one-member set is `(0 as BitSet<Flag>).incl(Flag.Used)`;
+  `const s: BitSet<Flag> = Flag.Used` is a type error.
+- Implicit text conversion: `` `${s}` ``, `"x " + s` and `String(s)` fail the C compile and print the
+  representation word on JS (`12` for bits 2 and 3); `console.log(s)` prints `<BitSet>` on C and the
+  word on JS (KNOWN-ISSUES L32). `s.toString()` is right in a template, a concatenation and `+=` on
+  both backends.
+- An integer mask crosses with one cast each way: `(mask as uint8) as BitSet<Flag>` at the band's
+  width, and `s as uint32` back.
+
+Why it is shaped this way — the cross-language survey, the one TypeScript idiom it costs
+(`(flags & F.X) != 0` becomes `.has()`), the width rules, and the deliberately deferred
+set literal `{A, B}` — is recorded in
+[`LANG-PRIMITIVE.md`](LANG-PRIMITIVE.md#bitsete--typed-ordinal-set-design-record-2026-09-07).
+
+### Type Aliases
+
+Simple type aliases and generic type aliases (Tier 3).
+
+```ms
 type ID = number;
 type StringOrNumber = string | number;
 type Callback = (data: string) => void;
-type Pair<T> = { first: T; second: T };
+
+// Generic type aliases — type parameters substituted at each use site
+type Box<T> = { value: T };
+type Pair<A, B> = { first: A, second: B };
+
+const b: Box<number> = { value: 42 };         // Box<number> = { value: number }
+const p: Pair<string, number> = { first: "hi", second: 1 };
+
+// Field type mismatch is caught:
+// const bad: Box<number> = { value: "wrong" };  // error: string not assignable to number
 ```
 
 ### Import / Export
@@ -508,6 +697,68 @@ export default class App { }
 export { Token } from "./lexer/token";
 export * from "./utils";
 ```
+
+### Converter Declarations (IMPLEMENTED 2026-07-31 — main `9ce47eb`; V1 limits: target matched by simple nominal name, build.ms global-import tier awaits build.ms globalImports)
+
+Third routine kind besides `function` and `macro`. Decided 2026-07-30.
+
+```typescript
+// function  — runs at runtime,      invoked explicitly by code
+// macro     — runs at compile time, invoked explicitly by code (AST -> AST)
+// converter — runs at compile time, invoked BY THE COMPILER at a type boundary
+export converter element(node: Node): VNode { /* macro-engine body */ }
+```
+
+Rules (each closes a known converter footgun):
+
+1. **Source restriction**: exactly one parameter, and its type MUST be compile-time-only
+   (`Node`). Runtime-source converters (`converter toBool(x: int): bool`) are deliberately
+   NOT supported: that is the footgun quadrant (changes meaning of live code).
+2. **Explicit target**: the return annotation states the POST-EXPANSION type. The expansion
+   result is re-checked normally against the position — the compiler never trusts the promise.
+3. **Scope law**: a converter applies only where its symbol is in scope
+   (module import, or project-wide via build.ms global import). Nearer scope shadows.
+4. **Ambiguity is an error**: two in-scope converters with the same source->target pair =
+   compile error at import time. The compiler never chooses.
+5. **No chaining**: one application max; if the produced type still mismatches, normal error.
+6. **Never inside overload scoring**: applies only at positions whose expected type is already
+   settled (return, resolved call arg, annotated decl). An overloaded call where the choice
+   would depend on conversion = error demanding an explicit call. (Applying converters
+   inside overload scoring would make macro expansion reentrant; we refuse.)
+7. **Explicit call stays legal**: a converter is callable by name like a macro.
+
+Safety invariant (the reason this cannot become `if 5:`): the source type cannot exist at
+runtime, so every site a converter can fire at is a compile ERROR today. A converter can
+only turn errors into code — it can never change the meaning of code that already compiles.
+
+Design note: languages whose `converter` body is a runtime procedure apply it as a runtime call;
+ours runs in the macro engine at compile time, because our source domain (AST) only exists at
+compile time — mirror constraints, not a preference.
+
+Design note 2 (2026-09-13, revisited against the reference). The reference matches a converter's
+DESTINATION against the formal with the ordinary type relation, accepting equal-or-generic and not
+subtype, and tries it at every fit site — so do we: the JSXElement/JSXFragment
+arms run wherever the expression appears and take the position's expected type, which is why a
+declaration, an argument, a field, a return and a nullable slot all lower alike. The one axis where
+we are deliberately narrower is rule 1: the reference allows a RUNTIME source type, so
+`converter toBool(x: int): bool` is legal there and `if 5:` starts compiling project-wide the moment
+someone imports it. That erodes a whole class of type errors everywhere, invisibly. We keep the AST
+source restriction instead, and we lose less than it looks:
+
+- The newtype ergonomics a runtime converter is usually reached for are covered by `distinct` +
+  one-way `BrandWiden` + the `valueOf` protocol, and by the `as<TargetType>` protocol (below), which IS
+  runtime-source conversion — opt-in per type, named by convention, owned by whoever declares the type.
+- Our converter body is a MACRO, so it can expand one node into an arbitrary tree (`<div/>` becomes a
+  whole `createComponent`/`el`/`dynText` program). A reference converter is a runtime proc and cannot
+  do this at all; an explicit macro call at every site is its only equivalent. On that axis we are the
+  more powerful of the two.
+
+If the source restriction is ever lifted, the shape to lift it into is the orphan rule, not the
+reference's: allow a runtime source only when the TARGET is a nominal type owned by the converter's
+own module. `converter toSeconds(x: number): Seconds` becomes legal, `converter toBool(x: number): boolean`
+stays illegal, and no import can weaken the type rules of a type it does not own.
+
+First user: JSX boundary lowering — see `docs/LANG-JSX.md` "Boundary Lowering via Converter".
 
 ## Statements
 
@@ -588,14 +839,64 @@ class Matrix<const ROWS: int32, const COLS: int32> {
 }
 ```
 
+**Inferring one type parameter from several arguments.** The first argument binds `T`; every
+argument that binds the same `T` is a candidate. The binding starts as the first candidate and
+moves to a later one only when that one is strictly wider (the current binding fits it, not the
+reverse); every candidate must then fit the chosen type, and the one that does not is reported.
+Argument order never changes the result.
+
+```typescript
+class Animal { name: string = ""; }
+class Dog extends Animal { breed: string = ""; }
+function pair<T>(a: T, b: T): T { return a; }
+
+pair("s", "t");              // T = string
+pair(animal, dog);           // T = Animal — Dog fits an Animal binding
+pair(dog, animal);           // T = Animal — Animal is strictly wider than Dog
+pair3(dog, cat, animal);     // T = Animal, in any argument order
+pair(1, 2.5);                // T = float64 — int32 fits float64, not the reverse
+
+pair("s", 3);                // error: arg 1 got int32, expected string — 'T' was bound by argument 0
+pair(dog, cat);              // error: siblings, no candidate covers both (TypeScript rejects this too)
+pair(anInt32, anInt64);      // error in either order: integer widths never widen into each other
+```
+
+One of these differs from TypeScript, deliberately: TypeScript has a single `number`, so
+`pair(anInt32, anInt64)` is fine there. MetaScript keeps `int32`, `int64` and `float64` distinct
+(see "Numeric Types"); only `int32` → `float64` counts as wider. Say which width you mean:
+`pair<int64>(anInt32, anInt64)`.
+
+**Explicit type arguments.** `f<A, B>(...)` must name exactly as many type arguments as the
+declaration has parameters — on functions, static methods, templates and `new` alike. Too few,
+too many, or any on a non-generic function are all rejected:
+
+```typescript
+function f2<A, B>(a: A, b: B): A { return a; }
+f2<string>("s", 1);          // error: Wrong number of type arguments to 'f2': expected 2, got 1
+f2<string, int32>("s", 1);   // ok
+```
+
+A written type argument *is* the binding: every argument must fit it and it is never widened.
+`pair<Dog>(animal, dog)` fails at argument 0 even though `pair(animal, dog)` would infer
+`Animal`. Templates follow the same rule (`id2<string>(3, 4)` reports argument 0), and a generic
+rest parameter checks each trailing argument against its element type (`f<T>(a: T, ...r: T[])`
+called `f("a", 3)` reports `arg 1: got int32, expected string`). A default in a function's
+parameter list (`<T, E = string>`) is parsed but not applied yet: pass every type argument, or
+pass none and let them infer.
+
+An explicit type argument settles `T` before the arguments are looked at: `pair<Animal>(dog, dog2)`
+instantiates the `Animal` version even though both arguments are `Dog`, `pair<Dog>(dog, animal)` is
+an error, and an explicit binding is never widened.
+
 ### Union & Intersection Types
 ```typescript
 type StringOrNumber = string | number;
 type Shape = Circle & Drawable;
 
-// Undiscriminated unions (field-based variant matching)
-type Result<T, E> =
-    | { ok: true; value: T }
+// Discriminated union with shared boolean-literal field — narrows via `if (r.ok)`.
+// See "Discriminated Union Types" below for full coverage of all DU forms.
+type R<T, E> =
+    | { ok: true;  value: T }
     | { ok: false; error: E };
 
 // Intersection types — combine multiple types
@@ -605,9 +906,16 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
-### Discriminated Union Types (Variant Objects)
+### Discriminated Union Types
 
-Discriminated unions use `match` in type position to bind each variant to an enum value. This eliminates ambiguity when variants share field names, and maps 1:1 to the standard reference's variant objects (`case kind: EnumType`).
+MetaScript supports two flavors of discriminated unions, both lowered to a tagged C union (`_tag` + variant payloads):
+
+1. **`match`-type DU** — explicit `match (disc: T) { Key => {...}, ... }` syntax. Discriminator can be an enum OR a boolean.
+2. **TS-style DU** — structural `{ disc: "x", ... } | { disc: "y", ... }` with a shared literal-typed discriminator field (string or boolean). Mirrors TypeScript's discriminated union pattern.
+
+Both forms support narrowing in `if` branches via discriminator equality, so the compiler can prove which variant fields are accessible in each branch.
+
+#### `match`-type with enum discriminator
 
 ```typescript
 enum NodeKind { NumLit, StrLit, BinExpr }
@@ -619,7 +927,20 @@ type NodeData = match (kind: NodeKind) {
 };
 ```
 
-The discriminant field (here `kind`) is always an enum type. Each arm maps one enum member to a set of variant-specific fields.
+The discriminant field (here `kind`) is the enum value. Each arm maps one enum member to a set of variant-specific fields.
+
+#### `match`-type with boolean discriminator
+
+For two-state values (success/failure, present/absent), boolean is the natural discriminator. The keys are `true` and `false` literals:
+
+```typescript
+type Result<T, E> = match (ok: boolean) {
+    true  => { value: T },
+    false => { error: E },
+};
+```
+
+This is exactly how the built-in `Result<T, E>` is defined internally — a boolean-discriminated tagged union, with `r.value` only reachable when `r.ok` is true and `r.error` only reachable in the false branch.
 
 #### Construction
 
@@ -669,51 +990,259 @@ function getValue(d: Data): number {
 }
 ```
 
+#### TS-style with literal discriminator
+
+A structural union of object types whose variants share a discriminator field with a literal type. The compiler infers which variants belong to the union by spotting the shared discriminant.
+
+```typescript
+// String-literal discriminator
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+function area(s: Shape): number {
+    if (s.kind === "circle") return s.radius * s.radius * 3;
+    return s.side * s.side;
+}
+
+// Boolean-literal discriminator
+interface Ok<T>  { ok: true;  value: T;     }
+interface Err<E> { ok: false; error: E;     }
+type R<T, E> = Ok<T> | Err<E>;
+```
+
+In each branch the compiler narrows the union to a single variant, so accessing variant-specific fields (`s.radius`, `r.value`) is type-safe.
+
 #### C Backend
 
-In the generated C code, the discriminant field maps to `_tag` (the internal union tag), and the enum type is used instead of a raw `int32_t`:
+All three forms lower to the same C layout — a wrapper struct with a numeric `_tag` plus an anonymous union over per-variant struct payloads:
 
 ```c
-// Generated C for NodeData:
-typedef struct NodeData {
-    NodeKind _tag;          // enum type, not int32_t
+// Generated C for NodeData (enum-disc match-type):
+typedef struct {
+    NodeKind _tag;          // enum type for match-type with enum disc
     union {
-        struct { double value; } _v0;           // NumLit
-        struct { msString value; } _v1;         // StrLit
-        struct { msString op; Node left; Node right; } _v2; // BinExpr
+        struct { double value; } v0;           // NumLit
+        struct { msString value; } v1;         // StrLit
+        struct { msString op; Node left; Node right; } v2; // BinExpr
     };
 } NodeData;
 ```
 
-#### Comparison with Undiscriminated Unions
+For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index). The discriminator field (`ok`, `kind`) lives inside each variant struct at the same offset, so accessing `r.ok` reads it through `v0`/`v1` overlapping memory.
 
-| Feature | `type X = \| { ... } \| { ... }` | `type X = match (d: Enum) { ... }` |
-|---------|----------------------------------|-------------------------------------|
-| Variant selection | Field-name matching (fragile) | Enum discriminant (precise) |
-| Overlapping field names | Picks wrong variant | Each variant independent |
-| Construction validation | No | Yes — checks fields match variant |
-| `_tag` type in C | `int32_t` | Enum type |
+#### Choosing the right form
 
-Use discriminated unions when variants may share field names or when you want compile-time construction validation. Use plain unions for simple cases where field names are unique across variants.
+| Use case | Best fit |
+|---|---|
+| Two-state value (success/failure) with custom payloads | `match (ok: boolean) { true => ..., false => ... }` |
+| Many variants identified by an enum | `match (kind: K) { K.A => ..., ... }` |
+| Adapting external/JSON shapes with `kind: "..."` strings | TS-style string DU |
+| Need narrowing on a boolean field — minimal ceremony | TS-style boolean DU (`{ok: true, ...} | {ok: false, ...}`) |
 
-### Utility Types
-```typescript
-Partial<T>           // All properties optional
-Required<T>          // All properties required
-Readonly<T>          // All properties readonly
-Record<K, V>         // Object type with keys K and values V
-Pick<T, K>           // Subset of properties
-Omit<T, K>           // Exclude properties
+Plain unions (`A | B` without a shared discriminator) work when variants have unique field names, but offer no construction validation and pick the wrong variant on field-name collision — prefer the discriminated forms above.
+
+### Enum Literal Types
+
+Specific enum members as types (Tier 1). An enum literal type is a subtype of its enum — `K.A` is assignable to `K`, but `K` is not assignable to `K.A`.
+
+```ms
+enum K { A, B, C }
+
+// Enum literal as parameter type — only accepts that specific member
+function handleA(k: K.A): void { }
+handleA(K.A);      // OK
+// handleA(K.B);   // error: got K.B, expected K.A
+
+// Enum literal as return type
+function makeA(): K.A { return K.A; }
+
+// Union of enum literals
+function handleAorB(k: K.A | K.B): void { }
+
+// Variable annotation preserves literal type
+const k: K.A = K.A;    // k: K.A (literal)
+const k2 = K.A;        // k2: K (widened — no annotation)
 ```
 
+### Function Overload Signatures
+
+Body-less overload declarations followed by a single implementation (Tier 1, TypeScript parity).
+
+```ms
+enum K { A, B }
+
+function f(k: K.A): string;          // overload sig 1
+function f(k: K.B): string;          // overload sig 2
+function f(k: K): string {           // implementation (must come last)
+    return "result";
+}
+
+f(K.A);  // matches sig 1 (Exact) over impl (Subtype)
+f(K.B);  // matches sig 2
+f(K.C);  // matches impl (fallback)
+```
+
+Rules:
+- Implementation must come LAST after all overload signatures
+- All sigs must have the same arity as the implementation
+- Each sig's param types must be assignable to the impl's corresponding params
+- Each sig's return type must be assignable to the impl's return type
+- At least one non-sig definition (the implementation) must exist
+
+**Known limitation — literal args**: Overload resolution currently scores each
+argument against each candidate's param type *without* per-candidate contextual
+re-checking. This means object-literal arguments (`{ ... }`) get an anonymous
+structural type during scoring that does **not** match specific named struct
+param types. Until speculative per-candidate checking lands, do **not** add
+overload signatures to functions that take object literals as discriminated
+arguments (e.g. a hypothetical `createNodeAt(NodeKind.X, { ... }, loc)` API).
+Use a single wide signature with a union param type instead — the caller can
+add an `as XxxData` cast if needed. Tier 3 generic aliases
+(`createNodeAt<K extends NodeKind>(kind: K, data: DataFor<K>, loc): Node`)
+will be the proper long-term solution.
+
 ### Conditional Types
-```typescript
-type IsString<T> = T extends string ? true : false;
-type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
+
+Type-level if/else based on assignability (Tier 3).
+
+```ms
+// Basic conditional: T extends U ? TrueType : FalseType
+type IsNumber<T> = T extends number ? string : boolean;
+const a: IsNumber<number> = "yes";    // resolves to string
+const b: IsNumber<string> = true;     // resolves to boolean
+
+// Nested conditionals
+type Classify<T> =
+    T extends string ? "text" :
+    T extends number ? "num" :
+    "other";
+
+// infer keyword — extract type from a pattern
+type Unwrap<T> = T extends Array<infer U> ? U : T;
+const x: Unwrap<number[]> = 42;       // U inferred as number
+const y: Unwrap<string> = "hi";       // no match → T = string
+
+// infer with generic aliases
+type Box<T> = { value: T };
+type Unbox<T> = T extends Box<infer U> ? U : never;
+const v: Unbox<Box<string>> = "hello"; // U inferred as string
+```
+
+`infer` is only valid inside the `extends` clause of a conditional type. It uses structural unification (`unifyType`) to extract the binding — works with Array, generic instances, Ref/Ptr wrappers, and struct types.
+
+### Discriminated Union Narrowing
+
+Type narrowing in `if` and `match` blocks based on discriminant field checks (Tier 2).
+
+#### String-literal discriminated unions
+
+```ms
+type Shape =
+    | { kind: "circle", radius: number }
+    | { kind: "square", side: number };
+
+function area(s: Shape): number {
+    // if-narrowing: s.radius is valid here, s.side would error
+    if (s.kind === "circle") {
+        return s.radius * s.radius * 3;
+    }
+    return s.side * s.side;
+}
+
+// match-narrowing: each arm restricts to the matching variant
+function describe(s: Shape): string {
+    return match (s.kind) {
+        "circle" => "r=" + s.radius.toString(),    // s narrowed to circle variant
+        "square" => "s=" + s.side.toString(),       // s narrowed to square variant
+    };
+}
+
+// Exhaustiveness: missing variant arms are reported
+// match (s.kind) { "circle" => 0 }
+// error: Non-exhaustive match: missing variant 'square'
+
+// Call-site validation: wrong fields for a variant are caught
+// area({ kind: "circle", side: 5 });
+// error: Field 'side' does not exist on the kind-matched variant
+```
+
+#### Enum-based discriminated unions
+
+```ms
+enum K { A, B }
+type V = match (kind: K) {
+    K.A => { x: number },
+    K.B => { y: string },
+};
+
+function f(v: V): number {
+    if (v.kind === K.A) {
+        return v.x;      // OK — variant A has x
+        // v.y would error: Property 'y' does not exist on type 'V.A'
+    }
+    return 0;
+}
+```
+
+#### `typeof` narrowing
+
+`typeof x === "tag"` (and `!==`) narrows a union by the tag the value carries at runtime, on both
+backends. The tags are the ones JavaScript reports: `"number"` covers every numeric kind,
+`"string"` the string kinds, `"boolean"`, `"function"` (closures and function values),
+`"bigint"`, and `"object"` for everything else (refs, structs, arrays, `null`). The negated
+branch keeps the complement.
+
+```ms
+function apply(v: int32 | ((prev: int32) => int32), cur: int32): int32 {
+    if (typeof v === "function") { return v(cur); }   // v: (prev: int32) => int32
+    return v;                                          // v: int32
+}
+
+function size(v: int32[] | int32): int32 {
+    if (typeof v === "object") { return v.length; }   // v: int32[]
+    return v;
+}
+```
+
+The compared tag must be a string literal; a variable holding `"function"` does not narrow.
+Two members that share a tag (a union of two function types) are not split by `typeof` — the
+union stays whole and a call on it is rejected. Inside the branch the narrowed value is used
+directly as an operand, callee, condition or receiver; no `as` is needed (an explicit
+`v as int32` remains a no-op there).
+
+### Struct Field Type Checking
+
+Object literal construction validates field types against the expected struct type (Gap 1).
+
+```ms
+type Config = { port: number, host: string };
+const c: Config = { port: 8080, host: "localhost" };    // OK
+
+// const bad: Config = { port: "wrong", host: 42 };
+// error: Type 'string' is not assignable to type 'number' for field 'port'
+// error: Type 'int32' is not assignable to type 'string' for field 'host'
+
+// Also works with generic aliases:
+type Box<T> = { value: T };
+// const b: Box<number> = { value: "wrong" };
+// error: Type 'string' is not assignable to type 'number' for field 'value'
+```
+
+### Utility Types
+```ms
+Partial<T>           // All properties optional (planned)
+Required<T>          // All properties required (planned)
+Readonly<T>          // Read-only view of T (shipped) — deep, never converts back to T; `readonly T[]` for arrays.
+                     // Not the `readonly` parameter modifier above (that one is an explicit copy). See Spawn.
+Record<K, V>         // Object type with keys K and values V (planned)
+Pick<T, K>           // Subset of properties (planned)
+Omit<T, K>           // Exclude properties (planned)
 ```
 
 ### Mapped Types
-```typescript
+```ms
+// Planned — not yet implemented
 type MyPartial<T> = { [K in keyof T]?: T[K] };
 type Nullable<T> = { [K in keyof T]: T[K] | null };
 ```
@@ -933,7 +1462,7 @@ extern function msPromiseRejectFuture(p: Promise<void>, error: string): void fro
 const p = msFutureCreate();
 
 // Settle it later (first call wins — double-settle is no-op)
-msPromiseSettle(p, null as unknown as void);
+msPromiseSettle(p, null);
 
 // Or reject it
 msPromiseRejectFuture(p, "error");
@@ -943,33 +1472,56 @@ Useful when resolve/reject need to be called from a different scope than where t
 
 #### Spawn — Thread Pool Parallelism
 
-`spawn` offloads work to a thread pool (Malebolgia-style: fixed workers, backpressure, local execution fallback):
+`spawn` offloads work to a thread pool (Malebolgia-style: fixed workers, backpressure, help-first scheduling):
 
-```typescript
-extern function msSpawn(fn: () => void): Promise<void> from "msSpawn";
-extern function msWaitFor(fut: Promise<void>): void from "msWaitFor";
-
-const fut = msSpawn(() => {
-    // runs on a worker thread
-    heavyComputation();
-});
-
-msWaitFor(fut);  // block until complete
+```ms
+const handle = spawn(() => heavyComputation());  // returns Promise<T>
+const result = await handle;                      // block until complete
 ```
 
-Spawn works with all Promise combinators:
+`spawn` returns a `Promise<T>` tagged as **affine + scope-bound** under the hood — it must be awaited exactly once before its scope exits. Surface type is `Promise<T>`; the affine semantics are attached via internal flags so the compiler can enforce safety without forcing users to learn a second type name:
 
-```typescript
-// Parallel execution — wait for both
-const results = msPromiseAll([msSpawn(workA), msSpawn(workB)]);
-msWaitFor(results);
-
-// Race — first to finish wins
-const fastest = msPromiseRace([msSpawn(workA), msSpawn(workB)]);
-msWaitFor(fastest);
+```ms
+const h = spawn(() => 42);
+// COMPILE ERROR if h is never awaited (PARALOCK R1/E2)
+// COMPILE ERROR if h is awaited twice (PARALOCK R2/E3)
+// COMPILE ERROR if h is returned from a function (PARALOCK R3/E4)
 ```
 
-**Memory ownership**: Captured variables are borrowed (read-only) by default. Use `move` for ownership transfer to the spawned thread.
+The same `Promise<T>` produced by `async function`s, actor CALLs, and `spawn(...)` all interoperate: you can mix them in arrays, pass them through generic code, etc. When a spawn-origin `Promise<T>` flows into a context that drops the affine guarantee (mixed array, generic parameter, explicit upcast), the compiler emits a lint so the safety loss is visible.
+
+**Spawn groups** — parallel fan-out with structured results:
+
+```ms
+// Parallel execution — Promise.all with spawn handles
+const results = await Promise.all([
+    spawn(() => workA()),
+    spawn(() => workB()),
+    spawn(() => workC()),
+]);
+// results: [resultA, resultB, resultC]
+```
+
+When all elements are spawn calls, `Promise.all` is automatically optimized to use AwaitGroup (condvar + zero-alloc) instead of the generic callback path.
+
+**Memory ownership** — three verbs, one keyword:
+
+```ms
+const c: Counter = { n: 0 };
+const cfg: Config = { size: 8 };
+
+spawn(() => c.n + cfg.size);                             // BORROW: captures are read at Readonly<T>
+spawn(() => { c.n = 1; return c.n; }, { move: [c] });    // MOVE:   c is the thunk's now; the parent cannot use c again
+spawn(() => lockedUpdate(gate, (v: int32): int32 => v + 1)); // SHARE:  writes go through a Locked<T> critical section
+```
+
+- A captured binding is a **read-only view** inside the thunk: assignment, `++`, `out` arguments, `move`, the mutating array builtins (`push`, `splice`, …) and an `as` cast back to the mutable type are compile errors (`cannot write through Readonly<Counter> — … (PARALOCK E24)`). The view is deep and follows the value through aliases, `for..of`, destructuring, and struct copies that carry a ref; a POD struct copy is a plain value again.
+- A callee that only reads says so in its signature: `function readOnly(c: Readonly<Counter>)`. A class method says it with a TypeScript `this` parameter — `peek(this: Readonly<Counter>): int32 { return this.n; }` — and only such methods are callable through a view (`v.bump()` on a view: `a method callable through the view declares its receiver … (PARALOCK E24)`); inside, `this` is the view, so a write is E24. An extension spells the same receiver `function peek(this c: Readonly<Counter>): int32`. The `this` parameter must come first, name the enclosing class (`C` or `Readonly<C>`), and is refused on static methods, constructors, free functions and lambdas.
+- `{ move: [x, y] }` hands the listed bindings to the thunk on the parent thread at the spawn site. Inside the thunk they are owned and writable; a later use in the parent is an error (`'c' was moved into a spawn thunk and cannot be used afterwards`), rebinding a `let` revives it. Entries must be plain local names. `{ timeout: ms }` is the other option; any other key is an error.
+- `move x` *inside* the thunk is refused (`cannot move out of Readonly<…>`): it would reset the parent's slot from the child thread.
+- A moved binding must be its **sole owner** (PARALOCK E148): a local of the enclosing function, built from a fresh value (a literal, an object/array literal, `new`, a call, `move`) and re-assigned only from fresh values, and never copied anywhere the parent can still reach before the spawn — another name, a field, a literal, a call argument, a closure, a `defer`. A parameter, a `for..of` element, or a module-level binding cannot be moved. The error names the site: `cannot move 'c': it is not the sole owner — it is bound to 'a' at 4:2; only a binding nothing else can reach may cross into the thunk (PARALOCK E148)`. Calling a method on the binding before the move is fine (`buf.push(i)`), as long as what goes in is fresh too.
+
+**Lint E40**: `await spawn(...)` inside a loop body is a warning — spawns execute sequentially. Collect handles first, then await outside the loop.
 
 #### AbortController — Cooperative Cancellation
 
@@ -1019,10 +1571,10 @@ String and pointer types pass through without boxing (they are already pointer-s
 | Feature | TypeScript | MetaScript | Notes |
 |---------|-----------|------------|-------|
 | `async`/`await` | Yes | Yes | State machine desugaring |
-| `Promise.all` | Yes | Yes | Thread-safe (atomics) |
-| `Promise.race` | Yes | Yes | Thread-safe (atomics) |
-| `Promise.allSettled` | Yes (ES2020) | Yes | Per-future outcome tracking |
-| `Promise.any` | Yes (ES2021) | Yes | Thread-safe (atomics) |
+| `Promise.all` | Yes | Yes | Typed collection; corpus-gated c/orc/danger/js parity (2026-08-28) |
+| `Promise.race` | Yes | Partial on C | Scalar `T` verified; `T = string` silently wrong (probed 2026-08-28) |
+| `Promise.allSettled` | Yes (ES2020) | **Broken on C** | Typed use crashes (NULL result array, probed 2026-08-28); decl is `Promise<T[]>`, not the JS outcome-object shape |
+| `Promise.any` | Yes (ES2021) | Partial on C | Scalar `T` verified; `T = string` silently wrong (probed 2026-08-28) |
 | `Promise.resolve`/`.reject` | Yes | Yes | Pre-settled futures |
 | `.then()`/`.catch()`/`.finally()` | Yes | Yes | Callback chaining |
 | `new Promise(executor)` | Yes | Yes | Synchronous executor |
@@ -1178,6 +1730,229 @@ async function handleRequest(): Promise<Result<Response, string>> {
 
 Every `try await` either succeeds (unwraps the value) or short-circuits with a typed error. No exception handling, no untyped errors, no surprise rejections.
 
+### Actors
+
+Actors are long-lived stateful objects that communicate via message passing. Each actor has its own mailbox and processes one message at a time — no internal locking needed.
+
+#### Declaration
+
+```typescript
+actor Counter {
+    private count: number = 0;
+
+    // void return = SEND (fire-and-forget, enqueue and return immediately)
+    increment(): void {
+        this.count += 1;
+    }
+
+    // non-void return = CALL (request/reply, returns Promise<T>)
+    get(): number {
+        return this.count;
+    }
+}
+
+const counter = new Counter();
+counter.increment();                  // send: returns immediately
+counter.increment();
+const value = await counter.get();    // call: returns Promise<number>
+```
+
+#### Actor Isolation
+
+An actor's mutable state is only accessible from within the actor itself. External access goes through the mailbox:
+
+```typescript
+const counter = new Counter();
+counter.count;                 // COMPILE ERROR: actor-isolated property
+await counter.get();           // OK: goes through mailbox
+```
+
+A field marked `@nonisolated` is readable from outside without await. The
+decorator is an ordinary symbol exported by `std/actor`, not a word the checker
+knows by spelling, so it has to be imported — and it may be renamed on import
+like any other name:
+
+```typescript
+import { nonisolated } from "std/actor";
+
+actor Server {
+    @nonisolated
+    public readonly name: string = "api-1";
+    private connections: number = 0;
+
+    getConnections(): number { return this.connections; }
+}
+
+const s = new Server();
+s.name;                           // OK: nonisolated, readonly
+await s.getConnections();         // OK: through mailbox
+```
+
+Without the import the name resolves to nothing and the field stays isolated:
+`Cannot find name 'nonisolated'`, followed by `cannot access actor field 'name'
+directly — use actor methods` at the read.
+
+Every actor has a `pid` field (int64) — its unique runtime identity, always nonisolated.
+
+#### The 3 Transfer Rules
+
+Data crossing actor boundaries follows three rules:
+
+```
+actor.method(data)
+       |
+       +-- Is `move` keyword present?
+       |     YES --> MOVE: transfer pointer, invalidate source (zero-copy)
+       |     NO  |
+       |         v
+       +-- Is data provably immutable?
+       |   (value type, or Ref<T> with all fields readonly)
+       |     YES --> SHARE: pass pointer, incref (zero-copy)
+       |     NO  |
+       |         v
+       +-- COPY: value types copied automatically
+       |   Ref<T> with mutable fields: must use `move`
+```
+
+```typescript
+// Value types — always safe (COPY):
+counter.add(42);                    // number copied into message
+
+// Immutable Ref<T> — safe to share (SHARE):
+interface FrozenConfig { readonly host: string; readonly port: number; }
+const cfg: FrozenConfig = { host: "0.0.0.0", port: 443 };
+server.configure(cfg);              // shared pointer, zero-copy
+
+// Mutable Ref<T> — must transfer ownership (MOVE):
+let state: MutableState = { count: 0 };
+worker.process(move state);         // zero-copy, state invalidated
+// state.count;                     // COMPILE ERROR: used after move
+```
+
+#### Spawn Inside Actors
+
+Actors can spawn parallel work internally. Safety rules prevent data races:
+
+```ms
+actor Worker {
+    private data: number[] = [];
+
+    compute(): number {
+        // OK: read-only field borrow in spawn thunk
+        const h = spawn(() => {
+            let sum = 0;
+            for (const v of this.data) sum = sum + v;
+            return sum;
+        });
+        return await h;
+    }
+}
+```
+
+The compiler enforces two safety rules (PARALOCK S1/S3):
+
+```ms
+actor Unsafe {
+    private state: number = 0;
+
+    bad(): void {
+        spawn(() => {
+            this.state = 42;     // COMPILE ERROR (S3): cannot mutate actor field in spawn
+        });
+        spawn(() => {
+            const ref = this;    // COMPILE ERROR (S1): cannot capture bare 'this'
+        });
+    }
+}
+```
+
+Actors also support cooperative suspension — async actor methods (`CALL` pattern) suspend the actor while awaiting an internal future, freeing the scheduler to process other actors' mailboxes.
+
+#### Supervision (Erlang OTP)
+
+Supervisors monitor child actors and restart them on failure:
+
+```typescript
+import { Supervisor, RestartStrategy, RestartType, ShutdownKind } from "std/actor/supervisor";
+
+const sup = new Supervisor(RestartStrategy.OneForOne, 3, 5);
+
+sup.addChild({
+    name: "database",
+    start: () => new DatabaseActor(connectionString),
+    restart: RestartType.Permanent,
+    shutdown: ShutdownKind.Timeout,
+    shutdownMs: 5000,
+});
+
+sup.start();
+```
+
+Three restart strategies: `OneForOne` (only crashed child), `OneForAll` (all restart), `RestForOne` (crashed + later children).
+
+Per-child shutdown protocol: `BrutalKill` (immediate), `Timeout` (graceful then force), `Infinity` (wait forever).
+
+Dynamic child management at runtime: `startChild`, `terminateChild`, `deleteChild`, `restartChild`, `countChildren`.
+
+`DynSupervisor` is the pool variant (all children use the same spec, dynamic add/remove).
+
+#### Links and Monitors
+
+```typescript
+import { link, unlink, monitor, demonitor } from "std/actor";
+
+// Link: bidirectional — if either dies, both die
+link(actorA.pid, actorB.pid);
+
+// Monitor: unidirectional — watcher receives DOWN message when target dies
+const ref = monitor(watcher.pid, target.pid);
+```
+
+Actors can trap exit signals by defining an `onExit` handler:
+
+```typescript
+actor Watcher {
+    onExit(childPid: int64, reason: ExitReason): void {
+        console.log(`child ${childPid} died: ${reason}`);
+    }
+}
+```
+
+#### Lifecycle Hooks
+
+```typescript
+actor MyActor {
+    onTerminate(reason: ExitReason): void { }    // called before destruction
+    onExit(pid: int64, reason: ExitReason): void { }  // linked actor died
+    onDown(ref: number, pid: int64, reason: ExitReason): void { }  // monitored actor died
+    onIdle(): void { }                            // no messages for N ms
+}
+```
+
+Enable idle timeout: `setIdleTimeout(this.pid, 5000)` — fires `onIdle` after 5 seconds of inactivity.
+
+#### Name Registry
+
+```typescript
+import { registerName, whereis, unregister } from "std/actor";
+
+registerName(actor.pid, "database");    // returns true on success
+const pid = whereis("database");        // returns pid or 0
+unregister("database");                 // auto-unregisters on actor death
+```
+
+#### Constructor
+
+Actor constructors run after the actor's pid is wired, so `this.pid` is available:
+
+```typescript
+actor Worker {
+    constructor(name: string) {
+        registerName(this.pid, name);   // OK: pid is valid here
+    }
+}
+```
+
 ### Decorators & Directives
 
 Both use `@` syntax. Semicolon disambiguates:
@@ -1201,9 +1976,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | Decorator | Applies To | Purpose | Status |
 |-----------|-----------|---------|--------|
 | `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
-| `@derive(Trait, ...)` | class, interface | Auto-generate methods (Eq, Hash, Clone, Debug) | PLANNED |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
-| `@target("c")` | block | Backend-conditional code | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
 
@@ -1234,21 +2007,95 @@ extern function ok<T>(val: T): Result<T, any>;
 | **Intrinsic** | `@builtin("Name")` | Inline C (any pattern) | Edit `builtinLower.ms` (compiler rebuild) |
 | **Operator** | `sizeof T` | Native C operator | Lexer/Parser change (compiler rebuild) |
 
+## Conditional Compilation
+
+`when` selects code at compile time from build flags. The first true branch is
+spliced into the enclosing statement list; every other branch is dropped at parse
+and **never type-checked**, so a dropped branch may name symbols that do not exist
+on the current target.
+
+```typescript
+when (js) {
+    function now(): number { return Date.now(); }
+} else when (c && !debug) {
+    function now(): number { return msClockMonotonic(); }
+} else {
+    function now(): number { return 0; }
+}
+```
+
+`when` splices — it does not open a scope, so declarations inside a taken branch
+belong to the enclosing module or function. It is available wherever a statement
+list is (module level, function body, macro body), and it gates directives as well
+as code:
+
+```typescript
+when (macos) {
+    @passL("-framework Metal");
+    @compile("./bridgeEmbed.m");
+}
+```
+
+### Condition grammar
+
+A closed grammar — flag names, literals, `!`, `&&`, `||`, comparisons
+(`==` `===` `!=` `!==` `<` `<=` `>` `>=`) and parentheses. Function calls and
+arbitrary expressions are rejected: conditions are resolved before any symbol
+table exists, so an identifier there is always a flag name, never a variable.
+Comparison is numeric when both sides are numeric, string otherwise.
+
+### Flags
+
+| Source | Example |
+|--------|---------|
+| Backend | `c`, `js`, `raiser`, plus `backend=c` |
+| Target OS | `macos`, `ios`, `android`, `linux`, `windows`, plus `os=macos` |
+| OS family (computed) | `posix`, `unix`, `bsd` |
+| Memory mode | `drc`, `orc`, `none`, `manual`, plus `gc=orc` |
+| Build mode | `debug`, `release`, `danger`, plus `mode=release` |
+| Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
+
+A flag with no value is `"true"`. A name that is not defined is **false, never an
+error** — the namespace is open, so a typo cannot be distinguished from a flag the
+user has not set. `msc --help-defines` lists everything currently defined.
+
+`-d:my-flag` is normalized to `my_flag`, since `my-flag` lexes as a subtraction.
+
+> `@target(...)` and `@platform(...)` were retired 2026-08-09 in favour of `when`.
+> `@target` never gated anything (the name was accepted, the filter was never
+> written); `@platform` gated directives only. Both now raise an error pointing here.
+
 ## Strings and Characters
 
 MetaScript provides a high-performance string system that is a systems-programming superset of TypeScript. It adds support for in-place mutation, primitive characters, zero-copy views, and binary-compatible byte array bridging.
 
-### 1. The `char` Primitive
-MetaScript introduces `char` as a first-class primitive type (mapped to C `char`/`int8`).
+### 0. The Index-Space Contract (normative)
 
-- **Access**: Accessing a string by index (`s[i]`) returns a `char`, not a string.
+Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte array, the standard reference's JS model) with a cached is-ASCII flag. Over that single representation the API exposes exactly **two index spaces, separated by name** — an offset produced in one space must never be consumed by the other:
+
+| Tier | Names | Index space | Semantics |
+|------|-------|-------------|-----------|
+| **TS tier** (default) | `length`, `s[i]`, `charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `slice`, `substring`, `split`, `replace`, `replaceAll`, `padStart`, `padEnd`, `startsWith`, `endsWith`, `repeat`, … | UTF-16 code units | **TypeScript-exact.** What a TS developer reads is what they get. |
+| **Byte tier** (explicit) | `byteLength`, `byteAt`, `byteSlice`, `byteIndexOf`, `asBytes`, `asString` | Raw UTF-8 bytes | The standard reference's string surface. Lexers, parsers, and binary protocols live here. |
+
+- **`s[i]` behaves like TypeScript**: it is equivalent to `charAt(i)` and yields the i-th UTF-16 code unit as a `string`. Sole documented deviation: out-of-range yields `""`, not `undefined`.
+- **ASCII fast path**: when the is-ASCII flag holds, byte index == code-unit index and both tiers run at byte speed. Non-ASCII TS-tier calls pay a UTF-8 decode walk.
+- **Bridge**: `asBytes()` is a zero-copy borrow of the buffer (C: Cursor bit-cast; JS: identity). `asString()` is a copying kernel returning a fresh owned string.
+- Index **assignment** (`s[i] = c`) is byte-space legacy and slated to move to an explicit byte-tier form; treat it as byte-tier today.
+
+### 1. The `char` Primitive
+MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
+
+- **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0).
 - **Literals**: Character literals use single quotes (e.g., `'a'`).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
+- **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
 const c: char = 'A';
-const s = "hello";
-const first: char = s[0]; // Returns 'h' as char
+const s = "héllo";
+const first = s[0];        // "h" — string, TS semantics
+const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
 ```
 
 ### 2. Mutable Strings
@@ -1256,13 +2103,14 @@ Strings in MetaScript are mutable when declared with `let`. All standard TypeScr
 
 - **`.length`**: Returns the number of characters (UTF-16 code units), matching TypeScript behavior.
 - **`.byteLength`**: Returns the raw number of bytes in the UTF-8 buffer (Systems-optimized).
+  On a `Buffer` use the call form `buf.byteLength()`: `Buffer` is `string` on the C target but
+  `uint8[]` on the JS target, and the call form is the surface both share.
 - **`.unicodeLength`**: Returns the number of actual Unicode code points.
 
 ```typescript
 let buf = "🚀";
 console.log(buf.length);        // 2 (TS compatibility)
 console.log(buf.byteLength);    // 4 (UTF-8 bytes)
-buf[0] = 'H';                   // Mutation (requires caution with UTF-8)
 ```
 
 ### 3. Zero-Copy String Views (`Span<char>`)
@@ -1318,6 +2166,45 @@ const buf: Ptr<Buffer> = arenaAlloc(arena, sizeof Buffer);
 extern function malloc(size: number): Ptr<void> from "ms_malloc";
 extern function free(p: Ptr<void>): void;
 ```
+
+#### Linked structures: arena ownership + `Ptr<T>` links
+
+An **owning** self-referential field makes the generated destroy hook recurse per
+node — stack depth equals chain length, so a long list overflows the stack at
+scope exit. The compiler warns on this shape:
+
+```
+warning: owning self-referential field 'next' in 'Tok': destroy recurses per node —
+a long chain overflows the stack; for non-owning links use Ptr<Tok> with an
+arena/array owner
+```
+
+The sanctioned pattern: an arena (plain array) owns every node; the links are
+non-owning `Ptr<T>`. Dropping the structure is then a flat array destroy:
+
+```typescript
+interface Tok {
+    value: string;
+    next: Ptr<Tok>;               // non-owning link — destroy hook skips it
+}
+
+const arena: Tok[] = [];          // the arena owns every node
+arena.push({ value: "a", next: null as unknown as Ptr<Tok> });
+arena.push({ value: "b", next: null as unknown as Ptr<Tok> });
+arena[0].next = arena[1];         // Ref ↔ Ptr assign both ways, no cast needed
+let cur: Ptr<Tok> = arena[0];
+while (cur !== null) { use(cur.value); cur = cur.next; }   // transparent access
+```
+
+Trees built through arrays (`children: Node[]`) are depth-bounded and are NOT
+flagged — only direct self-ref links recurse by chain length.
+
+DRC rule at the boundary: when a `Ptr<T>` whose pointee is a counted object flows
+into an **owning** position (a `T[]` element, a `T`-typed return, a `T` field in a
+literal), the compiler materializes ownership with an incref — and a `Ptr`
+variable is never *moved* into such a slot (it holds a borrow; there is no
+ownership to transfer). `Ptr<void>` / `Ptr` to plain structs (malloc/FFI memory,
+no rc header) are never touched by this rule.
 
 #### Class = `Ref<Object>` (Sugar)
 
@@ -1473,7 +2360,7 @@ All of this is invisible to the programmer. You write `T | null`, check with `!=
 ### 7. Efficient Concatenation
 The compiler automatically optimizes string concatenation chains (`a + b + c + d`).
 
-- **Fusion**: Multiple `+` operations are fused into a single variadic call (`msStringConcatMany`).
+- **Fusion**: Multiple `+` operations are fused into a single array-based call (`msStringConcatArr`).
 - **Single Allocation**: The total length is pre-calculated, resulting in exactly one heap allocation for the entire chain.
 
 ### 8. String Formatting and Type-to-String Conversion
@@ -1579,6 +2466,191 @@ The custom `toString` takes priority over the default debug format everywhere �
 | struct | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 | class | auto (colored debug) | explicit `.toString()` needed (plain JSON) | yes (plain JSON) | yes (plain JSON) |
 
+#### Explicit `.toItems()` — Iterator Protocol for `for...of`
+
+Any type with a `toItems()` method becomes iterable with `for...of`. The compiler resolves `toItems()` during type checking, not at runtime.
+
+```ms
+const names: Set<string> = new Set(["alice", "bob"]);
+for (const name of names) {
+    console.log(name);   // "alice", "bob"
+}
+
+const ages: Map<string, int32> = new Map();
+ages.set("alice", 30);
+for (const key of ages) {
+    console.log(key);    // "alice"
+}
+```
+
+The compiler rewrites `for (const x of set)` → `for (const x of set.toItems())` during checking. Generic instantiation happens naturally — no special runtime support.
+
+**Built-in `toItems()`**: `Set<T>` returns `T[]`, `Map<K, V>` returns `K[]` (keys by default, use `.values()` for values).
+
+**Custom iterables**: define a `toItems` extension method on any type:
+
+```ms
+function toItems(this self: TokenStream): Token[] {
+    // return array of tokens
+}
+
+// Now works:
+for (const tok of stream) { ... }
+```
+
+#### Convention-based dispatch protocols (overview)
+
+The `toItems` mechanism is one of a family of **convention-based dispatch protocols**: extension methods with reserved names that the compiler synthesizes calls to at well-defined syntax sites. Type opts in by declaring the extension; non-opt-in types remain strict.
+
+| Protocol | Synthesizes | Triggered when |
+|---|---|---|
+| `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
+| `toString(this T): string` | implicit string context | type concat with string |
+| `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
+| `as<TargetType>(this T): U` | `expr` → `expr.asU()` | T not assignable to U at use site |
+| `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+
+**Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.
+
+##### `valueOf` — opt-in value read
+
+A type that declares `valueOf` is read through it wherever the bare read would be an error:
+
+```ms
+type Accessor<T> = distinct (() => T);
+export function valueOf<T>(this a: Accessor<T>): T { return a(); }
+
+const [count, setCount] = createSignal(0);
+setCount(count + 1);               // count.valueOf() + 1
+if (count > 3) { ... }             // count.valueOf() > 3
+const n: number = count;           // count.valueOf()
+const f: () => number = count;     // the accessor itself: the slot takes it
+const alias = count;               // the accessor itself: nothing failed
+```
+
+It fires only where the bare read is already an error, at that error: a typed slot (declaration,
+assignment, return, non-overloaded or extension-method argument, `as U`); an operand that the operator
+check refuses (arithmetic, `===`/`!==`, relational, compound assignment) or a string concatenation, beside
+`toString`; a function tested for truthiness (`if`/`while`/`for`/ternary, `!`, the left of `&&`/`||`);
+unary `-`; an index or an indexed function; a spread; a `switch` whose case cannot equal it; `for..of`
+(before `toItems`); a receiver that lacks the member (before `toString`). Each of those positions is an
+error for a function value on its own — "a function is always truthy", "unary '-' needs a numeric
+operand", "an array index must be a number" — so a type without `valueOf` gets that error. It never fires
+at a callee, an assignment or `++` target, a formal that still has generic parameters, a slot that
+already takes `T`, a position that accepts every type (JSX children and attributes, `console.log`,
+`String(x)`, `typeof`), or inside overload resolution: like `as<T>`, an overloaded call needs a candidate
+that takes `T` itself, otherwise write `x()`.
+One step only: the result of a `valueOf` is not read again. The receiver matches by type name, so another
+distinct of the same shape does not borrow it, and the extension must be visible like any other (imported
+from its module, or re-exported through a hub).
+
+Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
+`() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
+(write `${count}` or `count.toString()`); `typeof count` inspects the handle.
+
+##### `getDynamicField` — opt-in dynamic member access
+
+```ms
+interface JsonValue { kind: JsonKind; ... }
+
+export function getDynamicField(this v: JsonValue, key: string): JsonValue {
+    if (v.kind === JsonKind.Object) { /* lookup */ }
+    return jsonNull();
+}
+
+const j = parseJson("...");
+const name = j.user.name;   // synthesized: j.getDynamicField("user").getDynamicField("name")
+```
+
+Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User` interface with declared fields only) remain strict like TypeScript — `u.weirdField` errors at compile.
+
+**Read-only**: synthesis fires only on the read path. `obj.foo = x` does NOT route through `getDynamicField` — the compiler's `leftPartOfAsgn` guard ensures writes still error strictly.
+
+##### `as<TargetType>` — opt-in primitive coercion
+
+Naming convention: `as` + PascalCase(target type name). The compiler tries `expr.asU()` synthesis when `expr`'s type is not directly assignable to `U` at any of: variable initializer, assignment RHS, function argument, return value.
+
+```ms
+interface Wrap { v: int32; }
+
+export function asNumber(this w: Wrap): number { return w.v as number; }
+export function asString(this w: Wrap): string { return "<" + (w.v as number).toString() + ">"; }
+
+const w: Wrap = { v: 42 };
+const n: number = w;        // synthesized: w.asNumber() → 42
+const s: string = w;        // synthesized: w.asString() → "<42>"
+```
+
+| Target type | Method name |
+|---|---|
+| `string` | `asString` |
+| `number` | `asNumber` |
+| `boolean` | `asBoolean` |
+| `int8/16/32/64` | `asInt8/16/32/64` |
+| `uint8/16/32/64` | `asUint8/16/32/64` |
+| `float32/64` | `asFloat32/64` |
+| User type `Color` | `asColor` |
+
+**Exact return type match**: when a type defines both `asInt32` and `asInt64`, target `int32` picks `asInt32` (compares `typeReturn.kind`, not just compatibility). No silent narrowing.
+
+**Not a coercion site: conditions.** `if (expr)`, `while (expr)` and the ternary condition are NOT among the four sites above, so `asBoolean` does not give a type JS-style truthiness. Measured 2026-09-13: `if (n)` with `n: number` passes the checker and dies in clang (`member reference base type 'double' is not a structure or union`), while `if (s)` with `s: string` "works" only because a C string is a pointer and `if (ptr)` is legal C — the JS lane does something else again (`const b: boolean = n` with `n = 0` prints `false` on C and `0` on JS). Those are the general declaration gate leaking C semantics, not a truthiness feature. Adding the condition position as a fifth coercion site, with `asBoolean` declared in std for `number`/`string`/arrays, is the shape that would give opt-in JS truthiness identically on both backends; it is not implemented.
+
+**Single-step only**: if T has `asU` and U has `asV`, target `V` does NOT chain T → U → V. Synthesis tries `T.asV` directly; if absent, falls through to error. This avoids unbounded coercion chains.
+
+##### Cross-protocol composition
+
+Both protocols can co-exist on the same type. Dynamic access result then flows into coercion:
+
+```ms
+interface Doc { tag: string; }
+
+export function getDynamicField(this d: Doc, key: string): Doc { return { tag: d.tag + "." + key }; }
+export function asString(this d: Doc): string { return "[" + d.tag + "]"; }
+
+const root: Doc = { tag: "root" };
+const s: string = root.user.name;
+// → root.getDynamicField("user").getDynamicField("name") → Doc { tag: "root.user.name" }
+// → that Doc.asString() → "[root.user.name]"
+```
+
+This is how `JsonValue` works post-Phase-3 migration: protocols replace the compiler-internal magic that used to hardcode JSON behavior in the checker.
+
+##### Cross-module generic protocols (mixin)
+
+A generic function can call convention extensions on its open type parameter `T` — including extensions defined in the **calling** module, not just the generic's own module (the extension is resolved at the instantiation site, so the calling module counts). This is how a library ships a generic walker and each consumer opts its own node type in:
+
+```ms
+// lib.ms — the walker never names concrete types
+export function walkTree<T>(n: T, depth: float32): void {
+    n.protoBump(depth);
+    for (const c of n.protoKids()) {
+        walkTree(c, depth + 1.0);
+    }
+}
+
+// main.ms — opt-in via exported extensions
+import { walkTree } from "./lib";
+interface Panel { name: string; children: Panel[]; depth: float32; }
+
+export function protoKids(this p: Panel): Panel[] { return p.children; }
+export function protoBump(this p: Panel, v: float32): void { p.depth = v; }
+
+walkTree(panel, 1.0);   // monomorphized: direct static calls, zero dispatch cost
+```
+
+Rules:
+
+- **Extensions must be `export`ed.** The monomorphized instance is emitted in the defining module's TU and calls the extensions cross-TU. A private extension is not visible to the instantiation and produces a check-time error with an `in instantiation of '...'` note at the call site.
+- **Conflict is an error.** If the defining module and the calling module both provide an extension with the same name and receiver, instantiation fails with "Ambiguous call to overloaded extension method" — there is no silent preference.
+- **Keep extensions next to the type or next to the walker** (orphan-rule-lite). Defining protocol extensions in an unrelated third module makes instantiation depend on which caller ran first.
+
+##### Limitations (V1)
+
+- **Bracket access** (`obj["foo"]`) NOT in protocol scope — only `MemberExpr` (dot access) triggers synthesis.
+- **Optional chain** (`obj?.foo`) skips synthesis to preserve null-safety semantics — use direct calls or non-optional access.
+- **Generic class** with extension method: blocked by pre-existing class-constructor monomorphization gap. Use generic `interface` instead, which works end-to-end.
+- **No infinite chain**: single-step coercion only; explicit chains require explicit calls.
+
 ### 9. Zero-Copy String ↔ Byte Array Bridge (Binary Parity)
 
 MetaScript strings and `uint8[]` byte arrays share an identical memory layout in the C backend. This enables zero-copy conversion between text and binary data — no allocation, no memcpy, just a type reinterpretation.
@@ -1681,7 +2753,6 @@ If you receive bytes from an untrusted source, the parser itself will reject inv
 | :--- | :--- | :--- | :--- |
 | **MetaScript** | `string` | `uint8[]` | Zero (bit-cast) |
 | **Zig** | `[]const u8` | `[]const u8` | Zero (same type) |
-| **Nim** | `string` | `seq[byte]` | Zero (`cast`) |
 | **Rust** | `String` / `&str` | `Vec<u8>` / `&[u8]` | Zero (`into_bytes`) + UTF-8 check on reverse |
 | **Go** | `string` | `[]byte` | Copy (immutable→mutable) |
 | **TypeScript** | `string` | `Uint8Array` | Copy (TextEncoder/Decoder) |
@@ -1762,15 +2833,30 @@ const registry: Record<string, number> = new Map();
 | `Array` | Heap (RC) | O(1) Direct | `msArray` |
 
 ### 1. Dynamic Arrays (`T[]`)
-The standard general-purpose array. It is heap-allocated and managed via Deterministic Reference Counting (DRC).
+The standard general-purpose array. It is a **reference type** — heap-allocated, DRC-managed, and shared on assignment exactly like a TypeScript array.
 
 - **Allocation**: Heap (Reference Counted).
 - **Size**: Growable.
-- **Behavior**: Passed by reference (incref/decref).
+- **Behavior**: Reference semantics — `const b = a` makes `b` an alias of `a`; a mutation through any alias is visible to all. Passed to functions by reference (no copy).
+- **Value counterpart**: use `Vec<T>` when you need copy-on-assignment value semantics.
 - **Usage**:
   ```typescript
   const items: number[] = [1, 2, 3];
-  items.push(4); // Growable
+  items.push(4);        // Growable
+  const alias = items;  // shares the same underlying array
+  alias.push(5);        // items is now [1, 2, 3, 4, 5]
+  ```
+- **Elements are invariant** (differs from TypeScript, which lets `Dog[]` stand in for `Animal[]`). An array is shared by pointer, so a view with a wider element type would let `push(new Animal())` land in a `Dog[]` and the next `dogs[i].breed` read past the object (measured as an ASan heap-buffer-overflow, 2026-09-10). Every route is closed: argument, `Span<T>`, `T[N]`, declaration, field, return, and a generic `T[]` whose `T` another argument would widen.
+  ```typescript
+  class Animal { name = ""; }
+  class Dog extends Animal { breed = ""; }
+  function add(xs: Animal[]) { xs.push(new Animal()); }
+  const dogs: Dog[] = [new Dog()];
+  add(dogs);                      // error: Argument type mismatch in 'add' arg 0: got Dog[], expected Animal[]
+  const view: Animal[] = dogs;    // error: Type 'Dog[]' is not assignable to type 'Animal[]' — memory layout differs (… array element …)
+  add(dogs as Animal[]);          // explicit view: you take the write hazard
+  const one: Animal = dogs[0];    // element subtyping itself is unchanged
+  const empty: Dog[] = [];        // empty literal, literals, and generic-open elements keep adapting
   ```
 
 ### 2. Fixed-Size Arrays (`T[N]`)
@@ -1804,6 +2890,20 @@ A non-owning view (pointer + length) into a `T[]` or `T[N]`. This is the MetaScr
   process(fixed);   // Implicit coercion: zero-copy
   ```
 
+### 4. Value Arrays (`Vec<T>`)
+The value-semantics counterpart to `T[]`. Same growable storage and methods, but **copied on assignment** — like a `struct` (or reference `seq`). Assigning or passing a `Vec<T>` produces an independent array; mutations do not propagate back to the source.
+
+- **Allocation**: Heap buffer, value handle (copied on assignment).
+- **Size**: Growable.
+- **Behavior**: Value semantics — `const b = a` copies; `a.push(x)` does NOT affect `b`.
+- **Use it when**: you need a private, non-aliased array, or to recover the (small) reference-deref cost in a *measured* hot loop. `T[]` is the right default — reach for `Vec<T>` deliberately, not by habit.
+- **Usage**:
+  ```typescript
+  const a: Vec<number> = [1, 2, 3];
+  const b = a;     // independent copy
+  a.push(4);       // b is still [1, 2, 3]
+  ```
+
 ---
 
 ### Key Usage & Implementation Notices
@@ -1824,16 +2924,27 @@ const inc: Span<number> = items[1...3]; // [20, 30, 40] (length 3)
 ```
 
 #### Lifetime Restrictions (Safety)
-To prevent dangling pointers, `Span<T>` is subject to strict "Borrow" rules:
-1. **No Storage**: A `Span<T>` cannot be stored as a field in a class or interface.
-2. **No Return**: A `Span<T>` created from a local variable cannot be returned from a function.
-3. **Parameter Primary**: The primary use case for `Span<T>` is as a function parameter to enable zero-copy data processing.
+`Span<T>` follows "Borrow" rules — two checker-enforced, one by contract:
+1. **Storage is allowed — the writer owns the borrow contract** (probed 2026-08-28: struct, class and interface fields plus globals all accept `Span` declarations; `BsatnReader.bytes: Span<uint8>` is the load-bearing in-tree example). The checker does NOT track this lifetime: a stored Span must not outlive the buffer it views, or C reads freed memory while JS keeps "working". This is the expert tier — SDK cursors/parsers. App code that wants to KEEP data stores `T[]` (alias + refcount keeps the buffer alive, still zero-copy) or `Vec<T>` (owns a copy). The implicit owning-container → `Span` coercion fires at every init/assign position — declaration, assignment, call argument, and object-literal field (the last closed 2026-08-28, `wrapSpanObjectFields` in spanLower).
+2. **No Return**: A `Span<T>` cannot be returned from a function at all (checker-enforced since 2026-08-28: `cannot return Span<T>: a Span borrows memory owned by its source; return the owning container (Vec<T> or T[]) instead`) — regardless of where the Span was created.
+3. **Parameter Primary**: The primary use case for `Span<T>` is as a function parameter — structurally safe (the callee's frame always dies before the caller's owner), zero-copy from every source (`T[]`, `Vec<T>`, `T[N]`, literals, slices).
+
+Safety tier and intent: today `Span` sits exactly where Zig slices sit — safe as a parameter by construction, unchecked as storage. The planned upgrade is escape-analysis lite in the checker (view-style inference over a few countable escape shapes), NOT a borrow checker: no lifetime annotations will ever enter the syntax (TS surface).
+
+#### Value Bindings Are Read-Only Views (Checker-Enforced)
+
+Value-typed bindings that look like copies are passed by pointer for speed; the checker preserves copy semantics by rejecting writes through them (landed 2026-08-23..28):
+- **Value params** (`function f(v: Vec<T>)`): interior writes (`v[0] = …`, `v.x = …`) AND builtin mutators (`v.push/pop/shift/unshift/splice/sort/reverse/fill/…`) are compile errors. `T[]` params stay fully writable — aliasing is their contract, and the caller sees it.
+- **for-of bindings** over value elements: same rule (the binding is a per-iteration copy); rebinding the loop variable stays legal; `T[]` elements stay writable.
+- To mutate the CALLER's data, say so in the signature: `ref`/`out` params (write-back works on both backends since 2026-08-28). For a scratch copy, copy explicitly: `let local = v;`.
+- **Known gap (planned)**: user-defined struct methods that write `this` are not yet detected at call sites through value bindings (`c.bump()` slips where `c.n = 1` errors). The design follows the language's inference philosophy — NO new keywords: the checker will scan method bodies for `this` writes (the `mutatedParams` mechanism) and flag such calls. `ref`/`out` stays reserved for caller-visible write-back params, never a required annotation.
 
 #### Summary Table
 
 | Type | Allocation | Passed As (C) | Ownership | Use Case |
 | :--- | :--- | :--- | :--- | :--- |
-| `T[]` | Heap | Pointer (RC) | Owned | General app logic |
+| `T[]` | Heap | Pointer (RC) | Owned (reference) | General app logic |
+| `Vec<T>` | Heap | Struct (Copy) | Owned (value) | Private/non-aliased arrays |
 | `T[N]` | Stack | Struct (Copy) | Owned | SIMD, Buffers, Math |
 | `Span<T>`| N/A | `ptr` + `len` | Borrowed | Performance, Parsers |
 
@@ -1863,7 +2974,7 @@ app.server.host    // fully typed through nesting
 const json = JSON.stringify(person);  // '{"name":"Son","age":30}'
 ```
 
-Implemented via monomorphization — `JSON.parse<Person>` generates a specialized parse function at compile time using `T`'s field names and types. Same mechanism as `Array<T>` and `Result<T, E>`. See `docs/JSON.md` for full design.
+Implemented via monomorphization — `JSON.parse<Person>` generates a specialized parse function at compile time using `T`'s field names and types. Same mechanism as `Array<T>` and `Result<T, E>`.
 
 ### Macros
 ```typescript
@@ -1898,9 +3009,15 @@ extern class console {
 
 ### Distinct Types
 ```typescript
-distinct type UserId = number;    // Nominal typing wrapper
-distinct type Email = string;     // Cannot assign string to Email
+type UserId = distinct number;    // Nominal typing wrapper
+type Email = distinct string;     // Cannot assign string to Email
 ```
+
+#### Reading a distinct thunk
+
+A `distinct` over a function type is callable (`count()`) and widens one way into that function type. It
+is never read implicitly on its own: a type that wants bare reads declares the `valueOf` protocol (see
+"Convention-based dispatch protocols").
 
 ### Quote Expressions
 ```typescript
@@ -2013,7 +3130,7 @@ test "addition" {
 
 test "ternary" {
     const sign = x > 0 ? "pos" : "neg";
-    assert sign === "neg" : "negative value should give neg";
+    assert sign === "neg", "negative value should give neg";
 }
 
 test "setup" {
@@ -2043,13 +3160,13 @@ Outside `test` blocks, `assert` emits a simple abort on failure — no power ass
 
 ### Running Tests
 
-Run with `bun run test-ms file.ms`. Supports `--filter="name"` to run matching tests only.
+Run with `msc test file.ms`.
 
 | Syntax | Behavior |
 |--------|----------|
 | `test "name" { ... }` | Register a test case |
 | `assert expr;` | Assertion — power assert in tests, abort outside |
-| `assert expr : "msg";` | Assertion with custom failure message |
+| `assert expr, "msg";` | Assertion with custom failure message |
 
 Output: `PASS`/`FAIL` per test, summary line (`N passed, N failed, N skipped`), exit code 1 on any failure.
 

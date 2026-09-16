@@ -81,7 +81,7 @@ export function pop<T>(this arr: T[]): T { unreachable; }
 ## Compiler Mechanism
 
 1. Compiler has a hardcoded default `globalImports` list (std/core, std/math, std/console, ...)
-2. Later: concat with `globalImports` from `build.ms` (user can add their own modules)
+2. Concatenates `globalImports` from `build.ms` after that default list (add-only, never replaces)
 3. Parse each listed `.ms` file (normal parser)
 4. Type-check (all 3 passes)
 5. Inject exported symbols into Global scope
@@ -91,7 +91,17 @@ export function pop<T>(this arr: T[]): T { unreachable; }
 
 ```
 Math.pi         → property access on global Math instance → 3.141592653589793
-Math.floor(3.7) → static extension → floor(3.7) → builtinLower → ms_floor(3.7)
+Math.floor(3.7) → static extension, resolved through the Math namespace → builtinLower → ms_floor(3.7)
 str.trim()      → instance extension → trim(str) → builtinLower → ms_string_trim(str)
-Promise.resolve(42) → static extension → resolve(42) → builtinLower → ms_promise_resolve(42)
+Promise.resolve(42) → static extension, resolved through the Promise namespace → builtinLower → ms_promise_resolve(42)
 ```
+
+A static extension is NOT a module-scope name: `floor(3.7)` written bare is
+`Undefined variable 'floor'`, and a user function named `floor` does not shadow
+or collide with `Math.floor`. Instance extensions keep the UFCS pair — both
+`str.trim()` and `trim(str)` resolve.
+
+Same-named routines of one module coexist — a static `scale(this typeof Unit,…)`
+next to a free `scale(…)`, or statics on two receivers sharing a name. Each
+routine's emitted name carries a per-(module, name) ordinal minted at its
+declaration (the `_uN` suffix), so the two never collapse into one symbol.

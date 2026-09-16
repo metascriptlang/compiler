@@ -27,6 +27,8 @@ The reference compiler provides 5 mechanisms to avoid deep copies. Our equivalen
 | 4 | `lent` return | (not yet implemented) | return by reference | Read-only borrow of internal data |
 | 5 | `.cursor` pragma | `NF_CURSOR` flag | no copy, no destroy | Non-owning reference — borrows without taking ownership |
 
+**Read-only views (`Readonly<T>`)** — the borrow verb at a thread boundary: a `spawn` thunk reads every capture through a deep read-only view that never converts back to `T`; `{ move: [x] }` at the spawn site is the transfer. See `LANG.md` → Spawn → Memory ownership.
+
 ### How the DRC Chooses
 
 At every use site, the DRC analyzer makes a binary decision:
@@ -40,7 +42,7 @@ Is this the LAST use of variable x?
           O(n) cost. Both x and dest own independent payloads.
 ```
 
-The `isLastReadSafe()` function in `inject.ms` performs this analysis. The reference compiler's `injectdestructors` pass does the same check.
+The `isLastReadSafe()` function in `inject.ms` performs this analysis. The reference compiler's destructor-injection pass does the same check.
 
 ### Why Deep Copy (Not Refcounting)
 
@@ -102,7 +104,7 @@ Mutation of a literal triggers copy-on-write (allocate fresh payload, copy data)
 
 ```
 ╔══════════════════════════════════════╦══════════════════════════════════════╗
-║ Reference (injectdestructors)        ║ MetaScript (inject.ms)               ║
+║ Reference (destructor injection)     ║ MetaScript (inject.ms)               ║
 ╠══════════════════════════════════════╬══════════════════════════════════════╣
 ║ # last use → sink:                   ║ // last use → sink:                  ║
 ║ genSink(dest, src)                   ║ // no copy emitted, just assign      ║
