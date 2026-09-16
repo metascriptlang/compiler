@@ -5,7 +5,7 @@ import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
-import { TargetInfo, hostTargetInfo } from "../checker/types";
+import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
 // -- Types --
 
@@ -339,4 +339,12 @@ test "float width follows the target cpu too" {
 
 test "an explicit cpu outranks the os-implied one" {
 	assert resolveTargetSizes("wasm", "amd64").ptrSize == 8;
+}
+
+test "int64 alignment packs to 4 only on i386 outside windows" {
+	assert floatInt64Align(resolveTargetSizes("linux", "i386")) == 4;
+	assert floatInt64Align(resolveTargetSizes("windows", "i386")) == 8;
+	assert floatInt64Align(resolveTargetSizes("wasm", "")) == 8;
+	assert floatInt64Align(resolveTargetSizes("bare", "arm")) == 8;
+	assert floatInt64Align(resolveTargetSizes("macos", "")) == 8;
 }

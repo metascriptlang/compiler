@@ -3947,6 +3947,23 @@ test "alignOfType 32-bit keeps int64 and float64 at their natural alignment" {
 	assert alignOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
 }
 
+test "alignOfType i386 packs int64 and float64 at 4 outside windows" {
+	const linux: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const windows: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "windows" };
+	assert alignOfType(linux, numberType()) == 4;
+	assert alignOfType(linux, createPrimitive(TypeKind.Int64)) == 4;
+	assert alignOfType(windows, numberType()) == 8;
+	assert alignOfType(windows, createPrimitive(TypeKind.Int64)) == 8;
+}
+
+test "sizeOfType char before int64 follows the target alignment rule" {
+	const wasm: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "wasm32", os: "wasm" };
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const obj = createStruct("Head", ["c", "x"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int64)], true);
+	assert sizeOfType(wasm, obj) == 16;
+	assert sizeOfType(i386, obj) == 12;
+}
+
 // ===== Maybe<T> + Nullable Pointer Tests =====
 
 test "createMaybeType for interface creates wrapper" {
