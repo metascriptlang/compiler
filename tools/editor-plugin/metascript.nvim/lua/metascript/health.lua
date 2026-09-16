@@ -90,15 +90,16 @@ function M.check()
 
   -- 5. msc binary (LSP server).
   local config = require("metascript").config
-  local server_path = config.server_path or "msc"
-  if vim.fn.executable(server_path) == 1 then
-    health.ok("msc binary found: " .. server_path)
+  local cmd = type(config.lsp) == "table" and config.lsp.cmd or { "msc", "lsp" }
+  local bin = cmd[1] or "msc"
+  if vim.fn.executable(bin) == 1 then
+    health.ok("LSP binary found: " .. bin)
   else
     health.error(
-      "msc binary not found: " .. server_path,
+      "LSP binary not found: " .. bin,
       {
-        "Install MetaScript or set server_path in setup()",
-        "Example: require('metascript').setup({ server_path = '/path/to/msc' })",
+        "Install MetaScript or set lsp.cmd in setup()",
+        "Example: require('metascript').setup({ lsp = { cmd = { '/path/to/msc', 'lsp' } } })",
       }
     )
   end

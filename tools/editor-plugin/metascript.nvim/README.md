@@ -1,6 +1,6 @@
 # metascript.nvim
 
-Batteries-included Neovim plugin for the [MetaScript](https://github.com/nickhatzz/metascript) language. Ships with a bundled tree-sitter grammar, highlight queries, LSP integration, smart indentation, code folding, and textobject support -- no external grammar coordination needed.
+Batteries-included Neovim plugin for the [MetaScript](https://github.com/metascriptlang/metascript) language. Ships with a bundled tree-sitter grammar, highlight queries, LSP integration, smart indentation, code folding, and textobject support -- no external grammar coordination needed.
 ## Features
 
 - **Tree-sitter highlighting** -- Full syntax highlighting via the bundled tree-sitter-metascript grammar, including JSX, match expressions, macros, and lifecycle hooks
@@ -8,37 +8,11 @@ Batteries-included Neovim plugin for the [MetaScript](https://github.com/nickhat
 - **LSP integration** -- Completion, hover, go-to-definition, references, rename, diagnostics, inlay hints, and semantic tokens via `msc lsp`
 - **Smart indentation** -- Tree-sitter powered auto-indent for blocks, functions, classes, match arms, and JSX
 - **Code folding** -- Fold functions, classes, interfaces, enums, match bodies, imports, and comments
-- **Snippets** -- 30+ high-quality snippets for common patterns (compatible with LuaSnip)
 - **Fallback Syntax** -- Regex-based highlighting for users without Tree-sitter
 - **Scope tracking** -- Scope-aware highlighting and navigation via locals queries
 - **Textobjects** -- Select around/inside functions, classes, parameters, conditionals, loops, and match arms (requires nvim-treesitter-textobjects)
 - **Health checks** -- `:checkhealth metascript` verifies your setup
 - **Self-contained** -- Grammar, queries, and plugin live in one directory; no sync issues
-
-### Snippets
-
-To use the bundled snippets with [LuaSnip](https://github.com/L3MON4D3/LuaSnip), add the following to your configuration:
-
-```lua
-require("luasnip.loaders.from_vscode").lazy_load({
-  paths = { vim.fn.stdpath("data") .. "/site/pack/packer/start/metascript.nvim" } -- Adjust path to your plugin manager
-})
-```
-
-If you use `lazy.nvim`, it's even simpler:
-
-```lua
-{
-  "nickhatzz/metascript.nvim",
-  dependencies = { "L3MON4D3/LuaSnip" },
-  config = function()
-    require("metascript").setup()
-    require("luasnip.loaders.from_vscode").lazy_load({
-      paths = { require("metascript").plugin_root() }
-    })
-  end
-}
-```
 
 ## Requirements
 - **Neovim >= 0.9** (0.10+ recommended for full tree-sitter and LSP features)
@@ -52,7 +26,7 @@ If you use `lazy.nvim`, it's even simpler:
 
 ```lua
 {
-  "nickhatzz/metascript.nvim",
+  "metascriptlang/metascript.nvim",
   ft = { "metascript" },
   dependencies = {
     "nvim-treesitter/nvim-treesitter",
@@ -71,7 +45,7 @@ If you use `lazy.nvim`, it's even simpler:
 
 ```lua
 use {
-  "nickhatzz/metascript.nvim",
+  "metascriptlang/metascript.nvim",
   requires = { "nvim-treesitter/nvim-treesitter" },
   ft = { "metascript" },
   config = function()
@@ -86,7 +60,7 @@ use {
 
 ```vim
 Plug 'nvim-treesitter/nvim-treesitter'
-Plug 'nickhatzz/metascript.nvim'
+Plug 'metascriptlang/metascript.nvim'
 
 " In your init.vim / init.lua:
 lua require('metascript').setup()
@@ -97,7 +71,7 @@ lua require('metascript').setup()
 Clone this repository into your Neovim runtime path:
 
 ```bash
-git clone https://github.com/nickhatzz/metascript.nvim \
+git clone https://github.com/metascriptlang/metascript.nvim \
   ~/.local/share/nvim/site/pack/plugins/start/metascript.nvim
 ```
 
@@ -225,10 +199,14 @@ vim.keymap.set("n", "]d", vim.diagnostic.goto_next, { buffer = true, desc = "Nex
 
 ## File Types
 
-| Extension | Filetype |
-|---|---|
-| `.ms` | `metascript` |
-| `.mts` | `metascript` |
+| Extension | Purpose | Filetype |
+|-----------|---------|----------|
+| `.ms`     | Standard MetaScript | `metascript` |
+| `.cms`    | C Runtime Target | `metascript` |
+| `.jms`    | JS Runtime Target | `metascript` |
+| `.ems`    | Erlang Runtime Target (experimental) | `metascript` |
+| `.wms`    | Wasm Runtime Target | `metascript` |
+| `.rms`    | Raiser IR / Runtime | `metascript` |
 
 ## Project Structure
 
@@ -251,8 +229,6 @@ metascript.nvim/
     textobjects.scm   -- Textobject selection queries
   plugin/
     metascript.lua    -- Auto-loaded user commands
-  snippets/
-    metascript.json   -- VS Code-format snippets (for LuaSnip)
   syntax/
     metascript.vim    -- Fallback regex highlighting (non-Tree-sitter)
   tree-sitter/        -- Bundled tree-sitter grammar (editor-agnostic)

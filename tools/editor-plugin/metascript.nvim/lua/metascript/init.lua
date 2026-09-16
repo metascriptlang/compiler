@@ -3,18 +3,16 @@
 ---
 --- Usage:
 ---   require('metascript').setup()
----   require('metascript').setup({ server_path = '/usr/local/bin/msc', lsp = true })
+---   require('metascript').setup({ lsp = { cmd = { "/path/to/msc", "lsp" } } })
 
 local M = {}
 
 --- Default configuration
 ---@class MetascriptConfig
----@field server_path string Path to the msc binary (default: "msc")
----@field lsp boolean|table Enable LSP client (default: true). Pass a table for fine-grained LSP options.
----@field treesitter boolean Register tree-sitter parser config (default: true)
----@field highlight table|nil Custom highlight group overrides (e.g., { ["@keyword"] = { bold = true } })
+---@field lsp? boolean|table Enable LSP client (default: true). Pass a table with cmd, on_attach, handlers, etc.
+---@field treesitter? boolean Register tree-sitter parser (default: true)
+---@field highlight? table Custom highlight group overrides (e.g., { ["@keyword"] = { bold = true } })
 M.config = {
-  server_path = "msc",
   lsp = true,
   treesitter = true,
   highlight = nil,
@@ -32,27 +30,22 @@ local function plugin_root()
 end
 
 --- Register the tree-sitter parser configuration so nvim-treesitter (or manual parsers) can
---- locate the MetaScript grammar from the bundled tree-sitter/ directory.
+--- locate the MetaScript grammar. Uses tree-sitter/ for the compiled .so,
+--- and tree-sitter-metascript/ (sibling) as the canonical grammar source.
 local function register_treesitter()
   local root = plugin_root()
   local ts_dir = root .. "/tree-sitter"
 
-  -- Register with nvim-treesitter if available.
-  local ok, parsers = pcall(require, "nvim-treesitter.parsers")
-  if ok and parsers then
-    local parser_config = parsers.get_parser_configs()
-    if parser_config and not parser_config.metascript then
-      parser_config.metascript = {
-        install_info = {
-          url = ts_dir,
-          files = { "src/parser.c" },
-          generate_requires_npm = false,
-          requires_generate_from_grammar = false,
-        },
-        filetype = "metascript",
-        used_by = {},
-      }
-    end
+  -- Always install bundled parser .so to nvim's parser directory.
+  -- The bundled .so is the source of truth — TSInstall may produce an incomplete
+  -- build (missing scanner.c), so we unconditionally overwrite on every startup.
+  local bundled_so = ts_dir .. "/metascript.so"
+  local nvim_parser_dir = vim.fn.stdpath("data") .. "/lazy/nvim-treesitter/parser"
+  local target_so = nvim_parser_dir .. "/metascript.so"
+  local bundled_stat = vim.loop.fs_stat(bundled_so)
+  if bundled_stat then
+    vim.fn.mkdir(nvim_parser_dir, "p")
+    vim.loop.fs_copyfile(bundled_so, target_so)
   end
 
   -- Register parser via vim.treesitter (Neovim 0.9+) regardless of nvim-treesitter presence.
@@ -95,6 +88,19 @@ function M.setup(opts)
   opts = opts or {}
   M.config = vim.tbl_deep_extend("force", M.config, opts)
 
+  -- Register file icons with nvim-web-devicons (used by neo-tree, bufferline, lualine, etc.)
+  local devicons_ok, devicons = pcall(require, "nvim-web-devicons")
+  if devicons_ok then
+    devicons.set_icon({
+      ms  = { icon = "󰛦", color = "#FF9800", name = "MetaScript" },
+      cms = { icon = "󰛦", color = "#546E7A", name = "MetaScriptC" },
+      jms = { icon = "󰛦", color = "#66BB6A", name = "MetaScriptJS" },
+      ems = { icon = "󰛦", color = "#CE93D8", name = "MetaScriptErlang" },
+      wms = { icon = "󰛦", color = "#4DD0E1", name = "MetaScriptWASM" },
+      rms = { icon = "󰛦", color = "#EF5350", name = "MetaScriptRuntime" },
+    })
+  end
+
   -- Register tree-sitter parser configuration.
   if M.config.treesitter then
     register_treesitter()
@@ -103,7 +109,32 @@ function M.setup(opts)
   -- Set up LSP.
   if M.config.lsp then
     local lsp_opts = type(M.config.lsp) == "table" and M.config.lsp or {}
-    require("metascript.lsp").setup(M.config.server_path, lsp_opts)
+    require("metascript.lsp").setup(lsp_opts)
+  end
+
+  -- Set default LSP semantic token highlights for MetaScript.
+  -- Links builtin functions/variables (defaultLibrary modifier) to "support" groups.
+  -- Users can override via the highlight config or colorscheme.
+  -- Unused symbols: gray + green curly underline via DiagnosticUnnecessary (tags:[1]).
+  local function patch_unnecessary_hl()
+    local hl = vim.api.nvim_get_hl(0, { name = "DiagnosticUnnecessary" })
+    hl.undercurl = true
+    hl.sp = vim.api.nvim_get_hl(0, { name = "DiagnosticHint" }).fg
+    vim.api.nvim_set_hl(0, "DiagnosticUnnecessary", hl)
+  end
+  patch_unnecessary_hl()
+  vim.api.nvim_create_autocmd("ColorScheme", { callback = patch_unnecessary_hl })
+
+  local semantic_defaults = {
+    ["@lsp.typemod.function.defaultLibrary.metascript"] = { link = "Special" },
+    ["@lsp.typemod.variable.defaultLibrary.metascript"] = { link = "Special" },
+    ["@lsp.typemod.type.defaultLibrary.metascript"] = { link = "Type" },
+  }
+  for group, attrs in pairs(semantic_defaults) do
+    -- Only set if not already defined by colorscheme.
+    if vim.fn.hlexists(group) == 0 or vim.tbl_isempty(vim.api.nvim_get_hl(0, { name = group })) then
+      vim.api.nvim_set_hl(0, group, attrs)
+    end
   end
 
   -- Apply highlight overrides.
@@ -124,11 +155,12 @@ function M.info()
   table.insert(lines, string.rep("-", 40))
   table.insert(lines, string.format("  Plugin root    : %s", root))
   table.insert(lines, string.format("  Neovim version : %s", vim.version and tostring(vim.version()) or "unknown"))
-  table.insert(lines, string.format("  Server path    : %s", M.config.server_path))
-
   -- Check msc binary.
-  local msc_found = vim.fn.executable(M.config.server_path) == 1
-  table.insert(lines, string.format("  msc available  : %s", msc_found and "yes" or "NO"))
+  local cmd = type(M.config.lsp) == "table" and M.config.lsp.cmd or { "msc", "lsp" }
+  local bin = cmd[1] or "msc"
+  table.insert(lines, string.format("  LSP command    : %s", table.concat(cmd, " ")))
+  local msc_found = vim.fn.executable(bin) == 1
+  table.insert(lines, string.format("  Binary found   : %s", msc_found and "yes" or "NO"))
 
   -- Check tree-sitter parser.
   local parser_ok = pcall(vim.treesitter.language.inspect, "metascript")

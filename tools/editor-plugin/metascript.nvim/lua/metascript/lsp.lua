@@ -3,8 +3,10 @@
 
 local M = {}
 
+--- Default LSP command.
+local DEFAULT_CMD = { "msc", "lsp" }
+
 --- Internal: store configuration for restarts.
-local _server_path = "msc"
 local _lsp_opts = {}
 local _client_id = nil
 
@@ -37,14 +39,13 @@ local function find_root(bufnr)
 end
 
 --- Build the LSP client configuration table.
----@param server_path string Path to the msc binary.
 ---@param root_dir string Project root directory.
 ---@param user_opts table User-supplied LSP overrides.
 ---@return table config vim.lsp.start-compatible configuration.
-local function build_config(server_path, root_dir, user_opts)
+local function build_config(root_dir, user_opts)
   local config = {
     name = "metascript",
-    cmd = { server_path, "lsp" },
+    cmd = user_opts.cmd or DEFAULT_CMD,
     root_dir = root_dir,
     filetypes = { "metascript" },
     single_file_support = true,
@@ -80,8 +81,8 @@ local function build_config(server_path, root_dir, user_opts)
   if user_opts.on_attach then
     config.on_attach = user_opts.on_attach
   end
-  if user_opts.cmd then
-    config.cmd = user_opts.cmd
+  if user_opts.handlers then
+    config.handlers = user_opts.handlers
   end
 
   return config
@@ -89,10 +90,9 @@ end
 
 --- Attempt to configure the LSP via nvim-lspconfig if it is installed.
 --- Returns true if lspconfig handled setup, false otherwise.
----@param server_path string
 ---@param user_opts table
 ---@return boolean
-local function try_lspconfig(server_path, user_opts)
+local function try_lspconfig(user_opts)
   local lspconfig_ok, lspconfig = pcall(require, "lspconfig")
   if not lspconfig_ok then
     return false
@@ -103,11 +103,13 @@ local function try_lspconfig(server_path, user_opts)
     return false
   end
 
+  local cmd = user_opts.cmd or DEFAULT_CMD
+
   -- Register the MetaScript server if it does not already exist.
   if not configs.metascript then
     configs.metascript = {
       default_config = {
-        cmd = { server_path, "lsp" },
+        cmd = cmd,
         filetypes = { "metascript" },
         root_dir = lspconfig.util.root_pattern(unpack(ROOT_MARKERS)),
         single_file_support = true,
@@ -118,7 +120,7 @@ local function try_lspconfig(server_path, user_opts)
 
   -- Build setup opts.
   local setup_opts = {
-    cmd = user_opts.cmd or { server_path, "lsp" },
+    cmd = cmd,
     settings = user_opts.settings or {},
     on_attach = user_opts.on_attach,
     capabilities = user_opts.capabilities,
@@ -141,14 +143,12 @@ end
 
 --- Set up the MetaScript LSP client.
 --- Tries lspconfig first; falls back to manual vim.lsp.start() via an autocmd.
----@param server_path string Path to the msc binary.
----@param user_opts table Additional LSP configuration.
-function M.setup(server_path, user_opts)
-  _server_path = server_path or "msc"
+---@param user_opts table LSP configuration (cmd, on_attach, handlers, settings, capabilities).
+function M.setup(user_opts)
   _lsp_opts = user_opts or {}
 
   -- Try lspconfig first.
-  if try_lspconfig(_server_path, _lsp_opts) then
+  if try_lspconfig(_lsp_opts) then
     return
   end
 
@@ -160,7 +160,7 @@ function M.setup(server_path, user_opts)
     callback = function(args)
       local bufnr = args.buf
       local root_dir = find_root(bufnr)
-      local config = build_config(_server_path, root_dir, _lsp_opts)
+      local config = build_config(root_dir, _lsp_opts)
       _client_id = vim.lsp.start(config, { bufnr = bufnr })
     end,
     desc = "Start MetaScript LSP client",
@@ -170,7 +170,7 @@ function M.setup(server_path, user_opts)
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].filetype == "metascript" then
       local root_dir = find_root(bufnr)
-      local config = build_config(_server_path, root_dir, _lsp_opts)
+      local config = build_config(root_dir, _lsp_opts)
       _client_id = vim.lsp.start(config, { bufnr = bufnr })
     end
   end
@@ -194,7 +194,7 @@ function M.restart()
     for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].filetype == "metascript" then
         local root_dir = find_root(bufnr)
-        local config = build_config(_server_path, root_dir, _lsp_opts)
+        local config = build_config(root_dir, _lsp_opts)
         vim.lsp.start(config, { bufnr = bufnr })
       end
     end

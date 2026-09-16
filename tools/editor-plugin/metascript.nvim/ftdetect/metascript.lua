@@ -4,6 +4,10 @@
 vim.filetype.add({
   extension = {
     ms = "metascript",
-    mts = "metascript",
+    cms = "metascript",
+    jms = "metascript",
+    ems = "metascript",
+    wms = "metascript",
+    rms = "metascript",
   },
 })

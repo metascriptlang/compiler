@@ -1,0 +1,3 @@
+[submodule "tree-sitter-metascript"]
+	path = tree-sitter
+	url = https://github.com/metascriptlang/tree-sitter-metascript.git
