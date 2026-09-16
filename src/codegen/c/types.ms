@@ -116,6 +116,43 @@ export function genHasDestroyHook(typeName: string): boolean {
 	return _hookSyms.get(typeName + "Destroy") != null;
 }
 
+export function procHeader(g: CGen, name: string, fnType: Type, paramNames: string[] | null, mutBits: int32, hookAbi: boolean): string {
+	let cRetType = getTypeDesc(g, fnType.typeReturn);
+	if (fnType.typeReturn == null) cRetType = "void";
+	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
+	const named = paramNames != null;
+	const names: string[] = paramNames != null ? paramNames : [];
+	const count = named ? names.length : fnType.typeChildren.length;
+	let paramList = "";
+	if (nrvo) {
+		paramList = cRetType + "* __result";
+		if (count > 0) paramList = paramList + ", ";
+	}
+	for (let i = 0; i < count; i += 1) {
+		if (i > 0) paramList = paramList + ", ";
+		const typed = i < fnType.typeChildren.length;
+		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
+		const mut = (mutBits & (1 << (i as int32))) != 0;
+		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
+		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
+			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
+		}
+		paramList = named ? paramList + `${pType} ${safeName(names[i])}` : paramList + pType;
+	}
+	if (paramList == "") paramList = "void";
+	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;
+}
+
+export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): void {
+	const hook = sym != null ? sym : lookupHookSym(callee);
+	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
+	const fnType = hook.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function) return;
+	if (nameSetHas(g.declaredProcs, callee)) return;
+	nameSetAdd(g.declaredProcs, callee);
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, callee, fnType, null, 0, true) + ";");
+}
+
 
 // ===== Type Resolution =====
 // All types are fully resolved PType objects by codegen time.
@@ -823,14 +860,9 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	} else if (isGeneric && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
-		// objType resolved here. Consult the global destroy-hook registry by mangled name — the MS
-		// analog of Nim's identity-keyed graph.attachedOps[attachedDestructor] — and wire by
-		// convention. This is an alloc site (msAllocTyped needs sizeof), so the struct is declared;
-		// the typed proto matches the real hook signature (redundant-decl-safe) and resolves
-		// cross-module to the owner module's global hook.
+		// objType resolved here. Consult the global destroy-hook registry by hook name.
 		destroyHook = mangle(className + "Destroy");
-		ensureForwardDecl(g, className);
-		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${className}* self);`);
+		ensureDrcProto(g, destroyHook, lookupHookSym(className + "Destroy"));
 	}
 	if (destroyHook.length > 0) {
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
@@ -861,12 +893,9 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 	// name is an undefined symbol at link. types.h documents destroyFn == NULL
 	// as the "no RC fields" convention; the destroy dispatch skips NULL.
 	if (pointeeType != null && hasDestructor(pointeeType) && arrayElementNeedsCleanup(pointeeType)) {
-		destroyHook = mangle(getAttachedOp(pointeeType, AttachedOp.AttachedDestructor));
-		// A pointer-shaped pointee forwards the base struct name — the hook proto
-		// and its forward typedef must not carry the `*` either.
-		const baseName = cType.endsWith("*") ? cType.slice(0, cType.byteLength - 1) : cType;
-		ensureForwardDecl(g, baseName);
-		addLine(sec(g, CSection.ForwardDecls), `void ${destroyHook}(${baseName}* self);`);
+		const hookName = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
+		destroyHook = mangle(hookName);
+		ensureDrcProto(g, destroyHook, lookupHookSym(hookName));
 	}
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
 	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
@@ -1695,11 +1724,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	let destroyFn = "msNumberArrayDestroy";
 	if (innerType.kind == TypeKind.Struct && innerType.typeName != "" && hasAsgnFlag(innerType)) {
 		destroyFn = baseDesc + "ArrayDestroy";
-		const fwdKey = "arrdestroyfwd:" + destroyFn;
-		if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
-			typeCacheSet(g.forwTypeCache, fwdKey, destroyFn);
-			addLine(sec(g, CSection.ProcHeaders), "void " + destroyFn + "(" + arrName + "* self);");
-		}
+		ensureDrcProto(g, destroyFn, null);
 	}
 	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn);
 	return "msPromiseAllFor_" + futName;

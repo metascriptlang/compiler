@@ -7,8 +7,7 @@
 import { Type, TypeKind, Symbol } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
-import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam, ccgIntroducedPtr, lookupHookSym } from "./types";
-import { safeName } from "./names";
+import { lookupHookSym, ensureDrcProto, procHeader } from "./types";
 import { findExportedSymbol } from "../../checker/context";
 
 // ===== DRC forward prototypes =====
@@ -44,43 +43,6 @@ export function isDrcLifecycleName(name: string): boolean {
 	// hasTypeInfo, countHooks start with lowercase — not DRC hooks.
 	if (name.length > 0 && name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code) return false;
 	return true;
-}
-
-export function procHeader(g: CGen, name: string, fnType: Type, paramNames: string[] | null, mutBits: int32, hookAbi: boolean): string {
-	let cRetType = getTypeDesc(g, fnType.typeReturn);
-	if (fnType.typeReturn == null) cRetType = "void";
-	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
-	const named = paramNames != null;
-	const names: string[] = paramNames != null ? paramNames : [];
-	const count = named ? names.length : fnType.typeChildren.length;
-	let paramList = "";
-	if (nrvo) {
-		paramList = cRetType + "* __result";
-		if (count > 0) paramList = paramList + ", ";
-	}
-	for (let i = 0; i < count; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		const typed = i < fnType.typeChildren.length;
-		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
-		const mut = (mutBits & (1 << (i as int32))) != 0;
-		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
-		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
-			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
-		}
-		paramList = named ? paramList + `${pType} ${safeName(names[i])}` : paramList + pType;
-	}
-	if (paramList == "") paramList = "void";
-	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;
-}
-
-export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): void {
-	const hook = sym != null ? sym : lookupHookSym(callee);
-	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
-	const fnType = hook.symbolType;
-	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	if (nameSetHas(g.declaredProcs, callee)) return;
-	nameSetAdd(g.declaredProcs, callee);
-	addLine(sec(g, CSection.ProcHeaders), procHeader(g, callee, fnType, null, 0, true) + ";");
 }
 
 // ===== Cross-module function prototypes =====
