@@ -712,6 +712,11 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	}
 	if (!renameReplace(tmp, oFile)) {
 		remove(tmp);
+		// oFile is fp-keyed, so anything already published there was compiled
+		// from the same .c with the same command: a sibling build's object is
+		// as good as ours. The rename only fails while a concurrent reader
+		// holds the target open, and losing that swap is not a build failure.
+		if (exists(oFile)) return Result.ok(null);
 		return Result.err(processError(
 			ProcessErrorKind.Unknown,
 			cmd,

@@ -620,7 +620,24 @@ export function writeCCodeCache(modPath: string, cCode: string, compileCmd: stri
 // inspect generated C even when zig cc fails). Published atomically: a
 // concurrent reader of the previous bytes is never torn.
 export function writeCSource(modPath: string, fp: string, cCode: string): void {
-	atomicWriteFile(stableCFileFp(modPath, fp), cCode);
+	const path = stableCFileFp(modPath, fp);
+	// The path embeds fpKey(hash(cCode):compileCmd:toolchainStamp), so a
+	// correctly written file already sitting here holds these exact bytes.
+	// Re-publishing it is not merely redundant: atomicWriteFile swaps the file
+	// with MoveFileEx(REPLACE_EXISTING) out from under a CONCURRENT build whose
+	// cc has it open, and zig then reports CacheCheckFailed.
+	//
+	// Compare the bytes, do not trust existence. The path only proves what was
+	// MEANT to be written: a host that dies mid-flush leaves a file of the right
+	// length full of NULs (136 such .c files appeared at once when a session was
+	// killed mid-corpus). An exists() check made that corruption permanent --
+	// every later build compiled the empty TU and the link failed on WinMain.
+	// A mismatch rewrites, so the cache heals the way it did before this check.
+	if (exists(path)) {
+		const onDisk = try readFile(path) catch "";
+		if (onDisk == cCode) return;
+	}
+	atomicWriteFile(path, cCode);
 }
 
 // Write the compile-success fingerprint (.cfp). Call ONLY after
@@ -637,14 +654,20 @@ export function writeCompileFingerprintFp(modPath: string, fp: string): void {
 	atomicWriteFile(stableOFileFp(modPath, fp) + ".cfp", fp);
 }
 
-// Remove cache artifacts after a failed compile so the next run
-// triggers a clean retry. Removes .o (potentially partial/empty from failed
-// zig cc) + .cfp + .c, all fp-keyed. No-op for dispatcher jobs (empty fp).
+// Remove cache artifacts after a failed compile so the next run triggers a
+// clean retry. Only the .cfp goes: it is the sentinel a later run reads to
+// SKIP compiling, so a stale one is the only artifact that can turn a failed
+// compile into a false cache hit.
+//
+// The .o and .c are deliberately left alone. Both are fp-keyed, so whatever
+// sits at those paths came from the same C with the same command, and is
+// never partial (compileCFile publishes by atomic rename, only on success).
+// Under concurrent builds removing them was actively harmful: one process's
+// failure deleted an object a SIBLING had just published, and the sibling's
+// link then died with `failed to open object ...: FileNotFound`.
 export function invalidateCompileCache(modPath: string, fp: string): void {
 	if (fp == "") return;
-	tryRemoveFile(stableOFileFp(modPath, fp));
 	tryRemoveFile(stableOFileFp(modPath, fp) + ".cfp");
-	tryRemoveFile(stableCFileFp(modPath, fp));
 }
 
 // ===== Link Cache (Layer 4) =====
@@ -843,10 +866,16 @@ test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {
 	bug6_clearArtifacts(modPath, fp);
 }
 
-test "bug6: invalidateCompileCache removes .o, .cfp and .c" {
-	// Failure path: cc returned non-zero. invalidateCompileCache must clean
-	// .o (which may be partial/empty from failed cc), .cfp (defensive
-	// — never written on failure post-fix) and the fp-keyed .c.
+test "bug6: invalidateCompileCache drops the .cfp and keeps the .o" {
+	// Failure path: cc returned non-zero. Only the .cfp may be removed - it
+	// is the sentinel a later run reads to SKIP compiling, so a stale one is
+	// the only artifact that can turn a failed compile into a false hit.
+	//
+	// The .o must SURVIVE. It is fp-keyed, so any object at that path came
+	// from the same C with the same command and is never partial (compileCFile
+	// publishes by atomic rename, only on success). Removing it made one
+	// process's failure delete an object a CONCURRENT build had just
+	// published, and that build's link then died with FileNotFound.
 	const modPath = "test/bug6/probe_invalidate.ms";
 	const fp = moduleCompileFp("int x;", "cc -O0");
 	bug6_clearArtifacts(modPath, fp);
@@ -855,8 +884,10 @@ test "bug6: invalidateCompileCache removes .o, .cfp and .c" {
 	assert exists(stableOFileFp(modPath, fp));
 	assert exists(stableOFileFp(modPath, fp) + ".cfp");
 	invalidateCompileCache(modPath, fp);
-	assert !exists(stableOFileFp(modPath, fp));
+	assert exists(stableOFileFp(modPath, fp));
 	assert !exists(stableOFileFp(modPath, fp) + ".cfp");
+	// The bug6 guarantee itself is unchanged: no .cfp means no cache hit.
+	assert !isCCodeCached(modPath, fp);
 	bug6_clearArtifacts(modPath, fp);
 }
 
