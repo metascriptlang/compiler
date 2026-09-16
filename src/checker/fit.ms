@@ -8,7 +8,7 @@ import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatc
 import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 
 // ===== Operator Inference =====
@@ -29,7 +29,7 @@ function promoteNumeric(a: Type, b: Type): Type {
 function widenBranchLiteral(t: Type): Type {
 	if (t.kind == TypeKind.StringLiteral) return stringType();
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
-	return t;
+	return closureStorageType(t);
 }
 
 function branchContributesToJoin(t: Type | null): boolean {
@@ -79,7 +79,7 @@ export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | 
 	if (expr == null || joined == null || isUnresolvedType(joined)) return expr;
 	const bt = expr.nodeType;
 	if (bt == null || bt.kind == TypeKind.Never || bt.kind == TypeKind.Void || isUnresolvedType(bt)) return expr;
-	if (bt == joined || sameType(bt, joined)) return expr;
+	if (bt == joined || (sameType(bt, joined) && bt.callConv == joined.callConv)) return expr;
 	return fitNode(ctx, expr, joined, bt);
 }
 
@@ -248,17 +248,45 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 	return conv;
 }
 
+// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
+// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
+// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
+export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Node {
+	if (formal.kind != TypeKind.Function || exprType.kind != TypeKind.Function
+		|| formal.callConv != CallingConvention.CcClosure
+		|| exprType.callConv == CallingConvention.CcClosure) {
+		return null as unknown as Node;
+	}
+	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const nullNode = createNode(NodeKind.NullLiteral, { nullPlaceholder: true } as NodeData, wrapTok);
+	nullNode.nodeType = nullType();
+	nullNode.flags = nullNode.flags.incl(NodeFlag.Sem);
+	const wrapped = createNode(NodeKind.ObjectLiteral, {
+		properties: [expr, nullNode],
+		keys: ["fn", "env"],
+		keyLocations: [expr.location, expr.location],
+	} as NodeData, wrapTok);
+	wrapped.nodeType = formal;
+	wrapped.flags = wrapped.flags.incl(NodeFlag.Closure).incl(NodeFlag.Sem);
+	return wrapped;
+}
+
 export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (expr.kind == NodeKind.NullLiteral || exprType.kind == TypeKind.Null) {
 		expr.nodeType = formal;
 		return expr;
+	}
+	let payload = expr;
+	if (formal.typeReturn != null) {
+		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
+		if (thunk != null as unknown as Node) payload = thunk;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const presentLit = createNode(NodeKind.BooleanLiteral, { boolValue: true } as NodeData, wrapTok);
 	presentLit.nodeType = booleanType();
 	presentLit.flags = presentLit.flags.incl(NodeFlag.Sem);
 	const wrapped = createNode(NodeKind.ObjectLiteral, {
-		properties: [expr, presentLit],
+		properties: [payload, presentLit],
 		keys: ["value", "present"],
 		keyLocations: [expr.location, expr.location],
 	} as NodeData, wrapTok);
@@ -836,6 +864,8 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	// nobody. Spelling the deref keeps the ref owned by its own scope and
 	// routes the payload through the ordinary value-copy path.
 	let operand = expr;
+	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType);
+	if (thunk != null as unknown as Node) operand = thunk;
 	if (valueType != exprType && slotHoldsStructByValue(formal.typeChildren[vi])) {
 		const drefNode = createNode(NodeKind.HiddenDeref, { expr: expr }, convTok);
 		drefNode.nodeType = valueType;
@@ -1001,30 +1031,8 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
-	// Direct function → closure auto-wrap (Reference parity: nkHiddenSubConv → nkClosure).
-	// When a named function (CcDefault) flows into a closure-typed slot (CcClosure),
-	// wrap as `{fn: expr, env: null}` ObjectLiteral with NodeFlag.Closure.
-	// Catches: var init, return, object field with closure type — `closureCallMarker.ms`
-	// already handles the call-arg case via wrapFuncArgsAsThunks.
-	if (formal.kind == TypeKind.Function && exprType.kind == TypeKind.Function
-		&& formal.callConv == CallingConvention.CcClosure
-		&& exprType.callConv != CallingConvention.CcClosure
-		&& expr.kind == NodeKind.Identifier
-		&& expr.resolvedSym != null
-		&& expr.resolvedSym.symbolKind == SymbolKind.Function) {
-		const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
-		const nullNode = createNode(NodeKind.NullLiteral, { nullPlaceholder: true } as NodeData, wrapTok);
-		nullNode.nodeType = nullType();
-		nullNode.flags = nullNode.flags.incl(NodeFlag.Sem);
-		const wrapped = createNode(NodeKind.ObjectLiteral, {
-			properties: [expr, nullNode],
-			keys: ["fn", "env"],
-			keyLocations: [expr.location, expr.location],
-		} as NodeData, wrapTok);
-		wrapped.nodeType = formal;
-		wrapped.flags = wrapped.flags.incl(NodeFlag.Closure).incl(NodeFlag.Sem);
-		return wrapped;
-	}
+	const thunk = synthClosureThunk(expr, formal, exprType);
+	if (thunk != null as unknown as Node) return thunk;
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
 	// MUST run BEFORE the same-kind early return below — both Token and
 	// Maybe<Token> have kind=Struct, so kind-equality alone wouldn't distinguish

@@ -504,6 +504,8 @@ function destructiveMoveVar(srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext): No
 function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MemberExprData;
 	md.object = processNode(md.object, dctx, DrcMode.Normal);
+	if (md.object.resolvedSym != null && md.object.resolvedSym.symbolKind == SymbolKind.Module
+		&& node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) return node;
 	// Reference parity (MemberExpr sinkArg): field access is a borrow —
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode == DrcMode.SinkArg && node.nodeType != null) {

@@ -15,7 +15,7 @@
 // and Sink/Lent are never built for a callee — probed, not assumed.
 
 import { Node, NodeKind, SymbolKind, Symbol, CallExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
-import { createFunction, voidType, peelTransparentInstance } from "../../checker/types";
+import { createFunction, voidType, peelTransparentInstance, closureStorageType } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -48,13 +48,8 @@ function markCall(node: Node): Node {
 	return node;
 }
 
-// Wrap function-reference arguments into closure thunks (standard pattern).
-// Scans CallExpr arguments: if arg is an Identifier → SymbolKind.Function
-// and the callee's corresponding parameter expects a Function/closure type,
-// wrap it in ObjectLiteral { fn, env } with closure nodeType.
 function wrapFuncArgsAsThunks(node: Node): void {
 	const cd = node.data as CallExprData;
-	// Need callee's function type to know parameter types
 	const calleeType = getCalleeType(cd);
 	if (calleeType == null) return;
 	if (calleeType.kind != TypeKind.Function) return;
@@ -62,21 +57,19 @@ function wrapFuncArgsAsThunks(node: Node): void {
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		const arg = cd.arguments[i];
-		if (arg.kind != NodeKind.Identifier) continue;
-		const argSym = arg.resolvedSym;
-		if (argSym == null) continue;
-		// Only wrap named functions (not variables/parameters which are already closures)
-		if (argSym.symbolKind != SymbolKind.Function) continue;
-		// In MetaScript, all function-typed parameters are closures (msClosure in C).
-		// A named function passed as argument always needs wrapping into { fn, env: null }.
+		if (arg.flags.has(NodeFlag.Closure)) continue;
+		let argType = arg.nodeType;
+		if (argType == null && arg.resolvedSym != null && arg.resolvedSym.symbolKind == SymbolKind.Function) {
+			argType = arg.resolvedSym.symbolType;
+		}
+		if (argType == null) continue;
+		const fnType = peelTransparentInstance(argType);
+		if (fnType.kind != TypeKind.Function || fnType.callConv == CallingConvention.CcClosure) continue;
 		const loc = arg.location;
 		const nullNode = makeNull(loc);
 		const thunk = makeObjectLiteral(["fn", "env"], [arg, nullNode], loc);
 		thunk.flags = thunk.flags.incl(NodeFlag.Closure);
-		// Set closure type from the function's own symbol type
-		if (argSym.symbolType != null) {
-			thunk.nodeType = argSym.symbolType;
-		}
+		thunk.nodeType = closureStorageType(fnType);
 		cd.arguments[i] = thunk;
 	}
 }

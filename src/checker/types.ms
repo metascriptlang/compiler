@@ -243,6 +243,14 @@ export function createClosureType(paramTypes: Type[], paramNames: string[], retu
 	return t;
 }
 
+export function closureStorageType(t: Type): Type {
+	if (t.kind != TypeKind.Function || t.callConv == CallingConvention.CcClosure) return t;
+	const c = createClosureType(t.typeChildren, t.typeNames, t.typeReturn != null ? t.typeReturn : voidType());
+	c.typeValue = t.typeValue;
+	c.typeFlags = t.typeFlags;
+	return c;
+}
+
 export function createEnum(name: string, members: string[], values: number[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
@@ -2706,7 +2714,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
-		bindings.types.push(withoutReadonlyView(concrete));
+		bindings.types.push(closureStorageType(withoutReadonlyView(concrete)));
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor) && formal.typeReturn != null) {
