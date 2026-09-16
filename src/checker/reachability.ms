@@ -634,6 +634,11 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				continue;
 			}
 
+			if (exportsCSymbol(bare)) {
+				markAndWalk(modulePath, getDeclName(bare));
+				continue;
+			}
+
 			// Root 5: Exported declarations in ENTRY MODULE only.
 			// Dependency module exports are NOT roots (reference parity: only sfExportc/sfCompilerProc).
 			// They become alive through transitive tracing from main() or top-level statements.
@@ -740,6 +745,18 @@ function isExportedDecl(node: Node): boolean {
 		return isExportedDecl(d.decoratedNode);
 	}
 	return false;
+}
+
+function exportsCSymbol(node: Node): boolean {
+	let decl = node;
+	if (decl.kind == NodeKind.ExportDecl) {
+		const ed = decl.data as ExportDeclData;
+		if (ed.exportedDecl == null) return false;
+		decl = ed.exportedDecl;
+	}
+	if (decl.kind != NodeKind.FunctionDecl) return false;
+	const sym = decl.resolvedSym;
+	return sym != null && sym.exportName != "";
 }
 
 // getDeclName imported from collectPass (single canonical copy)

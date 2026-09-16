@@ -273,6 +273,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.declNode = null as unknown as Node;
 	sym.overloads = [];
 	sym.nativeName = "";
+	sym.exportName = "";
 	sym.builtinKind = "";
 	sym.defaultParams = [];
 	sym.symFlags = mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>);

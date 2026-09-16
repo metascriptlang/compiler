@@ -216,6 +216,7 @@ export class Symbol {
 	declNode: Node;
 	overloads: Symbol[];
 	nativeName: string;
+	exportName: string;
 	builtinKind: string;
 	symFlags: BitSet<SymbolFlag>;
 	defaultParams: Node[];

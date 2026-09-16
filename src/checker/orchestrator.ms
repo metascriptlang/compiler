@@ -155,7 +155,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 					overloadTypes: [],
 					extReceiverType: "", extIsStatic: false,
 					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+					nativeName: sym.nativeName, exportName: sym.exportName, builtinKind: sym.builtinKind, overloadExportNames: [],
 					overloadNativeNames: [], overloadBuiltinKinds: [],
 					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
 				definingModule: sym.modulePath != "" ? sym.modulePath : path,

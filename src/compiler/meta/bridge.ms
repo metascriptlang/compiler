@@ -3218,6 +3218,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		declNode: null as unknown as Node,
 		overloads: [],
 		nativeName: "",
+		exportName: "",
 		builtinKind: "",
 		symFlags: 0 as BitSet<SymbolFlag>,
 		defaultParams: [],

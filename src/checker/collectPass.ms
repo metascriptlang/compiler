@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
-import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers } from "./decoratorHelpers";
+import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
@@ -244,20 +244,46 @@ export function collectDecorated(ctx: CheckerContext, node: Node): void {
 
 export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const dd = node.data as DecoratedDeclData;
+	const exportNameRejected = reportExportNameMisuse(ctx, dd);
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
 	const sym = lookupSymbol(ctx.table, declName);
 	if (sym == null) return;
 	const info = extractDecoratorInfo(node);
+	const exportName = exportNameRejected ? "" : info.exportName;
 	// For overloaded functions, the new function was just pushed as the last overload.
 	// Set builtinKind on the correct symbol (not the primary).
 	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
 	if (sym.overloads.length > 0) {
 		const idx = sym.overloads.length - 1;
 		if (info.builtinKind != "") sym.overloads[idx].builtinKind = info.builtinKind;
+		if (exportName != "") sym.overloads[idx].exportName = exportName;
 	} else {
 		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
+		if (exportName != "") sym.exportName = exportName;
 	}
+}
+
+function reportExportNameMisuse(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
+	const dec = exportNameDecorator(dd.decorators);
+	if (dec == null) return false;
+	const problem = exportNameMisuse(dec.data as MacroInvocationData, dd.decoratedNode);
+	if (problem == "") return false;
+	addError(ctx, problem, dec.location.line, dec.location.column);
+	return true;
+}
+
+function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
+	if (md.macroArgs.length > 1 || (md.macroArgs.length == 1 && md.macroArgs[0].kind != NodeKind.StringLiteral)) {
+		return "@exportName takes at most one string literal: the C symbol name";
+	}
+	const fn = exportedFunctionOf(decorated);
+	if (fn == null) return "@exportName applies to a module-level function";
+	const fd = fn.data as FunctionDeclData;
+	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@exportName defines a C symbol; an extern function binds one, name the import with `from \"c_name\"`";
+	if (isGenericFn(fd.fnFlags)) return "@exportName needs one C definition; a generic function has one per instantiation";
+	if (fd.fnBody == null) return "@exportName needs a function body";
+	return "";
 }
 
 // ===== Define + Error Helper =====
@@ -545,6 +571,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 			methodNode = dd.decoratedNode;
 			const info = extractDecoratorInfo(member);
 			builtinKind = info.builtinKind;
+			reportExportNameMisuse(ctx, dd);
 		}
 	}
 	if (methodNode == null) return;
@@ -867,6 +894,7 @@ export function importSymFromRegistry(
 	const origName = resolveOriginalName(exportInfo, importName);
 	if (origName != alias) sym.originalName = origName;
 	if (exportInfo.nativeName != "") sym.nativeName = exportInfo.nativeName;
+	if (exportInfo.exportName != "") sym.exportName = exportInfo.exportName;
 	if (exportInfo.builtinKind != "") sym.builtinKind = exportInfo.builtinKind;
 	if (exportInfo.headerPath != "") sym.headerPath = exportInfo.headerPath;
 	if (exportInfo.hasConstructor) setFlag(sym, SymbolFlag.HasConstructor);
@@ -919,6 +947,9 @@ function propagateImportedOverloads(
 		if (ovOrigName != localAlias) ovSym.originalName = ovOrigName;
 		if (exportInfo.overloadNativeNames != null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] != "") {
 			ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
+		}
+		if (exportInfo.overloadExportNames != null && ovIdx < exportInfo.overloadExportNames.length && exportInfo.overloadExportNames[ovIdx] != "") {
+			ovSym.exportName = exportInfo.overloadExportNames[ovIdx];
 		}
 		if (exportInfo.overloadBuiltinKinds != null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] != "") {
 			ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];

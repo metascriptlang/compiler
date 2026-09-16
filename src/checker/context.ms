@@ -32,8 +32,10 @@ export interface ExportedSymInfo {
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
 	nativeName: string;
+	exportName: string;
 	builtinKind: string;
 	overloadNativeNames: string[];
+	overloadExportNames: string[];
 	overloadBuiltinKinds: string[];
 	defaultParams: Node[];
 	overloadDefaultParamsFlat: Node[];
@@ -193,6 +195,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	const ovExtRecvs: string[] = [];
 	const ovExtStatics: boolean[] = [];
 	const ovRtNames: string[] = [];
+	const ovExportNames: string[] = [];
 	const ovBiKinds: string[] = [];
 	const ovDefParamsFlat: Node[] = [];
 	const ovDefParamsCounts: int32[] = [];
@@ -205,6 +208,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	while (ovi < sym.overloads.length) {
 		ovTypes.push(sym.overloads[ovi].symbolType);
 		ovRtNames.push(sym.overloads[ovi].nativeName);
+		ovExportNames.push(sym.overloads[ovi].exportName);
 		ovBiKinds.push(sym.overloads[ovi].builtinKind);
 		ovFlags.push(sym.overloads[ovi].symFlags as uint32 as int32);
 		ovDisambs.push(sym.overloads[ovi].disamb);
@@ -322,8 +326,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		overloadTypes: ovTypes,
 		extReceiverType: extRecv, extIsStatic: extStatic,
 		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
-		nativeName: sym.nativeName, builtinKind: sym.builtinKind,
-		overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds,
+		nativeName: sym.nativeName, exportName: sym.exportName, builtinKind: sym.builtinKind,
+		overloadNativeNames: ovRtNames, overloadExportNames: ovExportNames, overloadBuiltinKinds: ovBiKinds,
 		defaultParams: sym.defaultParams,
 		overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts,
 		definingModule: sym.modulePath != "" ? sym.modulePath : modulePath,

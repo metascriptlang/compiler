@@ -1,17 +1,18 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData } from "../ast/node";
 import { CheckerContext } from "./context";
 import { lookupSymbol, markUsed } from "./symbol";
 
 export interface DecoratorInfo {
 	builtinKind: string;
 	nativeName: string;
+	exportName: string;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin",
+	"comptime", "builtin", "exportName",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated"];
 
@@ -73,6 +74,32 @@ export function hasIntrinsicDecorator(ctx: CheckerContext, decorators: Node[], k
 	return false;
 }
 
+export function exportNameDecorator(decorators: Node[]): Node | null {
+	for (const dec of decorators) {
+		if (dec.kind != NodeKind.MacroInvocation) continue;
+		if ((dec.data as MacroInvocationData).macroName == "exportName") return dec;
+	}
+	return null;
+}
+
+export function exportedFunctionOf(decorated: Node): Node | null {
+	let decl = decorated;
+	if (decl != null && decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+	if (decl == null || decl.kind != NodeKind.FunctionDecl) return null;
+	return decl;
+}
+
+function exportNameOf(dec: Node, decorated: Node): string {
+	const md = dec.data as MacroInvocationData;
+	if (md.macroArgs.length == 1 && md.macroArgs[0].kind == NodeKind.StringLiteral) {
+		return (md.macroArgs[0].data as StringLiteralData).value;
+	}
+	if (md.macroArgs.length > 0) return "";
+	const fn = exportedFunctionOf(decorated);
+	if (fn == null) return "";
+	return (fn.data as FunctionDeclData).fnName;
+}
+
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
 export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
@@ -89,6 +116,8 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 			}
 		}
 	}
+	const exportDec = exportNameDecorator(dd.decorators);
+	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
 	// Extract nativeName from inner decorated node (from "c_name" clause)
 	const inner = dd.decoratedNode;
 	let natName = match (inner.kind) {
@@ -101,5 +130,6 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	return {
 		builtinKind: btKind,
 		nativeName: natName,
+		exportName: exportName,
 	};
 }

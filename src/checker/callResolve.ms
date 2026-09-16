@@ -2673,6 +2673,7 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 	sym.disamb = expInfo.disamb;
 	if (expInfo.originalName != "") sym.originalName = expInfo.originalName;
 	if (expInfo.nativeName != "") sym.nativeName = expInfo.nativeName;
+	if (expInfo.exportName != "") sym.exportName = expInfo.exportName;
 	if (expInfo.builtinKind != "") sym.builtinKind = expInfo.builtinKind;
 	if (expInfo.headerPath != "") sym.headerPath = expInfo.headerPath;
 	if (expInfo.jsModulePath != "") sym.jsModulePath = expInfo.jsModulePath;
@@ -2696,6 +2697,9 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 			overSym.modulePath = sym.modulePath;
 			if (oi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[oi] != "") {
 				overSym.nativeName = expInfo.overloadNativeNames[oi];
+			}
+			if (expInfo.overloadExportNames != null && oi < expInfo.overloadExportNames.length && expInfo.overloadExportNames[oi] != "") {
+				overSym.exportName = expInfo.overloadExportNames[oi];
 			}
 			if (oi < expInfo.overloadBuiltinKinds.length && expInfo.overloadBuiltinKinds[oi] != "") {
 				overSym.builtinKind = expInfo.overloadBuiltinKinds[oi];

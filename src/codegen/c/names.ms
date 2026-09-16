@@ -249,6 +249,7 @@ function symExternOrImportName(sym: Symbol | null, name: string): string {
 
 export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
 	if (name == "main") return safeName(name);
+	if (sym != null && sym.exportName != "") return sym.exportName;
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
 	// Use original declared name for mangling, not import alias

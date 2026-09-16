@@ -183,7 +183,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Lifted functions (sym === null) are always static
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
-	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported));
+	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
 	const prefix = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
