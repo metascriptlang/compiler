@@ -187,3 +187,4 @@ import "./bug170GenericVarParam";
 import "./bug169NamedFnIntoCarrier";
 import "./bug171FnValueInferredStorage";
 import "./bug172ExportNamePinsCSymbol";
+import "./bug173AssertMessageLowering";
