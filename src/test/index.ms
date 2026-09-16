@@ -70,6 +70,7 @@ import "./c/nominalFit";
 import "./c/bitSetWidth";
 import "./c/bitSetAlgebra";
 import "./c/sizeofFold";
+import "./js/sizeof";
 import "./c/numericNarrowing";
 import "./c/voidValue";
 import "./js/basic";

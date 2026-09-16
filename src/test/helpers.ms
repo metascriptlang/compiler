@@ -9,6 +9,7 @@ import "../parser/statements/core";
 import { resetAllSideChannels } from "../parser/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
+import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { hasErrors, CheckerError, CheckerContext, ExportRegistry } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
@@ -48,7 +49,9 @@ function collectErrors(errors: CheckerError[], prefix: string): string {
 // ===== Single-source compilation (1-module graph) =====
 
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
-export function compileToC(source: string): CompileResult {
+function setTarget(ctx: CheckerContext, target: TargetInfo): void { ctx.targetInfo = target; }
+
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
 	resetAllSideChannels();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -59,6 +62,9 @@ export function compileToC(source: string): CompileResult {
 
 	const registry = checkModuleGraph(graph, "");
 	const preludeCtx = getPreludeContext();
+	const hostTarget = preludeCtx.targetInfo;
+	preludeCtx.targetInfo = target;
+	defer setTarget(preludeCtx, hostTarget);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
@@ -140,7 +146,7 @@ export function compileToCWithStd(source: string): CompileResult {
 }
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
-export function compileToJS(source: string): CompileResult {
+export function compileToJS(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
 	resetAllSideChannels();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -149,6 +155,9 @@ export function compileToJS(source: string): CompileResult {
 
 	const registry = checkModuleGraph(graph, "");
 	const preludeCtx = getPreludeContext();
+	const hostTarget = preludeCtx.targetInfo;
+	preludeCtx.targetInfo = target;
+	defer setTarget(preludeCtx, hostTarget);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
