@@ -3,59 +3,68 @@
 // Verifies the codegen decision of whether to introduce pointer params
 // based on struct size, interface flag, and Ref wrapping.
 
-import { createStruct, createRef, createPtr, numberType, stringType, createMaybeType } from "../../checker/types";
+import { TargetInfo, createStruct, createRef, createPtr, numberType, stringType, createMaybeType } from "../../checker/types";
 import { ccgIntroducedPtr, isPointerType } from "../../codegen/c/types";
 import { fullPipeline, findFnDecl } from "./helpers";
 import { Node, NodeKind, ProgramData, ExportDeclData, FunctionDeclData, CallExprData, BlockStmtData, IfStmtData, ReturnStmtData, ExprStmtData, TypeKind } from "../../ast/node";
 
 test "ccgIntroducedPtr: small struct = false" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const t = createStruct("Small", ["x", "y"], [numberType(), numberType()], true);
-	assert !ccgIntroducedPtr(t);
+	assert !ccgIntroducedPtr(tg, t);
 }
 
 test "ccgIntroducedPtr: large struct = true" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const t = createStruct("Big", ["a", "b", "c", "d"], [numberType(), numberType(), numberType(), numberType()], true);
-	assert ccgIntroducedPtr(t);
+	assert ccgIntroducedPtr(tg, t);
 }
 
 test "ccgIntroducedPtr: struct with string fields = true" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const t = createStruct("WithStr", ["x", "name", "desc"], [numberType(), stringType(), stringType()], true);
-	assert ccgIntroducedPtr(t);
+	assert ccgIntroducedPtr(tg, t);
 }
 
 test "ccgIntroducedPtr: Ref type = false" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const inner = createStruct("FooRef", ["x"], [numberType()], true);
 	const ref = createRef(inner);
-	assert !ccgIntroducedPtr(ref);
+	assert !ccgIntroducedPtr(tg, ref);
 }
 
 test "ccgIntroducedPtr: non-interface struct = false" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const t = createStruct("Raw", ["a", "b", "c", "d"], [numberType(), numberType(), numberType(), numberType()], false);
-	assert !ccgIntroducedPtr(t);
+	assert !ccgIntroducedPtr(tg, t);
 }
 
 test "ccgIntroducedPtr: class type (Ref<Struct>) = false" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const inner = createStruct("DocR", ["kind", "name", "desc", "extra"], [numberType(), stringType(), stringType(), stringType()], true);
 	const classType = createRef(inner);
-	assert !ccgIntroducedPtr(classType);
+	assert !ccgIntroducedPtr(tg, classType);
 }
 
 test "ccgIntroducedPtr: unwrapped class inner struct = true" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const inner = createStruct("DocRI", ["kind", "name", "desc", "extra"], [numberType(), stringType(), stringType(), stringType()], true);
-	assert ccgIntroducedPtr(inner);
+	assert ccgIntroducedPtr(tg, inner);
 }
 
 test "ccgIntroducedPtr: Maybe wrapper large enough" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const inner = createStruct("BigTokM", ["kind", "value", "extra"], [numberType(), stringType(), stringType()], true);
 	const maybe = createMaybeType(inner);
-	assert ccgIntroducedPtr(maybe);
+	assert ccgIntroducedPtr(tg, maybe);
 }
 
 test "ccgIntroducedPtr: collapsed Maybe<Ref<T>> = false" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const inner = createStruct("FooMC", ["x"], [numberType()], true);
 	const ref = createRef(inner);
 	const maybe = createMaybeType(ref);
-	assert !ccgIntroducedPtr(maybe);
+	assert !ccgIntroducedPtr(tg, maybe);
 }
 
 // ===== E2E: Verify call-site C output =====
