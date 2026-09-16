@@ -2024,13 +2024,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	// Identifier: function-local RC vars are moved (not borrowed) — no incref
 	if (expr.kind == NodeKind.Identifier) {
 		const name = (expr.data as IdentifierData).name;
-		// $borrow_N_ temps from passCopyToSink are already owned copies (passCopyToSink
-		// incref'd them at creation). Returning one directly transfers that ownership
-		// to the caller — emitReturnWithIncref would cascade into a double-incref.
-		if (name.startsWith("$borrow_")) return false;
-		// $move_N temps from destructiveMoveVar hold an owned value moved out of a
-		// function-local — returning one transfers ownership to the caller, no incref.
-		if (name.startsWith("$move_")) return false;
+		if (expr.resolvedSym != null && hasFlag(expr.resolvedSym, SymbolFlag.SinkTemp)) return false;
 		// Cursor variables (for-of bindings, $-prefix borrows): borrowed references.
 		// Returning a cursor creates a new reference — must incref.
 		// Reference parity: the reference incref's at the assignment site inside the function;
