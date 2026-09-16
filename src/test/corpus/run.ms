@@ -509,9 +509,23 @@ function cellDone(c: Cell): boolean {
 	return exists(c.dir + "done");
 }
 
-// exit-code file: >=128 means signal death through the shell
+// exit-code file: >=128 means signal death through the shell.
+//
+// The file is published by `move /y done.tmp done` (cmd) / `mv` (posix), so
+// exists() flipping true does not mean it can be opened yet: on Windows the
+// rename target can still be held (filter driver / on-access scan) for a
+// few ms. Measured 2026-09-17 under a parallel build load: 3-4 cells per
+// full run read "-1" while the file on disk said "0". Retry before giving
+// up; a real read failure still surfaces as -1 after the window.
 function readExit(c: Cell): int32 {
-	return readFileOr(c.dir + "done", "-1").trim().parseInt() as int32;
+	let tries = 0;
+	while (true) {
+		const r = readFile(c.dir + "done");
+		if (r.ok) { return r.value.trim().parseInt() as int32; }
+		tries = tries + 1;
+		if (tries >= 20) { return -1; }
+		pollSleep("0.05", 50);
+	}
 }
 
 function finishRssCell(c: Cell): void {
