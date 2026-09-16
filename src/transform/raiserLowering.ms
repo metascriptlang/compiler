@@ -11,6 +11,7 @@ import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
+import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
@@ -50,5 +51,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
+	result = unwrapMaybe(result, ctx);
 	return result;
 }
