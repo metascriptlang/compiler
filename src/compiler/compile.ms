@@ -2030,6 +2030,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
+	if (runCode > 128) console.log(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
 

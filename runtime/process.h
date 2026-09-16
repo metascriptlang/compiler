@@ -394,6 +394,7 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0) return -1.0;
 	if (WIFEXITED(status)) return (double)WEXITSTATUS(status);
+	if (WIFSIGNALED(status)) return (double)(128 + WTERMSIG(status));
 	return -1.0;
 }
 #endif
