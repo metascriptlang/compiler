@@ -5,7 +5,7 @@ import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
-import { setTargetSizes, getTargetPtrSize, getTargetFloatSize } from "../checker/types";
+import { TargetInfo, hostTargetInfo } from "../checker/types";
 
 // -- Types --
 
@@ -36,6 +36,7 @@ export interface CliOptions {
 	                           // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                           // Cross-compile detected by callsites via `targetOs !== platform`.
 	cpuTarget: string;         // --cpu=<x86_64|arm64|...>: target CPU (cross-compile)
+	targetInfo: TargetInfo;
 	genDeps: boolean;
 	forceRebuild: boolean;
 	strip: boolean;
@@ -64,9 +65,6 @@ export interface CliOptions {
 
 // -- Argument parsing --
 
-const HOST_POINTER_BYTES: int32 = 8;
-const HOST_FLOAT_BYTES: int32 = 8;
-
 function cpuPointerBytes(cpu: string): int32 {
 	if (cpu == "amd64" || cpu == "x86_64" || cpu == "arm64" || cpu == "aarch64"
 			|| cpu == "riscv64" || cpu == "mips64" || cpu == "mips64el"
@@ -92,19 +90,17 @@ function targetCpuName(targetOs: string, cpuTarget: string): string {
 	return "";
 }
 
-export function resolveTargetSizes(targetOs: string, cpuTarget: string): void {
+export function resolveTargetSizes(targetOs: string, cpuTarget: string): TargetInfo {
 	const cpu = targetCpuName(targetOs, cpuTarget);
-	if (cpu == "") {
-		setTargetSizes(HOST_POINTER_BYTES, HOST_FLOAT_BYTES);
-		return;
-	}
+	if (cpu == "") return hostTargetInfo();
 	const bytes = cpuPointerBytes(cpu);
 	if (bytes == 0) {
 		console.log(`${error("error")}: unknown --cpu target: ${bold(cpu)}`);
 		console.log(`  Valid: amd64, arm64, i386, arm, wasm32, riscv32, riscv64, mips, mips64, powerpc, powerpc64, sparc, sparc64, s390x, loongarch64, avr, msp430`);
 		exit(1);
 	}
-	setTargetSizes(bytes, cpuFloatBytes(cpu));
+	const t: TargetInfo = { ptrSize: bytes, floatSize: cpuFloatBytes(cpu) };
+	return t;
 }
 
 export function parseArgs(): CliOptions {
@@ -128,6 +124,7 @@ export function parseArgs(): CliOptions {
 		ccBinary: "",
 		targetOs: platform,
 		cpuTarget: "",
+		targetInfo: hostTargetInfo(),
 		genDeps: false,
 		forceRebuild: false,
 		strip: false,
@@ -318,7 +315,7 @@ export function parseArgs(): CliOptions {
 		exit(0);
 	}
 
-	resolveTargetSizes(opts.targetOs, opts.cpuTarget);
+	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
 
 	return opts;
 }
@@ -326,33 +323,20 @@ export function parseArgs(): CliOptions {
 // ===== Tests =====
 
 test "pointer width follows the target cpu, not the host" {
-	resolveTargetSizes("macos", "");
-	assert getTargetPtrSize() == 8;
-	resolveTargetSizes("wasm", "");
-	assert getTargetPtrSize() == 4;
-	resolveTargetSizes("emcc", "");
-	assert getTargetPtrSize() == 4;
-	resolveTargetSizes("bare", "i386");
-	assert getTargetPtrSize() == 4;
-	resolveTargetSizes("linux", "arm64");
-	assert getTargetPtrSize() == 8;
-	resolveTargetSizes("macos", "");
+	assert resolveTargetSizes("macos", "").ptrSize == 8;
+	assert resolveTargetSizes("wasm", "").ptrSize == 4;
+	assert resolveTargetSizes("emcc", "").ptrSize == 4;
+	assert resolveTargetSizes("bare", "i386").ptrSize == 4;
+	assert resolveTargetSizes("linux", "arm64").ptrSize == 8;
 }
 
 test "float width follows the target cpu too" {
-	resolveTargetSizes("macos", "");
-	assert getTargetFloatSize() == 8;
-	resolveTargetSizes("wasm", "");
-	assert getTargetFloatSize() == 8;
-	resolveTargetSizes("bare", "avr");
-	assert getTargetFloatSize() == 4;
-	resolveTargetSizes("bare", "msp430");
-	assert getTargetFloatSize() == 4;
-	resolveTargetSizes("macos", "");
+	assert resolveTargetSizes("macos", "").floatSize == 8;
+	assert resolveTargetSizes("wasm", "").floatSize == 8;
+	assert resolveTargetSizes("bare", "avr").floatSize == 4;
+	assert resolveTargetSizes("bare", "msp430").floatSize == 4;
 }
 
 test "an explicit cpu outranks the os-implied one" {
-	resolveTargetSizes("wasm", "amd64");
-	assert getTargetPtrSize() == 8;
-	resolveTargetSizes("macos", "");
+	assert resolveTargetSizes("wasm", "amd64").ptrSize == 8;
 }

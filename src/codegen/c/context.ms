@@ -5,6 +5,7 @@
 
 import { Node, Type, Symbol } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
+import { TargetInfo, hostTargetInfo } from "../../checker/types";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -594,6 +595,7 @@ export class CGen {
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
 	checkerCtx: CheckerContext;
+	target: TargetInfo;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
@@ -627,6 +629,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
 		checkerCtx: ctx,
+		target: ctx != null ? ctx.targetInfo : hostTargetInfo(),
 		modulePath,
 		labels: 0,
 		initProc: createProc("__init000", null),

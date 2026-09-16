@@ -28,7 +28,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { isAwaitable } from "../checker/types";
+import { TargetInfo, hostTargetInfo, isAwaitable } from "../checker/types";
 import { lookupSymbol, SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -353,6 +353,7 @@ export function applyGcMode(opts: CliOptions): void {
 	else if (opts.gcMode == "manual") graphPreludeCtx.gcMode = GcMode.Manual;
 	else if (opts.gcMode == "orc") graphPreludeCtx.gcMode = GcMode.Orc;
 	graphPreludeCtx.targetOs = opts.targetOs;
+	graphPreludeCtx.targetInfo = opts.targetInfo;
 }
 
 // Loader-half timing gate, twin of the orchestrator's setGraphCheckTiming —
@@ -362,7 +363,7 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, gcMode: GcMode = GcMode.Orc): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
@@ -397,7 +398,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, gcMode);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, targetInfo, gcMode);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -940,7 +941,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
@@ -1171,7 +1172,7 @@ export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: R
 	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
 	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
 }
 
@@ -1197,7 +1198,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
 	applyGcMode(opts);
 
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
@@ -1438,6 +1439,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
+		ctx.targetInfo = opts.targetInfo;
 		const _ta0 = performance.now();
 		const preAnErrors = ctx.errors.length;
 		const analyzed = analyzeProgram(hcrResult, ctx);
@@ -1783,7 +1785,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -1886,6 +1888,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
 		ctx.targetOs = opts.targetOs;
+		ctx.targetInfo = opts.targetInfo;
 
 		const preAnErrors = ctx.errors.length;
 		const analyzed = analyzeProgram(hcrResult, ctx);

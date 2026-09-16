@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { TargetInfo, hostTargetInfo, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, lookupSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -1134,6 +1134,7 @@ export class CheckerContext {
 	targetOs: string;              // Target OS. Always set; defaults to host platform.
 	                               // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                               // Cross-compile detected via `targetOs !== platform`.
+	targetInfo: TargetInfo;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	readonlyBoundary: Cursor<Scope>;
@@ -1195,6 +1196,7 @@ export function createContext(): CheckerContext {
 		errors: [],
 		gcMode: GcMode.Orc,
 		targetOs: platform,
+		targetInfo: hostTargetInfo(),
 		currentFunction: null,
 		currentActorName: "",
 		readonlyBoundary: null as unknown as Cursor<Scope>,

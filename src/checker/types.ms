@@ -52,21 +52,15 @@ import { getGenericDecl } from "../parser/context";
 //
 // =====================================================================
 
-// ===== Target Configuration (Implementation parity) =====
-// Module-level state set once at startup. Defaults to 64-bit.
-
-let targetPtrSize: int32 = 8;
-let targetFloatSize: int32 = 8;
-
-export function setTargetSizes(ptrSize: int32, floatSize: int32): void {
-	targetPtrSize = ptrSize;
-	targetFloatSize = floatSize;
+export struct TargetInfo {
+	ptrSize: int32;
+	floatSize: int32;
 }
 
-export function getTargetPtrSize(): int32 { return targetPtrSize; }
-
-export function getTargetFloatSize(): int32 { return targetFloatSize; }
-
+export function hostTargetInfo(): TargetInfo {
+	const t: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	return t;
+}
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
 // Copies all fields from source into target, preserving target's object identity.
@@ -3339,39 +3333,39 @@ function alignTo(offset: int32, align: int32): int32 {
 let _layoutDepth: int32 = 0;
 
 // alignOfType — natural alignment for C ABI (target-aware)
-export function alignOfType(t: Type): int32 {
+export function alignOfType(tg: TargetInfo, t: Type): int32 {
 	if (_layoutDepth > 16) return 0;
 	_layoutDepth = _layoutDepth + 1;
-	const r = alignOfTypeInner(t);
+	const r = alignOfTypeInner(tg, t);
 	_layoutDepth = _layoutDepth - 1;
 	return r;
 }
 
-function alignOfTypeInner(t: Type): int32 {
-	const ps = targetPtrSize;
+function alignOfTypeInner(tg: TargetInfo, t: Type): int32 {
+	const ps = tg.ptrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
-		return alignOfStruct(t);
+		return alignOfStruct(tg, t);
 	}
 	if (t.kind == TypeKind.Union) {
-		return alignOfUnion(t);
+		return alignOfUnion(tg, t);
 	}
 	if (t.kind == TypeKind.Set) {
 		const sr = setRepr(t);
-		if (sr != null) return alignOfType(sr);
+		if (sr != null) return alignOfType(tg, sr);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return alignOfType(t.typeReturn);
+		return alignOfType(tg, t.typeReturn);
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
 		const body = instanceLayoutBody(t);
-		if (body != null && body != t) return alignOfType(body);
+		if (body != null && body != t) return alignOfType(tg, body);
 	}
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
-		return alignOfType(t.typeReturn);
+		return alignOfType(tg, t.typeReturn);
 	}
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
-		return alignOfType(t.typeChildren[0]);
+		return alignOfType(tg, t.typeChildren[0]);
 	}
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
@@ -3386,12 +3380,12 @@ function alignOfTypeInner(t: Type): int32 {
 	};
 }
 
-function alignOfStruct(t: Type): int32 {
+function alignOfStruct(tg: TargetInfo, t: Type): int32 {
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			const a = alignOfType(t.typeChildren[i]);
+			const a = alignOfType(tg, t.typeChildren[i]);
 			if (a > maxAlign) maxAlign = a;
 			i = i + 1;
 		}
@@ -3401,39 +3395,39 @@ function alignOfStruct(t: Type): int32 {
 
 // sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
-export function sizeOfType(t: Type): int32 {
+export function sizeOfType(tg: TargetInfo, t: Type): int32 {
 	if (_layoutDepth > 16) return SIZE_NOT_COMPUTABLE;
 	_layoutDepth = _layoutDepth + 1;
-	const r = sizeOfTypeInner(t);
+	const r = sizeOfTypeInner(tg, t);
 	_layoutDepth = _layoutDepth - 1;
 	return r;
 }
 
-function sizeOfTypeInner(t: Type): int32 {
-	const ps = targetPtrSize;
+function sizeOfTypeInner(tg: TargetInfo, t: Type): int32 {
+	const ps = tg.ptrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
-		return sizeOfStruct(t);
+		return sizeOfStruct(tg, t);
 	}
 	if (t.kind == TypeKind.Union) {
-		return sizeOfUnion(t);
+		return sizeOfUnion(tg, t);
 	}
 	if (t.kind == TypeKind.Set) {
 		const sr = setRepr(t);
-		if (sr != null) return sizeOfType(sr);
+		if (sr != null) return sizeOfType(tg, sr);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return sizeOfType(t.typeReturn) * t.typeValue;
+		return sizeOfType(tg, t.typeReturn) * t.typeValue;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
 		const body = instanceLayoutBody(t);
-		if (body != null && body != t) return sizeOfType(body);
+		if (body != null && body != t) return sizeOfType(tg, body);
 	}
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
-		return sizeOfType(t.typeReturn);
+		return sizeOfType(tg, t.typeReturn);
 	}
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
-		return sizeOfType(t.typeChildren[0]);
+		return sizeOfType(tg, t.typeChildren[0]);
 	}
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
@@ -3449,7 +3443,7 @@ function sizeOfTypeInner(t: Type): int32 {
 	};
 }
 
-function sizeOfStruct(t: Type): int32 {
+function sizeOfStruct(tg: TargetInfo, t: Type): int32 {
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
@@ -3457,9 +3451,9 @@ function sizeOfStruct(t: Type): int32 {
 		while (i < t.typeChildren.length) {
 			const field = t.typeChildren[i];
 			if (field != null && field.kind != TypeKind.Void) {
-				const fieldSize = sizeOfType(field);
+				const fieldSize = sizeOfType(tg, field);
 				if (fieldSize < 0) return fieldSize;
-				const fieldAlign = alignOfType(field);
+				const fieldAlign = alignOfType(tg, field);
 				if (fieldAlign > maxAlign) maxAlign = fieldAlign;
 				offset = alignTo(offset, fieldAlign);
 				offset = offset + fieldSize;
@@ -3491,19 +3485,19 @@ function unionTagType(t: Type): Type | null {
 	return t.typeExtra != null && t.typeExtra.kind == TypeKind.Enum ? t.typeExtra : null;
 }
 
-function sizeOfUnion(t: Type): int32 {
+function sizeOfUnion(tg: TargetInfo, t: Type): int32 {
 	const tag = unionTagType(t);
-	const tagSize = tag != null ? sizeOfType(tag) : 4;
+	const tagSize = tag != null ? sizeOfType(tg, tag) : 4;
 	if (tagSize < 0) return tagSize;
-	const tagAlign = tag != null ? alignOfType(tag) : 4;
+	const tagAlign = tag != null ? alignOfType(tg, tag) : 4;
 	let payload = 0;
 	let payloadAlign = 1;
 	if (t.typeChildren != null) {
 		for (const variant of t.typeChildren) {
-			const vs = sizeOfType(variant);
+			const vs = sizeOfType(tg, variant);
 			if (vs < 0) return vs;
 			if (vs > payload) payload = vs;
-			const va = alignOfType(variant);
+			const va = alignOfType(tg, variant);
 			if (va > payloadAlign) payloadAlign = va;
 		}
 	}
@@ -3511,12 +3505,12 @@ function sizeOfUnion(t: Type): int32 {
 	return alignTo(alignTo(tagSize, payloadAlign) + payload, maxAlign);
 }
 
-function alignOfUnion(t: Type): int32 {
+function alignOfUnion(tg: TargetInfo, t: Type): int32 {
 	const tag = unionTagType(t);
-	let maxAlign = tag != null ? alignOfType(tag) : 4;
+	let maxAlign = tag != null ? alignOfType(tg, tag) : 4;
 	if (t.typeChildren != null) {
 		for (const variant of t.typeChildren) {
-			const va = alignOfType(variant);
+			const va = alignOfType(tg, variant);
 			if (va > maxAlign) maxAlign = va;
 		}
 	}
@@ -3824,113 +3818,117 @@ test "substituteType Tuple" {
 }
 
 test "sizeOfType primitives 64-bit" {
-	setTargetSizes(8, 8);
-	assert sizeOfType(createPrimitive(TypeKind.Boolean)) == 1;
-	assert sizeOfType(createPrimitive(TypeKind.Char)) == 1;
-	assert sizeOfType(createPrimitive(TypeKind.Int32)) == 4;
-	assert sizeOfType(createPrimitive(TypeKind.Uint32)) == 4;
-	assert sizeOfType(createPrimitive(TypeKind.Float32)) == 4;
-	assert sizeOfType(numberType()) == 8;
-	assert sizeOfType(createPrimitive(TypeKind.Int64)) == 8;
-	assert sizeOfType(createPrimitive(TypeKind.Float64)) == 8;
-	assert sizeOfType(stringType()) == 16;
-	assert sizeOfType(createArray(numberType())) == 16;
-	assert sizeOfType(createPrimitive(TypeKind.Enum)) == 4;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createPrimitive(TypeKind.Boolean)) == 1;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Char)) == 1;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Uint32)) == 4;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Float32)) == 4;
+	assert sizeOfType(tg, numberType()) == 8;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Int64)) == 8;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Float64)) == 8;
+	assert sizeOfType(tg, stringType()) == 16;
+	assert sizeOfType(tg, createArray(numberType())) == 16;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Enum)) == 4;
 }
 
 test "sizeOfType primitives 32-bit" {
-	setTargetSizes(4, 8);
-	assert sizeOfType(numberType()) == 8;
-	assert sizeOfType(stringType()) == 8;
-	assert sizeOfType(createArray(numberType())) == 8;
-	assert sizeOfType(createFunction([], [], numberType())) == 8;
-	assert sizeOfType(createPrimitive(TypeKind.Ref)) == 4;
-	assert sizeOfType(createPrimitive(TypeKind.Int32)) == 4;
-	assert sizeOfType(createPrimitive(TypeKind.Int64)) == 8;
-	setTargetSizes(8, 8);
+	const tg: TargetInfo = { ptrSize: 4, floatSize: 8 };
+	assert sizeOfType(tg, numberType()) == 8;
+	assert sizeOfType(tg, stringType()) == 8;
+	assert sizeOfType(tg, createArray(numberType())) == 8;
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
+	assert sizeOfType(tg, createPrimitive(TypeKind.Int64)) == 8;
 }
 
 test "sizeOfType object no padding" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const obj = createStruct("Pair", ["x", "y"], [createPrimitive(TypeKind.Int32), createPrimitive(TypeKind.Int32)], true);
-	assert sizeOfType(obj) == 8;
+	assert sizeOfType(tg, obj) == 8;
 }
 
 test "sizeOfType object with padding" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	// { char (1 byte) + padding(3) + int32 (4 bytes) } = 8
 	const obj = createStruct("Mixed", ["a", "b"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int32)], true);
-	assert sizeOfType(obj) == 8;
+	assert sizeOfType(tg, obj) == 8;
 }
 
 test "sizeOfType object tail padding" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	// { int64 (8 bytes) + char (1 byte) + padding(7) } = 16 (aligned to maxAlign=8)
 	const obj = createStruct("Tail", ["x", "y"], [createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Char)], true);
-	assert sizeOfType(obj) == 16;
+	assert sizeOfType(tg, obj) == 16;
 }
 
 test "sizeOfType function closure" {
-	assert sizeOfType(createFunction([], [], numberType())) == 16;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 16;
 }
 
 test "sizeOfType bigint is a pointer" {
-	setTargetSizes(8, 8);
-	assert sizeOfType(createPrimitive(TypeKind.BigInt)) == 8;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createPrimitive(TypeKind.BigInt)) == 8;
 }
 
 test "sizeOfType literal discriminants carry their base width" {
-	setTargetSizes(8, 8);
-	assert sizeOfType(createBooleanLiteral(true)) == 1;
-	assert sizeOfType(createStringLiteral("circle")) == 16;
-	assert alignOfType(createBooleanLiteral(false)) == 1;
-	assert alignOfType(createStringLiteral("rect")) == 8;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createBooleanLiteral(true)) == 1;
+	assert sizeOfType(tg, createStringLiteral("circle")) == 16;
+	assert alignOfType(tg, createBooleanLiteral(false)) == 1;
+	assert alignOfType(tg, createStringLiteral("rect")) == 8;
 }
 
 test "sizeOfType union is tag plus widest variant" {
-	setTargetSizes(8, 8);
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const v0 = createStruct("", ["ok", "value"], [createPrimitive(TypeKind.Boolean), createPrimitive(TypeKind.Int32)], true);
 	const v1 = createStruct("", ["ok", "error"], [createPrimitive(TypeKind.Boolean), stringType()], true);
 	const u = createUnion([v0, v1]);
-	assert sizeOfType(v0) == 8;
-	assert sizeOfType(v1) == 24;
-	assert alignOfType(u) == 8;
-	assert sizeOfType(u) == 32;
+	assert sizeOfType(tg, v0) == 8;
+	assert sizeOfType(tg, v1) == 24;
+	assert alignOfType(tg, u) == 8;
+	assert sizeOfType(tg, u) == 32;
 }
 
 test "sizeOfType follows a generic instance to its substituted body" {
-	setTargetSizes(8, 8);
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
 	const v0 = createStruct("", ["ok", "value"], [createBooleanLiteral(true), createPrimitive(TypeKind.Int32)], true);
 	const v1 = createStruct("", ["ok", "error"], [createBooleanLiteral(false), stringType()], true);
 	const named = createUnion([v0, v1]);
 	const inst = createGenericInstance(named, [createPrimitive(TypeKind.Int32), stringType()]);
 	inst.typeReturn = named;
-	assert sizeOfType(inst) == 32;
+	assert sizeOfType(tg, inst) == 32;
 }
 
 test "sizeOfType gives an awaitable the width of its future handle" {
-	setTargetSizes(8, 8);
-	assert sizeOfType(createPromise(createPrimitive(TypeKind.Int32))) == 8;
-	assert alignOfType(createPromise(stringType())) == 8;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createPromise(createPrimitive(TypeKind.Int32))) == 8;
+	assert alignOfType(tg, createPromise(stringType())) == 8;
 }
 
 test "sizeOfType reports a sizeless type instead of zero" {
-	assert sizeOfType(voidType()) < 0;
-	assert sizeOfType(unknownType()) < 0;
-	assert sizeOfType(createGenericParam("T")) < 0;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, voidType()) < 0;
+	assert sizeOfType(tg, unknownType()) < 0;
+	assert sizeOfType(tg, createGenericParam("T")) < 0;
 	const holder = createStruct("Holder", ["v"], [unknownType()], true);
-	assert sizeOfType(holder) < 0;
+	assert sizeOfType(tg, holder) < 0;
 }
 
 test "alignOfType" {
-	assert alignOfType(createPrimitive(TypeKind.Char)) == 1;
-	assert alignOfType(createPrimitive(TypeKind.Int32)) == 4;
-	assert alignOfType(numberType()) == 8;
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert alignOfType(tg, createPrimitive(TypeKind.Char)) == 1;
+	assert alignOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
+	assert alignOfType(tg, numberType()) == 8;
 }
 
 test "alignOfType 32-bit" {
-	setTargetSizes(4, 8);
-	assert alignOfType(numberType()) == 4;
-	assert alignOfType(createPrimitive(TypeKind.Ref)) == 4;
-	assert alignOfType(createPrimitive(TypeKind.Int32)) == 4;
-	setTargetSizes(8, 8);
+	const tg: TargetInfo = { ptrSize: 4, floatSize: 8 };
+	assert alignOfType(tg, numberType()) == 4;
+	assert alignOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
+	assert alignOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
 }
 
 // ===== Maybe<T> + Nullable Pointer Tests =====

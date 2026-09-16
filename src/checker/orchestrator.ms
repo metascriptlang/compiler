@@ -15,7 +15,7 @@ import { preludePackStats } from "./preludePack";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { collectTopLevelLocal } from "./collectPass";
 import { isAssignableProfile } from "./compat";
-import { unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
+import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { registerModuleCtx, registerModuleProgram, instantiateProfile, instantiateTimings } from "./instantiate";
@@ -63,7 +63,7 @@ export function setGraphCheckTiming(on: boolean): void {
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, gcMode: GcMode = GcMode.Orc): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc): ExportRegistry {
 	const registry = createExportRegistry();
 
 	// PROFILE: sub-phase timings summed across all modules (-t only).
@@ -83,6 +83,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const baseCtx = buildPreludeContext(stdPath, backendExt);
 	tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
+	baseCtx.targetInfo = targetInfo;
 	baseCtx.gcMode = gcMode;
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);

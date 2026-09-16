@@ -216,7 +216,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 			p.params.push(d.params[pi]);
 			scopeMangledParam(p, safeName(d.params[pi]));
 			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
-			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[pi]) : shouldIndirectParam(fnType.typeChildren[pi], isMutated));
+			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
 			}

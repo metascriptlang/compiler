@@ -63,7 +63,7 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: stri
 		const typed = i < fnType.typeChildren.length;
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
-		const promote = typed && (hookAbi ? ccgIntroducedPtr(fnType.typeChildren[i]) : shouldIndirectParam(fnType.typeChildren[i], mut));
+		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}

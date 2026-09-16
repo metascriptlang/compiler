@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { genericInstanceAbiRepr, isStructType, sizeOfType, getTargetFloatSize, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -549,9 +549,9 @@ export function isNilableValueType(t: Type): boolean {
 // Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
 // Object types over the threshold, tuple same threshold,
 // Result/Union/Span always by pointer.
-function ptrThreshold(): int32 { return getTargetFloatSize() * 3; }
+function ptrThreshold(tg: TargetInfo): int32 { return tg.floatSize * 3; }
 
-export function ccgIntroducedPtr(t: Type): boolean {
+export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	if (t == null) return false;
 	// Reference parity: tyVar is not tyObject/tyTuple — `else: result = false`.
 	// A var param's `*` comes from mapType/getTypeDesc, never from lfIndirect.
@@ -559,16 +559,16 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (t.kind == TypeKind.Var) return false;
 	const inner = skipModifier(t);
 	if (inner == null) return false;
-	if (isStructType(inner)) return sizeOfType(inner) > ptrThreshold();
+	if (isStructType(inner)) return sizeOfType(tg, inner) > ptrThreshold(tg);
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
 	return match (inner.kind) {
-		TypeKind.Tuple => sizeOfType(inner) > ptrThreshold(),
+		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
 		TypeKind.GenericInstance => {
 			const repr = genericInstanceAbiRepr(inner);
-			return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(repr);
+			return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(tg, repr);
 		},
 		_ => false,
 	};
@@ -576,7 +576,7 @@ export function ccgIntroducedPtr(t: Type): boolean {
 
 // Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
-export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolean {
+export function shouldIndirectParam(tg: TargetInfo, paramType: Type, isMutated: boolean): boolean {
 	if (paramType == null) return false;
 	// Var params: the `*` is in the type (getTypeDesc); body derefs come from
 	// HiddenDeref nodes. Never indirect — not even when mutated (an out param
@@ -586,10 +586,10 @@ export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolea
 	const inner = paramAbiType(paramType);
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
-		return sizeOfType(inner) > ptrThreshold();
+		return sizeOfType(tg, inner) > ptrThreshold(tg);
 	}
 	if (isMutated && inner != null && (inner.kind == TypeKind.Function || inner.kind == TypeKind.Tuple)) return true;
-	return ccgIntroducedPtr(paramType);
+	return ccgIntroducedPtr(tg, paramType);
 }
 
 function paramAbiType(paramType: Type): Type | null {
@@ -1565,7 +1565,7 @@ function closureBaseTypeToC(g: CGen, pt: Type): string {
 function closureParamTypeToC(g: CGen, pt: Type): string {
 	const base = closureBaseTypeToC(g, pt);
 	// Reference parity: ccgIntroducedPtr params are passed by pointer in C
-	if (pt != null && ccgIntroducedPtr(pt)) return base + "*";
+	if (pt != null && ccgIntroducedPtr(g.target, pt)) return base + "*";
 	return base;
 }
 
@@ -1803,17 +1803,16 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple, setTargetSizes } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createEnum, createRef , createTuple } from "../../checker/types";
 import { createCGen } from "./context";
-import { CheckerContext, GcMode, addError } from "../../checker/context";
+import { GcMode, addError } from "../../checker/context";
 test "the pointer threshold follows the target float width" {
 	const pair = createStruct("Pair", ["a", "b"], [createPrimitive(TypeKind.Float64), createPrimitive(TypeKind.Float64)], true);
-	assert sizeOfType(pair) == 16;
-	setTargetSizes(8, 8);
-	assert !ccgIntroducedPtr(pair);
-	setTargetSizes(2, 4);
-	assert ccgIntroducedPtr(pair);
-	setTargetSizes(8, 8);
+	const wide: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	const narrow: TargetInfo = { ptrSize: 2, floatSize: 4 };
+	assert sizeOfType(wide, pair) == 16;
+	assert !ccgIntroducedPtr(wide, pair);
+	assert ccgIntroducedPtr(narrow, pair);
 }
 
 test "primitive keys" {

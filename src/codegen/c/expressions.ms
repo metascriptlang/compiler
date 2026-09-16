@@ -258,7 +258,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 	if (formal != null && argNode.kind != NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(formal);
 		const isMutated = (mutBits & (1 << (paramIdx as int32))) != 0;
-		const paramCcgPtr = shouldIndirectParam(formal, isMutated);
+		const paramCcgPtr = shouldIndirectParam(g.target, formal, isMutated);
 		if (argNode.nodeType != null) {
 			// Full type info: check pointer/value mismatch + ccgIntroducedPtr
 			let argIsPtr = isPointerType(argNode.nodeType);
@@ -1058,7 +1058,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 				// for ordinary call sites. Without this, the caller passes a
 				// value where the lifted `_init` signature expects a pointer.
 				if (argNode.nodeType != null
-						&& ccgIntroducedPtr(argNode.nodeType)
+						&& ccgIntroducedPtr(g.target, argNode.nodeType)
 						&& !isPointerType(argNode.nodeType)) {
 					argSnippet = safeAddrOf(g, p, argSnippet, argNode, argNode.nodeType);
 				}

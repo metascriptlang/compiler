@@ -2699,6 +2699,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// evaluated against the correct target without threading opts through
 	// the checker API.
 	ctx.targetOs = preludeCtx.targetOs;
+	ctx.targetInfo = preludeCtx.targetInfo;
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 
