@@ -4,7 +4,7 @@
 // modules in EVERY msc process (~150-250 ms after A0). This pack persists the
 // checked symbol table so a warm build starts from the finished scope:
 //
-//   key = hash(toolStamp ‖ stdTreeHash(stdPath) ‖ backendExt ‖ globalImports)
+//   key = hash(toolStamp ‖ stdPath ‖ stdTreeHash(stdPath) ‖ backendExt ‖ defaultGlobalImports)
 //   toolStamp = msc binary + runtime/ + vendor/ content (same inputs the
 //               object cache's toolchainStamp uses, recomputed locally — this
 //               module is deliberately self-contained: checker/ must not
@@ -38,7 +38,7 @@ import { createIdentCache, getIdentId } from "./idents";
 import { emptyType, noneType } from "./types";
 import { makeSymbolState } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
-import { globalImports, setExtraGlobalImports } from "./prelude";
+import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
@@ -134,7 +134,7 @@ function stdTreeHash(stdPath: string): string {
 
 export function preludePackKey(stdPath: string, backendExt: string): string {
 	const _k0 = performance.now();
-	const k = packHash(`${toolStamp()}|${stdTreeHash(stdPath)}|${backendExt}|${globalImports().join("|")}`);
+	const k = packHash(`${toolStamp()}|${stdPath}|${stdTreeHash(stdPath)}|${backendExt}|${defaultGlobalImports().join("|")}`);
 	_keyMs = _keyMs + (performance.now() - _k0);
 	return k;
 }
@@ -1573,12 +1573,15 @@ test "preludePack: corrupt deps file is a miss" {
 	}
 }
 
-test "preludePack: the key follows the build.ms global imports" {
+test "preludePack: the key ignores build.ms extras — the pack and its deps hold std only" {
 	setExtraGlobalImports([]);
 	const bare = preludePackKey("key-extras-probe", ".keytest");
 	setExtraGlobalImports(["/probe/converters"]);
 	const withExtra = preludePackKey("key-extras-probe", ".keytest");
 	setExtraGlobalImports([]);
-	assert bare != withExtra;
-	assert preludePackKey("key-extras-probe", ".keytest") == bare;
+	assert bare == withExtra;
+}
+
+test "preludePack: the key follows the std PATH — the rows it guards are absolute paths into one tree" {
+	assert preludePackKey("/one/std", ".keytest") != preludePackKey("/two/std", ".keytest");
 }

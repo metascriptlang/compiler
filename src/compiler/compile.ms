@@ -6,7 +6,7 @@ import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData } from "../ast/node";
 import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext, setGraphCheckTiming } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -39,13 +39,12 @@ import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, hasModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
+import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
-import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
+import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { globalImports } from "../checker/prelude";
 import { drainPendingInstances } from "../checker/instantiate";
 import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
@@ -434,23 +433,13 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 	_preludeSeedHit = false;
 	if (config.stdPath != "") {
 		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt));
-		if (deps != null && seedPreludeModules(graph, provider, deps)) {
-			_preludeSeedHit = true;
-			return;
-		}
+		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
-	for (const imp of globalImports()) {
-		const candidates = resolveImportWithConfig(imp, "virtual:prelude", config);
-		for (const candidate of candidates) {
-			if (provideSource(provider, candidate).ok) {
-				if (!hasModule(graph, candidate)) {
-					const _r = loadModule(graph, candidate, provider, config, 1);
-				}
-				break;
-			}
-		}
+	if (!_preludeSeedHit) {
+		loadStdGlobalImportModules(graph, provider, config);
+		if (config.stdPath != "") captureStdGraphDeps(graph);
 	}
-	if (config.stdPath != "") captureStdGraphDeps(graph);
+	loadExtraGlobalImportModules(graph, provider, config);
 }
 
 // Replay a deps snapshot into the graph. All sources are provided UP FRONT —

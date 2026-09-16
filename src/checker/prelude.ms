@@ -14,52 +14,60 @@ export function defaultGlobalImports(): string[] {
 }
 
 let _extraGlobalImports: string[] = [];
+let _extraGlobalImportModules: Map<string, boolean> = new Map<string, boolean>();
 
 export function setExtraGlobalImports(paths: string[]): void {
 	_extraGlobalImports = paths;
+	_extraGlobalImportModules = new Map<string, boolean>();
 }
 
-export function globalImports(): string[] {
-	const result = defaultGlobalImports();
-	for (const p of _extraGlobalImports) result.push(p);
-	return result;
+export function extraGlobalImports(): string[] {
+	return _extraGlobalImports;
 }
 
 export function isGlobalImport(path: string): boolean {
-	for (const entry of globalImports()) {
+	for (const entry of defaultGlobalImports()) {
 		if (path == entry) return true;
 	}
 	return false;
 }
 
+export function hasExtraGlobalImports(): boolean {
+	return _extraGlobalImports.length > 0;
+}
+
+export function noteExtraGlobalImportModule(moduleIdentity: string): void {
+	_extraGlobalImportModules.set(moduleIdentity, true);
+}
+
+export function isExtraGlobalImportModule(moduleIdentity: string): boolean {
+	return _extraGlobalImportModules.has(moduleIdentity);
+}
+
 // ===== Tests =====
-test "setExtraGlobalImports appends build.ms entries after the defaults" {
+test "setExtraGlobalImports keeps build.ms entries apart from the std defaults" {
 	const base = defaultGlobalImports().length;
 	setExtraGlobalImports(["/abs/neon/src/converters"]);
-	const imports = globalImports();
-	assert imports.length == base + 1;
-	assert imports[0] == "std/core/system";
-	assert imports[base] == "/abs/neon/src/converters";
-	assert isGlobalImport("/abs/neon/src/converters");
+	assert hasExtraGlobalImports();
+	assert extraGlobalImports().length == 1;
+	assert extraGlobalImports()[0] == "/abs/neon/src/converters";
+	assert defaultGlobalImports().length == base;
 	setExtraGlobalImports([]);
-	assert globalImports().length == base;
-	assert !isGlobalImport("/abs/neon/src/converters");
+	assert !hasExtraGlobalImports();
 }
 
 test "setExtraGlobalImports replaces previous extras" {
 	setExtraGlobalImports(["/a"]);
 	setExtraGlobalImports(["/b"]);
-	const imports = globalImports();
-	assert imports.length == defaultGlobalImports().length + 1;
-	assert imports[imports.length - 1] == "/b";
+	assert extraGlobalImports().length == 1;
+	assert extraGlobalImports()[0] == "/b";
 	setExtraGlobalImports([]);
 }
 
-test "isGlobalImport sees extras" {
+test "isGlobalImport is the std prelude only; an extra takes the ordinary import path" {
 	setExtraGlobalImports(["/abs/neon/converters"]);
-	assert isGlobalImport("/abs/neon/converters");
-	setExtraGlobalImports([]);
 	assert !isGlobalImport("/abs/neon/converters");
+	setExtraGlobalImports([]);
 }
 
 test "globalImports has system, string, array, bigint, json, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object" {
@@ -93,4 +101,14 @@ test "isGlobalImport matches" {
 test "isGlobalImport rejects non-global" {
 	assert !isGlobalImport("std/testing");
 	assert !isGlobalImport("./foo");
+}
+
+test "an extra global import is matched by loader identity, never by spelling" {
+	setExtraGlobalImports(["/proj/gi"]);
+	assert !isExtraGlobalImportModule("/proj/gi.ms");
+	noteExtraGlobalImportModule("/elsewhere/gi.ms");
+	assert isExtraGlobalImportModule("/elsewhere/gi.ms");
+	assert !isExtraGlobalImportModule("/proj/gi.ms");
+	setExtraGlobalImports([]);
+	assert !isExtraGlobalImportModule("/elsewhere/gi.ms");
 }

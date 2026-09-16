@@ -17,7 +17,7 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
-import { globalImports } from "./prelude";
+import { defaultGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
@@ -2393,9 +2393,8 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 
 // Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
 // so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
-function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
-	const isStd = specifier.length > 4 && specifier.slice(0, 4) == "std/";
-	const base = isStd && stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
+function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
+	const base = stdPath.length > 0 ? stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length) : stdSpecifier;
 	let src = try readFile(base + backendExt) catch "";
 	let resolvedPath = base + backendExt;
 	if (src.length == 0) {
@@ -2601,7 +2600,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 	}
 }
 
-// Build a prelude context with all globalImports loaded.
+// Build a prelude context with the std global imports loaded.
 // Used by both standalone checkProgram and orchestrator.
 // Creates a shared IdentCache (one cache per compilation)
 // that must be passed to all module contexts in the same compilation.
@@ -2609,13 +2608,13 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
+	const imps = defaultGlobalImports();
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packed = tryLoadPreludePack(packKey);
 	if (packed != null) return packed;
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
-	const imps = globalImports();
 	let idx = 0;
 	while (idx < imps.length) {
 		loadPreludeOne(ctx, imps[idx], stdPath, backendExt);
@@ -2699,6 +2698,39 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 
+export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext): void {
+	for (const sym of ctx.table.current.symbols.values()) {
+		if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+		addSymbolToScope(preludeCtx.table.current, sym);
+		if (sym.symbolKind != SymbolKind.Macro) continue;
+		const body = ctx.macroBodyRegistry.get(sym.name);
+		const params = ctx.macroParamsRegistry.get(sym.name);
+		if (body == null || params == null) continue;
+		preludeCtx.macroBodyRegistry.set(sym.name, body);
+		preludeCtx.macroParamsRegistry.set(sym.name, params);
+		const pt = ctx.macroParamTypesRegistry.get(sym.name);
+		if (pt != null) preludeCtx.macroParamTypesRegistry.set(sym.name, pt);
+		const dm = ctx.macroDeclModuleRegistry.get(sym.name);
+		preludeCtx.macroDeclModuleRegistry.set(sym.name, dm != null ? dm : ctx.modulePath);
+		const ct = ctx.converterTargetByName.get(sym.name);
+		if (ct != null && ct != "") {
+			preludeCtx.converterTargetByName.set(sym.name, ct);
+			const ctt = ctx.converterTargetTypes.get(sym.name);
+			if (ctt != null) preludeCtx.converterTargetTypes.set(sym.name, ctt);
+		}
+	}
+	if (ctx.extensionRegistry == null || preludeCtx.extensionRegistry == null) return;
+	const exts = ctx.extensionRegistry.methods;
+	let ei = 0;
+	while (ei < exts.length) {
+		const ext = exts[ei];
+		if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+			registerExtension(preludeCtx.extensionRegistry, ext);
+		}
+		ei = ei + 1;
+	}
+}
+
 let _pendingSeedSymbols: Symbol[] = [];
 
 export function registerSeedSymbols(syms: Symbol[]): void {
@@ -2773,11 +2805,17 @@ function checkProgramCore(
 // rebuild it per invocation share one instance. NOT for checkModuleGraph — it
 // stamps targetOs onto its base context, which must not outlive one build.
 let _preludeCtxByKey: Map<string, CheckerContext> = new Map<string, CheckerContext>();
+let _graphPreludeFn: (stdPath: string, backendExt: string) => CheckerContext = null as unknown as (stdPath: string, backendExt: string) => CheckerContext;
+
+export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string) => CheckerContext): void {
+	_graphPreludeFn = fn;
+}
+
 export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
 	const key = backendExt + "|" + stdPath;
 	const hit = _preludeCtxByKey.get(key);
 	if (hit != null) return hit;
-	const ctx = buildPreludeContext(stdPath, backendExt);
+	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
 	_preludeCtxByKey.set(key, ctx);
 	return ctx;
 }

@@ -47,6 +47,16 @@ export function backendExtension(backend: Backend): string {
 	};
 }
 
+export function backendOfExtension(ext: string): Backend {
+	return match (ext) {
+		".jms" => Backend.JS,
+		".rms" => Backend.Raiser,
+		".ems" => Backend.Erlang,
+		".wms" => Backend.Wasm,
+		_ => Backend.C,
+	};
+}
+
 // ===== Default Config Constructor =====
 
 export function createDefaultConfig(backend: Backend, stdPath: string): ResolverConfig {
@@ -326,6 +336,15 @@ test "backendExtension Raiser" { assert backendExtension(Backend.Raiser) == ".rm
 test "backendExtension Erlang" { assert backendExtension(Backend.Erlang) == ".ems"; }
 
 test "backendExtension Wasm" { assert backendExtension(Backend.Wasm) == ".wms"; }
+
+test "backendOfExtension inverts backendExtension for every backend" {
+	assert backendOfExtension(backendExtension(Backend.C)) == Backend.C;
+	assert backendOfExtension(backendExtension(Backend.JS)) == Backend.JS;
+	assert backendOfExtension(backendExtension(Backend.Raiser)) == Backend.Raiser;
+	assert backendOfExtension(backendExtension(Backend.Erlang)) == Backend.Erlang;
+	assert backendOfExtension(backendExtension(Backend.Wasm)) == Backend.Wasm;
+	assert backendOfExtension(".ms") == Backend.C;
+}
 // -- Default config --
 test "createDefaultConfig C has 4 extensions" {
 	const cfg = createDefaultConfig(Backend.C, "/usr/lib/msc/std");

@@ -10,7 +10,11 @@ import {
 } from "./context";
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, setSlowTrace } from "./checkPass";
+import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
+import { defaultGlobalImports, extraGlobalImports, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
+import { createModuleGraph } from "../module/graph";
+import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
+import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
 import { preludePackStats } from "./preludePack";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { collectTopLevelLocal } from "./collectPass";
@@ -43,6 +47,36 @@ import "../parser/statements/core";
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
+
+function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, entry: string, isExtra: boolean): void {
+	for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
+		if (!provideSource(provider, candidate).ok) continue;
+		const _r = loadModule(graph, candidate, provider, config, 1);
+		if (isExtra) noteExtraGlobalImportModule(moduleIdentity(candidate, config, provider));
+		return;
+	}
+}
+
+export function loadStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
+	for (const entry of defaultGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, false);
+}
+
+export function loadExtraGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
+	for (const entry of extraGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, true);
+}
+
+export function preludeGraphContext(stdPath: string, backendExt: string): CheckerContext {
+	if (!hasExtraGlobalImports()) return buildPreludeContext(stdPath, backendExt);
+	const config = createDefaultConfig(backendOfExtension(backendExt), stdPath);
+	const graph = createModuleGraph();
+	const provider = createFileSystemProvider();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadExtraGlobalImportModules(graph, provider, config);
+	const _registry = checkModuleGraph(graph, stdPath, backendExt);
+	return lastPreludeCtx;
+}
+
+registerGraphPreludeFn(preludeGraphContext);
 
 // Sub-phase timing for the graph check, mirroring cmdBuildC's phase timers.
 // Off unless the caller asked for -t, so a normal build pays nothing.
@@ -247,6 +281,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		// private helpers and locally-visible types). Pairs with the
 		// registerModuleCtx call in checkProgram for single-file mode.
 		registerModuleCtx(ctx.modulePath, ctx);
+
+		if (isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
 
 		// Copy structured errors to module (preserves line/col/severity)
 		for (const err of ctx.errors) {
