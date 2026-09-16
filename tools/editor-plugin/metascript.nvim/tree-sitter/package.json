@@ -23,7 +23,14 @@
   "tree-sitter": [
     {
       "scope": "source.metascript",
-      "file-types": ["ms", "mts"],
+      "file-types": [
+        "ms",
+        "cms",
+        "jms",
+        "ems",
+        "wms",
+        "rms"
+      ],
       "highlights": "queries/highlights.scm"
     }
   ]

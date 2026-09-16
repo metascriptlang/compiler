@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "metascript",
+      "camelcase": "MetaScript",
+      "scope": "source.metascript",
+      "path": ".",
+      "file-types": ["ms", "cms", "jms", "ems", "wms", "rms"],
+      "highlights": ["queries/highlights.scm"],
+      "injections": ["queries/injections.scm"],
+      "tags": ["queries/tags.scm"],
+      "injection-regex": "metascript"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "MetaScript grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/nicholasgasior/metascript"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "node": true
+  }
+}

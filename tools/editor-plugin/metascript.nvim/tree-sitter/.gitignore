@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+prebuilds/
+node_modules/
+bun.lock
+package-lock.json
+
+# Compiled shared libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+*.wasm
+
+# Object files
+*.o
+*.obj
+*.a
+*.pc
+
+# Archives
+*.tar.gz
+*.tgz
+*.zip

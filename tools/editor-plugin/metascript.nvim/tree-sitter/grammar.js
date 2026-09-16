@@ -8,6 +8,10 @@
 module.exports = grammar({
   name: 'metascript',
 
+  externals: $ => [
+    $._type_args_open,  // '<' that starts type arguments (resolved by external scanner)
+  ],
+
   extras: $ => [/\s/, $.comment],
 
   conflicts: $ => [
@@ -94,6 +98,8 @@ module.exports = grammar({
     [$.type_assertion_expression, $._expression],
     // Type assertion + generic: expr as Identifier<T> vs expr as Identifier < expr
     [$.type, $.generic_type],
+    // Intersection type conflicts (& is also bitwise AND in expressions)
+    [$.intersection_type, $._expression],
   ],
 
   word: $ => $.identifier,
@@ -109,7 +115,9 @@ module.exports = grammar({
       $.import_statement,
       $.export_statement,
       $.class_declaration,
+      $.actor_declaration,
       $.interface_declaration,
+      $.struct_declaration,
       $.enum_declaration,
       $.function_declaration,
       $.macro_declaration,
@@ -131,6 +139,7 @@ module.exports = grammar({
       $.break_statement,
       $.continue_statement,
       $.labeled_statement,
+      $.macro_directive_statement,
       $.expression_statement,
       $.block,
     ),
@@ -168,12 +177,14 @@ module.exports = grammar({
       seq('export', '{', commaSep1($.identifier), '}', optional(';')),
       // export default ...
       seq('export', 'default', choice($.function_declaration, $.class_declaration, $._expression), optional(';')),
-      // export const/let/function/class/interface/enum/type/macro/extern
+      // export const/let/function/class/interface/struct/enum/type/macro/extern
       seq('export', choice(
         $.variable_declaration,
         $.function_declaration,
         $.class_declaration,
+        $.actor_declaration,
         $.interface_declaration,
+        $.struct_declaration,
         $.enum_declaration,
         $.type_alias_declaration,
         $.macro_declaration,
@@ -217,8 +228,29 @@ module.exports = grammar({
 
     class_body: $ => seq(
       '{',
-      repeat(choice($.property_declaration, $.method_declaration)),
+      repeat(choice($.property_declaration, $.method_declaration, $.class_extern_method)),
       '}',
+    ),
+
+    actor_declaration: $ => seq(
+      repeat($.macro_decorator),
+      'actor',
+      field('name', $._type_identifier),
+      optional($.type_parameters),
+      field('body', $.class_body),
+    ),
+
+    // static extern ok(val: T): Result<T, E> from "cName";
+    class_extern_method: $ => seq(
+      repeat($.macro_decorator),
+      optional('static'),
+      'extern',
+      field('name', $._identifier_or_keyword),
+      optional($.type_parameters),
+      $.parameters,
+      optional($.type_annotation),
+      optional(seq('from', $.string)),
+      ';',
     ),
 
     interface_declaration: $ => seq(
@@ -250,6 +282,26 @@ module.exports = grammar({
       ';',
     ),
 
+    // Metascript: struct declaration (value type, data only, no methods)
+    // struct Point { x: float64; y: float64; }
+    // struct SuperUser = IUser & { more: string; };
+    struct_declaration: $ => seq(
+      repeat($.macro_decorator),
+      'struct',
+      field('name', $._type_identifier),
+      optional($.type_parameters),
+      choice(
+        field('body', $.struct_body),             // Direct: struct Point { ... }
+        seq('=', $.type, ';'),                    // Intersection: struct Foo = X & { ... };
+      ),
+    ),
+
+    struct_body: $ => seq(
+      '{',
+      repeat($.interface_property),  // fields only, no methods
+      '}',
+    ),
+
     enum_declaration: $ => seq(
       'enum',
       field('name', $.identifier),
@@ -273,6 +325,7 @@ module.exports = grammar({
 
     property_declaration: $ => seq(
       repeat($.macro_decorator),
+      optional('static'),
       field('name', $.identifier),
       optional($.type_annotation),
       optional(seq('=', $._expression)),
@@ -281,7 +334,9 @@ module.exports = grammar({
 
     method_declaration: $ => seq(
       repeat($.macro_decorator),
+      optional('static'),
       field('name', $.identifier),
+      optional($.type_parameters),
       $.parameters,
       optional($.type_annotation),
       field('body', $.block),
@@ -340,10 +395,11 @@ module.exports = grammar({
 
     extern_function: $ => seq(
       'function',
-      field('name', $.identifier),
+      field('name', $._identifier_or_keyword),
       optional($.type_parameters),
       $.parameters,
       optional($.type_annotation),
+      optional(seq('from', $.string)),
       ';',
     ),
 
@@ -356,15 +412,28 @@ module.exports = grammar({
         ';',  // Opaque: extern class FILE;
         $.extern_class_body,  // With fields: extern class stat_t { ... }
       ),
+      optional(seq('from', $.string)),
     ),
 
     extern_class_body: $ => seq(
       '{',
       repeat(choice(
         $.interface_property,  // Reuse interface property syntax
+        $.extern_method,       // Metascript: extern method inside extern class
         $.interface_method,    // Reuse interface method syntax
       )),
       '}',
+    ),
+
+    // Metascript: extern method inside class
+    // extern name(params): type from "c_name";
+    extern_method: $ => seq(
+      'extern',
+      field('name', $._identifier_or_keyword),
+      $.parameters,
+      optional($.type_annotation),
+      optional(seq('from', $.string)),
+      ';',
     ),
 
     extern_macro: $ => seq(
@@ -373,6 +442,7 @@ module.exports = grammar({
       optional($.type_parameters),
       $.parameters,
       optional($.type_annotation),
+      optional(seq('from', $.string)),
       ';',
     ),
 
@@ -382,7 +452,7 @@ module.exports = grammar({
     extern_var: $ => seq(
       'var',
       field('name', $.identifier),
-      optional(seq('as', $.string)),  // Optional C name
+      optional(seq('from', $.string)),  // Optional C name
       $.type_annotation,
       ';',
     ),
@@ -390,7 +460,7 @@ module.exports = grammar({
     extern_const: $ => seq(
       'const',
       field('name', $.identifier),
-      optional(seq('as', $.string)),  // Optional C name
+      optional(seq('from', $.string)),  // Optional C name
       $.type_annotation,
       ';',
     ),
@@ -398,7 +468,7 @@ module.exports = grammar({
     extern_enum: $ => seq(
       'enum',
       field('name', $.identifier),
-      optional(seq('as', $.string)),  // Optional C name
+      optional(seq('from', $.string)),  // Optional C name
       '{',
       optional(seq($.extern_enum_member, repeat(seq(',', $.extern_enum_member)))),
       optional(','),
@@ -451,6 +521,13 @@ module.exports = grammar({
       optional(';'),
     ),
 
+    // @include/@compile/@passC/@passL/@link - compiler directive statements
+    // These are standalone statements (end with ;), NOT decorators on declarations
+    macro_directive_statement: $ => seq(
+      $.macro_decorator,
+      ';',
+    ),
+
     // @extern("name") - native function binding (in function body) - legacy
     macro_extern_statement: $ => seq(
       '@extern',
@@ -469,14 +546,37 @@ module.exports = grammar({
     ),
 
     // Type alias with optional distinct
-    type_alias_declaration: $ => seq(
+    type_alias_declaration: $ => prec(2, seq(
       'type',
       field('name', $._type_identifier),
       optional($.type_parameters),
       '=',
       optional('distinct'),  // Metascript: distinct types
-      $.type,
-      ';',
+      choice($.discriminated_union_type, $.type),
+      optional(';'),
+    )),
+
+    // Metascript: type X = match (disc: Enum) { Enum.A => { ... }, Enum.B => { ... } }
+    discriminated_union_type: $ => seq(
+      'match',
+      '(',
+      field('discriminant', $.identifier),
+      ':',
+      field('discriminant_type', $._type_identifier),
+      ')',
+      '{',
+      optional(seq(
+        $.discriminated_variant,
+        repeat(seq(',', $.discriminated_variant)),
+        optional(','),
+      )),
+      '}',
+    ),
+
+    discriminated_variant: $ => seq(
+      field('key', choice($.member_expression, $.identifier)),
+      '=>',
+      field('type', $.type),
     ),
 
     // =========================================================================
@@ -506,6 +606,7 @@ module.exports = grammar({
       $._type_identifier,  // Use type_identifier for user-defined types
       $.array_type,
       $.union_type,
+      $.intersection_type,
       $.generic_type,
       $.function_type,      // (T) => U - closure/function type
       $.parenthesized_type, // (T) - for grouping in complex types
@@ -534,6 +635,8 @@ module.exports = grammar({
     array_type: $ => prec.left(seq($.type, '[', optional($.number), ']')),
 
     union_type: $ => prec.left(seq($.type, '|', $.type)),
+
+    intersection_type: $ => prec.left(seq($.type, '&', $.type)),
 
     generic_type: $ => seq($._type_identifier, '<', commaSep1($.type), '>'),
 
@@ -570,6 +673,7 @@ module.exports = grammar({
       $._type_identifier,
       $.array_type,
       $.union_type,
+      $.intersection_type,
       $.generic_type,
     ),
 
@@ -596,6 +700,10 @@ module.exports = grammar({
     ),
 
     type_parameters: $ => seq('<', commaSep1($.identifier), '>'),
+
+    // Type arguments at call sites: foo<Person>(x), JSON.parse<T>(s)
+    // Uses external scanner to disambiguate '<' from less-than
+    type_arguments: $ => seq($._type_args_open, commaSep1($.type), '>'),
 
     parameters: $ => seq('(', optional(commaSep1($.parameter)), ')'),
 
@@ -767,6 +875,7 @@ module.exports = grammar({
       $.await_expression,
       $.try_expression,
       $.call_expression,
+      $.generic_call_expression,
       $.member_expression,
       $.subscript_expression,
       $.new_expression,
@@ -953,6 +1062,14 @@ module.exports = grammar({
 
     call_expression: $ => prec(18, seq(
       field('function', $._expression),
+      field('arguments', $.arguments),
+    )),
+
+    // Generic call: foo<T>(x), obj.method<T>(x)
+    // External scanner resolves '<' as type args (not comparison)
+    generic_call_expression: $ => prec(18, seq(
+      field('function', $._expression),
+      field('type_arguments', $.type_arguments),
       field('arguments', $.arguments),
     )),
 
@@ -1198,10 +1315,12 @@ module.exports = grammar({
     // Literals
     // =========================================================================
 
-    identifier: $ => choice(
-      /[a-zA-Z_$][a-zA-Z0-9_$]*/,
-      seq('`', repeat(choice(/[^`\\]/, /\\./)), '`'),
-    ),
+    identifier: $ => token(/[a-zA-Z_$][a-zA-Z0-9_$]*/),
+
+    // Backtick-quoted operator identifier: `==`, `<`, `!=`, `[]`, `[]=`, `+`, etc.
+    // Used as function/method names for operator overloading.
+    // Higher precedence than template_string to avoid ambiguity in function-name position.
+    operator_identifier: $ => prec(2, seq('`', token.immediate(/[^`\n]+/), '`')),
 
     number: $ => choice(
       /0[xX][0-9a-fA-F_]+[n]?/,
@@ -1238,11 +1357,16 @@ module.exports = grammar({
       alias('as', $.identifier),
       alias('async', $.identifier),
       alias('await', $.identifier),
+      alias('test', $.identifier),
+      alias('expect', $.identifier),
+      alias('sizeof', $.identifier),
+      alias('Pointer', $.identifier),
     ),
 
     // Identifier or contextual keyword - used for names that can be keywords
     _identifier_or_keyword: $ => choice(
       $.identifier,
+      $.operator_identifier,
       $._contextual_keyword,
     ),
 

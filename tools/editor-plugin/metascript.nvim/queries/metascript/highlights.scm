@@ -1,368 +1,748 @@
-; Metascript Syntax Highlighting Queries
-; Synced from: tree-sitter-metascript/queries/highlights.scm
-
-; Keywords (true keywords that cannot be identifiers in any context)
-; NOTE: Contextual keywords (async, from, as, get, set, delete, catch, finally, await)
-; are NOT in this list - they're highlighted based on structural context
-[
-  ; JavaScript/TypeScript core
-  "class"
-  "interface"
-  "function"
-  "const"
-  "let"
-  "var"
-  "return"
-  "if"
-  "else"
-  "for"
-  "while"
-  "new"
-  "extends"
-  "implements"
-  ; TypeScript
-  "type"
-  ; ES modules
-  "import"
-  "export"
-  "default"
-  ; Metascript
-  "macro"
-  "extern"
-  "defer"
-  "distinct"
-  "unreachable"
-  "match"
-  "when"
-  "test"
-  "expect"
-  "move"
-  "out"
-  "borrow"
-  ; Error handling
-  "try"
-  "catch"
-  ; Extension methods
-  "typeof"
-] @keyword
+; MetaScript Syntax Highlighting Queries
+; Comprehensive highlights following nvim-treesitter ecma/typescript patterns
+; Covers all 143 named node types in the MetaScript tree-sitter grammar
 
 ; ===========================================================================
-; Match Expression
+; Variables — BASELINE (must be FIRST so all other rules override it)
 ; ===========================================================================
+
+(identifier) @variable
+
+; ===========================================================================
+; Special Identifiers (predicates override baseline)
+; ===========================================================================
+
+; PascalCase identifiers are types (TypeScript convention)
+((identifier) @type
+  (#lua-match? @type "^[A-Z]"))
+
+; UPPER_CASE identifiers are constants
+((identifier) @constant
+  (#lua-match? @constant "^_*[A-Z][A-Z%d_]*$"))
+
+; Built-in globals
+((identifier) @variable.builtin
+  (#any-of? @variable.builtin
+    "arguments" "module" "window" "document" "globalThis"
+    "process" "exports" "require" "__dirname" "__filename"
+    "self"))
+
+; Built-in classes / namespaces
+((identifier) @type.builtin
+  (#any-of? @type.builtin
+    "Object" "Function" "Boolean" "Symbol" "Number" "Math" "Date" "String" "RegExp"
+    "Map" "Set" "WeakMap" "WeakSet" "Promise" "Proxy" "Reflect" "Intl" "BigInt"
+    "Array" "Buffer" "Pointer" "ArrayBuffer" "DataView"
+    "Int8Array" "Uint8Array" "Uint8ClampedArray" "Int16Array" "Uint16Array"
+    "Int32Array" "Uint32Array" "Float32Array" "Float64Array" "BigInt64Array" "BigUint64Array"
+    "Error" "EvalError" "RangeError" "ReferenceError" "SyntaxError" "TypeError" "URIError"
+    "URL" "URLSearchParams" "TextEncoder" "TextDecoder" "AbortController" "AbortSignal"
+    "Blob" "File" "FileReader" "FormData" "Headers" "Request" "Response"
+    "ReadableStream" "WritableStream" "TransformStream"
+    "console" "JSON"))
+
+; Built-in functions
+((identifier) @function.builtin
+  (#any-of? @function.builtin
+    "eval" "isFinite" "isNaN" "parseFloat" "parseInt"
+    "decodeURI" "decodeURIComponent" "encodeURI" "encodeURIComponent"
+    "require"))
+
+; NaN and Infinity are number builtins
+((identifier) @number
+  (#any-of? @number "NaN" "Infinity"))
+
+; ===========================================================================
+; Types
+; ===========================================================================
+
+; Type identifiers — all type name positions
+(type_identifier) @type
+
+; Built-in primitive types: string, number, boolean, void, any, never, unknown
+(primitive_type) @type.builtin
+
+; MetaScript sized types: int8, int16, int32, int64, uint8-64, float32, float64, etc.
+(metascript_type) @type.builtin
+
+; Type annotation colon
+(type_annotation
+  ":" @punctuation.delimiter)
+
+; Type parameters and arguments angle brackets
+(type_parameters
+  [
+    "<"
+    ">"
+  ] @punctuation.bracket)
+
+; type_arguments — angle brackets are internal to generic_type, not matchable here
+
+; Union/intersection/discriminated-union operators are internal to their node types
+; and not matchable as children — highlighting handled by the generic operator rules
+
+; Discriminated variant key
+(discriminated_variant
+  key: (identifier) @variable.member)
+
+; Object type property names
+(object_type_property
+  name: (identifier) @variable.member)
+
+; Parenthesized type
+(parenthesized_type
+  [
+    "("
+    ")"
+  ] @punctuation.bracket)
+
+; Generic type: TypeName<T> — capture the type name
+(generic_type
+  (type_identifier) @type)
+
+; Array type brackets: Type[]
+(array_type
+  [
+    "["
+    "]"
+  ] @punctuation.bracket)
+
+; Object type braces
+(object_type
+  [
+    "{"
+    "}"
+  ] @punctuation.bracket)
+
+; Function type arrow
+(function_type
+  "=>" @punctuation.special)
+
+; Function type named parameters
+(function_type_parameter
+  name: (identifier) @variable.parameter)
+
+; ===========================================================================
+; Function/Method Declarations
+; ===========================================================================
+
+; Function declarations
+(function_declaration
+  name: (_) @function)
+
+; Method declarations
+(method_declaration
+  name: (_) @function.method)
+
+; Lifecycle hook function declarations
+(function_declaration
+  name: (identifier) @function.builtin
+  (#lua-match? @function.builtin "^on[A-Z]"))
+
+; Lifecycle hook method declarations
+(method_declaration
+  name: (identifier) @function.builtin
+  (#lua-match? @function.builtin "^on[A-Z]"))
+
+; Variable assigned arrow function → treat as function
+(variable_declaration
+  name: (identifier) @function
+  (arrow_function))
+
+; Variable assigned arrow function → treat as function (with type annotation between)
+(variable_declaration
+  name: (identifier) @function
+  (type_annotation)
+  (arrow_function))
+
+; Class declarations — name is type_identifier, caught by (type_identifier) @type
+; Interface declarations — same
+; Struct declarations — same
+; Enum declarations — same
+
+; Interface properties
+(interface_property
+  name: (identifier) @variable.member)
+
+; Interface methods
+(interface_method
+  name: (identifier) @function.method)
+
+; Property declarations (in class bodies)
+(property_declaration
+  name: (identifier) @variable.member)
+
+; Enum members
+(enum_member
+  (identifier) @constant)
+
+; Extern enum members
+(extern_enum_member
+  (identifier) @constant)
+
+; Type alias declaration name
+(type_alias_declaration
+  name: (type_identifier) @type)
+
+; ===========================================================================
+; Function/Method Calls
+; ===========================================================================
+
+; Direct function calls: foo()
+(call_expression
+  function: (identifier) @function.call)
+
+; Method calls: obj.method()
+(call_expression
+  function: (member_expression
+    property: (_) @function.method.call))
+
+; Generic function calls: foo<T>()
+(generic_call_expression
+  function: (identifier) @function.call)
+
+; Generic method calls: obj.method<T>()
+(generic_call_expression
+  function: (member_expression
+    property: (_) @function.method.call))
+
+; Await then call: await foo()
+(call_expression
+  function: (await_expression
+    (identifier) @function.call))
+
+; Await then method call: await obj.method()
+(call_expression
+  function: (await_expression
+    (member_expression
+      property: (_) @function.method.call)))
+
+; Lifecycle hook calls
+(call_expression
+  function: (identifier) @function.builtin
+  (#lua-match? @function.builtin "^on[A-Z]"))
+
+(call_expression
+  function: (member_expression
+    property: (identifier) @function.builtin)
+  (#lua-match? @function.builtin "^on[A-Z]"))
+
+; Constructor: new Foo()
+(new_expression
+  (identifier) @constructor)
+
+(new_expression
+  (member_expression
+    property: (_) @constructor))
+
+; ===========================================================================
+; Member Access
+; ===========================================================================
+
+; Property access: obj.property (must come before function call rules in priority,
+; but tree-sitter uses last-match-wins, so call rules above override this)
+(member_expression
+  property: (_) @variable.member)
+
+; Object literal properties: { key: value }
+(pair
+  key: (identifier) @variable.member)
+
+; Shorthand property: { name }
+(shorthand_property
+  (identifier) @variable.member)
+
+; ===========================================================================
+; Parameters — Comprehensive
+; ===========================================================================
+
+; Regular parameters
+(parameter
+  name: (_) @variable.parameter)
+
+; Arrow function single parameter: x => ...
+(arrow_function
+  parameters: (identifier) @variable.parameter)
+
+; Arrow function named parameters
+(arrow_function_parameter
+  name: (identifier) @variable.parameter)
+
+; Rest parameters: ...args
+(rest_parameter
+  "..." @operator
+  name: (identifier) @variable.parameter)
+
+; Destructuring patterns in parameters
+; Array pattern element
+(pattern_element
+  name: (identifier) @variable.parameter)
+
+; Object pattern property (shorthand): ({ a })
+(pattern_property
+  name: (identifier) @variable.parameter)
+
+; Object pattern property with alias: ({ a: b })
+(pattern_property
+  key: (identifier) @variable.member
+  value: (identifier) @variable.parameter)
+
+; Rest pattern in destructuring: ...rest
+(rest_pattern
+  "..." @operator
+  name: (identifier) @variable.parameter)
+
+; Extension method receiver parameters: function trim(this self: string)
+(this_parameter
+  "this" @variable.builtin)
+
+(this_parameter
+  "typeof" @keyword.operator)
+
+(this_parameter
+  name: (_) @variable.parameter)
+
+(this_parameter
+  receiver_type: (type
+    (primitive_type) @type.builtin))
+
+; ===========================================================================
+; Variables
+; ===========================================================================
+
+; Variable declarations
+(variable_declaration
+  name: (identifier) @variable)
+
+; Labeled statements
+(labeled_statement
+  label: (identifier) @label)
+
+; ===========================================================================
+; Match Expression (MetaScript-specific)
+; ===========================================================================
+
+; Match expression keyword
+(match_expression
+  "match" @keyword.conditional)
+
+; Match or-pattern pipe
+(match_or_pattern
+  "|" @punctuation.delimiter)
+
+; Match array pattern brackets
+(match_array_pattern
+  [
+    "["
+    "]"
+  ] @punctuation.bracket)
+
+; Match literal patterns
+(match_literal_pattern
+  (string) @string)
+(match_literal_pattern
+  (number) @number)
+(match_literal_pattern
+  (boolean) @boolean)
 
 ; Match arm arrow
 (match_arm
   "=>" @punctuation.special)
 
-; Match wildcard pattern
+; Match wildcard pattern: _
 (match_wildcard) @variable.builtin
 
 ; Match binding pattern (variable capture)
 (match_binding_pattern
   (identifier) @variable.parameter)
 
+; Match guard
+(match_arm
+  guard: (_) @keyword.conditional)
+
 ; ===========================================================================
-; Type Assertion (as)
+; Decorators / Macros (MetaScript-specific)
 ; ===========================================================================
 
-; as keyword in type assertion: expr as Type
-(type_assertion_expression
-  "as" @keyword)
-
-; Object type property names: { name: string }
-(object_type_property
-  name: (identifier) @property)
-
-; Metascript-specific: Macro decorators (user macros applied to classes)
+; User-defined decorators: @MyDecorator
 (macro_decorator
-  "@" @keyword.directive
-  name: (identifier) @keyword.directive)
+  "@" @attribute
+  name: (identifier) @attribute)
 
-; Metascript-specific: @comptime blocks
+; @comptime blocks
 (macro_comptime
-  "@comptime" @keyword.directive)
+  "@comptime" @attribute)
 
-; Metascript-specific: macro declaration
+; @target blocks (conditional compilation)
+(macro_target_block
+  "@target" @attribute)
+
+; @emit statements (raw backend code)
+(macro_emit_statement
+  "@emit" @attribute)
+
+; @emit expression (in return statements etc.)
+(macro_emit_expr
+  "@emit" @attribute)
+
+; @extern statements (native bindings)
+(macro_extern_statement
+  "@extern" @attribute)
+
+; Macro declarations
 (macro_declaration
   name: (identifier) @function.macro)
 
-; Metascript-specific: @target blocks (conditional compilation)
-(macro_target_block
-  "@target" @keyword.directive)
-
-; Metascript-specific: @emit statements (raw backend code)
-(macro_emit_statement
-  "@emit" @keyword.directive)
-
-; Metascript-specific: @extern statements (native bindings)
-(macro_extern_statement
-  "@extern" @keyword.directive)
-
-; Metascript-specific: extern macro declarations
+; Extern macro declarations
 (extern_macro
   name: (macro_name
-    "@" @keyword.directive
-    (identifier) @function.macro))
+    "@" @attribute
+    (identifier) @attribute))
+
+; Compiler directive statements: @include("..."); @compile("..."); etc.
+(macro_directive_statement
+  (macro_decorator
+    "@" @attribute
+    name: (identifier) @attribute))
 
 ; ===========================================================================
-; Variables - BASELINE (must be FIRST so all other rules override it)
-; ===========================================================================
-(identifier) @variable
-
-; ===========================================================================
-; Built-in Identifiers (predicates have higher priority than positional rules)
+; Extern Declarations (MetaScript-specific)
 ; ===========================================================================
 
-; Uppercase identifiers are types (TypeScript convention)
-((identifier) @type
-  (#lua-match? @type "^[A-Z]"))
+; Extern declaration keyword
+(extern_declaration
+  "extern" @keyword)
 
-; Built-in globals
-((identifier) @variable.builtin
-  (#any-of? @variable.builtin
-    "arguments" "module" "console" "window" "document" "globalThis"
-    "process" "Buffer" "exports" "require" "__dirname" "__filename"))
-
-; Built-in type constructors
-((identifier) @type.builtin
-  (#any-of? @type.builtin
-    "Object" "Function" "Boolean" "Symbol" "Number" "Math" "Date" "String" "RegExp"
-    "Map" "Set" "WeakMap" "WeakSet" "Array" "ArrayBuffer" "DataView"
-    "Int8Array" "Uint8Array" "Uint8ClampedArray" "Int16Array" "Uint16Array"
-    "Int32Array" "Uint32Array" "Float32Array" "Float64Array" "BigInt64Array" "BigUint64Array"
-    "Promise" "Proxy" "Reflect" "JSON" "Intl" "BigInt"
-    "Error" "EvalError" "RangeError" "ReferenceError" "SyntaxError" "TypeError" "URIError"
-    "URL" "URLSearchParams" "TextEncoder" "TextDecoder" "AbortController" "AbortSignal"
-    "Blob" "File" "FileReader" "FormData" "Headers" "Request" "Response"
-    "ReadableStream" "WritableStream" "TransformStream"))
-
-; ===========================================================================
-; Types
-; ===========================================================================
-(primitive_type) @type.builtin
-(metascript_type) @type.builtin
-
-; Type identifiers - TypeScript-style: dedicated node type for all type names
-; This catches: type aliases, class names, interface names, type annotations, generics
-(type_identifier) @type
-
-; ===========================================================================
-; Lifecycle Hooks (onDestroy, onCopy, onMove, onMoved)
-; Highlighted as special functions - these are reserved extension method names
-; ===========================================================================
-
-; Lifecycle hook function declarations
-(function_declaration
-  name: (identifier) @function.builtin
-  (#match? @function.builtin "^on(Destroy|Copy|Move|Moved)$"))
-
-; Lifecycle hook method declarations (in case defined inside class)
-(method_declaration
-  name: (identifier) @function.builtin
-  (#match? @function.builtin "^on(Destroy|Copy|Move|Moved)$"))
-
-; ===========================================================================
-; Async keyword (contextual - highlighted in structural context)
-; ===========================================================================
-
-; async in function declarations: async function foo()
-(function_declaration
-  "async" @keyword)
-
-; async in arrow functions: async (x) => ...
-(arrow_function
-  "async" @keyword)
-
-; await in await expressions: await fetch()
-(await_expression
-  "await" @keyword)
-
-; await in for-await-of: for await (const x of ...)
-(for_of_statement
-  "await" @keyword)
-
-; ===========================================================================
-; Function/Method declarations
-; ===========================================================================
-
-; Use (_) wildcard to match both identifier and _contextual_keyword (get, set, delete, etc.)
-(function_declaration
+(extern_function
   name: (_) @function)
 
-(method_declaration
+(extern_method
+  "extern" @keyword
+  name: (_) @function.method
+  "from" @keyword.import)
+
+; Operator identifiers (backtick-quoted: `==`, `<`, `[]`, etc.)
+; Highlight as function name — the backticks are part of the token
+; but the semantic meaning is "this is a function/method name".
+(operator_identifier) @function
+
+(class_extern_method
+  (macro_decorator
+    "@" @attribute
+    name: (identifier) @attribute))
+(class_extern_method
   name: (_) @function.method)
+(class_extern_method
+  "static" @keyword.modifier)
+(class_extern_method
+  "extern" @keyword)
+(class_extern_method
+  "from" @keyword.import)
 
-; Class declarations - name is now type_identifier (handled by generic rule above)
-; (class_declaration name: (type_identifier) @type) - already caught by (type_identifier) @type
+(extern_class
+  "from" @keyword.import)
 
-; Interface declarations - name is now type_identifier (handled by generic rule above)
-; (interface_declaration name: (type_identifier) @type) - already caught by (type_identifier) @type
+(extern_var
+  "from" @keyword.import)
 
-; Interface properties
-(interface_property
-  name: (identifier) @property)
+(extern_const
+  "from" @keyword.import)
 
-; Interface methods
-(interface_method
-  name: (identifier) @function.method)
+(extern_enum
+  "from" @keyword.import)
 
-; Property declarations
-(property_declaration
-  name: (identifier) @property)
+(extern_macro
+  "from" @keyword.import)
 
-; Parameters (allow contextual keywords like 'set', 'map', 'delete')
-(parameter
-  name: (_) @variable.parameter)
+(extern_function
+  "from" @keyword.import)
 
-; Extension method receiver parameters
-; Instance extension: function trim(this self: string): string
-; Static extension: function resolve(this typeof Promise, value: number): number
-(this_parameter
-  "this" @keyword)
+; ===========================================================================
+; Test Declarations (MetaScript-specific)
+; ===========================================================================
 
-(this_parameter
-  "typeof" @keyword)
+(test_declaration
+  name: (string) @string)
 
-(this_parameter
-  name: (_) @variable.parameter)
-
-; Extension receiver type - type_identifier already caught by (type_identifier) @type
-; Primitive types still need explicit rule
-(this_parameter
-  receiver_type: (type
-    (primitive_type) @type.builtin))
-
-; Function calls
-(call_expression
-  function: (identifier) @function.call)
-
-(call_expression
-  function: (member_expression
-    property: (_) @function.method.call))
-
-; Lifecycle hook calls (when called explicitly)
-(call_expression
-  function: (identifier) @function.builtin
-  (#match? @function.builtin "^on(Destroy|Copy|Move|Moved)$"))
-
-(call_expression
-  function: (member_expression
-    property: (identifier) @function.builtin)
-  (#match? @function.builtin "^on(Destroy|Copy|Move|Moved)$"))
-
-; Member access (allow contextual keywords like 'delete', 'get', 'set')
-(member_expression
-  property: (_) @property)
-
-; Object literal properties: { key: value } or { key } (shorthand)
-(pair
-  key: (identifier) @property)
-
-; Shorthand property: { name } instead of { name: name }
-(shorthand_property
-  (identifier) @property)
-
-; Variables
-(variable_declaration
-  name: (identifier) @variable)
-
+; ===========================================================================
 ; Literals
-(number) @number
-(string) @string
-(template_string) @string
+; ===========================================================================
+
+[
+  (this)
+] @variable.builtin
+
+[
+  (null)
+  (undefined)
+] @constant.builtin
+
 (boolean) @boolean
-(null) @constant.builtin
-(undefined) @constant.builtin
-(this) @variable.builtin
+
+(number) @number
+
+(string) @string
+
+(template_string) @string
+
+; Template string interpolation: ${ }
+(template_string
+  "${" @punctuation.special
+  "}" @punctuation.special)
 
 ; Comments
-; Must come BEFORE operator rules to prevent "/" in "*/" from being highlighted as operator
 (comment) @comment @spell
 
-; Arrow functions (closures)
-(arrow_function
-  "=>" @punctuation.special)
+; Documentation comments: /** ... */
+((comment) @comment.documentation
+  (#lua-match? @comment.documentation "^/[*][*][^*].*[*]/$"))
 
-; Arrow function parameters
-(arrow_function_parameter
-  name: (identifier) @variable.parameter)
+; ===========================================================================
+; Keywords — Conditional
+; ===========================================================================
 
-; Rest/spread parameter
-(rest_parameter
-  "..." @operator
-  name: (identifier) @variable.parameter)
-
-; Destructuring patterns in arrow function parameters
-; Array pattern element
-(pattern_element
-  name: (identifier) @variable.parameter)
-
-; Object pattern property (shorthand)
-(pattern_property
-  name: (identifier) @variable.parameter)
-
-; Object pattern property (with alias)
-(pattern_property
-  key: (identifier) @property
-  value: (identifier) @variable.parameter)
-
-; Rest pattern in destructuring
-(rest_pattern
-  "..." @operator
-  name: (identifier) @variable.parameter)
-
-; Function type
-(function_type
-  "=>" @punctuation.special)
-
-; Function type named parameter
-(function_type_parameter
-  name: (identifier) @variable.parameter)
-
-; Operators
 [
-  "+"
+  "if"
+  "else"
+  "switch"
+  "case"
+  "match"
+  "when"
+] @keyword.conditional
+
+; default in switch
+(switch_default
+  "default" @keyword.conditional)
+
+; ===========================================================================
+; Keywords — Repeat / Loop
+; ===========================================================================
+
+[
+  "for"
+  "of"
+  "in"
+  "do"
+  "while"
+  "continue"
+] @keyword.repeat
+
+; ===========================================================================
+; Keywords — Return / Yield
+; ===========================================================================
+
+"return" @keyword.return
+
+; ===========================================================================
+; Keywords — Function
+; ===========================================================================
+
+"function" @keyword.function
+
+; ===========================================================================
+; Keywords — Operator
+; ===========================================================================
+
+[
+  "new"
+  "typeof"
+] @keyword.operator
+
+; as in type assertions
+(type_assertion_expression
+  "as" @keyword.operator)
+
+; ===========================================================================
+; Keywords — Exception / Error Handling
+; ===========================================================================
+
+[
+  "try"
+  "catch"
+] @keyword.exception
+
+; ===========================================================================
+; Keywords — Import / Export
+; ===========================================================================
+
+[
+  "import"
+  "export"
+] @keyword.import
+
+; from in import/export statements
+(import_statement
+  "from" @keyword.import)
+(import_statement
+  "as" @keyword.import)
+(export_statement
+  "from" @keyword.import)
+
+; ===========================================================================
+; Keywords — Type Definitions
+; ===========================================================================
+
+[
+  "interface"
+  "enum"
+  "type"
+  "struct"
+  "class"
+  "actor"
+] @keyword.type
+
+; ===========================================================================
+; Keywords — Coroutine
+; ===========================================================================
+
+; async in function declarations
+(function_declaration
+  "async" @keyword.coroutine)
+
+; async in arrow functions
+(arrow_function
+  "async" @keyword.coroutine)
+
+; await in await expressions
+(await_expression
+  "await" @keyword.coroutine)
+
+; await in for-await-of
+(for_of_statement
+  "await" @keyword.coroutine)
+
+; ===========================================================================
+; Keywords — Modifiers
+; ===========================================================================
+
+[
+  "readonly"
+  "static"
+] @keyword.modifier
+
+; ===========================================================================
+; Keywords — General
+; ===========================================================================
+
+[
+  "const"
+  "let"
+  "var"
+  "extends"
+  "implements"
+  "break"
+  "default"
+] @keyword
+
+; export default
+(export_statement
+  "default" @keyword)
+
+; ===========================================================================
+; Keywords — MetaScript-specific
+; ===========================================================================
+
+[
+  "extern"
+  "macro"
+  "distinct"
+] @keyword
+
+[
+  "defer"
+  "move"
+  "borrow"
+  "out"
+] @keyword
+
+"test" @keyword
+
+"expect" @keyword
+
+; try expression: try expr catch fallback
+(try_expression
+  "try" @keyword.exception)
+(try_expression
+  "catch" @keyword.exception)
+
+; defer statement
+(defer_statement
+  "defer" @keyword)
+
+; expect statement
+(expect_statement
+  "expect" @keyword)
+
+; unreachable statement
+(unreachable_statement
+  "unreachable" @keyword)
+
+; ===========================================================================
+; Operators
+; ===========================================================================
+
+[
+  "--"
   "-"
-  "*"
-  "/"
-  "%"
-  "**"
-  "="
-  "==="
-  "!=="
-  "=="
-  "!="
-  "+="
   "-="
+  "+"
+  "++"
+  "+="
+  "*"
+  "**"
   "*="
+  "/"
   "/="
-  "%="
+  "%"
+  "="
+  "=="
+  "==="
+  "!="
+  "!=="
   "<"
-  ">"
   "<="
+  ">"
   ">="
-  "&&"
-  "||"
-  "!"
-  "~"
-  "&"
-  "|"
-  "^"
   "<<"
   ">>"
   ">>>"
-  "++"
-  "--"
+  "&&"
+  "||"
+  "&"
+  "|"
+  "^"
+  "~"
+  "!"
   "?"
   "??"
-  "?."
-  ":"
   "..."
   ".."
   "|>"
 ] @operator
 
-; Punctuation
+; Ternary operator ? : — special category
+(ternary_expression
+  [
+    "?"
+    ":"
+  ] @keyword.conditional.ternary)
+
+; Binary division (disambiguated from comment slash)
+(binary_expression
+  "/" @operator)
+
+; Arrow function =>
+(arrow_function
+  "=>" @punctuation.special)
+
+; Match arm =>
+(match_arm
+  "=>" @punctuation.special)
+
+; ===========================================================================
+; Punctuation — Brackets
+; ===========================================================================
+
 [
   "("
   ")"
@@ -372,9 +752,15 @@
   "}"
 ] @punctuation.bracket
 
+; ===========================================================================
+; Punctuation — Delimiters
+; ===========================================================================
+
 [
-  ","
   ";"
+  "."
+  ","
+  ":"
 ] @punctuation.delimiter
 
 ; ===========================================================================
@@ -402,7 +788,7 @@
 
 ; JSX attributes
 (jsx_attribute
-  name: (identifier) @attribute)
+  name: (identifier) @tag.attribute)
 
 ; JSX attribute string values
 (jsx_attribute
