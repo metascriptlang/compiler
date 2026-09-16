@@ -55,11 +55,18 @@ import { getGenericDecl } from "../parser/context";
 export struct TargetInfo {
 	ptrSize: int32;
 	floatSize: int32;
+	cpu: string;
+	os: string;
 }
 
 export function hostTargetInfo(): TargetInfo {
-	const t: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	const t: TargetInfo = { ptrSize: 8, floatSize: 8, cpu: "", os: "" };
 	return t;
+}
+
+export function floatInt64Align(tg: TargetInfo): int32 {
+	if ((tg.cpu == "i386" || tg.cpu == "386") && tg.os != "windows") return 4;
+	return 8;
 }
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -3379,8 +3386,8 @@ function alignOfTypeInner(tg: TargetInfo, t: Type): int32 {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
-		TypeKind.Number | TypeKind.Float64 => ps,
-		TypeKind.Int64 | TypeKind.Uint64 => ps,
+		TypeKind.Number | TypeKind.Float64 => floatInt64Align(tg),
+		TypeKind.Int64 | TypeKind.Uint64 => floatInt64Align(tg),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Function | TypeKind.Null => ps,
 		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => ps,
 		TypeKind.BigInt => ps,
@@ -3932,9 +3939,10 @@ test "alignOfType" {
 	assert alignOfType(tg, numberType()) == 8;
 }
 
-test "alignOfType 32-bit" {
-	const tg: TargetInfo = { ptrSize: 4, floatSize: 8 };
-	assert alignOfType(tg, numberType()) == 4;
+test "alignOfType 32-bit keeps int64 and float64 at their natural alignment" {
+	const tg: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "wasm32", os: "wasm" };
+	assert alignOfType(tg, numberType()) == 8;
+	assert alignOfType(tg, createPrimitive(TypeKind.Int64)) == 8;
 	assert alignOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
 	assert alignOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
 }

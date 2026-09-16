@@ -99,7 +99,7 @@ export function resolveTargetSizes(targetOs: string, cpuTarget: string): TargetI
 		console.log(`  Valid: amd64, arm64, i386, arm, wasm32, riscv32, riscv64, mips, mips64, powerpc, powerpc64, sparc, sparc64, s390x, loongarch64, avr, msp430`);
 		exit(1);
 	}
-	const t: TargetInfo = { ptrSize: bytes, floatSize: cpuFloatBytes(cpu) };
+	const t: TargetInfo = { ptrSize: bytes, floatSize: cpuFloatBytes(cpu), cpu: cpu, os: targetOs };
 	return t;
 }
 
