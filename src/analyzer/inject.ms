@@ -1737,10 +1737,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
 	let isCursor = false;
-	// Internal temps ($ prefix) initialized from existing variables are Cursors (Lent).
-	if (d.declName.startsWith("$") && d.initializer != null && d.initializer.kind == NodeKind.Identifier) {
-		isCursor = true;
-	}
 	// NodeFlag.Cursor: for-of bindings are borrows from the array (reference: cursor flag on for-loop vars)
 	if (stmt.flags.has(NodeFlag.Cursor)) {
 		isCursor = true;
@@ -2025,11 +2021,11 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	if (expr.kind == NodeKind.Identifier) {
 		const name = (expr.data as IdentifierData).name;
 		if (expr.resolvedSym != null && hasFlag(expr.resolvedSym, SymbolFlag.SinkTemp)) return false;
-		// Cursor variables (for-of bindings, $-prefix borrows): borrowed references.
+		// Cursor variables (for-of bindings, inferred borrows): borrowed references.
 		// Returning a cursor creates a new reference — must incref.
 		// Reference parity: the reference incref's at the assignment site inside the function;
 		// we skip DRC on cursor init, so we incref at the return instead.
-		if (isCursorSym(expr.resolvedSym) || (name.startsWith("$") && name != "$result")) {
+		if (isCursorSym(expr.resolvedSym)) {
 			if (expr.nodeType != null) {
 				const rc = sinkClassify(expr.nodeType, dctx.ctx);
 				return rc.needsCleanup && rc.rcKind == RcKind.Ref;

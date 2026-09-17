@@ -773,8 +773,6 @@ function computeCursorDecisions(p: Partitions): string[] {
 		const v = p.vars[i];
 		// Skip params (handled separately in inject.ms)
 		if ((v.flags & VF_IS_PARAM) != 0) { i += 1; continue; }
-		// Skip DRC-generated temps
-		if (v.name.startsWith("$")) { i += 1; continue; }
 		// Must not own data, be prevented, or be conditionally reassigned
 		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | VF_IS_COND_REASSIGNED)) != 0) {
 			i += 1; continue;
@@ -954,10 +952,10 @@ test "stored in object is NOT cursor (constructor context)" {
 	assert !isCursorNamed(body, "x");
 }
 
-test "DRC temp is not cursor" {
-	const body = getFuncBody("function f(arr: string[]) { const $result = arr[0]; }");
+test "DRC temp is inferred like any local" {
+	const body = getFuncBody("function f(arr: string[]) { const $tmp = arr[0]; }");
 	inferCursors(body);
-	assert !isCursorNamed(body, "$result");
+	assert isCursorNamed(body, "$tmp");
 }
 
 test "nested block cursor" {
