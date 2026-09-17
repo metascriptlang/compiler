@@ -1931,6 +1931,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`((${targetC}){.value=${payload}, .present=${tmp}.present})`);
 			return;
 		}
+		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
+			&& srcMaybe != null && isMaybeType(srcMaybe) && srcMaybe != d.convType
+			&& srcMaybe.typeReturn != null && isTagCarriedUnion(srcMaybe.typeReturn)) {
+			const nvi = projSlot - 1;
+			const srcC = getTypeDesc(g, srcMaybe);
+			g.labels += 1;
+			const tmp = `_mnarrow${g.labels}_`;
+			emitProcLocalsLine(p, `${srcC} ${tmp};`);
+			emitStmtsLine(p, `${tmp} = ${inner};`);
+			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${tmp}.value.v${nvi}, .present=true} : (${targetC}){0})`);
+			return;
+		}
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {
 			const pvi = projSlot - 1;
 			const memberValue = unwrapPointerLikeForVariant(d.convType);

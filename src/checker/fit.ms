@@ -273,6 +273,10 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
 		if (thunk != null as unknown as Node) payload = thunk;
+		if (formal.typeReturn.kind == TypeKind.Union && exprType.kind != TypeKind.Union && isTagCarriedUnion(formal.typeReturn)) {
+			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
+			if (injected != null as unknown as Node) payload = injected;
+		}
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const wrapped = createNode(NodeKind.HiddenStdConv, { convExpr: payload, convType: formal } as NodeData, wrapTok);
@@ -913,23 +917,39 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	if (exprType.kind == TypeKind.Union) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
-	let vi: int32 = -1;
+	return projectTagUnionMember(expr, declared, exprType);
+}
+
+export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
+	if (exprType.kind == TypeKind.Union) return -1;
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
-		if (child == exprType) { vi = ci; break; }
+		if (child == exprType) return ci;
 		ci += 1;
 	}
-	if (vi < 0) {
-		const value = unwrapRef(exprType);
-		vi = value != null && value.kind == TypeKind.Struct
-			? variantIndexInUnion(declared, value)
-			: primitiveMemberIndexInUnion(declared, exprType);
-	}
+	const value = unwrapRef(exprType);
+	return value != null && value.kind == TypeKind.Struct
+		? variantIndexInUnion(declared, value)
+		: primitiveMemberIndexInUnion(declared, exprType);
+}
+
+export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type): Node {
+	const vi = tagUnionMemberSlot(declared, exprType);
 	if (vi < 0) return null as unknown as Node;
-	const member = declared.typeChildren[vi];
+	return hiddenSlotConv(expr, declared.typeChildren[vi], vi);
+}
+
+export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type): Node {
+	if (carrier.typeReturn == null || narrowed.typeReturn == null) return null as unknown as Node;
+	const vi = tagUnionMemberSlot(carrier.typeReturn, narrowed.typeReturn);
+	if (vi < 0) return null as unknown as Node;
+	return hiddenSlotConv(expr, narrowed, vi);
+}
+
+function hiddenSlotConv(expr: Node, target: Type, vi: int32): Node {
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
-	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: member }, convTok);
-	convNode.nodeType = member;
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: target }, convTok);
+	convNode.nodeType = target;
 	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 	convNode.variantSlot = vi + 1;
 	return convNode;

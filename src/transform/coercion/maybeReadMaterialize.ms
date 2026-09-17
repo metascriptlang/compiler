@@ -15,14 +15,16 @@
 // (synthMaybeWrap), so the store writes the whole struct. Bottom-up walking wraps the
 // LHS before the assignment node is visited — undo it there.
 
-import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, Type } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, Type } from "../../ast/node";
+import { isMaybeType, unwrapMaybeType, isTagCarriedUnion } from "../../checker/types";
+import { projectTagUnionMember, narrowMaybePayload } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember } from "../util";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, visitMaybeRead);
+	const project = !ctx.jsBackend;
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project));
 }
 
 function isAssignOp(op: string): boolean {
@@ -66,6 +68,10 @@ function declaredMaybeOf(node: Node): Type | null {
 }
 
 function unwrapIfMaterialized(n: Node): Node {
+	if (n != null && n.kind == NodeKind.HiddenSubConv && n.variantSlot > 0) {
+		n = (n.data as HiddenStdConvData).convExpr;
+		if (n != null && n.nodeType != null && isMaybeType(n.nodeType)) return n;
+	}
 	if (n == null || n.kind != NodeKind.MemberExpr) return n;
 	const d = n.data as MemberExprData;
 	if (d.property != "value") return n;
@@ -73,7 +79,7 @@ function unwrapIfMaterialized(n: Node): Node {
 	return d.object;
 }
 
-function visitMaybeRead(node: Node): Node {
+function visitMaybeRead(node: Node, project: boolean): Node {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) d.left = unwrapIfMaterialized(d.left);
@@ -86,11 +92,26 @@ function visitMaybeRead(node: Node): Node {
 	}
 	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return node;
 	const nt = node.nodeType;
-	if (nt == null || nt.kind == TypeKind.Null || isMaybeType(nt)) return node;
+	if (nt == null || nt.kind == TypeKind.Null) return node;
+	if (isMaybeType(nt)) {
+		if (!project) return node;
+		const declared = declaredMaybeOf(node);
+		if (declared == null || declared == nt || !isTagCarriedUnion(unwrapMaybeType(declared))) return node;
+		node.nodeType = declared;
+		const narrowed = narrowMaybePayload(node, declared, nt);
+		if (narrowed != null as unknown as Node) return narrowed;
+		node.nodeType = nt;
+		return node;
+	}
 	const carrier = declaredMaybeOf(node);
 	if (carrier == null) return node;
 	node.nodeType = carrier;
 	const val = makeMember(node, "value", node.location);
-	val.nodeType = unwrapMaybeType(carrier);
+	const payload = unwrapMaybeType(carrier);
+	val.nodeType = payload;
+	if (project && nt != payload && isTagCarriedUnion(payload)) {
+		const projected = projectTagUnionMember(val, payload, nt);
+		if (projected != null as unknown as Node) return projected;
+	}
 	return val;
 }

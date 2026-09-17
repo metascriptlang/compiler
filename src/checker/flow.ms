@@ -1320,6 +1320,23 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	if (literalExpr.kind != NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
 	if (!isTypeofTag(d.value)) return t;
+	if (isMaybeType(t) && t.typeReturn != null) {
+		const members: Type[] = [];
+		const payload = t.typeReturn;
+		if (payload.kind == TypeKind.Union && payload.typeChildren != null) {
+			for (const c of payload.typeChildren) { if (c != null) members.push(c); }
+		} else {
+			members.push(payload);
+		}
+		members.push(nullType());
+		const kept: Type[] = [];
+		for (const m of members) {
+			if (typeofStringMatches(m, d.value) == assumeTrue) kept.push(m);
+		}
+		if (kept.length == 0 || kept.length == members.length) return t;
+		if (kept.length == 1) return kept[0];
+		return nullableUnionOf(kept);
+	}
 	// For union types, filter variants by whether their kind matches.
 	if (t.kind == TypeKind.Union) {
 		const remaining: Type[] = [];
