@@ -19,6 +19,7 @@ import {
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getFuncCodeLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
+import { parseIntStr } from "../utils/string";
 import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
@@ -136,6 +137,11 @@ export interface RaiserVM {
 	currentException: RaiserValue;
 	unwinding: boolean;
 	savedIp: number;
+	diagMessage: string;
+	diagLine: number;
+	diagColumn: number;
+	diagEndLine: number;
+	diagEndColumn: number;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -192,7 +198,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -277,6 +283,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
+	vm.diagMessage = "";
 	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
 	resetStrands(vm, funcIdx);
@@ -467,7 +474,24 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	return sp + 1;
 }
 
+const MACRO_ERROR_PREFIX = "__MACRO_ERROR__:";
+
+function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
+	if (thrown.kind != RaiserValueKind.String) return false;
+	if (!thrown.strVal.startsWith(MACRO_ERROR_PREFIX)) return false;
+	const payload = thrown.strVal.slice(MACRO_ERROR_PREFIX.length, thrown.strVal.length);
+	const parts = payload.split("\t");
+	vm.diagMessage = parts.length > 0 ? parts[0] : "compile error in macro";
+	vm.diagLine = parts.length > 1 ? parseIntStr(parts[1]) : 0;
+	vm.diagColumn = parts.length > 2 ? parseIntStr(parts[2]) : 0;
+	vm.diagEndLine = parts.length > 3 ? parseIntStr(parts[3]) : 0;
+	vm.diagEndColumn = parts.length > 4 ? parseIntStr(parts[4]) : 0;
+	vm.halted = true;
+	return true;
+}
+
 function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (!vm.unwinding && vmTakeMacroError(vm, getReg(vm, vm.baseReg + inst.a))) return;
 	if (!vm.unwinding) {
 		copyValueInto(vm.currentException, getReg(vm, vm.baseReg + inst.a));
 		vm.unwinding = true;
