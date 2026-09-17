@@ -295,6 +295,25 @@ function setToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	}, loc);
 }
 
+function enumToAst(t: Type, loc: SourceLocation): Node {
+	const enumValues: number[] = [];
+	for (const member of t.typeChildren) enumValues.push(member.typeValue);
+	return createNodeAt(NodeKind.EnumDecl, {
+		enumName: t.typeName,
+		enumMembers: t.typeNames,
+		enumValues,
+		nameLocation: loc,
+		memberLocations: [],
+	}, loc);
+}
+
+function tupleToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+	return createNodeAt(NodeKind.TypeGeneric, {
+		typExprBase: atomicTypeNode("tuple", loc),
+		typExprArgs: mapTypes(t.typeChildren, loc, visited),
+	}, loc);
+}
+
 function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode(nameOrDefault(t, "<anon-generic>"), loc),
@@ -437,6 +456,8 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		TypeKind.Struct => structToAst(t, loc, visited),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
 		TypeKind.Set => setToAst(t, loc, visited),
+		TypeKind.Enum => enumToAst(t, loc),
+		TypeKind.Tuple => tupleToAst(t, loc, visited),
 		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
 		TypeKind.GenericParam => atomicTypeNode(nameOrDefault(t, "T"), loc),
 		TypeKind.Union => unionToAst(t, loc, visited),
@@ -2413,19 +2434,70 @@ test "mapTypeToAst — null type emits Identifier(\"<null>\") sentinel" {
 
 test "mapTypeToAst — not-yet-handled kind falls back to typeName when set" {
 	const loc = makeLoc(1, 0);
-	// TypeKind.Enum is a Day 5+ handler, falls through to typeName placeholder today.
-	const t = makePrimType(TypeKind.Enum);
-	t.typeName = "Color";
+	const t = makePrimType(TypeKind.Varargs);
+	t.typeName = "Rest";
 	const out = mapTypeToAst(t, loc);
 	assert out.kind == NodeKind.Identifier;
-	assert (out.data as IdentifierData).name == "Color";
+	assert (out.data as IdentifierData).name == "Rest";
 }
 
 test "mapTypeToAst — not-yet-handled kind with no typeName emits the unmapped sentinel" {
 	const loc = makeLoc(1, 0);
-	const out = mapTypeToAst(makePrimType(TypeKind.Enum), loc);
+	const out = mapTypeToAst(makePrimType(TypeKind.Varargs), loc);
 	assert out.kind == NodeKind.Identifier;
 	assert (out.data as IdentifierData).name == "<unmapped-type>";
+}
+
+test "mapTypeToAst — Enum renders as EnumDecl carrying members and values" {
+	const loc = makeLoc(1, 0);
+	const t = makePrimType(TypeKind.Enum);
+	t.typeName = "Color";
+	t.typeNames = ["Red", "Green"];
+	const red = makePrimType(TypeKind.Number);
+	red.typeValue = 0;
+	const green = makePrimType(TypeKind.Number);
+	green.typeValue = 5;
+	t.typeChildren = [red, green];
+	const out = mapTypeToAst(t, loc);
+	assert out.kind == NodeKind.EnumDecl;
+	const d = out.data as EnumDeclData;
+	assert d.enumName == "Color";
+	assert d.enumMembers.length == 2;
+	assert d.enumMembers[1] == "Green";
+	assert d.enumValues.length == 2;
+	assert d.enumValues[1] == 5;
+}
+
+test "mapTypeToAst — Enum without explicit values renders an empty value list" {
+	const t = makePrimType(TypeKind.Enum);
+	t.typeName = "Flag";
+	t.typeNames = ["A"];
+	const out = mapTypeToAst(t, makeLoc(1, 0));
+	assert out.kind == NodeKind.EnumDecl;
+	assert (out.data as EnumDeclData).enumValues.length == 0;
+}
+
+test "mapTypeToAst — Tuple renders as TypeGeneric tuple<...> over the element types" {
+	const loc = makeLoc(1, 0);
+	const t = makePrimType(TypeKind.Tuple);
+	t.typeChildren = [makePrimType(TypeKind.Int32), makePrimType(TypeKind.String)];
+	const out = mapTypeToAst(t, loc);
+	assert out.kind == NodeKind.TypeGeneric;
+	const d = out.data as TypeGenericData;
+	assert (d.typExprBase.data as IdentifierData).name == "tuple";
+	assert d.typExprArgs.length == 2;
+	assert (d.typExprArgs[0].data as IdentifierData).name == "int32";
+	assert (d.typExprArgs[1].data as IdentifierData).name == "string";
+}
+
+test "mapTypeToAst — Tuple element that is a struct expands through the same chokepoint" {
+	const loc = makeLoc(1, 0);
+	const t = makePrimType(TypeKind.Tuple);
+	t.typeChildren = [makeStructType("P", ["x"], [makePrimType(TypeKind.Int32)])];
+	const out = mapTypeToAst(t, loc);
+	const d = out.data as TypeGenericData;
+	assert d.typExprArgs.length == 1;
+	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
 }
 
 // ===== mapTypeToAst tests — Day 2 (Struct → TypeObject) =====
