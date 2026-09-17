@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -793,6 +793,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return false;
 	const probe = newBuf();
 	if (objType.kind == TypeKind.Union) {
+		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
 		// Probe each variant's fields. Peel Ref/Ptr — interface variants are
 		// Ref<Struct> in the C backend.
