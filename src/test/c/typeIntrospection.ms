@@ -676,6 +676,37 @@ main();
 	assert c.ok;
 }
 
+test "E2E: getType renders an enum as EnumDecl and a tuple as TypeGeneric tuple" {
+	const src = `
+import { Node, NodeKind, bindSym, getType, resolveType } from "std/meta";
+
+enum Color { Red, Green = 5 }
+
+macro probe(x: Node): Node {
+	const c = getType(bindSym("Color"));
+	const t = resolveType("[int32, string]");
+	if (c == null) error("Color null", x);
+	else if (c.kind != NodeKind.EnumDecl) error("Color not EnumDecl", x);
+	else if (c.enumName != "Color") error("enumName mismatch", x);
+	else if (c.enumMembers.length != 2) error("enumMembers arity", x);
+	else if (c.enumMembers[1] != "Green") error("enumMembers[1] not Green", x);
+	if (t == null) error("tuple null", x);
+	else if (t.kind != NodeKind.TypeGeneric) error("tuple not TypeGeneric", x);
+	else if (t.typExprBase.name != "tuple") error("base not tuple", x);
+	else if (t.typExprArgs.length != 2) error("tuple arity", x);
+	else if (t.typExprArgs[1].name != "string") error("tuple[1] not string", x);
+	return x;
+}
+
+function main(): void {
+	const k = probe(1);
+}
+main();
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
 test "E2E: sameType compares the types behind two resolved nodes" {
 	const src = `
 import { Node, resolveType, sameType } from "std/meta";
