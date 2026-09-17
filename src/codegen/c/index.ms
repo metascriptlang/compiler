@@ -328,6 +328,46 @@ test "empty program has headers" {
 	assert result.length > 0;
 }
 
+test "module init metadata is isolated between emissions" {
+	const parsed = parseSource("");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const first = generateCModuleOutput(parsed.value, null as unknown as CheckerContext, "test/first", createAliveSet(), false, false);
+	const second = generateCModuleOutput(parsed.value, null as unknown as CheckerContext, "test/second", createAliveSet(), false, false);
+	assert first.modulePath == "test/first";
+	assert second.modulePath == "test/second";
+	assert !first.hasDatInit && !first.hasInit;
+	assert !second.hasDatInit && !second.hasInit;
+	assert first.code == generateCModule(parsed.value, null as unknown as CheckerContext, "test/first", createAliveSet(), false, false);
+}
+
+test "dispatcher follows dependency order regardless of result order" {
+	const dep = new CModuleOutput();
+	dep.modulePath = "test/dep";
+	dep.hasDatInit = true;
+	dep.hasInit = true;
+	const empty = new CModuleOutput();
+	empty.modulePath = "test/empty";
+	const entry = new CModuleOutput();
+	entry.modulePath = "test/entry";
+	entry.hasInit = true;
+	const paths = [dep.modulePath, empty.modulePath, entry.modulePath];
+	const original = genProjectDispatcher(paths, entry.modulePath, "", false, [dep, empty, entry]);
+	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [entry, empty, dep]);
+	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [empty, dep, entry]);
+	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [dep, empty, entry]);
+	const depName = mangleModuleName(dep.modulePath);
+	const emptyName = mangleModuleName(empty.modulePath);
+	const entryName = mangleModuleName(entry.modulePath);
+	assert original.indexOf(`${emptyName}__DatInit000`) < 0;
+	assert original.indexOf(`${emptyName}__Init000`) < 0;
+	assert original.indexOf(`${entryName}__DatInit000`) < 0;
+	assert original.indexOf(`${depName}__DatInit000();`) < original.indexOf(`${depName}__Init000();`);
+	assert original.indexOf(`${depName}__Init000();`) < original.indexOf(`${entryName}__Init000();`);
+	const bareEntry = genProjectDispatcher([empty.modulePath], empty.modulePath, "", true, [empty]);
+	assert bareEntry.indexOf(`${emptyName}__Init000();`) >= 0;
+}
+
 test "headers include stdint" {
 	const result = cOutput("");
 	// stdint.h should be present
