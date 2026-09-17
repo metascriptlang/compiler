@@ -7,14 +7,15 @@
 //
 // Core API:
 //   aliases(obj, field): AliasKind     — path decomposition + comparison
-//   isAnalysableFieldAccess(n, isCursorFn) — ownership gatekeeper
+//   isAnalysableFieldAccess(n)        — ownership gatekeeper
 //   deepAliases(dest, ri): boolean     — recursive self-alias check
 //   skipConvDfa(n): Node               — strip transparent wrappers
 
-import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, makeSymbol } from "../checker/symbol";
+import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
+import { makeHiddenDeref } from "../transform/util";
 import { parseInput } from "../transform/testUtil";
 
 // ===== AliasKind =====
@@ -41,7 +42,7 @@ export function skipConvDfa(n: Node): Node {
 // Reference: walk down path operations to root symbol. Check ownership constraints.
 // Returns true if DRC can reason about this field/array access.
 
-export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) => boolean): boolean {
+export function isAnalysableFieldAccess(orig: Node): boolean {
 	let n = skipConvDfa(orig);
 	if (n == null) return false;
 
@@ -53,12 +54,7 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 			NodeKind.ArrayAccess => {
 				n = skipConvDfa((n.data as ArrayAccessData).array);
 			},
-			NodeKind.HiddenDeref => {
-				const inner = skipConvDfa((n.data as HiddenDerefData).expr);
-				// Only owned deref (Ref<T>) is analysable, not Ptr<T>
-				if (inner != null && inner.nodeType != null && inner.nodeType.kind == TypeKind.Ptr) return false;
-				n = inner;
-			},
+			NodeKind.HiddenDeref => { return false; },
 			NodeKind.HiddenAddr => {
 				n = skipConvDfa((n.data as HiddenDerefData).expr);
 			},
@@ -69,8 +65,7 @@ export function isAnalysableFieldAccess(orig: Node, isCursorFn: (name: string) =
 				if (hasFlag(sym, SymbolFlag.Global)) return false;
 				// Params are borrows — not movable
 				if (sym.symbolKind == SymbolKind.Parameter) return false;
-				// Not a cursor (borrow)
-				if (isCursorFn(sym.name)) return false;
+				if (isCursorSym(sym)) return false;
 				return true;
 			},
 			_ => { return false; },
@@ -305,6 +300,46 @@ function attachSymToNodeAlias(node: Node, name: string, sym: Symbol): void {
 		|| node.kind == NodeKind.ArrowFunction
 		|| node.kind == NodeKind.FunctionExpr) return;
 	forEachChild(node, (c: Node): void => { attachSymToNodeAlias(c, name, sym); });
+}
+
+test "isAnalysableFieldAccess: field of a local = true" {
+	const n = getExpr("x.f;");
+	attachSymToNodeAlias(n, "x", makeTestSym("x"));
+	assert isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: field of a parameter = false" {
+	const n = getExpr("x.f;");
+	attachSymToNodeAlias(n, "x", makeSymbol("x", SymbolKind.Parameter, noneType(), false));
+	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: field of a global = false" {
+	const n = getExpr("x.f;");
+	const sym = makeTestSym("x");
+	setFlag(sym, SymbolFlag.Global);
+	attachSymToNodeAlias(n, "x", sym);
+	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: field of a cursor = false" {
+	const n = getExpr("x.f;");
+	const sym = makeTestSym("x");
+	setFlag(sym, SymbolFlag.Cursor);
+	attachSymToNodeAlias(n, "x", sym);
+	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: field behind a deref = false" {
+	const n = getExpr("x.f;");
+	attachSymToNodeAlias(n, "x", makeTestSym("x"));
+	const md = n.data as MemberExprData;
+	md.object = makeHiddenDeref(md.object, n.location);
+	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: unresolved root = false" {
+	assert !isAnalysableFieldAccess(getExpr("x.f;"));
 }
 
 // ===== Tests: skipConvDfa =====

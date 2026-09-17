@@ -1189,8 +1189,13 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			// Copy: shared reference (Reference: genCopy)
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
-		// Field/element access → always copy (borrow from shared object)
+		// Field/element access → analysable + last-read = move, else = copy
 		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.HiddenDeref => {
+			const srcOwns = rhs.nodeType != null && classifyType(rhs.nodeType, dctx.ctx).needsCleanup;
+			if (srcOwns && rcInfo.wasMovedFn != "" && isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
+				addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
+				return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+			}
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
 		// Conditional → split branches (Reference: handleNestedTempl)
@@ -1588,10 +1593,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (node == null) return false;
 	// Gate: must be analysable field access (local, not global, not cursor, not param)
-	if (!isAnalysableFieldAccess(node, (name: string): boolean => {
-		const vi = findVarInfoInContext(dctx, name);
-		return vi != null && vi.isCursor;
-	})) return false;
+	if (!isAnalysableFieldAccess(node)) return false;
 	const rootSym = getRootSym(node);
 	if (rootSym == null) return false;
 	// Standard safety checks (same as isLastReadSafe)
@@ -1806,26 +1808,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
 	if (parkedFutInit) dctx.parkedInitDepth -= 1;
 	const init = d.initializer;
-
-	// Result field extraction: $result_N.value → wasMoved on source to prevent double-free.
-	// Reuse the original `md.object` Identifier so its nodeType/resolvedSym flow
-	// through to codegen — the post-migration Result lays out as a tagged union,
-	// and the Union-DU member access path needs the type info to route through
-	// the active variant slot (`r.v0.value`) instead of bare `r.value`.
-	if (init.kind == NodeKind.MemberExpr) {
-		const md = init.data as MemberExprData;
-		if (md.object.kind == NodeKind.Identifier && md.property == "value") {
-			const objName = (md.object.data as IdentifierData).name;
-			if (objName.startsWith("$result")) {
-				if (rcInfo.wasMovedFn != "") {
-					const valueMember = makeMember(md.object, "value", loc);
-					valueMember.nodeType = init.nodeType;
-					addPending(dctx, makeWasMovedOnExpr(valueMember, rcInfo, loc));
-				}
-				return stmt;
-			}
-		}
-	}
 
 	// Unified RC decision via moveOrCopy.
 	const destNode = makeVarRef(d.declName, stmt.resolvedSym, loc);
