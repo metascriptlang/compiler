@@ -1,6 +1,6 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
 import { CheckerContext } from "./context";
 import { lookupSymbol, markUsed } from "./symbol";
 
@@ -56,12 +56,25 @@ function allIntrinsic(ctx: CheckerContext, decorators: Node[]): boolean {
 	return true;
 }
 
-export function stripIntrinsicMemberWrappers(ctx: CheckerContext, body: Node[]): void {
+export function recordFieldDecorators(sym: Symbol, dd: DecoratedDeclData): void {
+	const inner = dd.decoratedNode;
+	if (sym == null || inner == null || inner.kind != NodeKind.PropertyDecl) return;
+	const pd = inner.data as PropertyDeclData;
+	if (pd.propIsStatic) return;
+	for (const recorded of sym.fieldDecoratorNames) {
+		if (recorded == pd.propName) return;
+	}
+	sym.fieldDecoratorNames.push(pd.propName);
+	sym.fieldDecorators.push(dd.decorators);
+}
+
+export function stripIntrinsicMemberWrappers(ctx: CheckerContext, sym: Symbol, body: Node[]): void {
 	for (let i = 0; i < body.length; i += 1) {
 		const member = body[i];
 		if (member.kind != NodeKind.DecoratedDecl) continue;
 		const dd = member.data as DecoratedDeclData;
 		if (dd.decoratedNode == null || !allIntrinsic(ctx, dd.decorators)) continue;
+		recordFieldDecorators(sym, dd);
 		body[i] = dd.decoratedNode;
 	}
 }

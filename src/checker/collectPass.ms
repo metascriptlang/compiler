@@ -471,7 +471,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
 	}
-	stripIntrinsicMemberWrappers(ctx, d.classBody);
+	stripIntrinsicMemberWrappers(ctx, sym, d.classBody);
 }
 
 export function collectActor(ctx: CheckerContext, node: Node): void {
@@ -527,7 +527,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}
 	}
-	stripIntrinsicMemberWrappers(ctx, d.actorBody);
+	stripIntrinsicMemberWrappers(ctx, sym, d.actorBody);
 }
 
 function methodDeclOfMember(member: Node): Node | null {

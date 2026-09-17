@@ -12,7 +12,7 @@ import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
-import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly } from "../../checker/decoratorHelpers";
+import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators } from "../../checker/decoratorHelpers";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -365,6 +365,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
+			recordFieldDecorators(planClassSymbol(ctx, plan), dd);
 			const stmts: Node[] = [];
 			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", stmts: stmts };
 			plan.activeInits = inits;
@@ -943,6 +944,22 @@ test "an intrinsic member wrapper beside a user decorator is consumed by the fil
 	assert body[0].kind == NodeKind.MethodDecl;
 	assert body[0].resolvedSym != null;
 	assert body[0].resolvedSym.builtinKind == "CalcLoud";
+}
+
+test "an intrinsic field wrapper is recorded on the class symbol before it is stripped" {
+	const pr = parseSource("class Doc {\n\t@exportName(\"doc_id\") id: string = \"\";\n\t@builtin(\"DocLoud\") loud(): int32 { return 1; }\n\tname: string = \"\";\n}\n");
+	assert pr.ok;
+	const ctx = createContext();
+	collectTopLevel(ctx, pr.value);
+	const cls = (pr.value.data as ProgramData).programStmts[0];
+	const body = (cls.data as ClassDeclData).classBody;
+	assert body[0].kind == NodeKind.PropertyDecl;
+	const sym = lookupSymbol(ctx.table, "Doc");
+	assert sym != null;
+	assert sym.fieldDecoratorNames.length == 1;
+	assert sym.fieldDecoratorNames[0] == "id";
+	assert sym.fieldDecorators[0].length == 1;
+	assert (sym.fieldDecorators[0][0].data as MacroInvocationData).macroName == "exportName";
 }
 
 function exprStmtProperty(stmt: Node): string {
