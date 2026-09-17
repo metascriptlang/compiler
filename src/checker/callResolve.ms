@@ -2734,6 +2734,10 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t == null) return false;
+	if (t.kind == TypeKind.Cursor) {
+		const inner = t.typeReturn;
+		return inner != null && isPointerInC(inner, ctx);
+	}
 	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow || t.kind == TypeKind.Var;
 }
 
@@ -3012,11 +3016,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
-	const needsDeref = isPointerInC(objType, ctx);
+	const nullablePtr = objType.kind == TypeKind.Union ? unwrapRefNullUnion(objType) : null;
+	const ptrType = (nullablePtr != null && isPointerInC(nullablePtr, ctx)) ? nullablePtr : objType;
+	const needsDeref = isPointerInC(ptrType, ctx);
 	let resolvedObjType = objType;
 	if (needsDeref) {
-		if (objType.typeReturn != null) {
-			resolvedObjType = objType.typeReturn;
+		if (ptrType.typeReturn != null) {
+			resolvedObjType = ptrType.typeReturn;
 			if (resolvedObjType.kind == TypeKind.Ref && resolvedObjType.typeReturn != null) {
 				resolvedObjType = resolvedObjType.typeReturn;
 			}
@@ -3241,8 +3247,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			const symT = d.object.resolvedSym != null ? d.object.resolvedSym.symbolType : null;
 			if (symT != null && symT.kind == TypeKind.Var && symT.typeReturn != null) {
 				derefNode.nodeType = symT.typeReturn;
-			} else if ((objType.kind == TypeKind.Var || objType.kind == TypeKind.Ref) && objType.typeReturn != null) {
-				derefNode.nodeType = objType.typeReturn;
+			} else if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
+				derefNode.nodeType = ptrType.typeReturn;
 			} else {
 				derefNode.nodeType = resolvedObjType;
 			}
