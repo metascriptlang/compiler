@@ -1606,7 +1606,10 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 		NodeKind.IfStmt => {
 			const condition = readNode(objHeap, arrHeap, h, "condition", loc);
 			const consequent = readNode(objHeap, arrHeap, h, "consequent", loc);
-			const alternate = readNode(objHeap, arrHeap, h, "alternate", loc);
+			// The parser gives an else-less `if` an EMPTY block, never null, and
+			// every later pass walks `alternate` on that invariant.
+			let alternate = readNode(objHeap, arrHeap, h, "alternate", loc);
+			if (alternate == null) alternate = createNodeAt(NodeKind.BlockStmt, { statements: [] }, loc);
 			return createNodeAt(NodeKind.IfStmt, { condition, consequent, alternate }, loc);
 		},
 		NodeKind.WhileStmt => {
