@@ -19,7 +19,7 @@ import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
 } from "../util";
 import { booleanType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -837,7 +837,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	if (!ctx.jsBackend) {
 		const hashCallArgs: Node[] = [];
 		hashCallArgs.push(discNode);
-		switchDisc = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
+		switchDisc = makeCall(runtimeRef("msStringHash", loc), hashCallArgs, loc);
 	}
 	const switchNode = makeSwitch(switchDisc, switchCases, loc);
 

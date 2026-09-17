@@ -20,7 +20,7 @@ import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeString, makeNumber, makeMember, makeConditional,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringNameFor,
-	makeHiddenAddr,
+	makeHiddenAddr, runtimeRef,
 } from "../util";
 import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
@@ -81,12 +81,12 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			}
 			// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
 			if (me2.object.kind == NodeKind.NumberLiteral) {
-				const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
+				const call = makeCall(runtimeRef("msNumberToString", loc), [me2.object], loc);
 				call.nodeType = stringType();
 				return call;
 			}
 			if (me2.object.kind == NodeKind.BooleanLiteral) {
-				const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
+				const call = makeCall(runtimeRef("msBoolToString", loc), [me2.object], loc);
 				call.nodeType = stringType();
 				return call;
 			}
@@ -132,7 +132,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		if (ctx.jsBackend) return callNode;
 		const cdb = callNode.data as CallExprData;
 		const radixArg = cdb.arguments.length > 0 ? cdb.arguments[0] : makeNumber(10, loc);
-		const bcall = makeCall(makeIdent("msBigIntToString", loc), [obj, radixArg], loc);
+		const bcall = makeCall(runtimeRef("msBigIntToString", loc), [obj, radixArg], loc);
 		bcall.nodeType = stringType();
 		return bcall;
 	}
@@ -155,13 +155,13 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		let fn = "msNumberToStringRadix";
 		if (objType.kind == TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
 		else if (objType.kind == TypeKind.Int64) { fn = "msIntToStringRadix"; }
-		const call = makeCall(makeIdent(fn, loc), [obj, radixArg], loc);
+		const call = makeCall(runtimeRef(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// Boolean → msBoolToString
 	if (tk == TypeKind.Boolean) {
-		const call = makeCall(makeIdent("msBoolToString", loc), [obj], loc);
+		const call = makeCall(runtimeRef("msBoolToString", loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}
@@ -198,7 +198,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Array → msArrayToString (runtime helper)
 	if (tk == TypeKind.Array) {
-		const call = makeCall(makeIdent("msArrayToString", loc), [obj], loc);
+		const call = makeCall(runtimeRef("msArrayToString", loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}
@@ -237,7 +237,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	const loc = node.location;
 
 	if (builtinKind == "LengthStr" && cd.arguments.length == 1) {
-		return makeCall(makeIdent("msStringLength", loc), cd.arguments, loc);
+		return makeCall(runtimeRef("msStringLength", loc), cd.arguments, loc);
 	}
 
 	if (builtinKind == "AsBytes") {
@@ -406,7 +406,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 
 	// setLength takes &arr (mutates in place)
 	const addrOf = makeHiddenAddr(md.object, loc);
-	const result = makeCall(makeIdent(fn, loc), [addrOf, d.right], loc);
+	const result = makeCall(runtimeRef(fn, loc), [addrOf, d.right], loc);
 	result.nodeType = node.nodeType;
 	return result;
 }

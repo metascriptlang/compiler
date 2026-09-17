@@ -34,7 +34,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr, walkNode } from "../walker";
-import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped } from "../util";
+import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -115,19 +115,19 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	if (timeoutExpr == null) {
 		// No timeout — simple blocking wait
 		stmts.push(makeExprStmt(
-			makeCall(makeIdent("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
+			makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
 		return stmts;
 	}
 	// Phase 3: timed wait — const $deadline = msMonoTimeMs() + timeoutExpr;
 	const int64Type = createPrimitive(TypeKind.Int64);
-	const nowCall = makeCall(makeIdent("msMonoTimeMs", loc), [], loc);
+	const nowCall = makeCall(runtimeRef("msMonoTimeMs", loc), [], loc);
 	nowCall.nodeType = int64Type;
 	const dl = makeTempDecl(ctx, "deadline", makeBinary(nowCall, "+", timeoutExpr, loc), int64Type, loc);
 	stmts.push(dl.decl);
 
 	// msAwaitGroupBlockingWithDeadline($ag, $deadline);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupBlockingWithDeadline", loc), [
+		makeCall(runtimeRef("msAwaitGroupBlockingWithDeadline", loc), [
 			agIdent, dl.ident,
 		], loc), loc));
 
@@ -140,14 +140,14 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// free-while-in-flight hangs forever when a child is still blocked. The
 	// join is safe on the loop thread: the blocking wait pumps the event loop
 	// while waiting, which is exactly what unblocks a timer-parked child.
-	const timedOutCall = makeCall(makeIdent("msAwaitGroupTimedOut", loc), [agIdent], loc);
+	const timedOutCall = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
 	timedOutCall.nodeType = booleanType();
 	const cancelCall = makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupCancel", loc), [agIdent], loc), loc);
+		makeCall(runtimeRef("msAwaitGroupCancel", loc), [agIdent], loc), loc);
 	const joinCall = makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
+		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
 	const freeCall = makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupFree", loc), [agIdent], loc), loc);
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [agIdent], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
 	const ifBody = makeBlock([cancelCall, joinCall, freeCall, throwNode], loc);
@@ -173,24 +173,24 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 	const stmts: Node[] = [];
 
 	// 1. const $as = msAwaitSlotCreate(1);
-	const as = makeTempDecl(ctx, "as", makeCall(makeIdent("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+	const as = makeTempDecl(ctx, "as", makeCall(runtimeRef("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(as.decl);
 
 	// 2. msSpawnSlotSubmit($as, 0, closure);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), closureArg], loc), loc));
 
 	// 3. msAwaitSlotWait($as);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msAwaitSlotWait", loc), [as.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitSlotWait", loc), [as.ident], loc), loc));
 
 	// 4. const $agr = msAwaitSlotResult($as);
-	const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
+	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
 	stmts.push(agr.decl);
 
 	// 5. msAwaitSlotRelease($as);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msAwaitSlotRelease", loc), [as.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitSlotRelease", loc), [as.ident], loc), loc));
 
 	return { stmts, resultIdent: agr.ident };
 }
@@ -200,7 +200,7 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 	const stmts: Node[] = [];
 
 	// 1. const $ag = msAwaitGroupInit(1);
-	const ag = makeTempDecl(ctx, "ag", makeCall(makeIdent("msAwaitGroupInit", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+	const ag = makeTempDecl(ctx, "ag", makeCall(runtimeRef("msAwaitGroupInit", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(ag.decl);
 
 	// 2. Inject cancel safe-points into the closure body
@@ -216,19 +216,19 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 
 	// 3. msSpawnTaskSubmit($ag, 0, closure);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
 
 	// 4. Blocking wait with deadline
 	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
 	for (const ws of waitStmts) stmts.push(ws);
 
 	// 5. const $agr = msAwaitGroupResult($ag, 0);
-	const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);
+	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);
 	stmts.push(agr.decl);
 
 	// 6. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupFree", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
 
 	return { stmts, resultIdent: agr.ident };
 }
@@ -267,14 +267,14 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	const readFn = innerType != null ? typedFutureReadFn(innerType) : "";
 	if (readFn != "") {
 		stmts.push(makeExprStmt(
-			makeCall(makeIdent("msWaitForReady", loc), [futIdent], loc), loc));
-		const res = makeTempDecl(ctx, "aw", makeCall(makeIdent(readFn, loc), [futIdent], loc), innerType, loc);
+			makeCall(runtimeRef("msWaitForReady", loc), [futIdent], loc), loc));
+		const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef(readFn, loc), [futIdent], loc), innerType, loc);
 		stmts.push(res.decl);
 		return { stmts, resultIdent: res.ident, typed: true };
 	}
 
 	// Fallback: void* path (structs, refs, strings) — caller must apply unboxing
-	const res = makeTempDecl(ctx, "aw", makeCall(makeIdent("msWaitFor", loc), [futIdent], loc), VOID_PTR_TYPE, loc);
+	const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef("msWaitFor", loc), [futIdent], loc), VOID_PTR_TYPE, loc);
 	stmts.push(res.decl);
 	return { stmts, resultIdent: res.ident, typed: false };
 }
@@ -306,13 +306,13 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			const stmts: Node[] = [];
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
-				makeCall(makeIdent("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+				makeCall(runtimeRef("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
 			// const $agr = msAwaitSlotResult($slot);
-			const agr = makeTempDecl(ctx, "agr", makeCall(makeIdent("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
+			const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
 			stmts.push(agr.decl);
 			// msAwaitSlotRelease($slot);
 			stmts.push(makeExprStmt(
-				makeCall(makeIdent("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
+				makeCall(runtimeRef("msAwaitSlotRelease", loc), [slotEntry.slotIdent], loc), loc));
 			let resultIdent = agr.ident;
 			if (slotEntry.innerType != null) {
 				resultIdent = makeUnboxCall(resultIdent, slotEntry.innerType, loc);
@@ -374,11 +374,11 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					const stmts: Node[] = [];
 					const loc = stmt.location;
 					// const $slot = msAwaitSlotCreate(1);
-					const slot = makeTempDecl(ctx, "sl", makeCall(makeIdent("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
+					const slot = makeTempDecl(ctx, "sl", makeCall(runtimeRef("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 					stmts.push(slot.decl);
 					// msSpawnSlotSubmit($slot, 0, closure);
 					stmts.push(makeExprStmt(
-						makeCall(makeIdent("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
+						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
 					// Register for later `await h` lookup
 					_spawnSlotMap.set(d.declName, { slotIdent: slot.ident, closureArg: si.closure, innerType });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)

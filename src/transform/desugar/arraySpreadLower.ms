@@ -23,7 +23,7 @@ import { walkExpandBlocks } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
-	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken,
+	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef,
 } from "../util";
 
 function isLowerableSpreadLiteral(node: Node): boolean {
@@ -83,7 +83,7 @@ function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocat
 		args.push(makeHiddenAddr(typedRef(accSym, accT, loc), loc));
 	}
 	args.push(arg);
-	return makeExprStmt(makeCall(makeIdent("msGenericArrayPush", loc), args, loc), loc);
+	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), args, loc), loc);
 }
 
 function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {

@@ -17,7 +17,7 @@ import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparen
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken } from "../util";
+import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken, runtimeRef } from "../util";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
 // synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
@@ -93,7 +93,7 @@ function rewriteLockedIntrinsic(node: Node): Node {
 	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return node;
 	const name = (cd.callee.data as IdentifierData).name;
 	if (name != "msLockedLoad" && name != "msLockedStore") return node;
-	const call = makeCall(makeIdent(name, node.location), cd.arguments, node.location);
+	const call = makeCall(runtimeRef(name, node.location), cd.arguments, node.location);
 	call.nodeType = node.nodeType;
 	return call;
 }
@@ -113,7 +113,7 @@ function rewriteExternArrayReturn(node: Node): Node {
 			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;
 	node.nodeType = refType.typeReturn;
-	const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
+	const box = makeCall(runtimeRef("msBoxRefArray", node.location), [node], node.location);
 	box.nodeType = refType;
 	return box;
 }
@@ -129,7 +129,7 @@ function rewriteNewExpr(node: Node): Node {
 	if (isLockedRef(refType)) {
 		const ld = node.data as NewExprData;
 		if (ld.newArguments.length == 1) {
-			const cell = makeCall(makeIdent("msBoxLocked", node.location), [ld.newArguments[0]], node.location);
+			const cell = makeCall(runtimeRef("msBoxLocked", node.location), [ld.newArguments[0]], node.location);
 			cell.nodeType = refType;
 			return cell;
 		}
@@ -139,7 +139,7 @@ function rewriteNewExpr(node: Node): Node {
 	if (isAtomicRef(refType)) {
 		const d = node.data as NewExprData;
 		if (d.newArguments.length == 1) {
-			const box = makeCall(makeIdent("msBoxArc", node.location), [d.newArguments[0]], node.location);
+			const box = makeCall(runtimeRef("msBoxArc", node.location), [d.newArguments[0]], node.location);
 			box.nodeType = refType;
 			return box;
 		}
@@ -147,7 +147,7 @@ function rewriteNewExpr(node: Node): Node {
 	if (refType != null && refType.kind == TypeKind.Ref && refType.typeReturn != null
 			&& refType.typeReturn.kind == TypeKind.Array) {
 		node.nodeType = refType.typeReturn;
-		const box = makeCall(makeIdent("msBoxRefArray", node.location), [node], node.location);
+		const box = makeCall(runtimeRef("msBoxRefArray", node.location), [node], node.location);
 		box.nodeType = refType;
 		return box;
 	}
@@ -168,26 +168,26 @@ function rewriteArrayAccess(node: Node): Node {
 	if (arrType.kind == TypeKind.Array) {
 		const elemType = arrType.typeReturn;
 		const macroName = getArrayMacroName(elemType);
-		const result = makeCall(makeIdent(macroName, loc), [d.array, d.index], loc);
+		const result = makeCall(runtimeRef(macroName, loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeValue;
-		const result = makeCall(makeIdent("msSizedArrayAccess", loc), [d.array, d.index, makeNumber(size, loc)], loc);
+		const result = makeCall(runtimeRef("msSizedArrayAccess", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.Span) {
-		const result = makeCall(makeIdent("msSpanAccess", loc), [d.array, d.index], loc);
+		const result = makeCall(runtimeRef("msSpanAccess", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.String) {
-		const result = makeCall(makeIdent("msStringCharAccess", loc), [d.array, d.index], loc);
+		const result = makeCall(runtimeRef("msStringCharAccess", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -243,7 +243,7 @@ function rewriteMemberExpr(node: Node): Node {
 		}
 		if (objType.kind == TypeKind.String) {
 			const loc = node.location;
-			const result = makeCall(makeIdent("msStringLength", loc), [d.object], loc);
+			const result = makeCall(runtimeRef("msStringLength", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
@@ -266,7 +266,7 @@ function rewriteMemberExpr(node: Node): Node {
 	if (d.property == "unicodeLength") {
 		if (objType.kind == TypeKind.String) {
 			const loc = node.location;
-			const result = makeCall(makeIdent("msStringUnicodeLength", loc), [d.object], loc);
+			const result = makeCall(runtimeRef("msStringUnicodeLength", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
@@ -302,7 +302,7 @@ function rewriteArrayLiteral(node: Node): Node {
 			&& refType.typeReturn.kind == TypeKind.Array) {
 		node.nodeType = refType.typeReturn;
 		const inner = rewriteArrayLiteral(node);
-		const box = makeCall(makeIdent("msBoxRefArray", node.location), [inner], node.location);
+		const box = makeCall(runtimeRef("msBoxRefArray", node.location), [inner], node.location);
 		box.nodeType = refType;
 		return box;
 	}
@@ -322,7 +322,7 @@ function rewriteArrayLiteral(node: Node): Node {
 		for (let i = 0; i < d.elements.length; i += 1) {
 			args.push(d.elements[i]);
 		}
-		const call = makeCall(makeIdent("msNumberArrayFrom", loc), args, loc);
+		const call = makeCall(runtimeRef("msNumberArrayFrom", loc), args, loc);
 		call.nodeType = node.nodeType;
 		return call;
 	}
@@ -333,7 +333,7 @@ function rewriteArrayLiteral(node: Node): Node {
 		for (let i = 0; i < d.elements.length; i += 1) {
 			args.push(d.elements[i]);
 		}
-		const call = makeCall(makeIdent("msStringArrayFromArr", loc), args, loc);
+		const call = makeCall(runtimeRef("msStringArrayFromArr", loc), args, loc);
 		call.nodeType = node.nodeType;
 		return call;
 	}

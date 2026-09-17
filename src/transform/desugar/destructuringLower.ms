@@ -8,7 +8,7 @@ import { TransformContext, freshTempSym } from "../context";
 import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import { nullishLowered } from "../coercion/nullishCoalesce";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeIdent, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -76,7 +76,7 @@ export function expandArrayRet(
 					elemAccess.nodeType = restType.typeReturn;
 					const accRef = makeIdentResolved(accSym, loc);
 					accRef.nodeType = restType;
-					const pushCall = makeCall(makeIdent("msGenericArrayPush", loc), [makeHiddenAddr(accRef, loc), elemAccess], loc);
+					const pushCall = makeCall(runtimeRef("msGenericArrayPush", loc), [makeHiddenAddr(accRef, loc), elemAccess], loc);
 					const pushStmt = makeExprStmt(pushCall, loc);
 					const iv2 = makeIdentResolved(iSym, loc);
 					iv2.nodeType = int32Type();

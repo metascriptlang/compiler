@@ -12,7 +12,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, Identifie
 import { stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember } from "../util";
+import { makeCall, makeIdent, makeNumber, makeMember, runtimeRef } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -131,7 +131,7 @@ function flattenConcat(node: Node): Node {
 	if (parts.length == 2) {
 		if (!hasNonString) return node; // both strings, binary + is fine
 		const args: Node[] = [coerceToString(parts[0], loc), coerceToString(parts[1], loc)];
-		const call2 = makeCall(makeIdent("msStringConcat", loc), args, loc);
+		const call2 = makeCall(runtimeRef("msStringConcat", loc), args, loc);
 		call2.nodeType = stringType();
 		return call2;
 	}
@@ -144,7 +144,7 @@ function flattenConcat(node: Node): Node {
 	for (const p of parts) {
 		allArgs.push(coerceToString(p, loc));
 	}
-	const callN = makeCall(makeIdent("msStringConcatArr", loc), allArgs, loc);
+	const callN = makeCall(runtimeRef("msStringConcatArr", loc), allArgs, loc);
 	callN.nodeType = stringType();
 	return callN;
 }

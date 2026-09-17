@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionDa
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken } from "../util";
+import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -29,10 +29,10 @@ function needsBoxing(t: Type): boolean {
 export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 	if (retVal == null || retType == null) return retVal;
 	return match (retType.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
-		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [retVal], loc),
+		TypeKind.Boolean => makeCall(runtimeRef("msBoxBool", loc), [retVal], loc),
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(runtimeRef("msBoxInt32", loc), [retVal], loc),
 		TypeKind.String => {
 			// Same sink contract as the struct case. msBoxString increfs the msString
 			// payload, but strings are value types — the payload has NO refcount header
@@ -41,13 +41,13 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 			// 16-byte struct into the shell and memsets the source: payload ownership
 			// transfers to the box, the source's scope-exit destroy becomes a no-op,
 			// and readers (msUnboxString copy-out / worker inline memcpy) are unchanged.
-			const call = makeCall(makeIdent("msSinkBoxStruct", loc), [retVal], loc);
+			const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
 			call.nodeType = retType;
 			return call;
 		},
 		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array => {
 			// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
-			const call = makeCall(makeIdent("msSinkBoxStruct", loc), [retVal], loc);
+			const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
 			call.nodeType = retType;
 			return call;
 		},

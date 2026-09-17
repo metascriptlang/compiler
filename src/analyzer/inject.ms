@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -876,7 +876,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 		// Use msStringIncref(x) directly for proper refcount bump.
 		if (srcName == "" && rcInfo.rcKind == RcKind.String) {
 			return makeExprStmt(
-				makeCall(makeIdent("msStringIncref", loc), [makeVarRef(destName, destSym, loc)], loc), loc);
+				makeCall(runtimeRef("msStringIncref", loc), [makeVarRef(destName, destSym, loc)], loc), loc);
 		}
 		// dest: pointer unless runtime macro (seqLike + empty typeName)
 		const destRef = makeVarRef(destName, destSym, loc);
@@ -2103,9 +2103,9 @@ function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node 
 		tmpDecl.nodeType = at;
 		tmpDecl.resolvedSym = excSym;
 		const rcCopy = sinkClassify(at, dctx.ctx);
-		const increfFn = rcCopy.copyFn != "" ? rcCopy.copyFn : "msIncref";
+		const increfRef = rcCopy.copyFn != "" ? hookRef(rcCopy.copyFn, sloc) : runtimeRef("msIncref", sloc);
 		const incref = makeExprStmt(
-			makeCall(makeIdent(increfFn, sloc), [makeIdentResolved(excSym, sloc)], sloc), sloc);
+			makeCall(increfRef, [makeIdentResolved(excSym, sloc)], sloc), sloc);
 		td.throwArg = makeIdentResolved(excSym, sloc);
 		return makeBlock([tmpDecl, incref, stmt], sloc);
 	}
@@ -2118,9 +2118,9 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const tmpDecl = makeVarDecl(retSym.name, arg, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = retSym;
 	const rc = sinkClassify(arg.nodeType, dctx.ctx);
-	const increfFn = rc.copyFn != "" ? rc.copyFn : "msIncref";
+	const increfRef = rc.copyFn != "" ? hookRef(rc.copyFn, loc) : runtimeRef("msIncref", loc);
 	const incref = makeExprStmt(
-		makeCall(makeIdent(increfFn, loc), [makeIdentResolved(retSym, loc)], loc), loc);
+		makeCall(increfRef, [makeIdentResolved(retSym, loc)], loc), loc);
 	const retStmt = makeReturn(makeIdentResolved(retSym, loc), loc);
 	return makeBlock([tmpDecl, incref, retStmt], loc);
 }
@@ -2514,7 +2514,7 @@ test "stmtCanThrow false for null" { assert !stmtCanThrow(null as unknown as Nod
 
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
-	const call = makeCall(makeIdent("msStringDecref", loc), [], loc);
+	const call = makeCall(runtimeRef("msStringDecref", loc), [], loc);
 	assert !callCanThrow(call);
 }
 
@@ -2532,7 +2532,7 @@ test "stmtCanThrow true for ThrowStmt" {
 
 test "stmtCanThrow false for ms-prefixed call in VarDecl" {
 	const loc = testLoc();
-	const decl = makeVarDecl("x", makeCall(makeIdent("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
+	const decl = makeVarDecl("x", makeCall(runtimeRef("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
 	assert !stmtCanThrow(decl);
 }
 

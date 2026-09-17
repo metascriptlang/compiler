@@ -9,7 +9,7 @@ import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType,
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
-import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl } from "../util";
+import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
@@ -33,25 +33,25 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	// Number/int → msNumberToString; 64-bit integers need the exact formatter
 	if (isWideInteger(t)) {
 		const fn = t.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
-		const call = makeCall(makeIdent(fn, loc), [arg], loc);
+		const call = makeCall(runtimeRef(fn, loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	if (isNumeric(t)) {
-		const call = makeCall(makeIdent("msNumberToString", loc), [arg], loc);
+		const call = makeCall(runtimeRef("msNumberToString", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// bigint → digits + "n", matching what node prints for console.log(255n).
 	// Interpolation and concat drop the suffix; that split is TS behaviour, not ours.
 	if (t.kind == TypeKind.BigInt && !ctx.jsBackend) {
-		const call = makeCall(makeIdent("msBigIntToDebugString", loc), [arg], loc);
+		const call = makeCall(runtimeRef("msBigIntToDebugString", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
 	// Boolean → msBoolToString
 	if (t.kind == TypeKind.Boolean) {
-		const call = makeCall(makeIdent("msBoolToString", loc), [arg], loc);
+		const call = makeCall(runtimeRef("msBoolToString", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
@@ -117,7 +117,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	}
 	// Fallback for enums without typeName
 	if (t.kind == TypeKind.Enum) {
-		const call = makeCall(makeIdent("msIntToString", loc), [arg], loc);
+		const call = makeCall(runtimeRef("msIntToString", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
@@ -348,7 +348,7 @@ export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	// No args → msPrintln("")
 	if (cd.arguments.length == 0) {
-		return makeCall(makeIdent("msPrintln", loc), [makeString("", loc)], loc);
+		return makeCall(runtimeRef("msPrintln", loc), [makeString("", loc)], loc);
 	}
 	// Coerce all args to string
 	const coerced: Node[] = [];
@@ -359,7 +359,7 @@ export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	}
 	// Single arg → msPrintln(coerced)
 	if (coerced.length == 1) {
-		return makeCall(makeIdent("msPrintln", loc), [coerced[0]], loc);
+		return makeCall(runtimeRef("msPrintln", loc), [coerced[0]], loc);
 	}
 	// Multi-arg: build "coerced[0] + " " + coerced[1] + ..." chain
 	let result = coerced[0];
@@ -374,5 +374,5 @@ export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 		i = i + 1;
 	}
 	result.nodeType = stringType();
-	return makeCall(makeIdent("msPrintln", loc), [result], loc);
+	return makeCall(runtimeRef("msPrintln", loc), [result], loc);
 }

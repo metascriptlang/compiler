@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, String
 import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeHiddenAddr } from "../util";
+import { makeCall, makeIdent, makeNumber, makeHiddenAddr, runtimeRef } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -58,12 +58,12 @@ function rewriteStringOp(node: Node): Node {
 			const addrOf = makeHiddenAddr(d.left, loc);
 			const code = asAsciiCharCode(rd.right);
 			if (code >= 0) {
-				const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+				const result = makeCall(runtimeRef("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
 				result.nodeType = node.nodeType;
 				return result;
 			}
 			const right = coercePartToString(rd.right, loc);
-			const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
+			const result = makeCall(runtimeRef("msStringAppend", loc), [addrOf, right], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
@@ -84,11 +84,11 @@ function rewriteStringOp(node: Node): Node {
 				const addrOf = makeHiddenAddr(d.left, loc);
 				const code = asAsciiCharCode(cd.arguments[1]);
 				if (code >= 0) {
-					const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+					const result = makeCall(runtimeRef("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
 					result.nodeType = node.nodeType;
 					return result;
 				}
-				const result = makeCall(makeIdent("msStringAppend", loc),
+				const result = makeCall(runtimeRef("msStringAppend", loc),
 						[addrOf, cd.arguments[1]], loc);
 				result.nodeType = node.nodeType;
 				return result;
@@ -106,7 +106,7 @@ function rewriteStringOp(node: Node): Node {
 					newArgs.push(cd.arguments[i]);
 					i += 1;
 				}
-				const result = makeCall(makeIdent("msStringAppendArr", loc), newArgs, loc);
+				const result = makeCall(runtimeRef("msStringAppendArr", loc), newArgs, loc);
 				result.nodeType = node.nodeType;
 				return result;
 			}
@@ -128,7 +128,7 @@ function rewriteStringOp(node: Node): Node {
 	if (d.operator == "+") {
 		const left = coercePartToString(d.left, loc);
 		const right = coercePartToString(d.right, loc);
-		const result = makeCall(makeIdent("msStringConcat", loc), [left, right], loc);
+		const result = makeCall(runtimeRef("msStringConcat", loc), [left, right], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -141,12 +141,12 @@ function rewriteStringOp(node: Node): Node {
 		const addrOf = makeHiddenAddr(d.left, loc);
 		const code = asAsciiCharCode(d.right);
 		if (code >= 0) {
-			const result = makeCall(makeIdent("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
+			const result = makeCall(runtimeRef("msStringAppendChar", loc), [addrOf, makeNumber(code, loc)], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
 		const right = coercePartToString(d.right, loc);
-		const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
+		const result = makeCall(runtimeRef("msStringAppend", loc), [addrOf, right], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -162,7 +162,7 @@ function rewriteStringIndexAssign(arr: Node, idx: Node, val: Node, original: Nod
 	const loc = original.location;
 	// Build: msStringSetChar(s, i, ch) — codegen will handle & for the first arg
 	// since mutating methods use the & prefix convention
-	const setCall = makeCall(makeIdent("msStringSetChar", loc), [arr, idx, val], loc);
+	const setCall = makeCall(runtimeRef("msStringSetChar", loc), [arr, idx, val], loc);
 	setCall.nodeType = original.nodeType;
 	return setCall;
 }
@@ -176,17 +176,17 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.nodeType != null) {
 		if (isWideInteger(node.nodeType)) {
 			const fn = node.nodeType.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
-			return makeCall(makeIdent(fn, loc), [node], loc);
+			return makeCall(runtimeRef(fn, loc), [node], loc);
 		}
 		if (isNumeric(node.nodeType)) {
-			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+			return makeCall(runtimeRef("msNumberToString", loc), [node], loc);
 		}
 		if (node.nodeType.kind == TypeKind.Boolean) {
-			return makeCall(makeIdent("msBoolToString", loc), [node], loc);
+			return makeCall(runtimeRef("msBoolToString", loc), [node], loc);
 		}
 	}
 	if (node.kind == NodeKind.NumberLiteral) {
-		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+		return makeCall(runtimeRef("msNumberToString", loc), [node], loc);
 	}
 	return node;
 }

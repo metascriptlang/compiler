@@ -16,7 +16,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
-import { makeIdent, makeBlock, makeExprStmt, makeCall } from "../transform/util";
+import { makeIdent, makeBlock, makeExprStmt, makeCall, runtimeRef } from "../transform/util";
 import { testLoc } from "./inject";
 
 // ===== Known wasMoved / destroy function names =====
@@ -237,13 +237,13 @@ export function optimizeDrc(program: Node): Node {
 function makeWmCall(varName: string): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(makeIdent("msStringWasMoved", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(runtimeRef("msStringWasMoved", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeDestroyCallForTest(varName: string): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(makeIdent("msStringDecref", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(runtimeRef("msStringDecref", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeOtherStmt(): Node {

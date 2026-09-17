@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
+import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
@@ -268,7 +268,7 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
 	if (increfFn == "msStringCopy") {
-		buf.items.push(makeExprStmt(makeCall(makeIdent("msStringCopy", loc),
+		buf.items.push(makeExprStmt(makeCall(runtimeRef("msStringCopy", loc),
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
 	}
@@ -481,7 +481,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 			// there would race the atomic count). Acyclic pointees are skipped per the
 			// reference attachedTrace gate (liftdestructors.nim:782-791).
 			if (!atomic && isCyclic) {
-				buf.items.push(makeExprStmt(makeCall(makeIdent("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
 		},
 		_ => {},
@@ -1241,9 +1241,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
 	// the statement list is sufficient. No-op under --gc=drc.
 	if (hook == "destroy") {
-		const wrapped: Node[] = [makeExprStmt(makeCall(makeIdent("msOrcBeginTeardown", loc), [], loc), loc)];
+		const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
 		for (const it of buf.items) { wrapped.push(it); }
-		wrapped.push(makeExprStmt(makeCall(makeIdent("msOrcEndTeardown", loc), [], loc), loc));
+		wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
 		buf.items = wrapped;
 	}
 
@@ -1332,7 +1332,7 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	if (isRef) {
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
 		dupStmts.push(resultDecl);
-		dupStmts.push(makeExprStmt(makeCall(makeIdent("msIncref", loc), [makeTypedIdentResolved(resultSym, null, loc)], loc), loc));
+		dupStmts.push(makeExprStmt(makeCall(runtimeRef("msIncref", loc), [makeTypedIdentResolved(resultSym, null, loc)], loc), loc));
 		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
@@ -1531,11 +1531,11 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
 	if (isStringLike(fieldType)) {
-		return makeCall(makeIdent("msStringEquals", loc), [aField, bField], loc);
+		return makeCall(runtimeRef("msStringEquals", loc), [aField, bField], loc);
 	}
 	// bigint fields are msBigInt* — `===` would answer identity, not value.
 	if (fieldType.kind == TypeKind.BigInt) {
-		return makeBinary(makeCall(makeIdent("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
+		return makeBinary(makeCall(runtimeRef("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
 	}
 	if (isPayloadUnion(fieldType)) {
 		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
