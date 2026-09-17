@@ -28,7 +28,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	TypeAssertionData, DestructuringDeclData,
 	ExportDeclData, DecoratedDeclData, TestDeclData,
-	MacroInvocationData,
+	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData,
 } from "../ast/node";
@@ -264,6 +264,11 @@ function bindStatement(state: BinderState, node: Node): void {
 		NodeKind.UnreachableStmt => {
 			bindExpression(state, node);
 			state.currentFlow = state.unreachableFlow;
+		},
+		NodeKind.SpliceMany => {
+			for (const n of (node.data as SpliceManyData).spliceNodes) {
+				bindStatement(state, n);
+			}
 		},
 		_ => bindExpression(state, node),
 	};
@@ -818,6 +823,10 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	for (const arg of d.arguments) {
 		bindExpression(state, arg);
 	}
+	// Every macro invocation is a bare call, rewritten IN PLACE to
+	// MacroInvocation by the checker after this pass — stamp the program point
+	// here so bindExpandedSubtree has a seed (same point as that arm below).
+	node.flowNode = state.currentFlow;
 	// `exit(...)` never returns (C: exit/msExit, [[noreturn]]). Flow after the
 	// call is dead, so an `if (!r.ok) { exit(1); } r.value` guard narrows the
 	// fall-through path to the ok variant.
