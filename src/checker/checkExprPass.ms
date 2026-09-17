@@ -1526,6 +1526,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					arrExpected = uNonNull;
 				}
 			}
+			if (arrExpected != null && isMaybeType(arrExpected) && arrExpected.typeReturn != null) {
+				arrExpected = peelTransparentInstance(arrExpected.typeReturn);
+			}
 			if (arrExpected != null && arrExpected.kind == TypeKind.Union) {
 				const soleArr = soleUnionMember(arrExpected, isArrayShaped);
 				if (soleArr != null) arrExpected = soleArr;

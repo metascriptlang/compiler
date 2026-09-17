@@ -512,6 +512,63 @@ export function createTypeRef(name: string): Type {
 	return t;
 }
 
+export function nullableUnionOf(members: Type[]): Type {
+	let sawNull = false;
+	const parts: Type[] = [];
+	for (const m of members) {
+		if (m == null) continue;
+		if (m.kind == TypeKind.Null) { sawNull = true; continue; }
+		if (isMaybeType(m) && m.typeReturn != null) {
+			sawNull = true;
+			parts.push(m.typeReturn);
+			continue;
+		}
+		if (hasNullMember(m)) {
+			sawNull = true;
+			for (const c of m.typeChildren) {
+				if (c != null && c.kind != TypeKind.Null) parts.push(c);
+			}
+			continue;
+		}
+		parts.push(m);
+	}
+	if (!sawNull) return createUnion(members);
+	const kept: Type[] = [];
+	for (const p of parts) {
+		let dup = false;
+		for (const k of kept) {
+			if (k == p) { dup = true; break; }
+		}
+		if (!dup) kept.push(p);
+	}
+	if (kept.length == 0) return nullType();
+	if (kept.length == 1) {
+		const only = kept[0];
+		if (isMaybeWrappable(only) || only.kind == TypeKind.Union) return createMaybeType(only);
+		if (members.length == 2 && members[0] != null && members[0].kind == TypeKind.Null && members[1] == only) {
+			return createUnion(members);
+		}
+		return createUnion([only, nullType()]);
+	}
+	return createMaybeType(createUnion(kept));
+}
+
+export function isNullableShape(members: Type[]): boolean {
+	for (const m of members) {
+		if (m == null) continue;
+		if (m.kind == TypeKind.Null || isMaybeType(m) || hasNullMember(m)) return true;
+	}
+	return false;
+}
+
+function hasNullMember(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
+	for (const c of t.typeChildren) {
+		if (c != null && c.kind == TypeKind.Null) return true;
+	}
+	return false;
+}
+
 export function createUnion(types: Type[]): Type {
 	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
 	// Without flattening, downstream shape checks miss the canonical form and
@@ -2497,19 +2554,8 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete);
 				substituteClearFlag(t);
-				// Re-canonicalize `T | null` after substitution: when T resolves to a
-				// value-type, collapse Union<T, Null> → Maybe<T>. Mirrors the path
-				// in resolvePass.ms:260-266 that canonicalizes user-written
-				// annotations. At decl time, T is a GenericParam (not Maybe-wrappable)
-				// so the original Union<GP, Null> stays uncanonical; at substitute time
-				// T is concrete and we can pick the right shape.
-				if (t.kind == TypeKind.Union && copy.typeChildren.length == 2) {
-					const a = copy.typeChildren[0];
-					const b = copy.typeChildren[1];
-					if (a != null && b != null) {
-						if (b.kind == TypeKind.Null && isMaybeWrappable(a)) return createMaybeType(a);
-						if (a.kind == TypeKind.Null && isMaybeWrappable(b)) return createMaybeType(b);
-					}
+				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
+					return nullableUnionOf(copy.typeChildren);
 				}
 				return copy;
 			},
@@ -2589,16 +2635,8 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes);
 				substituteClearFlag(t);
-				// Re-canonicalize `T | null` after substitution (same rule as
-				// substituteTypeInner): collapse Union<T, Null> → Maybe<T> when
-				// the substituted member became a wrappable value-type.
-				if (t.kind == TypeKind.Union && copy.typeChildren.length == 2) {
-					const a = copy.typeChildren[0];
-					const b = copy.typeChildren[1];
-					if (a != null && b != null) {
-						if (b.kind == TypeKind.Null && isMaybeWrappable(a)) return createMaybeType(a);
-						if (a.kind == TypeKind.Null && isMaybeWrappable(b)) return createMaybeType(b);
-					}
+				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
+					return nullableUnionOf(copy.typeChildren);
 				}
 				return copy;
 			},

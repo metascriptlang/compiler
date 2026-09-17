@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createMaybeType, setMinArity, assignType, isStructType, isMaybeWrappable, isNumeric, isPrimitiveUnionMember, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet } from "./types";
+import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -15,6 +15,13 @@ import { findCallTypeArg, getGenericDecl, getGenericDeclFieldNames, getGenericDe
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
 import { monoTypeKey } from "../monomorphize/registry";
+
+function anyHasGenericParams(types: Type[]): boolean {
+	for (const t of types) {
+		if (hasGenericParams(t)) return true;
+	}
+	return false;
+}
 
 // stripRestParamPrefix — in-place strip of the legacy "..." prefix from the
 // last entry of an AST param-name array. Mirrors what createFunction does for
@@ -401,38 +408,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				members.push(resolveAnnotation(part, ctx, line, col));
 			}
 		}
-		// T | null where T is value-type struct → Maybe<T> (struct has no null sentinel,
-		// so it needs a wrapper). Ref<T> | null and Ptr<T> | null stay as Union — codegen
-		// collapses them to bare pointer at emit time (the null pointer IS the sentinel),
-		// while the type checker keeps the union so flow narrowing can distinguish
-		// `Foo` from `Foo | null`.
-		if (members.length == 2) {
-			if (isMaybeWrappable(members[0]) && members[1] != null && members[1].kind == TypeKind.Null) {
-				return createMaybeType(members[0]);
-			}
-			if (members[0] != null && members[0].kind == TypeKind.Null && isMaybeWrappable(members[1])) {
-				return createMaybeType(members[1]);
-			}
-		}
-		// Flat nullable primitive union (`"a" | "b" | null`, `float32 | string | null`):
-		// once createUnion flattens, the Maybe shape is unrecoverable — catch it
-		// here. The null-free residue rides Maybe's present/value machinery (single
-		// msString carrier for strlits, tagged union for mixed primitives).
-		// Ref/Struct members keep the plain-union path.
-		if (members.length > 2) {
-			let sawNull = false;
-			const nonNull: Type[] = [];
-			for (const m of members) {
-				if (m != null && m.kind == TypeKind.Null) { sawNull = true; }
-				else if (m != null) { nonNull.push(m); }
-			}
-			if (sawNull && nonNull.length >= 2) {
-				let allPrim = true;
-				for (const m of nonNull) {
-					if (!isPrimitiveUnionMember(m)) { allPrim = false; }
-				}
-				if (allPrim) return createMaybeType(createUnion(nonNull));
-			}
+		if (members.length > 0 && isNullableShape(members) && !anyHasGenericParams(members)) {
+			return nullableUnionOf(members);
 		}
 		if (members.length > 0) return createUnion(members);
 	}

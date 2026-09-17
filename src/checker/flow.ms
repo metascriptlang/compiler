@@ -20,7 +20,7 @@ import {
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion,
-	createMaybeType, isMaybeWrappable, isPrimitiveUnionMember,
+	nullableUnionOf, hasGenericParams,
 	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
@@ -835,20 +835,15 @@ export function canonicalizeBranchJoin(t: Type): Type {
 		if (!dup) nonNull.push(member);
 	}
 	if (!sawNull) return t;
-	if (nonNull.length == 0) return nullType();
-	if (nonNull.length == 1) {
-		if (isMaybeWrappable(nonNull[0])) return createMaybeType(nonNull[0]);
-		return createUnion([nonNull[0], nullType()]);
-	}
-	let allPrim = true;
-	for (const m of nonNull) {
-		if (!isPrimitiveUnionMember(m)) { allPrim = false; break; }
-	}
-	if (allPrim) return createMaybeType(createUnion(nonNull));
 	const rebuilt: Type[] = [];
-	for (const m of nonNull) rebuilt.push(m);
+	let generic = false;
+	for (const m of nonNull) {
+		rebuilt.push(m);
+		if (hasGenericParams(m)) generic = true;
+	}
 	rebuilt.push(nullType());
-	return createUnion(rebuilt);
+	if (generic) return createUnion(rebuilt);
+	return nullableUnionOf(rebuilt);
 }
 
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
