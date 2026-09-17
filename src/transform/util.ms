@@ -2,7 +2,8 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { makeSymbol, setFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
@@ -103,13 +104,13 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 	if (innerType == null || innerType.kind == TypeKind.Void) return voidPtrExpr;
 	const fn = unboxFnNameForType(innerType);
 	if (fn != "") {
-		const c = makeCall(makeIdent(fn, loc), [voidPtrExpr], loc);
+		const c = makeCall(runtimeRef(fn, loc), [voidPtrExpr], loc);
 		c.nodeType = innerType;
 		return c;
 	}
 	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
 	if (isStructLikeType(innerType) || innerType.kind == TypeKind.Array) {
-		const call = makeCall(makeIdent("msUnboxStruct", loc), [voidPtrExpr], loc);
+		const call = makeCall(runtimeRef("msUnboxStruct", loc), [voidPtrExpr], loc);
 		call.nodeType = innerType;
 		return call;
 	}
@@ -165,6 +166,21 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 	n.resolvedSym = sym;
 	n.nodeType = sym.symbolType;
 	return n;
+}
+
+let _runtimeSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function runtimeProcSym(procName: string): Symbol {
+	const existing = _runtimeSyms.get(procName);
+	if (existing != null) return existing;
+	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
+	setFlag(sym, SymbolFlag.ImportC);
+	_runtimeSyms.set(procName, sym);
+	return sym;
+}
+
+export function runtimeRef(procName: string, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
 
 export function hookRef(hookName: string, loc: SourceLocation): Node {
