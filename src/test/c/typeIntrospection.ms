@@ -37,11 +37,15 @@ import { Node, NodeKind } from "std/meta";
 interface User { name: string; age: int32; }
 
 macro fieldCountOf(x: Node): Node {
+	let t = x.nodeType;
+	if (t.kind != NodeKind.TypeGeneric || t.typExprBase.name != "Ref") error("an interface value must carry Ref<TypeObject>", x);
+	t = t.typExprArgs[0];
+	if (t.typExprFieldNames.length != 2) error("expected 2 fields, got " + t.typExprFieldNames.length, x);
 	return {
 		kind: NodeKind.NumberLiteral,
 		line: x.line,
 		column: x.column,
-		value: x.nodeType.typExprFieldNames.length,
+		value: t.typExprFieldNames.length,
 		isFloat: false,
 	};
 }
@@ -170,18 +174,21 @@ test "E2E: codec-style macro reads typExprFieldNames after defer + monomorphize 
 	// The real A3 use case: codec macro inside a generic helper. At eager-check
 	// time, `t.nodeType` is GenericParam — typExprFieldNames doesn't exist on
 	// Identifier. Defer holds the call. Mono substitutes T → User. Post-mono
-	// expandMacros fires the macro with t.nodeType = TypeObject (Struct shape).
+	// expandMacros fires the macro with t.nodeType = Ref<TypeObject>.
 	const src = `
 import { Node, NodeKind } from "std/meta";
 
 class User { name: string; age: int32; }
 
 macro fieldCount(x: Node): Node {
+	let t = x.nodeType;
+	if (t.kind == NodeKind.TypeGeneric) t = t.typExprArgs[0];
+	if (t.typExprFieldNames.length != 2) error("expected 2 fields, got " + t.typExprFieldNames.length, x);
 	return {
 		kind: NodeKind.NumberLiteral,
 		line: x.line,
 		column: x.column,
-		value: x.nodeType.typExprFieldNames.length,
+		value: t.typExprFieldNames.length,
 		isFloat: false,
 	};
 }
@@ -259,11 +266,19 @@ class Doc {
 }
 
 macro firstDecoratorKind(x: Node): Node {
+	let t = x.nodeType;
+	if (t.kind == NodeKind.TypeGeneric) t = t.typExprArgs[0];
+	const decs = t.typExprFieldDecorators;
+	if (decs.length != 2) error("expected 2 decorator slots, got " + decs.length, x);
+	if (decs[0].length != 1) error("expected 1 decorator on id, got " + decs[0].length, x);
+	if (decs[1].length != 0) error("expected no decorator on name, got " + decs[1].length, x);
+	const dec = decs[0][0];
+	if (dec.kind != NodeKind.MacroInvocation || dec.macroName != "rename") error("id is not decorated by rename", x);
 	return {
 		kind: NodeKind.NumberLiteral,
 		line: x.line,
 		column: x.column,
-		value: x.nodeType.typExprFieldDecorators[0][0].kind,
+		value: dec.kind,
 		isFloat: false,
 	};
 }
@@ -271,6 +286,44 @@ macro firstDecoratorKind(x: Node): Node {
 function main(): void {
 	const d: Doc = new Doc();
 	const k = firstDecoratorKind(d);
+}
+`;
+	const c = compileToCWithStd(src);
+	assert c.ok;
+}
+
+test "E2E: field decorators keep source order when a user decorator sits beside an intrinsic one" {
+	const src = `
+import { Node, NodeKind } from "std/meta";
+
+function rename(name: string): (value: Node) => void {
+	return (value: Node): void => {};
+}
+
+class Doc {
+	@rename("_id") @exportName("doc_id") id: string;
+	@exportName("doc_name") name: string;
+}
+
+macro decoratorNames(x: Node): Node {
+	let t = x.nodeType;
+	if (t.kind == NodeKind.TypeGeneric) t = t.typExprArgs[0];
+	const decs = t.typExprFieldDecorators;
+	if (decs[0].length != 2) error("expected 2 decorators on id, got " + decs[0].length, x);
+	if (decs[0][0].macroName != "rename" || decs[0][1].macroName != "exportName") error("id decorators lost their source order", x);
+	if (decs[1].length != 1 || decs[1][0].macroName != "exportName") error("expected exportName on name", x);
+	return {
+		kind: NodeKind.NumberLiteral,
+		line: x.line,
+		column: x.column,
+		value: decs[0].length,
+		isFloat: false,
+	};
+}
+
+function main(): void {
+	const d: Doc = new Doc();
+	const k = decoratorNames(d);
 }
 `;
 	const c = compileToCWithStd(src);
