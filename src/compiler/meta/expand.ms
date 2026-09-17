@@ -61,7 +61,7 @@ import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "
 import { rewriteCallAsMacroInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -1203,6 +1203,22 @@ function tryRewriteEnumMember(node: Node): Node {
 //
 // Limitation: D must be an ObjectLiteral at the call site. A variable like
 // `createNodeAt(K, dataVar, L)` can't be statically merged — left as-is.
+function peelHiddenConv(n: Node): Node {
+	let cur = n;
+	while (cur != null) {
+		if (cur.kind == NodeKind.HiddenStdConv || cur.kind == NodeKind.HiddenSubConv) {
+			cur = (cur.data as HiddenStdConvData).convExpr;
+			continue;
+		}
+		if (cur.kind == NodeKind.HiddenDeref) {
+			cur = (cur.data as HiddenDerefData).expr;
+			continue;
+		}
+		break;
+	}
+	return cur;
+}
+
 function tryRewriteCreateNodeAt(node: Node): Node {
 	if (node == null || node.kind != NodeKind.CallExpr) return node;
 	const c = node.data as CallExprData;
@@ -1211,9 +1227,9 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	if (calleeName != "createNodeAt" && calleeName != "createNode") return node;
 	if (c.arguments.length != 3) return node;
 
-	const kindArg = c.arguments[0];
-	const dataArg = c.arguments[1];
-	const locArg = c.arguments[2];
+	const kindArg = peelHiddenConv(c.arguments[0]);
+	const dataArg = peelHiddenConv(c.arguments[1]);
+	const locArg = peelHiddenConv(c.arguments[2]);
 
 	// D must be an ObjectLiteral for v1 — otherwise we can't statically merge
 	if (dataArg.kind != NodeKind.ObjectLiteral) return node;
@@ -2104,6 +2120,9 @@ registerExpandMacroInvocation(expandMacroInvocation);
 registerMacroBodyPreparer((body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
 	preprocessMacroBody(body);
 	return bakeTypeIntrinsics(body, ctx, regCtx, macroName, "");
+});
+registerComptimeHelperPreparer((decl: Node): void => {
+	preprocessMacroBody(decl);
 });
 
 // ===== Tests =====

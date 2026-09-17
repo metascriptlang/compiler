@@ -25,7 +25,7 @@ import { lookupModuleCtx } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 
@@ -207,6 +207,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		}
 	}
 	const clone = cloneNodeForCheck(sym.declNode);
+	callComptimeHelperPreparer(clone);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	const idx = compileProgramIntoEngine(program, seeds, name);

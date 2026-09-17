@@ -70,6 +70,15 @@ export function registerMacroBodyPreparer(fn: MacroBodyPreparerFn): void {
 	macroBodyPreparerFn = fn;
 }
 
+type ComptimeHelperPreparerFn = (decl: Node) => void;
+let comptimeHelperPreparerFn: ComptimeHelperPreparerFn = (decl: Node): void => {};
+export function callComptimeHelperPreparer(decl: Node): void {
+	comptimeHelperPreparerFn(decl);
+}
+export function registerComptimeHelperPreparer(fn: ComptimeHelperPreparerFn): void {
+	comptimeHelperPreparerFn = fn;
+}
+
 let _macroDeclModulePath = "";
 
 export function setMacroDeclModulePath(path: string): void {
