@@ -19,7 +19,7 @@ import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
-import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
+import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher } from "../codegen/c/index";
 import { mangleModuleName } from "../codegen/c/names";
 import { resetEmittedInstances } from "../codegen/c/declarations";
 import { aliveSetHasModule, clearSkippedTypeInfos } from "../codegen/c/context";
@@ -1523,6 +1523,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let clangTime: float64 = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
+	const moduleOutputs: CModuleOutput[] = [];
 	const cd = cacheDir();
 	// GATHER — codegen stays serial (emitted-instance dedup + hook ownership are
 	// global codegen state); cache misses become parallel compile jobs. oSlots
@@ -1544,7 +1545,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 		const tCg = performance.now();
 		const preCgErrors = p.ctx.errors.length;
-		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
+		const output = generateCModuleOutput(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
+		const cCode = output.code;
+		output.code = "";
+		moduleOutputs.push(output);
 		codegenTime = codegenTime + (performance.now() - tCg);
 
 		if (p.ctx.errors.length > preCgErrors) {
@@ -1615,7 +1619,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1633,7 +1637,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib");
+		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
 		// The dispatcher TU is a fixed input to its compile job — its .c must be
 		// fp-keyed and published atomically like any module's: two concurrent
 		// builds with different entries/configs write different dispatcher C to

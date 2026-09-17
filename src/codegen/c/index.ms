@@ -25,7 +25,18 @@ import { emitIncludeDirectives } from "./context";
 // and per-module DatInit000/Init000 (non-static for cross-module visibility).
 // Does NOT generate the global dispatcher (MsPreMainInner/MsMainInner/MsMain/POSIX main).
 
+export class CModuleOutput {
+	code: string = "";
+	modulePath: string = "";
+	hasDatInit: boolean = false;
+	hasInit: boolean = false;
+}
+
 export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean): string {
+	return generateCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr).code;
+}
+
+export function generateCModuleOutput(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean): CModuleOutput {
 	const g = createCGen(ctx, modulePath);
 	g.aliveSet = aliveSet;
 	g.isTestBuild = isTestBuild;
@@ -97,13 +108,16 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	emitTestTable(g);
 
 	// Generate per-module init functions (non-static for cross-module visibility)
-	genModuleInitFns(g);
+	const output = new CModuleOutput();
+	output.modulePath = modulePath;
+	genModuleInitFns(g, output);
 
 
 
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
 
-	return assembleOutput(g);
+	output.code = assembleOutput(g);
+	return output;
 }
 
 // ===== Per-Module Init Functions =====
@@ -111,23 +125,15 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 // Generates DatInit000 and Init000 for this module.
 // Non-static so other modules' dispatchers can call them.
 
-let _emptyDatInits = new HashSet<string>();
-let _emptyInits = new HashSet<string>();
-
-function clearInitEmptiness(): void {
-	_emptyDatInits = new HashSet<string>();
-	_emptyInits = new HashSet<string>();
-}
-
-function genModuleInitFns(g: CGen): void {
+function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const modName = mangleModuleName(g.modulePath);
 	const datInitName = g.isHcr ? "DatInit000" : `${modName}__DatInit000`;
 	const initName = g.isHcr ? "Init000" : `${modName}__Init000`;
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
-	if (datContent.length == 0) _emptyDatInits.add(g.modulePath);
-	if (initContent.length == 0) _emptyInits.add(g.modulePath);
+	output.hasDatInit = datContent.length > 0;
+	output.hasInit = initContent.length > 0;
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
@@ -179,8 +185,14 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, targetOs: string, noMain: boolean): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, targetOs: string, noMain: boolean, outputs: CModuleOutput[]): string {
 	const b = createBuilder();
+	const emptyDatInits = new HashSet<string>();
+	const emptyInits = new HashSet<string>();
+	for (const output of outputs) {
+		if (!output.hasDatInit) emptyDatInits.add(output.modulePath);
+		if (!output.hasInit) emptyInits.add(output.modulePath);
+	}
 
 	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for msTestErrorFlag + async futures
 	addLine(b, "#include <stdint.h>");
@@ -191,8 +203,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	// Forward declarations for all module init functions
 	for (const mp of modulePaths) {
 		const modName = mangleModuleName(mp);
-		if (!_emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
-		if (!_emptyInits.has(mp) || mp == entryPath) addLine(b, `void ${modName}__Init000(void);`);
+		if (!emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
+		if (!emptyInits.has(mp) || mp == entryPath) addLine(b, `void ${modName}__Init000(void);`);
 	}
 	addNewline(b);
 
@@ -210,7 +222,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		if (!_emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
+		if (!emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -220,7 +232,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "static void MsMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		if (mp != entryPath && !_emptyInits.has(mp)) {
+		if (mp != entryPath && !emptyInits.has(mp)) {
 			addLine(b, `${mangleModuleName(mp)}__Init000();`);
 		}
 	}
@@ -237,8 +249,6 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "  msOrcCollect();");
 	addLine(b, "}");
 	addNewline(b);
-
-	clearInitEmptiness();
 
 	// Library output: the host owns the entry point and calls MsMain() — emit no
 	// main wrapper, whatever the target OS.
@@ -301,10 +311,10 @@ import "../../parser/statements/core";
 function cOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	const moduleCode = generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
+	const output = generateCModuleOutput(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
 	const paths: string[] = ["test/input"];
-	const dispatcher = genProjectDispatcher(paths, "test/input", "", false);
-	return moduleCode + "\n" + dispatcher;
+	const dispatcher = genProjectDispatcher(paths, "test/input", "", false, [output]);
+	return output.code + "\n" + dispatcher;
 }
 
 function cModuleOutput(input: string): string {

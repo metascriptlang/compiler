@@ -19,7 +19,7 @@ import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
-import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
+import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher } from "../codegen/c/index";
 import { AliveSet, createAliveSet } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
 import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
@@ -252,6 +252,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 
 	// Full pipeline per module (same as compile.ms:358-411)
 	let combined = "";
+	const moduleOutputs: CModuleOutput[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -278,10 +279,13 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
-		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
+		const output = generateCModuleOutput(analyzed, ctx, modPath, aliveSet, false, false);
+		combined = combined + output.code;
+		output.code = "";
+		moduleOutputs.push(output);
 	}
 
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false, moduleOutputs);
 	return `${combined}\n${dispatcher}`;
 }
 
@@ -366,6 +370,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false);
 
 	let combined = "";
+	const moduleOutputs: CModuleOutput[] = [];
 	for (const modPath of graph.loadOrder) {
 		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
@@ -394,10 +399,13 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
-		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
+		const output = generateCModuleOutput(analyzed, ctx, modPath, aliveSet, false, false);
+		combined = combined + output.code;
+		output.code = "";
+		moduleOutputs.push(output);
 	}
 
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false, moduleOutputs);
 	return `${combined}\n${dispatcher}`;
 }
 
