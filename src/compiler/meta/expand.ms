@@ -1274,24 +1274,21 @@ function tryRewriteCompileError(node: Node): Node {
 	const hasLoc = cd.arguments.length == 2;
 	const locNode = hasLoc ? cd.arguments[1] : null;
 	if (name == "error") {
-		// error("msg") → return { __compileError: 1, message: "msg" }
-		// error("msg", node) → return { ..., line, column, endLine, endColumn }
-		const keys: string[] = ["__compileError", "message"];
-		const props: Node[] = [mkNumber(1, loc), msgArg];
-		if (locNode != null) {
-			keys.push("line");
-			props.push(mkMember(locNode, "line", loc));
-			keys.push("column");
-			props.push(mkMember(locNode, "column", loc));
-			keys.push("endLine");
-			props.push(mkMember(locNode, "endLine", loc));
-			keys.push("endColumn");
-			props.push(mkMember(locNode, "endColumn", loc));
-		}
-		const sentinel = createNodeAt(NodeKind.ObjectLiteral, {
-			properties: props, keys, keyLocations: [],
+		let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: msgArg,
 		}, loc);
-		return createNodeAt(NodeKind.ReturnStmt, { argument: sentinel }, loc);
+		if (locNode != null) {
+			const fields: string[] = ["line", "column", "endLine", "endColumn"];
+			for (const f of fields) {
+				payload = createNodeAt(NodeKind.BinaryExpr, {
+					operator: "+", left: payload, right: mkString("\t", loc),
+				}, loc);
+				payload = createNodeAt(NodeKind.BinaryExpr, {
+					operator: "+", left: payload, right: mkMember(locNode, f, loc),
+				}, loc);
+			}
+		}
+		return createNodeAt(NodeKind.ThrowStmt, { throwArg: payload }, loc);
 	}
 	// warning("msg") / warning("msg", node) → console.log with encoded location.
 	// Non-halting — macro continues after the warning.
@@ -1724,6 +1721,23 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	const resultVal = vmCallFunction(vm, cm.funcIdx, marshalArgs);
 	popActiveMetaCtx();
 
+	if (vm.diagMessage != "") {
+		const diagMsg = vm.diagMessage;
+		const diagLine = vm.diagLine > 0 ? vm.diagLine as int32 : node.location.line;
+		const diagCol = vm.diagColumn > 0 ? vm.diagColumn as int32 : node.location.column;
+		vm.diagMessage = "";
+		if (vm.diagEndLine > 0 || vm.diagEndColumn > 0) {
+			const diagEndLine = vm.diagEndLine > 0 ? vm.diagEndLine as int32 : diagLine;
+			const diagEndCol = vm.diagEndColumn > 0 ? vm.diagEndColumn as int32 : diagCol + 1;
+			addErrorFullRange(ctx, `Macro '${d.macroName}': ${diagMsg}`, diagLine, diagCol, diagEndLine, diagEndCol);
+		} else {
+			addError(ctx, `Macro '${d.macroName}': ${diagMsg}`, diagLine, diagCol);
+		}
+		clearObjectHeap(vm.objectHeap);
+		clearArrayHeap(vm.arrayHeap);
+		return node;
+	}
+
 	let vmCtx: RaiserContext | null = {
 		mod: vm.mod,
 		hasModule: true,
@@ -1744,37 +1758,6 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		return node;
 	}
 
-	// Check for compile-time error sentinel.
-	// error("msg") → { __compileError: 1, message: "msg" }
-	// error("msg", node) → { __compileError: 1, message: "msg", line: N, column: N }
-	const lastVal = vmCtx.lastResult;
-	if (lastVal.kind == RaiserValueKind.Object) {
-		const errFlag = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "__compileError");
-		if (errFlag.kind == RaiserValueKind.Int && errFlag.intVal == 1) {
-			const errMsg = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "message");
-			const msg = errMsg.kind == RaiserValueKind.String ? errMsg.strVal : "compile error in macro";
-			// 2-arg form: use the input node's location if provided.
-			// Supports both point (line, column) and range (+ endLine, endColumn).
-			const errLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "line");
-			const errCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "column");
-			const errEndLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endLine");
-			const errEndCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endColumn");
-			const diagLine = errLine.kind == RaiserValueKind.Int ? errLine.intVal as int32 : (errLine.kind == RaiserValueKind.Float ? errLine.floatVal as int32 : node.location.line);
-			const diagCol = errCol.kind == RaiserValueKind.Int ? errCol.intVal as int32 : (errCol.kind == RaiserValueKind.Float ? errCol.floatVal as int32 : node.location.column);
-			const hasEndLine = errEndLine.kind == RaiserValueKind.Int || errEndLine.kind == RaiserValueKind.Float;
-			const hasEndCol = errEndCol.kind == RaiserValueKind.Int || errEndCol.kind == RaiserValueKind.Float;
-			if (hasEndLine || hasEndCol) {
-				const diagEndLine = hasEndLine ? (errEndLine.kind == RaiserValueKind.Int ? errEndLine.intVal as int32 : errEndLine.floatVal as int32) : diagLine;
-				const diagEndCol = hasEndCol ? (errEndCol.kind == RaiserValueKind.Int ? errEndCol.intVal as int32 : errEndCol.floatVal as int32) : diagCol + 1;
-				addErrorFullRange(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol, diagEndLine, diagEndCol);
-			} else {
-				addError(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol);
-			}
-			clearObjectHeap(vmCtx.objectHeap);
-			clearArrayHeap(vmCtx.arrayHeap);
-			return node;
-		}
-	}
 	// Check for compile-time warnings in Raiser output.
 	// warning("msg") → "__MACRO_WARN__:msg"
 	// warning("msg", node) → "__MACRO_WARN__:msg\tline\tcol"

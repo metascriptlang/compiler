@@ -235,6 +235,11 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 	if (result.funcIdx < 0) return createContext();
 	const noArgs: RaiserValue[] = [];
 	const resultVal = vmCallFunction(result.vm, result.funcIdx, noArgs);
+	if (result.vm.diagMessage != "") {
+		const diagMsg = result.vm.diagMessage;
+		result.vm.diagMessage = "";
+		addError(token, `@comptime block: ${diagMsg}`, result.vm.diagLine as int32, result.vm.diagColumn as int32);
+	}
 	return {
 		mod: result.vm.mod,
 		hasModule: true,

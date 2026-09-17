@@ -751,6 +751,16 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		clearArrayHeap(arrHeap);
 		return target;
 	}
+	if (vm.diagMessage != "") {
+		const diagMsg = vm.diagMessage;
+		const diagLine = vm.diagLine > 0 ? vm.diagLine as int32 : loc.line;
+		const diagCol = vm.diagColumn > 0 ? vm.diagColumn as int32 : loc.column;
+		vm.diagMessage = "";
+		addError(ctx, `decorator '${name}': ${diagMsg}`, diagLine, diagCol);
+		clearObjectHeap(objHeap);
+		clearArrayHeap(arrHeap);
+		return target;
+	}
 	if (res.kind != RaiserValueKind.Object) {
 		addError(ctx, `decorator '${name}' produced no result object`, loc.line, loc.column);
 		clearObjectHeap(objHeap);
@@ -766,21 +776,6 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		else plan.activeInits.stmts.push(s);
 	}
 	const rv = heapObjectGetField(objHeap, h, "result");
-	if (rv.kind == RaiserValueKind.Object) {
-		const errFlag = heapObjectGetField(objHeap, rv.intVal, "__compileError");
-		if (errFlag.kind == RaiserValueKind.Int && errFlag.intVal == 1) {
-			const errMsg = heapObjectGetField(objHeap, rv.intVal, "message");
-			const msg = errMsg.kind == RaiserValueKind.String ? errMsg.strVal : "compile error in decorator";
-			const el = heapObjectGetField(objHeap, rv.intVal, "line");
-			const ec = heapObjectGetField(objHeap, rv.intVal, "column");
-			const line = el.kind == RaiserValueKind.Int ? el.intVal as int32 : (el.kind == RaiserValueKind.Float ? el.floatVal as int32 : loc.line);
-			const column = ec.kind == RaiserValueKind.Int ? ec.intVal as int32 : (ec.kind == RaiserValueKind.Float ? ec.floatVal as int32 : loc.column);
-			addError(ctx, `decorator '${name}': ${msg}`, line, column);
-			clearObjectHeap(objHeap);
-			clearArrayHeap(arrHeap);
-			return target;
-		}
-	}
 	let outNode = target;
 	if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
