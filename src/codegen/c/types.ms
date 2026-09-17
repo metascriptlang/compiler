@@ -409,6 +409,10 @@ function structKeyIdentity(t: Type): string {
 	return mangledTypeName(t.sym, t.typeName);
 }
 
+export function anonUnionCName(t: Type): string {
+	return "msUnion_" + hashToBase36(typeKey(t));
+}
+
 export function typeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
@@ -1252,7 +1256,7 @@ function genUnionType(g: CGen, t: Type): string {
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached != "") return cached;
 
-	const name = (t.typeName.length > 0) ? typeIdentityName(g, t) : "msUnion_" + hashToBase36(key);
+	const name = (t.typeName.length > 0) ? typeIdentityName(g, t) : anonUnionCName(t);
 	typeCacheSet(g.typeCache, key, name);
 	if (t.typeName.length > 0) {
 		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);

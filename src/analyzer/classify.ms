@@ -5,13 +5,13 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType, isPrimitiveUnionMember } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { mangleMonoName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -317,7 +317,12 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			if (t.typeName != "" && hasAsgnFlag(t)) {
 				const un = hookBaseCName(t.typeName, t, ctx.checkerCtx);
 				return makeRcInfo(RcKind.Named, un, un + "Destroy", un + "Copy", un + "WasMoved", un + "Sink", false);
-			} else { return noRcInfo(); }
+			}
+			if (t.typeName == "" && anonUnionOwnsRc(t, ctx)) {
+				const an = anonUnionCName(t);
+				return makeRcInfo(RcKind.Named, an, an + "Destroy", an + "Copy", an + "WasMoved", an + "Sink", false);
+			}
+			return noRcInfo();
 		},
 		TypeKind.Tuple => {
 			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
@@ -333,6 +338,19 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		},
 		_ => noRcInfo(),
 	};
+}
+
+export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {
+	if (t.typeChildren == null || t.typeChildren.length < 2) return false;
+	let allPrimitive = true;
+	let owns = false;
+	for (const c of t.typeChildren) {
+		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return false;
+		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return false;
+		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
+		if (classifyType(c, ctx).needsCleanup) owns = true;
+	}
+	return owns && !allPrimitive;
 }
 
 // ===== Fresh Expression Detection =====

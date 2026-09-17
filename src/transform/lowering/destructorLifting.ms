@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
@@ -678,6 +678,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
+			} else {
+				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
+				if (anonName != "") namedObjOp(hook, anonName, xf, yf, buf, loc);
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
@@ -795,7 +798,11 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 		// Ref<Struct> in the C backend.
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
 			const variant = peelToStruct(objType.typeChildren[vi]);
-			if (variant != null && variant.typeNames != null) {
+			if (isScalarVariant(objType.typeChildren[vi], variant)) {
+				const visited: NameSet = createNameSet();
+				fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
+				if (probe.items.length > 0) return true;
+			} else if (variant != null && variant.typeNames != null) {
 				for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 					const visited: NameSet = createNameSet();
 					fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), variant.typeNames[fi], variant.typeChildren[fi], lctx, probe, visited, loc);
@@ -964,7 +971,8 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 		// no per-variant Destroy helpers were emitted, leaving the wrapper hook
 		// (`<Union>Destroy`) calling undefined helpers at link time.
 		const variant = peelToStruct(objType.typeChildren[vi]);
-		if (variant != null && variant.typeNames != null) {
+		const scalar = isScalarVariant(objType.typeChildren[vi], variant);
+		if ((variant != null && variant.typeNames != null) || scalar) {
 			// Generate per-variant arm body
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
@@ -972,7 +980,11 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const h2 = hook == "trace"
 				? makeSymbol(s2.name, SymbolKind.Variable, createPtr(voidType()), false)
 				: (s2.name == s1.name ? h1 : makeSymbol(s2.name, SymbolKind.Variable, s2.symbolType, false));
-			buildVariantArmBody(hook, objType, h1, h2, vi, vName, variant, isUnary, lctx, armBuf, loc);
+			if (scalar) {
+				buildScalarArmBody(hook, h1, h2, vName, objType.typeChildren[vi], lctx, armBuf, loc);
+			} else {
+				buildVariantArmBody(hook, objType, h1, h2, vi, vName, variant as Type, isUnary, lctx, armBuf, loc);
+			}
 
 			if (armBuf.items.length > 0) {
 				// Generate helper function: TypeName_vN_Suffix(self) or TypeName_vN_Suffix(dest, src)
@@ -1032,6 +1044,26 @@ function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: s
 	}
 }
 
+function isScalarVariant(member: Type | null, variant: Type | null): boolean {
+	if (member == null || (variant != null && variant.kind == TypeKind.Struct)) return false;
+	return member.kind != TypeKind.Null && member.kind != TypeKind.Void;
+}
+
+function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
+	if (hook == "sinkAssign") {
+		armBuf.items.push(makeExprStmt(makeAssign(
+			makeMember(hookParamDeref(s1, loc), vName, loc),
+			makeMember(hookParamDeref(s2, loc), vName, loc), loc), loc));
+		return;
+	}
+	const x = hookParamDeref(s1, loc);
+	const y = hook == "trace" ? makeIdentResolved(s2, loc)
+		: (hook == "destroy" || hook == "wasMoved") ? hookParamDeref(s1, loc)
+		: hookParamDeref(s2, loc);
+	const visited: NameSet = createNameSet();
+	fillBody(hook, x, y, vName, member, lctx, armBuf, visited, loc);
+}
+
 // Generate the body of a single variant's arm (used by both inline and helper patterns)
 function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "destroy") {
@@ -1070,7 +1102,9 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 		// the hook stopped after the tag copy — the payload never moved.
 		const variant = peelToStruct(objType.typeChildren[vi]);
 		const armBuf = newBuf();
-		if (variant != null && variant.typeNames != null) {
+		if (isScalarVariant(objType.typeChildren[vi], variant)) {
+			buildScalarArmBody(hook, s1, s2, "v" + vi.toString(), objType.typeChildren[vi], lctx, armBuf, loc);
+		} else if (variant != null && variant.typeNames != null) {
 			const vName = "v" + vi.toString();
 			buildVariantArmBody(hook, objType, s1, s2, vi, vName, variant, isUnary, lctx, armBuf, loc);
 		}
@@ -1629,6 +1663,23 @@ function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 
 // The four value-type hooks for a tuple, once per module + once globally (claimGlobal).
 // No-RC tuples generate nothing — classify.ms returns noRcInfo, so no hook is referenced.
+function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	if (t.typeName != "" || t.typeChildren == null || t.typeChildren.length < 2) return "";
+	let allPrimitive = true;
+	for (const c of t.typeChildren) {
+		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return "";
+		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return "";
+		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
+	}
+	if (allPrimitive) return "";
+	const name = anonUnionCName(t);
+	if (!nameSetContains(lctx.generated, name) && !isGloballyOwned(name)) {
+		if (!typeNeedsHooks(t, lctx, loc)) return "";
+		ensureHooks(name, t, null as unknown as Type, false, lctx, loc);
+	}
+	return namedTypeHasHooks(name, lctx) ? name : "";
+}
+
 function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
 	if (nameSetContains(lctx.generated, tupleName)) return;
@@ -2064,6 +2115,9 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 			// here so classify.ms's msTuple_<hash>{Destroy,Sink} reference isn't undefined.
 			if (node.nodeType.kind == TypeKind.Tuple) {
 				ensureTupleHooks(tupleTypeName(node.nodeType), node.nodeType, lctx, node.location);
+			}
+			if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName == "") {
+				ensureAnonUnionHooks(node.nodeType, lctx, node.location);
 			}
 		}
 		return node;
