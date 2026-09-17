@@ -174,66 +174,14 @@ function isVisiting(visited: Type[], t: Type): boolean {
 	return false;
 }
 
-// Walk a class body to find decorators attached to each named property.
-// Returns a parallel array (length = fieldNames.length) where [i] = decorator
-// nodes for field i, or [] if that field has no decorators.
-//
-// Source shape:
-//   class User {
-//       @rename("_id") id: string;     // decorated
-//       name: string;                  // not decorated
-//   }
-//
-// The class body holds Node[] members. A decorated property is wrapped:
-//   DecoratedDecl { decorators: [...], decoratedNode: PropertyDecl }
-// Static fields and methods are skipped (V2 scope: instance fields only).
-//
-// Inheritance limit: parent-class fields appear in `t.typeNames` but NOT in
-// `cd.classBody` of the child — they get empty decorator slots. Codec macros
-// see decorators only for fields declared directly on the class. V3 may walk
-// the inheritance chain.
 function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
-	if (t.sym != null && t.sym.fieldDecoratorNames.length > 0) {
-		for (let j = 0; j < t.typeNames.length; j = j + 1) {
-			for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
-				if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
-					out[j] = t.sym.fieldDecorators[k];
-					break;
-				}
-			}
-		}
-		return out;
-	}
-
-	if (t.sym == null || t.sym.declNode == null) return out;
-	let decl = t.sym.declNode;
-	// Peel ExportDecl wrapper if present (e.g., `export class User { ... }`)
-	if (decl.kind == NodeKind.ExportDecl) {
-		const ed = decl.data as ExportDeclData;
-		if (ed.exportedDecl != null) decl = ed.exportedDecl;
-	}
-	if (decl.kind != NodeKind.ClassDecl) return out;
-
-	const cd = decl.data as ClassDeclData;
-	// Walk classBody, collect (propName → decorators) for non-static properties
-	for (const member of cd.classBody) {
-		if (member == null) continue;
-		let inner = member;
-		let decorators: Node[] = [];
-		if (member.kind == NodeKind.DecoratedDecl) {
-			const dd = member.data as DecoratedDeclData;
-			decorators = dd.decorators;
-			if (dd.decoratedNode != null) inner = dd.decoratedNode;
-		}
-		if (inner.kind != NodeKind.PropertyDecl) continue;
-		const pd = inner.data as PropertyDeclData;
-		if (pd.propIsStatic) continue;
-		// Find the field index in t.typeNames and store decorators at that slot
-		for (let j = 0; j < t.typeNames.length; j = j + 1) {
-			if (t.typeNames[j] == pd.propName) {
-				out[j] = decorators;
+	if (t.sym == null) return out;
+	for (let j = 0; j < t.typeNames.length; j = j + 1) {
+		for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
+			if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
+				out[j] = t.sym.fieldDecorators[k];
 				break;
 			}
 		}
@@ -243,9 +191,8 @@ function collectFieldDecorators(t: Type): Node[][] {
 
 // Build a TypeObject node for a Struct (interface / class / struct) Type.
 // Reads parallel arrays t.typeNames (field names) + t.typeChildren (field types).
-// Decorators (V2): for ClassDecl-backed types, walk the class body to surface
-// per-field decorator nodes. Other Type sources (interface, anon struct,
-// generic instantiation) get empty arrays.
+// Decorators (V2): per-field decorator nodes come from the class Symbol;
+// a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
 	return createNodeAt(NodeKind.TypeObject, {
@@ -2564,31 +2511,7 @@ test "mapTypeToAst — anonymous Struct (empty typeName) still emits TypeObject"
 
 // ===== mapTypeToAst tests — V2 (decorators on class fields) =====
 
-// Build a synthetic ClassDecl Node with decorated fields, attach it as
-// declNode of a Symbol. Mirrors what the checker produces for a real class.
-function makeDecoratedField(propName: string, propType: string, decorators: Node[]): Node {
-	const loc = makeLoc(1, 0);
-	const propNode = createNodeAt(NodeKind.PropertyDecl, {
-		propName, propType, propIsStatic: false, propIsReadonly: false,
-		propVisibility: "",
-		propInitializer: null as unknown as Node,
-	}, loc);
-	if (decorators.length == 0) return propNode;
-	return createNodeAt(NodeKind.DecoratedDecl, {
-		decorators, decoratedNode: propNode,
-	}, loc);
-}
-
 function makeClassWithDecoratedFields(name: string, fieldNames: string[], fieldDecorators: Node[][]): Type {
-	const loc = makeLoc(1, 0);
-	const classBody: Node[] = [];
-	for (let i = 0; i < fieldNames.length; i = i + 1) {
-		classBody.push(makeDecoratedField(fieldNames[i], "string", fieldDecorators[i]));
-	}
-	const classDecl = createNodeAt(NodeKind.ClassDecl, {
-		className: name, classExtends: "", classBody,
-		nameLocation: loc,
-	}, loc);
 	const t = makePrimType(TypeKind.Struct);
 	t.typeName = name;
 	t.typeNames = fieldNames;
@@ -2596,7 +2519,8 @@ function makeClassWithDecoratedFields(name: string, fieldNames: string[], fieldD
 	for (let i = 0; i < fieldNames.length; i = i + 1) fieldTypes.push(makePrimType(TypeKind.String));
 	t.typeChildren = fieldTypes;
 	t.sym = makeSymbol(name, SymbolKind.Class);
-	t.sym.declNode = classDecl;
+	t.sym.fieldDecoratorNames = fieldNames;
+	t.sym.fieldDecorators = fieldDecorators;
 	return t;
 }
 
@@ -2639,57 +2563,6 @@ test "mapTypeToAst — non-class Struct (interface-style, no declNode) gets empt
 	assert d.typExprFieldDecorators.length == 2;
 	assert d.typExprFieldDecorators[0].length == 0;
 	assert d.typExprFieldDecorators[1].length == 0;
-}
-
-test "mapTypeToAst — methods in classBody are skipped (V2 scope = fields only)" {
-	const loc = makeLoc(1, 0);
-	const propDec = createNodeAt(NodeKind.Identifier, { name: "rename" }, loc);
-	// Build a class with: a decorated property + a method (which should be ignored)
-	const propNode = createNodeAt(NodeKind.PropertyDecl, {
-		propName: "id", propType: "string", propIsStatic: false, propIsReadonly: false,
-		propVisibility: "",
-		propInitializer: null as unknown as Node,
-	}, loc);
-	const decoratedProp = createNodeAt(NodeKind.DecoratedDecl, {
-		decorators: [propDec], decoratedNode: propNode,
-	}, loc);
-	const methodNode = createNodeAt(NodeKind.MethodDecl, {
-		methodName: "toString", methodParams: [], methodParamTypes: [],
-		methodBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, loc),
-		methodIsStatic: false, methodFlags: "", methodVisibility: "", methodReturnType: "string",
-		methodDefaults: [], nativeName: "", nameLocation: loc,
-	}, loc);
-	const classDecl = createNodeAt(NodeKind.ClassDecl, {
-		className: "Mixed", classExtends: "",
-		classBody: [decoratedProp, methodNode],
-		nameLocation: loc,
-	}, loc);
-	const t = makePrimType(TypeKind.Struct);
-	t.typeName = "Mixed";
-	t.typeNames = ["id"];
-	t.typeChildren = [makePrimType(TypeKind.String)];
-	t.sym = makeSymbol("Mixed", SymbolKind.Class);
-	t.sym.declNode = classDecl;
-	const out = mapTypeToAst(t, loc);
-	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators.length == 1;
-	assert d.typExprFieldDecorators[0].length == 1;  // method ignored, only field's decorator surfaces
-	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name == "rename";
-}
-
-test "mapTypeToAst — class wrapped in ExportDecl peels through to find class body" {
-	const loc = makeLoc(1, 0);
-	const dec = createNodeAt(NodeKind.Identifier, { name: "validate" }, loc);
-	const t = makeClassWithDecoratedFields("Exp", ["v"], [[dec]]);
-	// Wrap declNode in ExportDecl
-	const exportDecl = createNodeAt(NodeKind.ExportDecl, {
-		exportedDecl: t.sym.declNode,
-	}, loc);
-	t.sym.declNode = exportDecl;
-	const out = mapTypeToAst(t, loc);
-	const d = out.data as TypeObjectData;
-	assert d.typExprFieldDecorators[0].length == 1;
-	assert (d.typExprFieldDecorators[0][0].data as IdentifierData).name == "validate";
 }
 
 // ===== mapTypeToAst tests — Day 3 (Array / SizedArray / Span → TypeArray) =====
