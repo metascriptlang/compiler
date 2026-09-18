@@ -655,7 +655,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Union => {
 			const refInner = unwrapRefNullUnion(fieldType);
 			if (refInner != null) {
-				if (refInner.kind == TypeKind.Ptr || (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
+				// `unknown` is pointer-top and outside reference counting, so the store
+				// side never increfs it; decref here would free a value nobody owned.
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Unknown
+					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
