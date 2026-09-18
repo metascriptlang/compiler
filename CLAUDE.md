@@ -4,13 +4,11 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 
 ## Git Rules
 
-**NEVER** use `git stash`, `git reset`, `git checkout .`, `git restore`, or any command that discards, overrides, or resets the current working tree state. The working tree contains in-progress work that must not be lost.
-
-**NEVER `rsync` (or any mirroring/`--delete` copy) INTO this working tree.** Data flows one way only: this tree is the source, `~/.metascript/` is the destination. `tools/sync-local-binary.sh` is written that way (`SRC` = repo, `DEST` = `$MSC_INSTALL_DIR:-$HOME/.metascript`) and must stay that way. A mirror pointed at the tree deletes every uncommitted file no other session has staged yet — unrecoverable, and `git` cannot undo it. To bring a worktree's work back here, land it with `git update-ref` and re-sync the index per path; to refresh a stale file, use `git show <rev>:<path>`.
-
-**Landing into this tree is a line-by-line merge, never a file-level copy.** Every file here may already carry another session's uncommitted work, so `cp`, whole-file `Write`, and `git checkout <rev> -- <path>` are all wrong: they replace the file instead of merging into it, and the work they delete was never committed by anyone. Land through a private worktree (build the commits there, publish with `git update-ref <new> <old>`, re-sync the real index per path with `git update-index --add --cacheinfo`), and rebuild any file that mixes your hunks with a peer's from the tip blob plus your own edits — reviewed hunk by hunk at `-U1`, since `-U3` silently merges a neighbour's hunk into yours.
-
-**Branching and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md).** `release/<version>` is cut from `main`; a `fix/<desc>` for a release is cut from that release branch and merges back into it; the version tag goes on the release branch and is pushed before `tools/release.sh --upload`; the release merges back into `main` once stable, landed from a private worktree with `git update-ref`. Release, fix and merge work each get their own worktree — never switch branches in this shared tree.
+- **One session, one worktree** — the `WorktreeCreate` hook runs `tools/wt.sh new`, which gives branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready; start work with `claude --worktree <name>`, or `tools/wt.sh new <name>` by hand.
+- **The main checkout only receives lands** — `tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
+- **Uncommitted work is never discarded** — no `git stash`, `reset`, `checkout .` or `restore`; retire a worktree with `tools/wt.sh rm` (names what it would lose, `--force` discards only that), find idle ones with `tools/wt.sh ls --stale`.
+- **Data flows one way, repo → `~/.metascript/`** — through `tools/sync-local-binary.sh` only; nothing mirrors into a checkout.
+- **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 
 ## Docs Rule — never edit `docs/*.md` from reading alone
 
