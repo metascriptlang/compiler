@@ -199,7 +199,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	const resolvedName = (t.typeName != "" && !isAnonTypeName(t.typeName))
 		? t.typeName
 		: (t.typeNames.length > 0 ? anonTypeName(t) : "");
-	if (resolvedName.startsWith("msAnon_") && isDuVariantHashName(resolvedName)) return noRcInfo();
+	if (isDuVariantHashName(resolvedName)) return noRcInfo();
 	if (resolvedName != "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
