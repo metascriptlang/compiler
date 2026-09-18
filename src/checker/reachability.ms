@@ -707,9 +707,7 @@ function bakeableEmptyArrayLiteral(init: Node): boolean {
 	}
 	if (init.kind != NodeKind.CallExpr) return false;
 	const cd = init.data as CallExprData;
-	if (cd.callee.kind != NodeKind.Identifier) return false;
-	const id = cd.callee.data as IdentifierData;
-	if (id.name != "msBoxRefArray") return false;
+	if (init.resolvedSym == null || init.resolvedSym.builtinKind != "BoxRefArray") return false;
 	if (cd.arguments.length != 1) return false;
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
