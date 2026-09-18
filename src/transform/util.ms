@@ -187,6 +187,10 @@ export function runtimeProcSym(procName: string): Symbol {
 	return sym;
 }
 
+export function isRuntimeProcCall(node: Node, procName: string): boolean {
+	return node.kind == NodeKind.CallExpr && node.resolvedSym == runtimeProcSym(procName);
+}
+
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }

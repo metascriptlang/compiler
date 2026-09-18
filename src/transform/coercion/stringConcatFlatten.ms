@@ -12,7 +12,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, Identifie
 import { stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember, runtimeRef } from "../util";
+import { makeCall, makeIdent, makeNumber, makeMember, runtimeRef, isRuntimeProcCall } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -28,14 +28,7 @@ export function lowerStringConcatFlatten(program: Node, ctx: TransformContext): 
 function isStringLeaf(node: Node): boolean {
 	if (node.kind == NodeKind.StringLiteral) return true;
 	if (node.nodeType != null && isStringLike(node.nodeType)) return true;
-	if (node.kind == NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		if (cd.callee.kind == NodeKind.Identifier) {
-			const cn = (cd.callee.data as IdentifierData).name;
-			if (cn == "msStringConcat" || cn == "msStringConcatArr") return true;
-		}
-	}
-	return false;
+	return isRuntimeProcCall(node, "msStringConcat") || isRuntimeProcCall(node, "msStringConcatArr");
 }
 
 // True if the subtree rooted at `node` is a string-concat chain — i.e. a `+`
@@ -83,22 +76,19 @@ function collectConcatPartsDeep(node: Node): Node[] {
 		}
 		if (cur.kind == NodeKind.CallExpr) {
 			const cd = cur.data as CallExprData;
-			if (cd.callee.kind == NodeKind.Identifier) {
-				const cn = (cd.callee.data as IdentifierData).name;
-				if (cn == "msStringConcat" && cd.arguments.length == 2) {
-					stack.push(cd.arguments[1]);
-					stack.push(cd.arguments[0]);
-					continue;
+			if (isRuntimeProcCall(cur, "msStringConcat") && cd.arguments.length == 2) {
+				stack.push(cd.arguments[1]);
+				stack.push(cd.arguments[0]);
+				continue;
+			}
+			if (isRuntimeProcCall(cur, "msStringConcatArr") && cd.arguments.length >= 1) {
+				// args[0] is the count; skip it, push parts in reverse so stack pops in order.
+				let i = cd.arguments.length - 1;
+				while (i >= 1) {
+					stack.push(cd.arguments[i]);
+					i -= 1;
 				}
-				if (cn == "msStringConcatArr" && cd.arguments.length >= 1) {
-					// args[0] is the count; skip it, push parts in reverse so stack pops in order.
-					let i = cd.arguments.length - 1;
-					while (i >= 1) {
-						stack.push(cd.arguments[i]);
-						i -= 1;
-					}
-					continue;
-				}
+				continue;
 			}
 		}
 		result.push(cur);

@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, String
 import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeHiddenAddr, runtimeRef } from "../util";
+import { makeCall, makeIdent, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -76,10 +76,9 @@ function rewriteStringOp(node: Node): Node {
 	if (d.operator == "=" && isStringTyped(d.left) && d.right.kind == NodeKind.CallExpr) {
 		const cd = d.right.data as CallExprData;
 		if (cd.callee.kind == NodeKind.Identifier) {
-			const calleeName = (cd.callee.data as IdentifierData).name;
 			const loc = node.location;
 			// msStringConcat(x, p) — 2-part with self-first → msStringAppend(&x, p)
-			if (calleeName == "msStringConcat" && cd.arguments.length == 2
+			if (isRuntimeProcCall(d.right, "msStringConcat") && cd.arguments.length == 2
 					&& isSameIdent(d.left, cd.arguments[0])) {
 				const addrOf = makeHiddenAddr(d.left, loc);
 				const code = asAsciiCharCode(cd.arguments[1]);
@@ -96,7 +95,7 @@ function rewriteStringOp(node: Node): Node {
 
 			// msStringConcatArr(count, x, a, b, ...) — N-part with self-first
 			// → msStringAppendArr(&x, N-1, a, b, ...)
-			if (calleeName == "msStringConcatArr" && cd.arguments.length >= 3
+			if (isRuntimeProcCall(d.right, "msStringConcatArr") && cd.arguments.length >= 3
 					&& isSameIdent(d.left, cd.arguments[1])) {
 				const newCount = cd.arguments.length - 2;
 				const addrOf = makeHiddenAddr(d.left, loc);
