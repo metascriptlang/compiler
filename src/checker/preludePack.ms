@@ -508,14 +508,16 @@ export interface PreludeDepsSnapshot {
 // the .pk. Null when buildPreludeContext runs without the loader (LSP,
 // standalone checkProgram) — the deps write is then a no-op.
 let _depsSnapshot: PreludeDepsSnapshot | null = null;
-export function setStdGraphDepsSnapshot(s: PreludeDepsSnapshot): void {
+let _depsSnapshotKey = "";
+export function setStdGraphDepsSnapshot(s: PreludeDepsSnapshot | null, key: string): void {
 	_depsSnapshot = s;
+	_depsSnapshotKey = key;
 }
 
 function writePreludeDeps(root: string, key: string): void {
-	if (_depsSnapshot == null) return;
+	if (_depsSnapshot == null || _depsSnapshotKey != key) return;
 	const snap = _depsSnapshot;
-	const lines: string[] = [];
+	const lines: string[] = ["K\t" + key];
 	for (const m of snap.mods) {
 		lines.push(`G\t${escapeP(m.path)}`);
 		for (const imp of m.imports) {
@@ -895,10 +897,10 @@ export function tryLoadPreludeDeps(key: string): PreludeDepsSnapshot | null {
 	ensureDir(root);
 	ensurePackMarker(root);
 	const body = try readFile(`${root}/${key}.deps`) catch "";
-	if (body == "") return null;
+	if (!body.startsWith("K\t" + key + "\n")) return null;
 	const snap: PreludeDepsSnapshot = { mods: [], circulars: [] };
 	const lines = splitPackLines(body);
-	let li = 0;
+	let li = 1;
 	while (li < lines.length) {
 		const line = lines[li];
 		li = li + 1;
@@ -1507,6 +1509,7 @@ test "preludePack: corrupt entry is a miss" {
 test "preludePack: deps snapshot roundtrip through the .deps file" {
 	env.set("MSC_PRELUDE_PACK", "1");
 	try {
+		const key = preludePackKey("deps-roundtrip-probe", ".depstest");
 		// Snapshot with the awkward corners: empty name/alias lists, an
 		// import of the last G row, a circular record with a multi-hop
 		// cycle, and a path containing separator bytes (\t and ,).
@@ -1524,8 +1527,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 			circulars: [
 				{ fromPath: "/std/core/a.ms", toPath: "/std/core/b.ms", cycle: ["/std/core/a.ms", "/std/core/b.ms", "/std/core/a.ms"], importLine: 3, importNames: ["z"] },
 			],
-		});
-		const key = preludePackKey("deps-roundtrip-probe", ".depstest");
+		}, key);
 		writePreludePack(key, makeTestCtx());
 		const loaded = tryLoadPreludeDeps(key);
 		assert loaded != null;
@@ -1550,8 +1552,12 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		assert loaded.circulars[0].importNames[0] == "z";
 		remove(`${packRoot()}/${key}.deps`);
 		remove(`${packRoot()}/${key}.pk`);
+		const otherKey = preludePackKey("deps-roundtrip-probe", ".other-backend");
+		writePreludePack(otherKey, makeTestCtx());
+		assert tryLoadPreludeDeps(otherKey) == null;
+		remove(`${packRoot()}/${otherKey}.pk`);
 	} finally {
-		setStdGraphDepsSnapshot(null as unknown as PreludeDepsSnapshot);
+		setStdGraphDepsSnapshot(null, "");
 		env.delete("MSC_PRELUDE_PACK");
 	}
 }
