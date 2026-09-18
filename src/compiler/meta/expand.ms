@@ -1847,6 +1847,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 
 // ===== walkExpand: recursive AST walker =====
 
+function walkExpandExprArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
+	for (let i = 0; i < arr.length; i += 1) arr[i] = walkExpand(arr[i], ctx, depth);
+}
+
 // Walks an array of nodes, replacing each with its expansion in place.
 function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
 	// SERIALIZE A2: macros may return NodeKind.SpliceMany to emit multiple
@@ -1973,7 +1977,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			walkExpandArray(d.caseTests, ctx, depth);
+			walkExpandExprArray(d.caseTests, ctx, depth);
 			walkExpandArray(d.caseStmts, ctx, depth);
 			return node;
 		},
@@ -1991,7 +1995,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.MatchCase => {
 			const d = node.data as MatchCaseData;
-			walkExpandArray(d.casePatterns, ctx, depth);
+			walkExpandExprArray(d.casePatterns, ctx, depth);
 			d.caseGuard = walkExpand(d.caseGuard, ctx, depth);
 			d.caseBody = walkExpand(d.caseBody, ctx, depth);
 			return node;
@@ -2018,7 +2022,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			d.callee = walkExpand(d.callee, ctx, depth);
-			walkExpandArray(d.arguments, ctx, depth);
+			walkExpandExprArray(d.arguments, ctx, depth);
 			return node;
 		},
 		NodeKind.MemberExpr => {
@@ -2041,12 +2045,12 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
-			walkExpandArray(d.properties, ctx, depth);
+			walkExpandExprArray(d.properties, ctx, depth);
 			return node;
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
-			walkExpandArray(d.elements, ctx, depth);
+			walkExpandExprArray(d.elements, ctx, depth);
 			return node;
 		},
 		NodeKind.ArrowFunction => {

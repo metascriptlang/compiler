@@ -392,6 +392,22 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.jsxSpreadArg, null);
 			node.nodeType = noneType(); return;
 		},
+		NodeKind.SpliceMany => {
+			if (node == ctx.stmtPosExpr) { node.nodeType = inferredType(); return; }
+			const splice = createNodeAt(NodeKind.SpliceMany, node.data, node.location);
+			const spliceValue = unwrapSpliceManyAtExpr(ctx, node, splice);
+			if (spliceValue == null) { node.nodeType = errorType(); return; }
+			node.kind = spliceValue.kind;
+			node.data = spliceValue.data;
+			if (spliceValue.location != null) node.location = spliceValue.location;
+			node.nodeType = null as unknown as Type;
+			node.resolvedSym = null;
+			node.flags = 0 as BitSet<NodeFlag>;
+			node.variantSlot = 0;
+			checkExpr(ctx, node, expectedType);
+			bindRefsToHoistedPrefix(node, splice);
+			node.nodeType = node.nodeType; return;
+		},
 		NodeKind.ComptimeBlock => {
 			// Eagerly fold @comptime block — mirrors Phase B+ macro eager
 			// expansion below. Without this, `const X = @comptime { ... }`
