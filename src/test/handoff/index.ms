@@ -46,6 +46,7 @@ import "./closureCall";
 import "./nrvoReassign";
 import "./closureEnvArrayType";
 import "./closureParamCapture";
+import "./unknownNullFieldHooks";
 import "./toStringUnified";
 import "./incompleteStruct";
 import "./anonStructCast";
