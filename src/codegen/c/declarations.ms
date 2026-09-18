@@ -358,7 +358,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d);
+		genStaticFieldGlobals(g, d, false);
 		return;
 	}
 
@@ -407,7 +407,7 @@ function genClassDecl(g: CGen, node: Node): void {
 		}
 		// Static field globals + initializer emission (own decls only — parent's
 		// statics emitted by parent's genClassDecl).
-		genStaticFieldGlobals(g, d);
+		genStaticFieldGlobals(g, d, node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Actor);
 
 		let structDef = `struct ${name} {\n`;
 		for (let i = 0; i < fieldTypes.length; i += 1) {
@@ -431,7 +431,7 @@ function genClassDecl(g: CGen, node: Node): void {
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
+function genStaticFieldGlobals(g: CGen, d: ClassDeclData, ownerIsActor: boolean): void {
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
@@ -454,16 +454,20 @@ function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
 					addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
 				},
 				_ => {
-					const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
-					emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
-					// g.initProc is a scratch buffer nobody flushes — drain it
-					// into ModuleInit the way genTopLevelStmt does, or the
-					// assignment never runs.
-					const locals = readProcLocals(g.initProc);
-					const stmts = readProcStmts(g.initProc);
-					clearProcBuffers(g.initProc);
-					if (locals.length > 0) { add(sec(g, CSection.ModuleInit), locals); }
-					if (stmts.length > 0) { add(sec(g, CSection.ModuleInit), stmts); }
+					if (!ownerIsActor) {
+						addError(g.checkerCtx, "internal: a computed static initializer for '" + d.className + "." + pd.propName + "' reached C codegen unlowered in " + g.modulePath, member.location.line, member.location.column);
+					} else {
+						const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
+						emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
+						// g.initProc is a scratch buffer nobody flushes — drain it
+						// into ModuleInit the way genTopLevelStmt does, or the
+						// assignment never runs.
+						const locals = readProcLocals(g.initProc);
+						const stmts = readProcStmts(g.initProc);
+						clearProcBuffers(g.initProc);
+						if (locals.length > 0) { add(sec(g, CSection.ModuleInit), locals); }
+						if (stmts.length > 0) { add(sec(g, CSection.ModuleInit), stmts); }
+					}
 				},
 			};
 		}
@@ -870,7 +874,7 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 // ===== Tests =====
 
 import { createCGen, assembleOutput, scopeMangledParam } from "./context";
-import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
+import { CheckerContext, GcMode, isGenericFn, addError } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 
