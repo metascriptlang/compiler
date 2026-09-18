@@ -287,47 +287,11 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
-	// MS function params are borrows (Nim default — no sink params, ea38c2a).
-	// The only consumed argument positions are the hardcoded runtime sinks below.
 	const sym = node.resolvedSym;
 
-	// Reference parity: seq.add(y: sink T) — push takes ownership of its argument.
-	// After extension method lowering, push is a direct call with nativeName containing "ArrayPush".
-	// The value argument (last param, after the array receiver) must be treated as consumed (sink).
-	let isArrayPush = false;
-	if (sym != null && sym.nativeName != "") {
-		const nn = sym.nativeName;
-		if (nn == "&msGenericArrayPush" || nn == "&msStringArrayPush" || nn == "&msNumberArrayPush" || nn == "&msRefArrayPush") {
-			isArrayPush = true;
-		}
-	}
-
-	// `msFutureCompleteT(fut, value)` — future takes ownership of the struct value.
-	// Synthetic call emitted by asyncBridge for async struct returns. MS parser has no
-	// explicit `sink T` annotation syntax (sink is inferred from body, and externs have
-	// no body), so we hardcode the sink position here — same precedent as msArrayPush
-	// above. Without this, DRC wraps a fresh-call RHS in a scope-exit $tmp that
-	// double-frees the strings the future has just taken ownership of (observed on
-	// cross-module async struct returns; same-module worked only by accident because
-	// struct literals lower away the CallExpr wrapping before DRC sees it).
-	let isCompleteSink = false;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		const calleeName = (cd.callee.data as IdentifierData).name;
-		if (calleeName == "msFutureCompleteT" || calleeName.startsWith("msMsgComplete")) isCompleteSink = true;
-	}
-
-	// `msSpawnInto(fut, closure, ...)` — the spawn takes ownership of the
-	// pre-allocated future: thread.h's submit incref (Amendment G) and the
-	// worker's inline publish ride on it, and the CALL result (same future)
-	// carries the caller's ownership onward. Same precedent as msFutureCompleteT
-	// above: without this, DRC wraps the msFutureCreateInline argument in a
-	// scope-exit $tmp decref that double-owns against the spawn submit ref —
-	// the future is freed while the worker still publishes into it (heap
-	// corruption after a few thousand string spawns; string is the only
-	// spawn shape with a caller-side pre-allocated future).
-	let isSpawnIntoSink = false;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		if ((cd.callee.data as IdentifierData).name == "msSpawnInto") isSpawnIntoSink = true;
+	let sinkParams: Type[] | null = null;
+	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
+		sinkParams = sym.symbolType.typeChildren;
 	}
 
 	// Actor proxy call without a park = SEND-class handoff: the caller never
@@ -345,12 +309,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		// Push value arg (index 1, after receiver) is sink
-		if (isArrayPush && i == 1) argMode = DrcMode.Consumed;
-		// future/actor-reply completion value arg (index 1, after the future) is sink
-		if (isCompleteSink && i == 1) argMode = DrcMode.Consumed;
-		// spawn-into future arg (index 0) is sink — spawn owns the pre-allocated future
-		if (isSpawnIntoSink && i == 0) argMode = DrcMode.Consumed;
+		if (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink) {
+			argMode = DrcMode.Consumed;
+		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
 		if (isActorSendHandoff && i >= 1 && cd.arguments[i] != null && cd.arguments[i].nodeType != null) {
 			const sendRc = classifyType(cd.arguments[i].nodeType, dctx.ctx);
