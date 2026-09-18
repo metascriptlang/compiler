@@ -178,7 +178,7 @@ export class HashMap<K, V> {
 	writing: boolean;
 }
 
-function hashMapRawGet<K, V>(m: HashMap<K, V>, key: K): int32 {
+function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 	if (m.data.length == 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = m.data.length - 1;
@@ -244,7 +244,14 @@ export function get<K, V>(this m: HashMap<K, V>, key: K): V | null {
 	return null;
 }
 
-export function has<K, V>(this m: HashMap<K, V>, key: K): boolean {
+export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: K): Readonly<V> | null {
+	if (m.writing) { msMapFatal("map read during write"); }
+	const idx = hashMapRawGet(m, key);
+	if (idx < 0) return null;
+	return m.data[idx].value;
+}
+
+export function has<K, V>(this m: Readonly<HashMap<K, V>>, key: K): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashMapRawGet(m, key) >= 0;
 }
@@ -362,7 +369,7 @@ export class HashSet<T> {
 	}
 }
 
-function hashSetRawGet<T>(s: HashSet<T>, key: T): int32 {
+function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 	if (s.data.length == 0) return -1;
 	const hc = key.hash();
 	const mask: int32 = s.data.length - 1;
@@ -413,7 +420,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: HashSet<T>, value: T): boolean {
+export function has<T>(this s: Readonly<HashSet<T>>, value: T): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashSetRawGet(s, value) >= 0;
 }
