@@ -15,7 +15,7 @@
 // (synthMaybeWrap), so the store writes the whole struct. Bottom-up walking wraps the
 // LHS before the assignment node is visited — undo it there.
 
-import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, Type } from "../../ast/node";
+import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, isTagCarriedUnion } from "../../checker/types";
 import { projectTagUnionMember, narrowMaybePayload } from "../../checker/fit";
 import { TransformContext } from "../context";
@@ -79,6 +79,19 @@ function unwrapIfMaterialized(n: Node): Node {
 	return d.object;
 }
 
+function narrowAssertedCarrier(node: Node): Node {
+	const target = node.nodeType;
+	if (target == null || !isMaybeType(target)) return node;
+	const inner = (node.data as TypeAssertionData).asExpr;
+	if (inner == null || inner.nodeType == null) return node;
+	const carrier = inner.nodeType;
+	if (!isMaybeType(carrier) || carrier == target) return node;
+	if (!isTagCarriedUnion(unwrapMaybeType(carrier))) return node;
+	const narrowed = narrowMaybePayload(inner, carrier, target);
+	if (narrowed != null as unknown as Node) return narrowed;
+	return node;
+}
+
 function visitMaybeRead(node: Node, project: boolean): Node {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -90,6 +103,7 @@ function visitMaybeRead(node: Node, project: boolean): Node {
 		d.outArg = unwrapIfMaterialized(d.outArg);
 		return node;
 	}
+	if (node.kind == NodeKind.TypeAssertion) return project ? narrowAssertedCarrier(node) : node;
 	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return node;
 	const nt = node.nodeType;
 	if (nt == null || nt.kind == TypeKind.Null) return node;
