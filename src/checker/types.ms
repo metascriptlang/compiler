@@ -846,8 +846,15 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 // (nullable) patterns would erroneously match the Ref variant's fields.
 let _fvbCount: float64 = 0;
 let _fvbTime: float64 = 0;
+let _queryProfilingEnabled = true;
+let _queryCachesReadOnly = false;
+export function setConcurrentTypeQueries(enabled: boolean): void {
+	_queryProfilingEnabled = !enabled;
+	_queryCachesReadOnly = enabled;
+}
 export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount, _fvbTime]; }
 export function findVariantByFieldName(unionType: Type | null, fieldName: string): int32 {
+	if (!_queryProfilingEnabled) return findVariantByFieldNameInner(unionType, fieldName);
 	_fvbCount = _fvbCount + 1;
 	const _v0 = performance.now();
 	const r = findVariantByFieldNameInner(unionType, fieldName);
@@ -1390,8 +1397,10 @@ export function createMaybeType(inner: Type): Type {
 	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe);
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
-	_maybeCache.push(t);
-	_maybeCacheNames.push(key);
+	if (!_queryCachesReadOnly) {
+		_maybeCache.push(t);
+		_maybeCacheNames.push(key);
+	}
 	return t;
 }
 
@@ -2436,11 +2445,52 @@ export function skipModifier(t: Type | null): Type | null {
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
 // Returns a new Type (does not mutate original).
-function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
+function typeVisitHas(seen: Cursor<Type>[], t: Type): boolean {
+	for (let i = seen.length - 1; i >= 0; i -= 1) {
+		if (seen[i] == t) return true;
+	}
+	return false;
+}
+
+class TypeVisitSet {
+	entries: Cursor<Type>[];
+	table: int32[];
+	constructor() {
+		this.entries = [];
+		this.table = [];
+	}
+}
+
+function typeVisitSlot(visited: TypeVisitSet, t: Cursor<Type>): int32 {
+	const mask: int32 = visited.table.length - 1;
+	let h: int32 = ((t as unknown).hash() & (mask as int64)) as int32;
+	while (visited.table[h] != 0 && visited.entries[visited.table[h] - 1] != t) h = (h + 1) & mask;
+	return h;
+}
+
+function typeVisitGrow(visited: TypeVisitSet): void {
+	const cap: int32 = visited.table.length == 0 ? 16 : visited.table.length * 2;
+	const table: int32[] = new Array(cap);
+	visited.table = table;
+	for (let i = 0; i < visited.entries.length; i += 1) {
+		visited.table[typeVisitSlot(visited, visited.entries[i])] = i + 1;
+	}
+}
+
+function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
+	if (visited.table.length < (visited.entries.length + 1) * 2) typeVisitGrow(visited);
+	const h = typeVisitSlot(visited, t);
+	if (visited.table[h] != 0) return false;
+	visited.entries.push(t);
+	visited.table[h] = visited.entries.length;
+	return true;
+}
+
+function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): Type {
 	const newFieldTypes: Type[] = [];
 	let changed = false;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
-		const sub = substituteType(t.typeChildren[ci], paramName, concrete);
+		const sub = substituteTypeInner(t.typeChildren[ci], paramName, concrete, seen);
 		newFieldTypes.push(sub);
 		if (sub != t.typeChildren[ci]) changed = true;
 	}
@@ -2492,27 +2542,9 @@ function copyTypeForSubst(t: Type): Type {
 }
 
 // In-place substitute all children of a copied type.
-function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type): void {
+function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
-		copy.typeChildren[ci] = substituteType(copy.typeChildren[ci], paramName, concrete);
-	}
-}
-
-// Cycle detection: flag on the Type itself.
-// Reference parity: uses localCache (hash table). We use a flag bit — same principle
-// (identity-based, no incref/decref on tracked types). O(1) check vs O(n) linear scan.
-// Cannot use Type[] stack — DRC push/pop/decref frees rc=0 types (fatal in C binary).
-function substituteIsSeen(t: Type): boolean {
-	return t.typeFlags.has(TypeFlag.Substituting);
-}
-
-function substituteSetFlag(t: Type): void {
-	t.typeFlags = t.typeFlags.incl(TypeFlag.Substituting);
-}
-
-function substituteClearFlag(t: Type): void {
-	if (t.typeFlags.has(TypeFlag.Substituting)) {
-		t.typeFlags = t.typeFlags.excl(TypeFlag.Substituting);
+		copy.typeChildren[ci] = substituteTypeInner(copy.typeChildren[ci], paramName, concrete, seen);
 	}
 }
 
@@ -2520,51 +2552,57 @@ let _substCount: float64 = 0;
 let _substTime: float64 = 0;
 export function substituteTypeProfile(): float64[] { return [_substCount, _substTime]; }
 export function substituteType(t: Type | null, paramName: string, concrete: Type): Type {
+	const seen: Cursor<Type>[] = [];
+	if (!_queryProfilingEnabled) return substituteTypeInner(t, paramName, concrete, seen);
 	_substCount = _substCount + 1;
 	const _s0 = performance.now();
-	const r = substituteTypeInner(t, paramName, concrete);
+	const r = substituteTypeInner(t, paramName, concrete, seen);
 	_substTime = _substTime + (performance.now() - _s0);
 	return r;
 }
-function substituteTypeInner(t: Type | null, paramName: string, concrete: Type): Type {
+function substituteTypeInner(t: Type | null, paramName: string, concrete: Type, seen: Cursor<Type>[]): Type {
 	if (t == null) return inferredType();
 	if (t.kind == TypeKind.GenericParam && t.typeName == paramName) return concrete;
-	if (substituteIsSeen(t)) return t;
-	substituteSetFlag(t);
+	if (typeVisitHas(seen, t)) return t;
+	seen.push(t);
+	const result = substituteTypeWalk(t, paramName, concrete, seen);
+	seen.pop();
+	return result;
+}
+
+function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: Cursor<Type>[]): Type {
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
-			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeValue),
-			TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.Set => createBitSet(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Array => createArray(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.SizedArray => createSizedArray(substituteTypeInner(t.typeReturn, paramName, concrete, active), t.typeValue),
+			TypeKind.Span => createSpan(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Set => createBitSet(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Varargs => t.typeChildren.length > 0
-				? createVarargs(substituteType(t.typeChildren[0], paramName, concrete))
+				? createVarargs(substituteTypeInner(t.typeChildren[0], paramName, concrete, active))
 				: t,
 			TypeKind.Function => {
 				const fn = copyTypeForSubst(t);
-				substituteChildrenInPlace(fn, paramName, concrete);
-				fn.typeReturn = substituteType(t.typeReturn, paramName, concrete);
-				substituteClearFlag(t);
+				substituteChildrenInPlace(fn, paramName, concrete, active);
+				fn.typeReturn = substituteTypeInner(t.typeReturn, paramName, concrete, active);
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
 				const copy = copyTypeForSubst(t);
-				substituteChildrenInPlace(copy, paramName, concrete);
-				substituteClearFlag(t);
+				substituteChildrenInPlace(copy, paramName, concrete, active);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}
 				return copy;
 			},
-			TypeKind.Ref => rebuildRefLike(t, substituteType(refSubstInner(t), paramName, concrete)),
-			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.Var => createVar(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.Cursor => createCursor(substituteType(t.typeReturn, paramName, concrete)),
-			TypeKind.Struct => substituteStruct(t, paramName, concrete),
+			TypeKind.Ref => rebuildRefLike(t, substituteTypeInner(refSubstInner(t), paramName, concrete, active)),
+			TypeKind.Ptr => createPtr(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Borrow => createBorrow(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Var => createVar(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Cursor => createCursor(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Struct => substituteStruct(t, paramName, concrete, active),
 			TypeKind.GenericInstance => {
 				// Substitute typeChildren and typeReturn (the instantiated body
 				// produced by instantiateGenericBody). typeExtra (the
@@ -2576,23 +2614,20 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 				// param-name entries for built-in Result/Promise/Iterator
 				// (see parser/context.ms `getGenericDecl` fallbacks).
 				const gi = copyTypeForSubst(t);
-				substituteChildrenInPlace(gi, paramName, concrete);
+				substituteChildrenInPlace(gi, paramName, concrete, active);
 				if (gi.typeReturn != null) {
-					gi.typeReturn = substituteType(gi.typeReturn, paramName, concrete);
+					gi.typeReturn = substituteTypeInner(gi.typeReturn, paramName, concrete, active);
 				}
-				substituteClearFlag(t);
 				return gi;
 			},
 			TypeKind.Conditional => {
 				// Substitute in all 4 children, then try to evaluate
 				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlace(cond, paramName, concrete);
-				substituteClearFlag(t);
+				substituteChildrenInPlace(cond, paramName, concrete, active);
 				return evaluateConditionalType(cond);
 			},
 			_ => t,
 		};
-	substituteClearFlag(t);
 	return result;
 }
 
@@ -2603,6 +2638,11 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 // walked once instead of once per binding. inferGenericReturn folds bindings
 // per call site; on self-host that was 21M single-param node walks (~56s).
 export function substituteAllParams(t: Type | null, names: string[], concretes: Type[]): Type {
+	const seen: Cursor<Type>[] = [];
+	return substituteAllParamsInner(t, names, concretes, seen);
+}
+
+function substituteAllParamsInner(t: Type | null, names: string[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	if (t == null) return inferredType();
 	if (t.kind == TypeKind.GenericParam) {
 		for (let ni = 0; ni < names.length; ni += 1) {
@@ -2610,76 +2650,77 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 		}
 		return t;
 	}
-	if (substituteIsSeen(t)) return t;
-	substituteSetFlag(t);
+	if (typeVisitHas(seen, t)) return t;
+	seen.push(t);
+	const result = substituteAllParamsWalk(t, names, concretes, seen);
+	seen.pop();
+	return result;
+}
+
+function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], active: Cursor<Type>[]): Type {
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
-			TypeKind.Array => createArray(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.SizedArray => createSizedArray(substituteAllParams(t.typeReturn, names, concretes), t.typeValue),
-			TypeKind.Span => createSpan(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.Set => createBitSet(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Array => createArray(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.SizedArray => createSizedArray(substituteAllParamsInner(t.typeReturn, names, concretes, active), t.typeValue),
+			TypeKind.Span => createSpan(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Set => createBitSet(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Varargs => t.typeChildren.length > 0
-				? createVarargs(substituteAllParams(t.typeChildren[0], names, concretes))
+				? createVarargs(substituteAllParamsInner(t.typeChildren[0], names, concretes, active))
 				: t,
 			TypeKind.Function => {
 				const fn = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(fn, names, concretes);
-				fn.typeReturn = substituteAllParams(t.typeReturn, names, concretes);
-				substituteClearFlag(t);
+				substituteChildrenInPlaceAll(fn, names, concretes, active);
+				fn.typeReturn = substituteAllParamsInner(t.typeReturn, names, concretes, active);
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
 				const copy = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(copy, names, concretes);
-				substituteClearFlag(t);
+				substituteChildrenInPlaceAll(copy, names, concretes, active);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}
 				return copy;
 			},
-			TypeKind.Ref => rebuildRefLike(t, substituteAllParams(refSubstInner(t), names, concretes)),
-			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.Var => createVar(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.Cursor => createCursor(substituteAllParams(t.typeReturn, names, concretes)),
-			TypeKind.Struct => substituteStructAll(t, names, concretes),
+			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, concretes, active)),
+			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Var => createVar(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Struct => substituteStructAll(t, names, concretes, active),
 			TypeKind.GenericInstance => {
 				// typeExtra intentionally NOT walked — same rationale as
 				// substituteTypeInner (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(gi, names, concretes);
+				substituteChildrenInPlaceAll(gi, names, concretes, active);
 				if (gi.typeReturn != null) {
-					gi.typeReturn = substituteAllParams(gi.typeReturn, names, concretes);
+					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, concretes, active);
 				}
-				substituteClearFlag(t);
 				return gi;
 			},
 			TypeKind.Conditional => {
 				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(cond, names, concretes);
-				substituteClearFlag(t);
+				substituteChildrenInPlaceAll(cond, names, concretes, active);
 				return evaluateConditionalType(cond);
 			},
 			_ => t,
 		};
-	substituteClearFlag(t);
 	return result;
 }
 
-function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[]): void {
+function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
-		copy.typeChildren[ci] = substituteAllParams(copy.typeChildren[ci], names, concretes);
+		copy.typeChildren[ci] = substituteAllParamsInner(copy.typeChildren[ci], names, concretes, seen);
 	}
 }
 
-function substituteStructAll(t: Type, names: string[], concretes: Type[]): Type {
+function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	const newFieldTypes: Type[] = [];
 	let changed = false;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
-		const sub = substituteAllParams(t.typeChildren[ci], names, concretes);
+		const sub = substituteAllParamsInner(t.typeChildren[ci], names, concretes, seen);
 		newFieldTypes.push(sub);
 		if (sub != t.typeChildren[ci]) changed = true;
 	}
@@ -2745,6 +2786,7 @@ let _unifyCount: float64 = 0;
 let _unifyTime: float64 = 0;
 export function unifyTypeProfile(): float64[] { return [_unifyCount, _unifyTime]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
+	if (!_queryProfilingEnabled) { unifyTypeGuard(formal, concrete, bindings); return; }
 	_unifyCount = _unifyCount + 1;
 	const _u0 = performance.now();
 	unifyTypeGuard(formal, concrete, bindings);
@@ -2895,38 +2937,28 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 }
 
 export function hasGenericParams(t: Type | null): boolean {
-	const found = genericScanMark(t);
-	genericScanClear(t);
-	return found;
-}
-
-function genericScanMark(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.GenericParam) return true;
-	if (t.typeFlags.has(TypeFlag.GenericScan)) return false;
-	t.typeFlags = t.typeFlags.incl(TypeFlag.GenericScan);
+	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
+	return genericScan(t, new TypeVisitSet());
+}
+
+function genericScan(t: Type | null, active: TypeVisitSet): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.GenericParam) return true;
+	if (!typeVisitAdd(active, t)) return false;
 	if (t.kind == TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-			if (genericScanMark(t.typeChildren[gi])) return true;
+			if (genericScan(t.typeChildren[gi], active)) return true;
 		}
 		return false;
 	}
-	if (genericScanMark(t.typeReturn)) return true;
-	if (genericScanMark(t.typeExtra)) return true;
+	if (genericScan(t.typeReturn, active)) return true;
+	if (genericScan(t.typeExtra, active)) return true;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		if (genericScanMark(t.typeChildren[i])) return true;
+		if (genericScan(t.typeChildren[i], active)) return true;
 	}
 	return false;
-}
-
-function genericScanClear(t: Type | null): void {
-	if (t == null || !t.typeFlags.has(TypeFlag.GenericScan)) return;
-	t.typeFlags = t.typeFlags.excl(TypeFlag.GenericScan);
-	genericScanClear(t.typeReturn);
-	genericScanClear(t.typeExtra);
-	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		genericScanClear(t.typeChildren[i]);
-	}
 }
 
 // ===== Type Query Helpers =====
@@ -3027,11 +3059,10 @@ export function getElementType(t: Type): Type {
 }
 
 // Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
-let _collectGenericDepth = 0;
-function collectGenericParamNames(t: Type | null, names: string[]): void {
+function collectGenericParamNames(t: Type | null, names: string[], depth: int32): void {
 	if (t == null) return;
 	if (t == null) return;
-	if (_collectGenericDepth > 20) return;
+	if (depth > 20) return;
 	if (t.kind == TypeKind.GenericParam) {
 		let dup = false;
 		let ni = 0;
@@ -3039,21 +3070,20 @@ function collectGenericParamNames(t: Type | null, names: string[]): void {
 		if (!dup) names.push(t.typeName);
 		return;
 	}
-	_collectGenericDepth = _collectGenericDepth + 1;
-	if (t.typeReturn != null) collectGenericParamNames(t.typeReturn, names);
-	if (t.typeExtra != null) collectGenericParamNames(t.typeExtra, names);
+	if (t.typeReturn != null) collectGenericParamNames(t.typeReturn, names, depth + 1);
+	if (t.typeExtra != null) collectGenericParamNames(t.typeExtra, names, depth + 1);
 	let ci = 0;
 	while (ci < t.typeChildren.length) {
-		collectGenericParamNames(t.typeChildren[ci], names);
+		collectGenericParamNames(t.typeChildren[ci], names, depth + 1);
 		ci = ci + 1;
 	}
-	_collectGenericDepth = _collectGenericDepth - 1;
 }
 
 let _gpCount: float64 = 0;
 let _gpTime: float64 = 0;
 export function getPropertyProfile(): float64[] { return [_gpCount, _gpTime]; }
 export function getProperty(t: Type | null, name: string): Type {
+	if (!_queryProfilingEnabled) return getPropertyInner(t, name);
 	_gpCount = _gpCount + 1;
 	const _g0 = performance.now();
 	const r = getPropertyInner(t, name);
@@ -3094,7 +3124,7 @@ function getPropertyInner(t: Type | null, name: string): Type {
 			if (isUnresolvedType(baseProp)) return baseProp;
 			if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
 				const paramNames: string[] = [];
-				collectGenericParamNames(t.typeExtra, paramNames);
+				collectGenericParamNames(t.typeExtra, paramNames, 0);
 				let gi = 0;
 				while (gi < paramNames.length) {
 					if (gi < t.typeChildren.length) {
@@ -3184,6 +3214,7 @@ let _tnoCount: float64 = 0;
 let _tnoTime: float64 = 0;
 export function typeNameOfProfile(): float64[] { return [_tnoCount, _tnoTime]; }
 export function typeNameOf(t: Type | null): string {
+	if (!_queryProfilingEnabled) return typeNameOfInner(t);
 	_tnoCount = _tnoCount + 1;
 	const _n0 = performance.now();
 	const r = typeNameOfInner(t);
@@ -3280,6 +3311,7 @@ let _tdnCount: float64 = 0;
 let _tdnTime: float64 = 0;
 export function typeDisplayNameProfile(): float64[] { return [_tdnCount, _tdnTime]; }
 export function typeDisplayName(t: Type | null): string {
+	if (!_queryProfilingEnabled) return typeDisplayNameInner(t);
 	_tdnCount = _tdnCount + 1;
 	const _d0 = performance.now();
 	const r = typeDisplayNameInner(t);
@@ -3391,42 +3423,41 @@ function alignTo(offset: int32, align: int32): int32 {
 	return offset + (align - rem);
 }
 
-let _layoutDepth: int32 = 0;
-
 // alignOfType — natural alignment for C ABI (target-aware)
 export function alignOfType(tg: TargetInfo, t: Type): int32 {
-	if (_layoutDepth > 16) return 0;
-	_layoutDepth = _layoutDepth + 1;
-	const r = alignOfTypeInner(tg, t);
-	_layoutDepth = _layoutDepth - 1;
-	return r;
+	return alignOfTypeAt(tg, t, 0);
 }
 
-function alignOfTypeInner(tg: TargetInfo, t: Type): int32 {
+function alignOfTypeAt(tg: TargetInfo, t: Type, depth: int32): int32 {
+	if (depth > 16) return 0;
+	return alignOfTypeInner(tg, t, depth + 1);
+}
+
+function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	const ps = tg.ptrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
-		return alignOfStruct(tg, t);
+		return alignOfStruct(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Union) {
-		return alignOfUnion(tg, t);
+		return alignOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
 		const sr = setRepr(t);
-		if (sr != null) return alignOfType(tg, sr);
+		if (sr != null) return alignOfTypeAt(tg, sr, depth);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return alignOfType(tg, t.typeReturn);
+		return alignOfTypeAt(tg, t.typeReturn, depth);
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
 		const body = instanceLayoutBody(t);
-		if (body != null && body != t) return alignOfType(tg, body);
+		if (body != null && body != t) return alignOfTypeAt(tg, body, depth);
 	}
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
-		return alignOfType(tg, t.typeReturn);
+		return alignOfTypeAt(tg, t.typeReturn, depth);
 	}
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
-		return alignOfType(tg, t.typeChildren[0]);
+		return alignOfTypeAt(tg, t.typeChildren[0], depth);
 	}
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
@@ -3441,12 +3472,12 @@ function alignOfTypeInner(tg: TargetInfo, t: Type): int32 {
 	};
 }
 
-function alignOfStruct(tg: TargetInfo, t: Type): int32 {
+function alignOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			const a = alignOfType(tg, t.typeChildren[i]);
+			const a = alignOfTypeAt(tg, t.typeChildren[i], depth);
 			if (a > maxAlign) maxAlign = a;
 			i = i + 1;
 		}
@@ -3458,38 +3489,39 @@ function alignOfStruct(tg: TargetInfo, t: Type): int32 {
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
 export function sizeOfType(tg: TargetInfo, t: Type): int32 {
 	if (tg.ptrSize < 4) return SIZE_NOT_COMPUTABLE;
-	if (_layoutDepth > 16) return SIZE_NOT_COMPUTABLE;
-	_layoutDepth = _layoutDepth + 1;
-	const r = sizeOfTypeInner(tg, t);
-	_layoutDepth = _layoutDepth - 1;
-	return r;
+	return sizeOfTypeAt(tg, t, 0);
 }
 
-function sizeOfTypeInner(tg: TargetInfo, t: Type): int32 {
+function sizeOfTypeAt(tg: TargetInfo, t: Type, depth: int32): int32 {
+	if (depth > 16) return SIZE_NOT_COMPUTABLE;
+	return sizeOfTypeInner(tg, t, depth + 1);
+}
+
+function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	const ps = tg.ptrSize;
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
-		return sizeOfStruct(tg, t);
+		return sizeOfStruct(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Union) {
-		return sizeOfUnion(tg, t);
+		return sizeOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
 		const sr = setRepr(t);
-		if (sr != null) return sizeOfType(tg, sr);
+		if (sr != null) return sizeOfTypeAt(tg, sr, depth);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return sizeOfType(tg, t.typeReturn) * t.typeValue;
+		return sizeOfTypeAt(tg, t.typeReturn, depth) * t.typeValue;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;
 		const body = instanceLayoutBody(t);
-		if (body != null && body != t) return sizeOfType(tg, body);
+		if (body != null && body != t) return sizeOfTypeAt(tg, body, depth);
 	}
 	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) {
-		return sizeOfType(tg, t.typeReturn);
+		return sizeOfTypeAt(tg, t.typeReturn, depth);
 	}
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
-		return sizeOfType(tg, t.typeChildren[0]);
+		return sizeOfTypeAt(tg, t.typeChildren[0], depth);
 	}
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
@@ -3505,7 +3537,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type): int32 {
 	};
 }
 
-function sizeOfStruct(tg: TargetInfo, t: Type): int32 {
+function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
@@ -3513,9 +3545,9 @@ function sizeOfStruct(tg: TargetInfo, t: Type): int32 {
 		while (i < t.typeChildren.length) {
 			const field = t.typeChildren[i];
 			if (field != null && field.kind != TypeKind.Void) {
-				const fieldSize = sizeOfType(tg, field);
+				const fieldSize = sizeOfTypeAt(tg, field, depth);
 				if (fieldSize < 0) return fieldSize;
-				const fieldAlign = alignOfType(tg, field);
+				const fieldAlign = alignOfTypeAt(tg, field, depth);
 				if (fieldAlign > maxAlign) maxAlign = fieldAlign;
 				offset = alignTo(offset, fieldAlign);
 				offset = offset + fieldSize;
@@ -3547,19 +3579,19 @@ function unionTagType(t: Type): Type | null {
 	return t.typeExtra != null && t.typeExtra.kind == TypeKind.Enum ? t.typeExtra : null;
 }
 
-function sizeOfUnion(tg: TargetInfo, t: Type): int32 {
+function sizeOfUnion(tg: TargetInfo, t: Type, depth: int32): int32 {
 	const tag = unionTagType(t);
-	const tagSize = tag != null ? sizeOfType(tg, tag) : 4;
+	const tagSize = tag != null ? sizeOfTypeAt(tg, tag, depth) : 4;
 	if (tagSize < 0) return tagSize;
-	const tagAlign = tag != null ? alignOfType(tg, tag) : 4;
+	const tagAlign = tag != null ? alignOfTypeAt(tg, tag, depth) : 4;
 	let payload = 0;
 	let payloadAlign = 1;
 	if (t.typeChildren != null) {
 		for (const variant of t.typeChildren) {
-			const vs = sizeOfType(tg, variant);
+			const vs = sizeOfTypeAt(tg, variant, depth);
 			if (vs < 0) return vs;
 			if (vs > payload) payload = vs;
-			const va = alignOfType(tg, variant);
+			const va = alignOfTypeAt(tg, variant, depth);
 			if (va > payloadAlign) payloadAlign = va;
 		}
 	}
@@ -3567,12 +3599,12 @@ function sizeOfUnion(tg: TargetInfo, t: Type): int32 {
 	return alignTo(alignTo(tagSize, payloadAlign) + payload, maxAlign);
 }
 
-function alignOfUnion(tg: TargetInfo, t: Type): int32 {
+function alignOfUnion(tg: TargetInfo, t: Type, depth: int32): int32 {
 	const tag = unionTagType(t);
-	let maxAlign = tag != null ? alignOfType(tg, tag) : 4;
+	let maxAlign = tag != null ? alignOfTypeAt(tg, tag, depth) : 4;
 	if (t.typeChildren != null) {
 		for (const variant of t.typeChildren) {
-			const va = alignOfType(tg, variant);
+			const va = alignOfTypeAt(tg, variant, depth);
 			if (va > maxAlign) maxAlign = va;
 		}
 	}
