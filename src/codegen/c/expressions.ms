@@ -1940,6 +1940,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseVariantError(${tmp}.value._tag, ${nvi});`);
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${tmp}.value.v${nvi}, .present=true} : (${targetC}){0})`);
 			return;
 		}
