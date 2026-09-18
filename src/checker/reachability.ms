@@ -4,7 +4,7 @@
 // starting from roots (main, top-level stmts, test decls, exported symbols).
 // Cross-module references traced via ImportDecl source paths.
 
-import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, ImportDeclData, HiddenStdConvData,
+import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -17,31 +17,19 @@ import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
 
-// ===== Module Index =====
-// Maps module path to its program AST for cross-module tracing.
-
-interface ModuleIndex {
-	paths: string[];
-	programs: Node[];
-}
-
-// Program lookup cache — parallel arrays
-let _progCacheKeys: string[] = [];
-let _progCacheVals: Node[] = [];
-
 // ===== Global Name Index =====
 // Pre-built name→modulePath index for O(1) cross-module lookup.
 // Replaces the O(n*m) linear scan of all modules for unresolved identifiers.
 // Built once at the start of computeAliveSet.
 let _nameIndex: HashMap<string, string> = new HashMap<string, string>();
 
-function nameIndexBuild(idx: ModuleIndex): void {
+function nameIndexBuild(programs: Node[], paths: string[]): void {
 	_nameIndex = new HashMap<string, string>();
-	for (let m = 0; m < idx.programs.length; m += 1) {
-		const prog = idx.programs[m];
+	for (let m = 0; m < programs.length; m += 1) {
+		const prog = programs[m];
 		if (prog == null) continue;
 		const pd = prog.data as ProgramData;
-		const modPath = idx.paths[m];
+		const modPath = paths[m];
 		for (const stmt of pd.programStmts) {
 			if (stmt == null) continue;
 			const name = getDeclName(stmt);
@@ -58,70 +46,36 @@ function nameIndexLookup(name: string): string {
 	return "";
 }
 
-function findProgram(idx: ModuleIndex, path: string): Node {
-	for (let c = 0; c < _progCacheKeys.length; c += 1) {
-		if (_progCacheKeys[c] == path) return _progCacheVals[c];
-	}
-	for (let i = 0; i < idx.paths.length; i += 1) {
-		if (idx.paths[i] == path) {
-			_progCacheKeys.push(path);
-			_progCacheVals.push(idx.programs[i]);
-			return idx.programs[i];
+// ===== Declaration Index =====
+// "modulePath:name" → its first top-level declaration; _declNext chains the
+// overloads of one key in statement order. The first program of a path owns it.
+let _declHead: HashMap<string, int32> = new HashMap<string, int32>();
+let _declNodes: Node[] = [];
+let _declNext: int32[] = [];
+
+function declIndexBuild(programs: Node[], paths: string[]): void {
+	_declHead = new HashMap<string, int32>();
+	_declNodes = [];
+	_declNext = [];
+	const indexed = new HashSet<string>();
+	for (let m = 0; m < programs.length; m += 1) {
+		const modPath = paths[m];
+		if (indexed.has(modPath)) continue;
+		indexed.add(modPath);
+		const prog = programs[m];
+		if (prog == null) continue;
+		const stmts = (prog.data as ProgramData).programStmts;
+		for (let s = stmts.length - 1; s >= 0; s -= 1) {
+			const decl = topDecl(stmts[s]);
+			if (decl == null) continue;
+			const key = modPath + ":" + topDeclName(decl);
+			const next = _declHead.get(key) ?? -1;
+			_declNodes.push(decl);
+			_declNext.push(next);
+			_declHead.set(key, _declNodes.length - 1);
 		}
 	}
-	return null as unknown as Node;
 }
-
-// ===== Import Resolution =====
-// Given an import specifier in a program, find which module path it resolves to.
-// We scan ImportDecl nodes to build a local import map per module.
-
-interface ImportMap {
-	names: string[];      // imported symbol name
-	sourcePaths: string[]; // resolved module path
-}
-
-function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
-	const map: ImportMap = { names: [], sourcePaths: [] };
-	const d = program.data as ProgramData;
-	for (const stmt of d.programStmts) {
-		if (stmt == null) continue;
-		let importNode = stmt;
-		// Unwrap ExportDecl
-		if (stmt.kind == NodeKind.ExportDecl) {
-			const ed = stmt.data as ExportDeclData;
-			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.ImportDecl) {
-				importNode = ed.exportedDecl;
-			}
-		}
-		if (importNode.kind == NodeKind.ImportDecl) {
-			const id = importNode.data as ImportDeclData;
-			const resolvedPath = resolveSpecifier(id.importSource, modIdx);
-			if (resolvedPath != "") {
-				for (let i = 0; i < id.importNames.length; i += 1) {
-					map.names.push(id.importNames[i]);
-					map.sourcePaths.push(resolvedPath);
-				}
-			}
-		}
-	}
-	return map;
-}
-
-// Resolve an import specifier to a known module path.
-// Tries suffix matching: "std/core/string/index" matches "/abs/path/std/core/string/index.ms"
-function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
-	for (let i = 0; i < modIdx.paths.length; i += 1) {
-		const p = modIdx.paths[i];
-		// Check if path ends with the specifier (with or without extension)
-		if (p.endsWith(specifier) || p.endsWith(specifier + ".ms") || p.endsWith(specifier + ".cms") || p.endsWith(specifier + "/index.ms") || p.endsWith(specifier + "/index.cms")) {
-			return p;
-		}
-	}
-	return "";
-}
-
-
 
 // ===== Visited Set (Set-based for O(1) lookup) =====
 
@@ -135,30 +89,14 @@ function visitedAdd(key: string): void {
 	_visitedSet.add(key);
 }
 
-// ===== Import Map Cache (avoid rebuilding per markAndWalk call) =====
-
-let _importCacheKeys: string[] = [];
-let _importCacheVals: ImportMap[] = [];
-
-function getImportMap(program: Node, modulePath: string): ImportMap {
-	for (let c = 0; c < _importCacheKeys.length; c += 1) {
-		if (_importCacheKeys[c] == modulePath) return _importCacheVals[c];
-	}
-	const map = buildImportMap(program, _modIdx);
-	_importCacheKeys.push(modulePath);
-	_importCacheVals.push(map);
-	return map;
-}
-
 // ===== Module-level state (avoids closure capture of value-type arrays/structs) =====
 
 let _aliveSet: AliveSet = createAliveSet();
-let _modIdx: ModuleIndex = { paths: [], programs: [] };
 
 // ===== Core Walker =====
 
 // Walk a node recursively, marking any referenced declarations alive.
-function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
+function walkBody(node: Node, modulePath: string): void {
 	if (node == null) return;
 	if (node.nodeType != null) {
 		let ut = node.nodeType;
@@ -207,9 +145,9 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	// CallExpr — walk callee and arguments
 	if (k == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
-		walkBody(cd.callee, modulePath, importMap);
+		walkBody(cd.callee, modulePath);
 		for (const arg of cd.arguments) {
-			walkBody(arg, modulePath, importMap);
+			walkBody(arg, modulePath);
 		}
 		return;
 	}
@@ -223,9 +161,9 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	// future synthetic name.
 	if (k == NodeKind.NewExpr) {
 		const nd = node.data as NewExprData;
-		walkBody(nd.newCallee, modulePath, importMap);
+		walkBody(nd.newCallee, modulePath);
 		for (const arg of nd.newArguments) {
-			walkBody(arg, modulePath, importMap);
+			walkBody(arg, modulePath);
 		}
 		if (nd.newCallee.resolvedSym != null) {
 			const classSym = nd.newCallee.resolvedSym;
@@ -249,14 +187,14 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	// whose initializer references <T>Destroy/<T>Trace (TypeInfo→hook edge).
 	if (k == NodeKind.ObjectLiteral) {
 		markTypeInfoEdge(node, modulePath);
-		walkChildrenGeneric(node, modulePath, importMap);
+		walkChildrenGeneric(node, modulePath);
 		return;
 	}
 
 	// MemberExpr — walk object + mark resolved extension/class method
 	if (k == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		walkBody(md.object, modulePath, importMap);
+		walkBody(md.object, modulePath);
 		if (node.resolvedSym != null) {
 			const sym2 = node.resolvedSym;
 			const targetName2 = (sym2.originalName != "" && sym2.originalName != null) ? sym2.originalName : sym2.name;
@@ -282,7 +220,7 @@ function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	// For all other nodes: walk children generically via forEachChild
 	// NOTE: forEachChild uses a callback — we pass module-level state
 	// instead of closure-captured value-type arrays to avoid use-after-free
-	walkChildrenGeneric(node, modulePath, importMap);
+	walkChildrenGeneric(node, modulePath);
 }
 
 // Allocation site → <T>TypeInfo edge. The emitted allocation references the
@@ -386,9 +324,9 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 }
 
 // Walk all children of a node generically via shared forEachChild
-function walkChildrenGeneric(node: Node, modulePath: string, importMap: ImportMap): void {
+function walkChildrenGeneric(node: Node, modulePath: string): void {
 	forEachChild(node, (child: Node): void => {
-		walkBody(child, modulePath, importMap);
+		walkBody(child, modulePath);
 	});
 }
 
@@ -418,139 +356,80 @@ function markAndWalk(modulePath: string, name: string): void {
 		}
 	}
 
-	// Find ALL declarations with this name (handles overloaded functions)
-	const program = findProgram(_modIdx, modulePath);
-	if (program == null) return;
-	const importMap = getImportMap(program, modulePath);
-	const d = program.data as ProgramData;
-	for (const stmt of d.programStmts) {
-		if (stmt == null) continue;
-		const found = matchDeclName(stmt, name);
-		if (found != null) {
-			walkBody(found, modulePath, importMap);
-			// When a class becomes alive, also mark `<className>_init` alive —
-			// `methodToFunction` lifts the ctor body into a top-level
-			// FunctionDecl with that name and removes the ConstructorDecl from
-			// classBody, so the name is not discoverable from the class node.
-			// Every class carries an `_init` (ctorLower synthesizes one when
-			// the source has no constructor), and marking a name that has no
-			// declaration is inert. Required for both `new C(...)` and
-			// `super(args)` from a child class — which codegen lowers to
-			// `<Parent>_init(this, args)`, so any reachable parent in the
-			// inheritance chain needs its `_init` alive too.
-			if (found.kind == NodeKind.ClassDecl) {
-				// Recursive: markAndWalk so the lifted `_init` body is also
-				// visited. The ctor body may contain `super(args)` whose
-				// parent class needs to be reached + that parent's `_init`
-				// chained alive too. Without recursion, A → B → C inheritance
-				// chains stop at the leaf and parent `_init`s drop out.
-				markAndWalk(modulePath, initFnName(name));
-			}
-			// Actors: actorLower erased the NewExpr before this walk runs, so
-			// no allocation-site edge fires — but a spawned actor's TypeInfo
-			// is always demanded. Marking it walks its initializer, which
-			// marks Destroy/Trace via the Identifier fallback.
-			const isActorOrigin = found.kind == NodeKind.ActorDecl
-				|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
-					&& found.resolvedSym.symbolKind == SymbolKind.Actor);
-			if (isActorOrigin) {
-				const acName = hookBaseCNameOfSym(name, found.resolvedSym);
-				markAndWalk(modulePath, name + "TypeInfo");
-				markAndWalk(modulePath, acName + "Destroy");
-				markAndWalk(modulePath, acName + "Trace");
-			}
+	// Walk ALL declarations with this name (handles overloaded functions)
+	let di = _declHead.get(key) ?? -1;
+	while (di >= 0) {
+		const found = _declNodes[di];
+		di = _declNext[di];
+		walkBody(found, modulePath);
+		// When a class becomes alive, also mark `<className>_init` alive —
+		// `methodToFunction` lifts the ctor body into a top-level
+		// FunctionDecl with that name and removes the ConstructorDecl from
+		// classBody, so the name is not discoverable from the class node.
+		// Every class carries an `_init` (ctorLower synthesizes one when
+		// the source has no constructor), and marking a name that has no
+		// declaration is inert. Required for both `new C(...)` and
+		// `super(args)` from a child class — which codegen lowers to
+		// `<Parent>_init(this, args)`, so any reachable parent in the
+		// inheritance chain needs its `_init` alive too.
+		if (found.kind == NodeKind.ClassDecl) {
+			// Recursive: markAndWalk so the lifted `_init` body is also
+			// visited. The ctor body may contain `super(args)` whose
+			// parent class needs to be reached + that parent's `_init`
+			// chained alive too. Without recursion, A → B → C inheritance
+			// chains stop at the leaf and parent `_init`s drop out.
+			markAndWalk(modulePath, initFnName(name));
+		}
+		// Actors: actorLower erased the NewExpr before this walk runs, so
+		// no allocation-site edge fires — but a spawned actor's TypeInfo
+		// is always demanded. Marking it walks its initializer, which
+		// marks Destroy/Trace via the Identifier fallback.
+		const isActorOrigin = found.kind == NodeKind.ActorDecl
+			|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
+				&& found.resolvedSym.symbolKind == SymbolKind.Actor);
+		if (isActorOrigin) {
+			const acName = hookBaseCNameOfSym(name, found.resolvedSym);
+			markAndWalk(modulePath, name + "TypeInfo");
+			markAndWalk(modulePath, acName + "Destroy");
+			markAndWalk(modulePath, acName + "Trace");
 		}
 	}
 }
 
-// Find a top-level declaration by name in a program AST (first match only).
-// Used by the no-resolvedSym fallback search — markAndWalk uses inline loop for all overloads.
-function findDecl(program: Node, name: string): Node {
-	const d = program.data as ProgramData;
-	for (const stmt of d.programStmts) {
-		if (stmt == null) continue;
-		const found = matchDeclName(stmt, name);
-		if (found != null) return found;
-	}
-	return null as unknown as Node;
-}
-
-// Check if a statement is a declaration with the given name. Returns the node to walk.
-function matchDeclName(node: Node, name: string): Node {
-	if (node == null) return null as unknown as Node;
+// The declaration a top-level statement introduces, unwrapped from
+// ExportDecl/DecoratedDecl, or null when it declares nothing walkable.
+function topDecl(node: Node | null): Node | null {
+	if (node == null) return null;
 	const k = node.kind;
-
-	if (k == NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		if (d.fnName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		if (d.declName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		if (d.className == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.ActorDecl) {
-		const d = node.data as ActorDeclData;
-		if (d.actorName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.InterfaceDecl || k == NodeKind.StructDecl) {
-		const d = node.data as { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
-		if (d.interfaceName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.EnumDecl) {
-		const d = node.data as { enumName: string, enumMembers: string[] };
-		if (d.enumName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.TypeAliasDecl) {
-		const d = node.data as { aliasName: string, aliasType: string, aliasIsDistinct: boolean };
-		if (d.aliasName == name) return node;
-		return null as unknown as Node;
-	}
-	if (k == NodeKind.ExternDecl) {
-		const d = node.data as ExternDeclData;
-		if (d.externName == name) return node;
-		return null as unknown as Node;
-	}
-	// Unwrap ExportDecl
-	if (k == NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return matchDeclName(d.exportedDecl, name);
-	}
-	// Unwrap DecoratedDecl
-	if (k == NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return matchDeclName(d.decoratedNode, name);
-	}
-	return null as unknown as Node;
+	if (k == NodeKind.ExportDecl) return topDecl((node.data as ExportDeclData).exportedDecl);
+	if (k == NodeKind.DecoratedDecl) return topDecl((node.data as DecoratedDeclData).decoratedNode);
+	if (k == NodeKind.FunctionDecl || k == NodeKind.VariableDecl || k == NodeKind.ClassDecl
+		|| k == NodeKind.ActorDecl || k == NodeKind.InterfaceDecl || k == NodeKind.StructDecl
+		|| k == NodeKind.EnumDecl || k == NodeKind.TypeAliasDecl || k == NodeKind.ExternDecl) return node;
+	return null;
 }
 
-function findImport(importMap: ImportMap, name: string): number {
-	for (let i = 0; i < importMap.names.length; i += 1) {
-		if (importMap.names[i] == name) return i;
+function topDeclName(decl: Node): string {
+	const k = decl.kind;
+	if (k == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).fnName;
+	if (k == NodeKind.VariableDecl) return (decl.data as VariableDeclData).declName;
+	if (k == NodeKind.ClassDecl) return (decl.data as ClassDeclData).className;
+	if (k == NodeKind.ActorDecl) return (decl.data as ActorDeclData).actorName;
+	if (k == NodeKind.InterfaceDecl || k == NodeKind.StructDecl) {
+		return (decl.data as { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] }).interfaceName;
 	}
-	return -1;
+	if (k == NodeKind.EnumDecl) return (decl.data as { enumName: string, enumMembers: string[] }).enumName;
+	if (k == NodeKind.TypeAliasDecl) return (decl.data as { aliasName: string, aliasType: string, aliasIsDistinct: boolean }).aliasName;
+	return (decl.data as ExternDeclData).externName;
 }
 
 // ===== Public API =====
 
 export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean): AliveSet {
 	_aliveSet = createAliveSet();
-	_modIdx = { paths, programs };
 	_visitedSet = new HashSet<string>();
-	_importCacheKeys = [];
-	_importCacheVals = [];
-	_progCacheKeys = [];
-	_progCacheVals = [];
-	nameIndexBuild(_modIdx);
+	nameIndexBuild(programs, paths);
+	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 
 	// For each module, find roots and mark them alive
@@ -559,13 +438,12 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 		const program = programs[m];
 		if (program == null) continue;
 		const d = program.data as ProgramData;
-		const importMap = buildImportMap(program, _modIdx);
 
 		for (const stmt of d.programStmts) {
 			if (stmt == null) continue;
 
 			// Unwrap DecoratedDecl (module-level @passC/@passL/... wrap the next
-			// decl) so name/kind roots below see the real decl — matchDeclName
+			// decl) so name/kind roots below see the real decl — topDecl
 			// already unwraps; the root scan must too or a decorated `main` is
 			// invisible and the whole entry module goes dead.
 			let bare = stmt;
@@ -605,12 +483,12 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 					const isLifted = (fn.length >= 8 && fn.slice(0, 8) == "$lifted_")
 						|| (fn.length >= 4 && fn.slice(0, 4) == "$fn_");
 					if (!isLifted) {
-						walkBody(bare, modulePath, importMap);
+						walkBody(bare, modulePath);
 					}
 					continue;
 				}
 				if (isArraySeqHookName(fn)) {
-					walkBody(bare, modulePath, importMap);
+					walkBody(bare, modulePath);
 					continue;
 				}
 
@@ -620,7 +498,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
 			// Entry module test blocks are wrapped in main() by codegen, so they're always roots.
 			if (bare.kind == NodeKind.TestDecl && (isTest || modulePath == entryPath)) {
-				walkBody(bare, modulePath, importMap);
+				walkBody(bare, modulePath);
 				continue;
 			}
 
@@ -633,7 +511,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				if (ed.exportedDecl != null) initStmt = ed.exportedDecl;
 			}
 			if (isTopLevelStatement(initStmt)) {
-				walkBody(bare, modulePath, importMap);
+				walkBody(bare, modulePath);
 				continue;
 			}
 
@@ -656,11 +534,11 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
-	_modIdx = { paths: [], programs: [] };
 	_visitedSet = new HashSet<string>();
-	_progCacheKeys = [];
-	_progCacheVals = [];
 	_nameIndex = new HashMap<string, string>();
+	_declHead = new HashMap<string, int32>();
+	_declNodes = [];
+	_declNext = [];
 	return result;
 }
 
