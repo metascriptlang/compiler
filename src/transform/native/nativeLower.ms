@@ -12,7 +12,7 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, CallExprData, IdentifierData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
@@ -77,25 +77,8 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind == NodeKind.CallExpr) return rewriteLockedIntrinsic(rewriteExternArrayReturn(node));
+	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(node);
 	return node;
-}
-
-// The Locked<T> payload load/store are declared extern so the std surface can
-// spell them, but no C function of that name exists: the backend rewrites each
-// into a field access on the generated cell struct. Detach the call from its
-// extern symbol so codegen reaches that rewrite — the extern path emits the
-// nativeName call directly and would produce a call to an undeclared function.
-function rewriteLockedIntrinsic(node: Node): Node {
-	if (node.kind != NodeKind.CallExpr) return node;
-	if (node.resolvedSym == null) return node;
-	const cd = node.data as CallExprData;
-	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return node;
-	const name = (cd.callee.data as IdentifierData).name;
-	if (name != "msLockedLoad" && name != "msLockedStore") return node;
-	const call = makeCall(runtimeRef(name, node.location), cd.arguments, node.location);
-	call.nodeType = node.nodeType;
-	return call;
 }
 
 // An extern (FFI) function whose return is typed Ref<Array> returns the array BY VALUE at
