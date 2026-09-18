@@ -69,7 +69,6 @@ export enum TypeFlag {
 	AwaitableAffine,      // PARALOCK affine (spawn-origin Promise)
 	AwaitableScopeBound,  // PARALOCK R3/E4 (cannot escape creating scope)
 	HasInheritedFields,   // class has flattened parent fields (suppresses DRC parent-call)
-	Substituting,
 	IsAtomic,             // Arc<T> atomic-rc marker on a Ref
 	DuVariant,            // INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
 	OpenClass,            // class is extended (non-final): canFormAcycle returns true unconditionally, the tfFinal rule. Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge

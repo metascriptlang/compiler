@@ -2537,7 +2537,7 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeName = t.typeName;
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
-	result.typeFlags = t.typeFlags.excl(TypeFlag.Substituting);
+	result.typeFlags = t.typeFlags;
 	result.typeValue = t.typeValue;
 	result.callConv = t.callConv;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {

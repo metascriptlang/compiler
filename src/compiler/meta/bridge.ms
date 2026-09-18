@@ -2617,10 +2617,10 @@ test "mapTypeToAst — Array<Array<T>> emits nested TypeArray" {
 	assert (innerData.typExprElement.data as IdentifierData).name == "int32";
 }
 
-test "mapTypeToAst — SizedArray size is independent of the Substituting flag" {
+test "mapTypeToAst — SizedArray size is independent of its type flags" {
 	const loc = makeLoc(1, 0);
 	const t = makeArrayType(TypeKind.SizedArray, makePrimType(TypeKind.Int32), 8);
-	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.Substituting);
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
 	const out = mapTypeToAst(t, loc);
 	const d = out.data as TypeArrayData;
 	assert d.typExprSize == 8;
