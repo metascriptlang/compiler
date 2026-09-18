@@ -575,6 +575,9 @@ function isInt64Min(v: int64): boolean {
 // (lexer.nim:536-548). `negated` is the unary minus the caller folded in: the
 // token itself is always a magnitude, because the lexer never eats the sign.
 export function literalFitsInType(node: Node, target: Type, negated: boolean): boolean {
+	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
+		return literalFitsInType(node, target.typeReturn, negated);
+	}
 	if (!isNodeIntLit(node)) return false;
 	const d = node.data as NumberLiteralData;
 	const mag = d.value;

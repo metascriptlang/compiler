@@ -156,7 +156,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (node == null) return;
 	if (node.flags.has(NodeFlag.Sem) && node.nodeType != null) return;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = errorType(); return; }
-	checkExprInner(ctx, node, expectedType);
+	const slotType = (expectedType != null && (expectedType.kind == TypeKind.Sink || expectedType.kind == TypeKind.Lent) && expectedType.typeReturn != null)
+		? expectedType.typeReturn
+		: expectedType;
+	checkExprInner(ctx, node, slotType);
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 }

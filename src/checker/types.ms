@@ -1587,6 +1587,14 @@ export function createVar(inner: Type): Type {
 	return t;
 }
 
+export function createSink(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Sink;
+	t.typeReturn = inner;
+	propagateToOwner(t, inner);
+	return t;
+}
+
 export function createTuple(elementTypes: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Tuple;
@@ -2251,6 +2259,7 @@ function typeKey(t: Type): string {
 		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		_ => t.kind.toString(),
 	};
@@ -2420,9 +2429,7 @@ export function propagateToOwner(parent: Type, child: Type): void {
 }
 
 // ===== Ownership Modifiers =====
-// TypeKind.Sink/Lent have no producer since sink inference was removed (ea38c2a);
-// the see-through arms stay for a future explicit `sink T`. skipModifier also
-// unwraps Var, which is still constructed.
+// TypeKind.Lent has no producer; Sink is produced by an explicit `sink` param.
 
 export function skipModifier(t: Type | null): Type | null {
 	if (t == null) return t;
@@ -2563,6 +2570,7 @@ function substituteTypeInner(t: Type | null, paramName: string, concrete: Type):
 			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Var => createVar(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Sink => createSink(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Cursor => createCursor(substituteType(t.typeReturn, paramName, concrete)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete),
 			TypeKind.GenericInstance => {
@@ -2644,6 +2652,7 @@ export function substituteAllParams(t: Type | null, names: string[], concretes: 
 			TypeKind.Ptr => createPtr(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Borrow => createBorrow(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Var => createVar(substituteAllParams(t.typeReturn, names, concretes)),
+			TypeKind.Sink => createSink(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Cursor => createCursor(substituteAllParams(t.typeReturn, names, concretes)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes),
 			TypeKind.GenericInstance => {
@@ -2770,7 +2779,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		bindings.types.push(closureStorageType(withoutReadonlyView(concrete)));
 		return;
 	}
-	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor) && formal.typeReturn != null) {
+	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
 		unifyType(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
 	}
