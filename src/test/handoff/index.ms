@@ -45,6 +45,7 @@ import "./crossModuleGlobal";
 import "./closureCall";
 import "./nrvoReassign";
 import "./closureEnvArrayType";
+import "./closureParamCapture";
 import "./toStringUnified";
 import "./incompleteStruct";
 import "./anonStructCast";
