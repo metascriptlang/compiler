@@ -196,3 +196,4 @@ import "./bug178StrLitUnionHooks";
 import "./bug183MacroCallFlowSeed";
 import "./bug184MacroErrorFromNestedFn";
 import "./bug185MacroHelperBuildsNode";
+import "./bug186MaybeUnionNarrowCast";
