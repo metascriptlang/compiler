@@ -146,7 +146,7 @@ ls_row() {
     return
   fi
   br=$(git -C "$w" symbolic-ref -q --short HEAD || printf 'detached@%s' "$(git -C "$w" rev-parse --short HEAD 2>/dev/null)")
-  dirty=$(git -C "$w" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  dirty=$(wt_status "$w" | grep -c . | tr -d ' ')
   ahead=$(unlanded "$w" | wc -l | tr -d ' ')
   out=-
   [ -d "$w/out" ] && out=$(kib_human "$(du -sk "$w/out" 2>/dev/null | awk '{print $1}')")
@@ -166,8 +166,27 @@ cmd_ls() {
   rm -f "$table"
 }
 
+wt_status() {
+  local w=$1 out
+  if out=$(git -C "$w" status --porcelain 2>/dev/null); then
+    printf '%s' "$out"
+  elif out=$(git -C "$w" diff --name-status --ignore-submodules=all HEAD 2>/dev/null && git -C "$w" ls-files --others --exclude-standard 2>/dev/null | sed 's/^/?? /'); then
+    printf '%s' "$out"
+  else
+    printf '%s' "!! git cannot read the state of this worktree; uncommitted work cannot be ruled out"
+  fi
+}
+
+live_submodules() {
+  local w=$1 d
+  git -C "$w" ls-files -s 2>/dev/null | awk '$1 == 160000 { print $4 }' | while IFS= read -r d; do
+    [ -e "$w/$d/.git" ] && [ ! -L "$w/$d" ] && printf '%s\n' "$d"
+  done
+  return 0
+}
+
 cmd_rm() {
-  local target="" force=0 a w table pids dirty ahead br cost=0 removeflag=() e
+  local target="" force=0 a w table pids dirty subs ahead br cost=0 removeflag=() e
   for a in "$@"; do
     case "$a" in
       --force) force=1 ;;
@@ -179,7 +198,8 @@ cmd_rm() {
   [ "$w" != "$MAIN" ] || die "rm: refusing to remove the main checkout"
   table=$(cwd_table)
   pids=$(procs_in "$w" "$table")
-  dirty=$(git -C "$w" status --porcelain 2>/dev/null)
+  dirty=$(wt_status "$w")
+  subs=$(live_submodules "$w")
   ahead=$(unlanded "$w")
   br=$(git -C "$w" symbolic-ref -q --short HEAD || true)
   if [ -n "$pids" ]; then
@@ -188,6 +208,9 @@ cmd_rm() {
   fi
   if [ -n "$dirty" ]; then
     cost=1; say "uncommitted and untracked files:"; printf '%s\n' "$dirty" | sed 's/^/  /' >&2
+  fi
+  if [ -n "$subs" ]; then
+    cost=1; say "initialized submodule checkouts (git removes them only by force):"; printf '%s\n' "$subs" | sed 's/^/  /' >&2
   fi
   if [ -n "$ahead" ]; then
     cost=1; say "commits not on $BASE${br:+ (branch $br is deleted with the worktree)}:"
@@ -199,7 +222,7 @@ cmd_rm() {
   [ -d "$w/out" ] && say "out/: $(kib_human "$(du -sk "$w/out" | awk '{print $1}')")"
   local paper_before="" paper_after
   [ -d "$MAIN/paper" ] && paper_before=$(find "$MAIN/paper/" | wc -l | tr -d ' ')
-  [ -n "$dirty" ] && removeflag=(--force)
+  { [ -n "$dirty" ] || [ -n "$subs" ]; } && removeflag=(--force)
   if ! git -C "$MAIN" worktree remove "${removeflag[@]}" "$w"; then
     die "rm: git refused to remove $w for a reason not listed above; nothing else was forced"
   fi
