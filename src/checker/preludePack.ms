@@ -542,6 +542,7 @@ function writePreludeDeps(root: string, key: string): void {
 //   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
 //   M macroName declModule bodyIdx paramsCsv paramTypesCsv
 //   C converterName targetTypeName typeIdx
+//   P compilerFuncName symIdx
 //   D includeDirectives
 //   F compilerFlags
 //   X compileDirectives
@@ -764,6 +765,12 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		if (target == null) continue;
 		const ct = ctx.converterTargetTypes.get(name);
 		lines.push(`C\t${escapeP(name)}\t${escapeP(target)}\t${idxType(ct)}`);
+	}
+
+	for (const name of ctx.compilerFuncs.keys()) {
+		const declared = ctx.compilerFuncs.get(name);
+		if (declared == null) continue;
+		lines.push(`P\t${escapeP(name)}\t${idxSym(declared)}`);
 	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
@@ -1128,6 +1135,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const extRows: string[][] = [];
 	const macroRows: string[][] = [];
 	const convRows: string[][] = [];
+	const compilerFuncRows: string[][] = [];
 	let includeDirectives = "";
 	let compilerFlags = "";
 	let compileDirectives = "";
@@ -1208,6 +1216,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			macroRows.push(f);
 		} else if (f[0] == "C") {
 			convRows.push(f);
+		} else if (f[0] == "P") {
+			compilerFuncRows.push(f);
 		} else if (f[0] == "D") {
 			includeDirectives = unescapeP(f[1]);
 		} else if (f[0] == "F") {
@@ -1303,6 +1313,11 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		if (ti >= 0 && ti < types.length) ctx.converterTargetTypes.set(name, types[ti]);
 	}
 
+	for (const f of compilerFuncRows) {
+		const si = f[2].parseInt() as int32;
+		if (si >= 0 && si < syms.length) ctx.compilerFuncs.set(unescapeP(f[1]), syms[si]);
+	}
+
 	ctx.includeDirectives = includeDirectives;
 	ctx.compilerFlags = compilerFlags;
 	ctx.compileDirectives = compileDirectives;
@@ -1390,6 +1405,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.compilerFlags = "-Ivendor/x -O2";
 		ctx.compileDirectives = "vendor/crypto/a.c vendor/io/b.c";
 		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "string", "std/pk/test.ms", noneType(), true, sym, 0));
+		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
 		writePreludePack(key, ctx);
@@ -1397,6 +1413,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkTestFn"));
 		assert got != null;
+		assert loaded.compilerFuncs.get("pkRuntimeName") == got, "a compilerFunc binding did not survive the pack";
 		assert got.symbolKind == SymbolKind.Function;
 		assert got.state == SymbolState.Checked;
 		assert (got.symFlags as uint32) == 2;
