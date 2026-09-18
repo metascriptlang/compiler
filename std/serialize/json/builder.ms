@@ -42,21 +42,21 @@ export function jsonInt(n: int64): JsonValue {
 // the link, despite being typed-checked OK. Compiler bug, not idiomatic.
 // TODO: refactor to for..of once DCE walks for..of-lowered bodies.
 
-export function jsonArrayOfStrings(arr: string[]): JsonValue {
+export function jsonArrayOfStrings(arr: Span<string>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonString(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfBooleans(arr: boolean[]): JsonValue {
+export function jsonArrayOfBooleans(arr: Span<boolean>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonBool(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfNumbers(arr: number[]): JsonValue {
+export function jsonArrayOfNumbers(arr: Span<number>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonNumber(arr[i])); i = i + 1; }
@@ -67,49 +67,49 @@ export function jsonArrayOfNumbers(arr: number[]): JsonValue {
 // (int32 elements 4 bytes, int64 8 bytes — alignment differs). Each helper
 // widens per-element via scalar cast, which is byte-correct.
 
-export function jsonArrayOfInt8(arr: int8[]): JsonValue {
+export function jsonArrayOfInt8(arr: Span<int8>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfInt16(arr: int16[]): JsonValue {
+export function jsonArrayOfInt16(arr: Span<int16>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfInt32(arr: int32[]): JsonValue {
+export function jsonArrayOfInt32(arr: Span<int32>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfInt64(arr: int64[]): JsonValue {
+export function jsonArrayOfInt64(arr: Span<int64>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i])); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfUint8(arr: uint8[]): JsonValue {
+export function jsonArrayOfUint8(arr: Span<uint8>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfUint16(arr: uint16[]): JsonValue {
+export function jsonArrayOfUint16(arr: Span<uint16>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
 	return jsonArray(items);
 }
 
-export function jsonArrayOfUint32(arr: uint32[]): JsonValue {
+export function jsonArrayOfUint32(arr: Span<uint32>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonInt(arr[i] as int64)); i = i + 1; }
@@ -117,7 +117,7 @@ export function jsonArrayOfUint32(arr: uint32[]): JsonValue {
 }
 
 // Float32 needs explicit widen too — float32[] vs float64[] differ in stride.
-export function jsonArrayOfFloat32(arr: float32[]): JsonValue {
+export function jsonArrayOfFloat32(arr: Span<float32>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) { items.push(jsonNumber(arr[i] as float64)); i = i + 1; }

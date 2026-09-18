@@ -2774,6 +2774,18 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyType(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
 	}
+	if (formal.kind == TypeKind.Span) {
+		const source = unwrapRef(concrete);
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray
+				|| source.kind == TypeKind.Span) {
+			unifyType(formal.typeReturn, source.typeReturn, bindings);
+			return;
+		}
+		if (source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) {
+			unifyType(formal.typeReturn, charType(), bindings);
+			return;
+		}
+	}
 	// Array/Span/Ref/Ptr: unify element types
 	if (formal.kind == concrete.kind
 		&& (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray
@@ -3795,6 +3807,28 @@ test "unify Array<T> vs Array<string>" {
 	assert b.names.length == 1;
 	assert b.names[0] == "T";
 	assert b.types[0].kind == TypeKind.String;
+}
+
+test "unify Span infers elements from owned shared fixed arrays and strings" {
+	const sources: Type[] = [
+		createArray(int32Type()),
+		createRef(createArray(int32Type())),
+		createSizedArray(int32Type(), 2),
+		createSpan(int32Type()),
+	];
+	for (const source of sources) {
+		const bindings = createUnifyBindings();
+		unifyType(createSpan(createGenericParam("T")), source, bindings);
+		assert bindings.names.length == 1;
+		assert bindings.types[0].kind == TypeKind.Int32;
+	}
+	const chars = createUnifyBindings();
+	unifyType(createSpan(createGenericParam("T")), stringType(), chars);
+	assert chars.names.length == 1;
+	assert chars.types[0].kind == TypeKind.Char;
+	const rejected = createUnifyBindings();
+	unifyType(createSpan(createGenericParam("T")), int32Type(), rejected);
+	assert rejected.names.length == 0;
 }
 
 test "unify Result<T, E> vs Result<number, string>" {
