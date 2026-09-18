@@ -19,6 +19,12 @@ function perCall(): string { static let t = mk("B"); return t; }
 function a(): int32 { static const t = 1; return t; }
 function b(): int32 { static const t = 2; return t; }
 
+// A generic call checks an arrow argument twice and a generic body is checked
+// once per instance; `static` is syntax, so it has to survive both re-walks.
+function eachRow<T>(p: { each: T[]; row: (n: T) => string }): string { return p.row(p.each[0]); }
+function inRecheckedArrow(): string { return eachRow<int32>({ each: [1], row: (n) => { static const t = mk("C"); return t; } }); }
+function inGenericBody<T>(x: T): string { static const t = mk("D"); return t; }
+
 function main(): void {
 	let ok = true;
 
@@ -34,6 +40,12 @@ function main(): void {
 	if (a() != 1) ok = false;
 
 	if (builds != 3) ok = false;
+
+	if (inRecheckedArrow() != "C4") ok = false;
+	if (inRecheckedArrow() != "C4") ok = false;
+	if (inGenericBody<int32>(1) != "D5") ok = false;
+	if (inGenericBody<int32>(2) != "D5") ok = false;
+	if (builds != 5) ok = false;
 
 	if (ok) {
 		console.log("static-storage PASS");
