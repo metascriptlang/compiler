@@ -15,6 +15,10 @@ usage: tools/wt.sh <command> [args]
                         remove a worktree; refuses while it holds dirty files,
                         unlanded commits or live processes, and names them;
                         --force discards exactly what it names
+  land [name] [--also '<cmd>']...
+                        rebase onto main, gate (build + msc test src/index.ms +
+                        each --also command), then move main forward and sync
+                        the main checkout path by path
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
 
@@ -209,6 +213,101 @@ cmd_rm() {
   say "removed $w"
 }
 
+main_blob() {
+  local f=$MAIN/$1
+  if [ -L "$f" ]; then
+    printf '%s' "$(readlink "$f")" | git hash-object --stdin
+  elif [ -f "$f" ]; then
+    git hash-object --no-filters -- "$f"
+  fi
+}
+
+main_held() {
+  local old=$1 paths=$2 p was
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    was=$(git -C "$MAIN" ls-tree "$old" -- "$p")
+    [ "$(printf '%s' "$was" | awk '{print $1}')" = 160000 ] && continue
+    if [ "$(main_blob "$p")" != "$(printf '%s' "$was" | awk '{print $3}')" ]; then
+      printf '%s\n' "$p"
+    elif [ -n "$(git -C "$MAIN" diff --cached --name-only "$old" -- "$p")" ]; then
+      printf '%s (staged)\n' "$p"
+    fi
+  done <<<"$paths"
+}
+
+sync_main_path() {
+  local p=$1 old=$2 new=$3 entry mode blob cur was
+  was=$(git -C "$MAIN" ls-tree "$old" -- "$p")
+  entry=$(git -C "$MAIN" ls-tree "$new" -- "$p")
+  mode=$(printf '%s' "$entry" | awk '{print $1}')
+  blob=$(printf '%s' "$entry" | awk '{print $3}')
+  if [ "$mode" = 160000 ] || [ "$(printf '%s' "$was" | awk '{print $1}')" = 160000 ]; then
+    if [ -n "$entry" ]; then git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"; else git -C "$MAIN" update-index --force-remove -- "$p"; fi
+    return
+  fi
+  cur=$(main_blob "$p")
+  [ "$cur" = "$(printf '%s' "$was" | awk '{print $3}')" ] || { say "  $p: changed in the main checkout during land, left for a manual merge"; return 1; }
+  if [ -z "$entry" ]; then
+    git -C "$MAIN" update-index --force-remove -- "$p" && rm -f "$MAIN/$p"
+    return
+  fi
+  mkdir -p "$(dirname "$MAIN/$p")"
+  if [ "$mode" = 120000 ]; then
+    rm -f "$MAIN/$p" && ln -s "$(git -C "$MAIN" cat-file blob "$blob")" "$MAIN/$p" || return 1
+    git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"
+    return
+  fi
+  git -C "$MAIN" cat-file blob "$blob" >"$MAIN/$p.wt-land" && mv "$MAIN/$p.wt-land" "$MAIN/$p" || return 1
+  case "$mode" in
+    100755) chmod 755 "$MAIN/$p" ;;
+    *) chmod 644 "$MAIN/$p" ;;
+  esac
+  git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"
+}
+
+cmd_land() {
+  local target="" also=() w old new paths clash p failed=0 cmd
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --also) also+=("${2:?--also needs a command}"); shift ;;
+      *) target=$1 ;;
+    esac
+    shift
+  done
+  if [ -n "$target" ]; then w=$(resolve_target "$target"); else w=$(git rev-parse --show-toplevel); fi
+  [ "$w" != "$MAIN" ] || die "land: run from a worktree, not the main checkout"
+  [ "$(git -C "$MAIN" symbolic-ref -q HEAD)" = "refs/heads/$BASE" ] || die "land: the main checkout is not on $BASE"
+  [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || die "land: $w has uncommitted changes to tracked files"
+  old=$(git -C "$MAIN" rev-parse "$BASE")
+  if ! git -C "$w" rebase "$old" >&2; then
+    git -C "$w" rebase --abort >/dev/null 2>&1
+    die "land: rebase onto $BASE conflicts; rebase by hand in $w"
+  fi
+  new=$(git -C "$w" rev-parse HEAD)
+  [ "$new" != "$old" ] || die "land: nothing to land"
+  git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
+  say "gate: build"
+  (cd "$w" && ./msc build src/index.ms --output=out/wt-land/msc) >&2 || die "land: gate build failed"
+  say "gate: msc test src/index.ms"
+  (cd "$w" && ./msc test src/index.ms) >&2 || die "land: gate suite failed"
+  for cmd in "${also[@]+"${also[@]}"}"; do
+    say "gate: $cmd"
+    (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
+  done
+  paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
+  clash=$(main_held "$old" "$paths")
+  [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
+$(printf '%s\n' "$clash" | sed 's/^/  /')"
+  git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" || die "land: $BASE moved during the gate; run land again"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    sync_main_path "$p" "$old" "$new" || failed=1
+  done <<<"$paths"
+  [ "$failed" -eq 0 ] || die "land: $BASE is at $(git -C "$MAIN" rev-parse --short "$new"); the paths above need a manual merge"
+  say "landed $(git -C "$MAIN" rev-list --count "$old..$new") commit(s): $BASE $(git -C "$MAIN" rev-parse --short "$old")..$(git -C "$MAIN" rev-parse --short "$new")"
+}
+
 hook_field() {
   jq -r --arg k "$1" '.[$k] // empty'
 }
@@ -218,6 +317,7 @@ case "${1:-}" in
   ls) shift; cmd_ls "$@" ;;
   __ls_row) ls_row "${2%%$'\t'*}" "${2#*$'\t'}" ;;
   rm) shift; cmd_rm "$@" ;;
+  land) shift; cmd_land "$@" ;;
   hook-create) name=$(hook_field name); cmd_new "$name" ;;
   hook-remove) path=$(hook_field worktree_path); cmd_rm "$path" ;;
   -h|--help|help|"") usage ;;
