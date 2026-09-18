@@ -75,6 +75,7 @@ import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
@@ -106,6 +107,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	if (!jsBackend) { result = lowerStaticInit(result, ctx); }
 	result = lowerVoidBind(result, ctx);
 	result = lowerObjectSpread(result, ctx);
 	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);
