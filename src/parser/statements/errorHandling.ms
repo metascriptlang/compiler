@@ -103,3 +103,9 @@ test "try-catch-finally" { assert programOk("try { x; } catch (e) { y; } finally
 test "catch no param" { assert programOk("try { x; } catch { y; }"); }
 // Negative
 test "try alone rejects" { assert !programOk("try { x; }"); }
+
+test "try expression statement" { assert programOk("try f();"); }
+
+test "try member call statement" { assert programOk("try a.b(c);"); }
+
+test "try statement as unbraced if body" { assert programOk("if (x) try f(); else try g();"); }
