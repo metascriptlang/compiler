@@ -2685,6 +2685,10 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 // for-of creates cursor bindings that skip RC — pushing cursors into another
 // container creates dangling pointers when the source is destroyed.
 export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+	// A `@compilerFunc` routine is reachable by name from every module a
+	// synthesized call lands in, whether or not the declaring module exported it —
+	// so the table travels whole, like the reference keeps it on the module graph.
+	ctx.compilerFuncs = preludeCtx.compilerFuncs;
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
 	for (const sym of preludeCtx.table.current.symbols.values()) {
