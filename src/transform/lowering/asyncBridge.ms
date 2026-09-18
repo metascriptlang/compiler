@@ -180,11 +180,13 @@ function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promis
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 		const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [valueExpr], loc);
 		boxCall.nodeType = voidPtrType;
+		const boxSym = makeSymbol(retFutName + "_b", SymbolKind.Variable, voidPtrType, false);
 		const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 		boxDecl.nodeType = voidPtrType;  // variable holds void* (the boxed pointer)
+		boxDecl.resolvedSym = boxSym;
 		const completeStmt = makeExprStmt(makeCall(
 			runtimeRef("msFutureComplete", loc),
-			[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)],
+			[makeTypedIdent(retFutName, promiseType, loc), makeTypedIdentResolved(boxSym, voidPtrType, loc)],
 			loc,
 		), loc);
 		return [boxDecl, completeStmt];
@@ -672,11 +674,13 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 						const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [rd.argument], loc);
 						boxCall.nodeType = voidPtrType;
+						const boxSym = makeSymbol(retFutName + "_b", SymbolKind.Variable, voidPtrType, false);
 						const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 						boxDecl.nodeType = voidPtrType;
+						boxDecl.resolvedSym = boxSym;
 						newStmts.push(boxDecl);
 						completeCall = makeCall(runtimeRef("msFutureComplete", loc),
-							[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)], loc);
+							[makeTypedIdent(retFutName, promiseType, loc), makeTypedIdentResolved(boxSym, voidPtrType, loc)], loc);
 					} else {
 						completeCall = makeCall(runtimeRef("msFutureCompleteT", loc),
 							[makeTypedIdent(retFutName, promiseType, loc), rd.argument], loc);
