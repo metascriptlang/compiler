@@ -11,7 +11,7 @@ import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextW
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
+import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
@@ -22,7 +22,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
-import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { getGenericDecl } from "../parser/context";
@@ -278,10 +278,19 @@ function checkClassStmt(ctx: CheckerContext, node: Node): void {
 		checkClassDecl(ctx, node);
 		return;
 	}
-	if (!claimLocalTypeName(ctx, node, "class")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
-	collectClass(ctx, node);
+	const minted = node.resolvedSym;
+	if (minted != null && hasFlag(minted, SymbolFlag.Forward)) {
+		fillForwardSymbol(ctx, minted);
+	} else if (!claimLocalTypeName(ctx, node, "class")) {
+		return;
+	} else if (callDecoratorDefers(ctx, node)) {
+		mintClass(ctx, node);
+		after = applyNestedDecorators(ctx, node);
+		fillClass(ctx, node);
+	} else {
+		collectClass(ctx, node);
+	}
 	resolveClass(ctx, node);
 	checkClassDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
@@ -321,25 +330,60 @@ function checkActorStmt(ctx: CheckerContext, node: Node): void {
 		checkActorDecl(ctx, node);
 		return;
 	}
-	if (!claimLocalTypeName(ctx, node, "actor")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
-	collectActor(ctx, node);
+	const minted = node.resolvedSym;
+	if (minted != null && hasFlag(minted, SymbolFlag.Forward)) {
+		fillForwardSymbol(ctx, minted);
+	} else if (!claimLocalTypeName(ctx, node, "actor")) {
+		return;
+	} else if (callDecoratorDefers(ctx, node)) {
+		mintActor(ctx, node);
+		after = applyNestedDecorators(ctx, node);
+		fillActor(ctx, node);
+	} else {
+		collectActor(ctx, node);
+	}
 	resolveActor(ctx, node);
 	checkActorDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
 	hoistNestedInits(ctx, after);
 }
 
+function localTypeDeclOf(stmt: Node): Node {
+	let node = stmt;
+	if (node.kind == NodeKind.DecoratedDecl) node = (node.data as DecoratedDeclData).decoratedNode;
+	if (node == null) return null as unknown as Node;
+	if (node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl) return node;
+	return null as unknown as Node;
+}
+
+function mintDecoratedLocalType(ctx: CheckerContext, stmt: Node): boolean {
+	const decl = localTypeDeclOf(stmt);
+	if (decl == null || decl == stmt) return true;
+	const isActor = decl.kind == NodeKind.ActorDecl;
+	if (!claimLocalTypeName(ctx, decl, isActor ? "actor" : "class")) return false;
+	if (isActor) {
+		mintActor(ctx, decl);
+	} else {
+		mintClass(ctx, decl);
+	}
+	const sym = decl.resolvedSym;
+	if (sym != null) setFlag(sym, SymbolFlag.Forward);
+	return true;
+}
+
 function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
 	const after: Node[] = [];
+	const declared = localTypeDeclOf(node);
+	const sym = declared != null ? declared.resolvedSym : null;
 	const rewritten = callApplyDecoratedStmt(ctx, node, after);
 	if (rewritten != node) {
 		node.kind = rewritten.kind;
 		node.data = rewritten.data;
 		if (rewritten.location != null) node.location = rewritten.location;
 		node.nodeType = null as unknown as Type;
-		node.resolvedSym = null;
+		node.resolvedSym = sym;
+		if (sym != null) sym.declNode = node;
 		node.flags = rewritten.flags;
 		node.variantSlot = rewritten.variantSlot;
 	}
@@ -357,7 +401,10 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
-	if (local && callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
+	if (local && callDecoratorDefers(ctx, node)) {
+		if (!mintDecoratedLocalType(ctx, node)) return;
+		after = applyNestedDecorators(ctx, node);
+	}
 	if (node.kind == NodeKind.DecoratedDecl) {
 		const inner = (node.data as DecoratedDeclData).decoratedNode;
 		if (inner != null) checkStmt(ctx, inner);
