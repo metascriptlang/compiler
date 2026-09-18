@@ -548,6 +548,14 @@ function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
 }
 
+function _bridgeMsStringPadStart(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).padStart(unboxInt(args[1]) as int32, unboxString(args[2])));
+}
+
+function _bridgeMsStringPadEnd(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).padEnd(unboxInt(args[1]) as int32, unboxString(args[2])));
+}
+
 function _bridgeMsStringParseInt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).parseInt() as number);
 }
@@ -789,6 +797,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt);
+	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart);
+	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd);
 	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt);
 	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat);
 	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint);
@@ -887,6 +897,16 @@ test "ensureHostTableLoaded registers process accessors" {
 	assert lookupHostFn("msProcessCwd") != null;
 	assert lookupHostFn("msProcessPlatform") != null;
 	assert lookupHostFn("msProcessGetEnv") != null;
+}
+
+test "string padding bridges preserve native semantics" {
+	ensureHostTableLoaded();
+	assert lookupHostFn("msStringPadStart") != null;
+	assert lookupHostFn("msStringPadEnd") != null;
+	assert _bridgeMsStringPadStart([boxString("42"), boxInt(6), boxString("0")]).strVal == "000042";
+	assert _bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")]).strVal == "42aba";
+	assert _bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")]).strVal == "xxé";
+	assert _bridgeMsStringPadEnd([boxString("same"), boxInt(7), boxString("")]).strVal == "same";
 }
 
 test "ensureHostTableLoaded is idempotent" {
@@ -1130,7 +1150,6 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	// Deliberately dead — each needs work before it can come off this list.
 	const knownDead: string[] = [
 		"msStringSubstring",                              // clamp semantics differ from byteSlice
-		"msStringPadStart", "msStringPadEnd",             // MS-able, unwritten
 		"msStringParseFloat", "msStringParseInt",         // parsing not in the shared tier
 		"msStringFromCodePoint",                          // needs a codepoint-to-UTF8 encoder
 	];
