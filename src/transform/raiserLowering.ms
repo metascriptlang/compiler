@@ -17,6 +17,8 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
+import { lowerObjectSpread } from "./desugar/objectSpreadLower";
+import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -32,6 +34,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	let result = lowerImplicitConv(program, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	result = lowerObjectSpread(result, ctx);
+	result = lowerArraySpread(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
