@@ -2500,6 +2500,7 @@ function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
 }
 
 function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): Type {
+	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return t;
 	const newFieldTypes: Type[] = [];
 	let changed = false;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
@@ -2730,6 +2731,7 @@ function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Ty
 }
 
 function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): Type {
+	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return t;
 	const newFieldTypes: Type[] = [];
 	let changed = false;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {

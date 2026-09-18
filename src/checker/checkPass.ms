@@ -20,7 +20,7 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
-import { setConditionalAssignFn, hasGenericParams, createArray } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
@@ -3421,6 +3421,17 @@ test "declared struct answers generic queries from its members" {
 	assert !hasGenericParams(lookupSymbol(ctx.table, "Plain").symbolType);
 	assert !hasGenericParams(lookupSymbol(ctx.table, "Tagged").symbolType);
 	assert !hasGenericParams(lookupSymbol(ctx.table, "usePlain").symbolType);
+}
+
+test "substitution keeps a declared struct without generic params" {
+	const ctx = checkSource("class Plain { n: number = 0; items: number[] = []; next: Plain | null = null; } class Box<T> { value: T; constructor(v: T) { this.value = v; } }");
+	assert !hasErrors(ctx);
+	const plain = unwrapRef(lookupSymbol(ctx.table, "Plain").symbolType);
+	assert substituteType(plain, "T", numberType()) == plain;
+	assert substituteAllParams(plain, ["T"], [numberType()]) == plain;
+	const box = unwrapRef(lookupSymbol(ctx.table, "Box").symbolType);
+	assert substituteType(box, "T", numberType()) != box;
+	assert substituteAllParams(box, ["T"], [numberType()]) != box;
 }
 
 test "generic type alias simple" {
