@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -334,7 +334,11 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 		distributeBodyComments(node, d.classBody);
 		const members: Doc[] = [];
 		for (const m of d.classBody) {
-			members.push(callPrintNode(m, options));
+			if (m.kind == NodeKind.BlockStmt) {
+				members.push(wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)])));
+			} else {
+				members.push(callPrintNode(m, options));
+			}
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
 		parts.push(docHardLine());

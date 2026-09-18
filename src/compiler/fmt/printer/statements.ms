@@ -9,7 +9,7 @@ import {
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
@@ -58,6 +58,40 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		}
 	}
 	return docGroup(parts);
+}
+
+export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
+	// Wrap with comments if present.
+	// 3 buckets by relative line:
+	//   - leading: comment.line < node.line (before)
+	//   - trailing: comment.line === node.line (same line, end-of-line comment)
+	//   - below: comment.line > node.line (standalone line(s) after the stmt)
+	if (node.comments.length > 0) {
+		const leading: Doc[] = [];
+		const trailing: Doc[] = [];
+		const below: Doc[] = [];
+		for (const comment of node.comments) {
+			if (comment.line < node.location.line) {
+				leading.push(docText(comment.value));
+				leading.push(docHardLine());
+			} else if (comment.line == node.location.line) {
+				trailing.push(docLineSuffix([docText(" " + comment.value)]));
+			} else {
+				below.push(docHardLine());
+				below.push(docText(comment.value));
+			}
+		}
+		if (leading.length > 0 || trailing.length > 0 || below.length > 0) {
+			const parts: Doc[] = [];
+			for (const l of leading) { parts.push(l); }
+			parts.push(innerDoc);
+			for (const t of trailing) { parts.push(t); }
+			for (const b of below) { parts.push(b); }
+			return docGroup(parts);
+		}
+	}
+
+	return innerDoc;
 }
 
 export function printBlock(node: Node, options: FormatOptions): Doc {
