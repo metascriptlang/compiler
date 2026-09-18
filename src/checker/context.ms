@@ -1150,6 +1150,7 @@ export class CheckerContext {
 	moduleGraph: ModuleGraph;
 	currentModule: Module;
 	exportRegistry: ExportRegistry;
+	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
 	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
@@ -1212,6 +1213,7 @@ export function createContext(): CheckerContext {
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
 		exportRegistry: createExportRegistry(),
+		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
 		macroBodyRegistry: new HashMap<string, Node>(),
 		converterTargets: new HashMap<string, string>(),

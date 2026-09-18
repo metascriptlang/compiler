@@ -258,10 +258,22 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		const idx = sym.overloads.length - 1;
 		if (info.builtinKind != "") sym.overloads[idx].builtinKind = info.builtinKind;
 		if (exportName != "") sym.overloads[idx].exportName = exportName;
+		if (info.throws) setFlag(sym.overloads[idx], SymbolFlag.Throws);
+		if (info.compilerFunc) registerCompilerFunc(ctx, sym.overloads[idx]);
 	} else {
 		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 		if (exportName != "") sym.exportName = exportName;
+		if (info.throws) setFlag(sym, SymbolFlag.Throws);
+		if (info.compilerFunc) registerCompilerFunc(ctx, sym);
 	}
+}
+
+// A `@compilerFunc` declaration is the one place a synthesized call can read its
+// callee from: `runtimeProcSym` holds only the name it is about to emit.
+function registerCompilerFunc(ctx: CheckerContext, sym: Symbol): void {
+	const key = sym.nativeName != "" ? sym.nativeName : sym.name;
+	if (key == "") return;
+	ctx.compilerFuncs.set(key, sym);
 }
 
 function reportExportNameMisuse(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
