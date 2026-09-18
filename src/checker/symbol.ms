@@ -1,7 +1,7 @@
 import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
-import { IdentCache, createIdentCache, getIdentId } from "./idents";
+import { IdentCache, createIdentCache, findIdentId, getIdentId } from "./idents";
 
 // The lifted constructor's name. Read by reachability (DCE marking),
 // methodToFunction (which creates it) and the C backend (call + proto sites) —
@@ -78,7 +78,7 @@ export enum ScopeKind {
 // ===== Symbol Flags (Standard reference implementation parity) =====
 
 // Flag helpers
-export function hasFlag(sym: Symbol, flag: SymbolFlag): boolean {
+export function hasFlag(sym: Readonly<Symbol>, flag: SymbolFlag): boolean {
 	return sym.symFlags.has(flag);
 }
 
@@ -200,6 +200,18 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 		scope = scope.parent;
 	}
 	return null as unknown as Symbol;
+}
+
+export function lookupSymbolReadonly(table: Readonly<SymbolTable>, name: string): Readonly<Symbol> {
+	const nameId = findIdentId(table.identCache, name);
+	if (nameId == 0) return null as unknown as Readonly<Symbol>;
+	let scope = table.current;
+	while (scope != null) {
+		const sym = scope.symbols.get(nameId);
+		if (sym != null) return sym;
+		scope = scope.parent;
+	}
+	return null as unknown as Readonly<Symbol>;
 }
 
 // Check current scope only, O(1) via symbols.

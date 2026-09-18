@@ -65,6 +65,17 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 	return newEntry.id;
 }
 
+export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {
+	const h = hashStringSigned(name);
+	const idx = h & BUCKET_MASK;
+	let entry = cache.buckets[idx];
+	while (entry != null) {
+		if (entry.hash == h && entry.name == name) return entry.id;
+		entry = entry.next;
+	}
+	return 0;
+}
+
 // ===== Tests =====
 
 test "same string returns same id" {
