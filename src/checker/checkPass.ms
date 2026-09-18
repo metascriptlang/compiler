@@ -20,7 +20,7 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
-import { setConditionalAssignFn } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray } from "./types";
 setConditionalAssignFn(isAssignable);
 import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
@@ -3409,6 +3409,19 @@ test "string DU match stmt missing variant errors" {
 }
 
 // ===== Tier 3: Generic Type Aliases =====
+
+test "declared struct answers generic queries from its members" {
+	const ctx = checkSource("class Box<T> { value: T; constructor(v: T) { this.value = v; } } interface Holder<U> { item: U; } class Plain { n: number = 0; next: Plain | null = null; } class Tagged<T> { id: number = 0; } type Pair<V> = { a: V, b: Plain }; function usePlain(p: Plain, h: Holder<number>): void {} function useBox<W>(b: Box<W>): void {}");
+	assert !hasErrors(ctx);
+	assert hasGenericParams(lookupSymbol(ctx.table, "Box").symbolType);
+	assert hasGenericParams(createArray(lookupSymbol(ctx.table, "Box").symbolType));
+	assert hasGenericParams(lookupSymbol(ctx.table, "Holder").symbolType);
+	assert hasGenericParams(lookupSymbol(ctx.table, "Pair").symbolType);
+	assert hasGenericParams(lookupSymbol(ctx.table, "useBox").symbolType);
+	assert !hasGenericParams(lookupSymbol(ctx.table, "Plain").symbolType);
+	assert !hasGenericParams(lookupSymbol(ctx.table, "Tagged").symbolType);
+	assert !hasGenericParams(lookupSymbol(ctx.table, "usePlain").symbolType);
+}
 
 test "generic type alias simple" {
 	assert checkOk("type Box<T> = { value: T }; const b: Box<number> = { value: 42 };");

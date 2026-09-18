@@ -3,7 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp } from "../ast/node";
 import { getGenericDecl } from "../parser/context";
 
 // =====================================================================
@@ -2426,6 +2426,19 @@ export function propagateToOwner(parent: Type, child: Type): void {
 	if (child != null && child.typeFlags.has(TypeFlag.HasAsgn)) {
 		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);
 	}
+	if (isDeclaredStruct(parent)) propagateGenericParam(parent, child);
+}
+
+function isDeclaredStruct(t: Type): boolean {
+	if (t.kind != TypeKind.Struct || t.sym == null) return false;
+	const declared = t.sym.symbolKind;
+	return declared == SymbolKind.Class || declared == SymbolKind.Interface || declared == SymbolKind.Struct || declared == SymbolKind.Actor;
+}
+
+export function propagateGenericParam(owner: Type, member: Type | null): void {
+	if (!owner.typeFlags.has(TypeFlag.HasGenericParam) && hasGenericParams(member)) {
+		owner.typeFlags = owner.typeFlags.incl(TypeFlag.HasGenericParam);
+	}
 }
 
 // ===== Ownership Modifiers =====
@@ -2939,6 +2952,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 export function hasGenericParams(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.GenericParam) return true;
+	if (isDeclaredStruct(t)) return t.typeFlags.has(TypeFlag.HasGenericParam);
 	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
 	return genericScan(t, new TypeVisitSet());
 }
@@ -2946,6 +2960,7 @@ export function hasGenericParams(t: Type | null): boolean {
 function genericScan(t: Type | null, active: TypeVisitSet): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.GenericParam) return true;
+	if (isDeclaredStruct(t)) return t.typeFlags.has(TypeFlag.HasGenericParam);
 	if (!typeVisitAdd(active, t)) return false;
 	if (t.kind == TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {

@@ -77,7 +77,7 @@ export enum TypeFlag {
 	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
 	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
-	GenericScan,
+	HasGenericParam,
 }
 
 // ===== Attached Lifecycle Ops =====
