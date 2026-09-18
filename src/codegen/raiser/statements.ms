@@ -19,9 +19,10 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, currentLoop, hasLoop, patchLoopBreaks, patchLoopContinues,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler
+	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
+import { emitValueCopy } from "./valueCopy";
 
 // --- Statement compilation ---
 
@@ -30,7 +31,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
 			if (d.argument != null) {
-				const reg = compileExpr(s, d.argument);
+				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				emitRet(s, reg);
 			} else {
 				const reg = allocReg(s);
@@ -120,15 +121,26 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		// Wrap in closure pair { fn: funcIdx, env: nil } so it can be passed around and called uniformly
 		if (d.initializer.kind == NodeKind.Identifier) {
 			const initId = d.initializer.data as IdentifierData;
-			const fIdx = resolveFunc(s, initId.name);
-			if (fIdx >= 0) {
+			const fIdx = resolveRoutine(s, d.initializer.resolvedSym, initId.name);
+			if (fIdx >= 0 && (d.initializer.resolvedSym == null
+					|| isRoutineSym(d.initializer.resolvedSym))) {
 				const pairReg = emitClosurePair(s, fIdx, -1);
+				const global = resolveGlobal(s, node.resolvedSym);
+				if (global >= 0) {
+					emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, pairReg, global, 0));
+					return;
+				}
 				declareLocal(s, d.declName, pairReg);
 				return;
 			}
 		}
 		const isStr = exprIsString(s, d.initializer);
-		const reg = compileExpr(s, d.initializer);
+		const reg = emitValueCopy(s, compileExpr(s, d.initializer), node.nodeType);
+		const global = resolveGlobal(s, node.resolvedSym);
+		if (global >= 0) {
+			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
+			return;
+		}
 		if (regIsFixedLocal(s, reg)) {
 			const slot = allocReg(s);
 			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
@@ -139,6 +151,11 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 	} else {
 		const reg = allocReg(s);
 		emitLoadConst(s, reg, raiserNil());
+		const global = resolveGlobal(s, node.resolvedSym);
+		if (global >= 0) {
+			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
+			return;
+		}
 		declareLocal(s, d.declName, reg);
 	}
 }

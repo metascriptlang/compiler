@@ -2,6 +2,7 @@
 
 import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
 import { RaiserValue, raiserInt } from "./value";
+import { RaiserCopyPlan } from "./valueCopy";
 
 // --- Function ---
 
@@ -12,6 +13,7 @@ export interface RaiserFunction {
 	arity: number;
 	localsCount: number;
 	maxRegs: number;
+	copyPlans: RaiserCopyPlan[];
 }
 
 // --- Module ---
@@ -20,16 +22,17 @@ export interface RaiserModule {
 	name: string;
 	functions: RaiserFunction[];
 	entry: number;
+	globalCount: int32;
 }
 
 // --- Constructors ---
 
 export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
-	return { name, code, constants, arity, localsCount, maxRegs };
+	return { name, code, constants, arity, localsCount, maxRegs, copyPlans: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	return { name, functions, entry };
+	return { name, functions, entry, globalCount: 0 };
 }
 
 // --- Test Helper ---

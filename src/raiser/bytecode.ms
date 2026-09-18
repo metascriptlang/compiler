@@ -143,6 +143,10 @@ export enum RaiserOpcode {
 	SignExtend,       // AB: R[A] = sign-extend the low B bits of R[A]
 	ShiftRightU,      // ABC: R[A] = R[B] >>> R[C]
 	Conv,             // ABC: R[A] = R[B] converted to the numeric class RaiserConvClass C
+	CopyValue,
+	LoadGlobal,
+	StoreGlobal,
+	StrByteLen,
 }
 
 export enum RaiserConvClass {

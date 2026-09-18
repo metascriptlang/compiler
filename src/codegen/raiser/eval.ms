@@ -144,6 +144,8 @@ function freshEngine(): ComptimeEngine {
 }
 
 function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string): int32 {
+	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
+	defer registerRaiserOnDemand(previousOnDemand);
 	registerSeedSymbols(seeds);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
@@ -222,8 +224,6 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	return idx;
 }
 
-registerRaiserOnDemand(ensureCompiledIntoEngine);
-
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
 	const result = compileMacroIntoEngine(program, token, fnName);
 	if (result == null as unknown as EngineMacroResult) return createContext();
@@ -279,6 +279,104 @@ function evalOrcVM(code: string): RaiserVM {
 	const transformed = transformForRaiser(refined, checkerCtx);
 	const mod = generateRaiser(transformed);
 	return execModule(mod, "orc");
+}
+
+test "engine: byteLength counts UTF-8 bytes independently from UTF-16 length" {
+	const ctx = evalOrcVM("const value = 'é😀'; console.log(value.byteLength); console.log(value.length);");
+	assert ctx.error == "";
+	assert ctx.output == "6\n3\n";
+}
+
+test "engine: conditional return retains a fallthrough terminator" {
+	const ctx = evalOrcVM("function emit(value: boolean): void { if (value) console.log('value'); else return; } emit(true); emit(false); console.log('end');");
+	assert ctx.error == "";
+	assert ctx.output == "value\nend\n";
+}
+
+test "engine: explicit exit coerces its number and aborts module initialization" {
+	const ctx = evalOrcVM("console.log('before'); exit(7); console.log('after');");
+	assert ctx.error == "";
+	assert ctx.output == "before\n";
+	assert ctx.exitValue.kind == RaiserValueKind.Int;
+	assert ctx.exitValue.intVal == 7;
+}
+
+test "engine: struct assignment preserves the source value" {
+	const r = evalFull("struct S { x: int32; } let a: S = { x: 1 };"
+		+ " let b = a; b.x = 2; return a.x * 10 + b.x;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 12;
+}
+
+test "engine: shared arrays copy their value elements" {
+	const ctx = evalOrcVM("struct Item { value: int32; } const item: Item = { value: 1 }; const items: Item[] = [item]; items[0].value = 2; console.log(item.value); console.log(items[0].value);");
+	assert ctx.error == "";
+	assert ctx.output == "1\n2\n";
+}
+
+test "engine: recursive value copy plans preserve the source tree" {
+	const ctx = evalOrcVM("struct Tree { value: int32; children: Vec<Tree>; } const tree: Tree = { value: 1, children: [{ value: 2, children: [] }] }; const copy = tree; copy.children[0].value = 3; console.log(tree.children[0].value); console.log(copy.children[0].value);");
+	assert ctx.error == "";
+	assert ctx.output == "2\n3\n";
+}
+
+test "engine: nested value copy retains reference identity under ORC" {
+	const vm = evalOrcVM("interface R { x: int32; }"
+		+ " struct S { child: Vec<int32>; shared: R; }"
+		+ " let a: S = { child: [1], shared: { x: 1 } };"
+		+ " let b = a; b.child.push(2); b.shared.x = 3;"
+		+ " return a.child.length * 100 + b.child.length * 10 + a.shared.x;");
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 123;
+}
+
+test "engine: value copy preserves Span fields and Span bindings" {
+	const r = evalFull("struct S { view: Span<int32>; } let a: Vec<int32> = [1];"
+		+ " let view: Span<int32> = a; let box: S = { view: a }; let copy = box;"
+		+ " view[0] = 4; copy.view[0] = 7; return a[0];");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 7;
+}
+
+test "engine: global initialization runs once and functions read its storage" {
+	const r = evalFull("let calls: int32 = 0;"
+		+ " function next(): int32 { calls += 1; return calls; }"
+		+ " const first = next(); return calls * 100 + first * 10 + first;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 111;
+}
+
+test "engine: global updates retain prefix and postfix values" {
+	const r = evalFull("let calls: int32 = 1;"
+		+ " function next(): int32 { const before = calls++; const after = ++calls;"
+		+ " return before * 10 + after; } return next() * 10 + calls;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 133;
+}
+
+test "engine: object spread copies owned fields and applies overrides" {
+	const r = evalFull("struct S { x: int32; items: Vec<int32>; } let calls: int32 = 0;"
+		+ " function source(): S { calls += 1; return { x: 1, items: [2] }; }"
+		+ " const base = source(); let changed: S = { ...base, x: 3 };"
+		+ " changed.items.push(4); return calls * 100 + base.items.length * 10 + changed.x;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 113;
+}
+
+test "engine: object spread evaluates a call operand once" {
+	const r = evalFull("struct S { x: int32; y: int32; } let calls: int32 = 0;"
+		+ " function source(): S { calls += 1; return { x: 1, y: 2 }; }"
+		+ " const changed: S = { ...source(), x: 3 }; return calls * 10 + changed.x;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 13;
+}
+
+test "engine: array spread preserves source ownership" {
+	const r = evalFull("const source: Vec<int32> = [1, 2];"
+		+ " let extended: Vec<int32> = [...source, 3]; extended[0] = 9;"
+		+ " return source[0] * 100 + source.length * 10 + extended.length;");
+	assert r.lastError == "";
+	assert r.lastResult.intVal == 123;
 }
 
 test "engine: shift left on int64 keeps bits past 31" {
