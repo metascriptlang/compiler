@@ -695,6 +695,8 @@ programs that pin its observable behavior through every lane (§3.6).
 
 Status legend: ✅ done · 🚧 in progress · 🔲 todo
 
+- C emission: `codegen/c/index.ms` pins prepared generic ownership, emission-order permutations and DCE TypeInfo facts; corpus `781-emissionOwnership` covers private helpers, shared recursive hooks, dead modules and observable init order.
+
 ### P0 — Foundation (the "guard the bugs we just fixed" tier)
 
 - [x] ✅ `src/test/lang/discrim.ms` — 4 DU shapes + generic mono + multi-instance coexistence + RC interaction (18 tests, 2026-05-03)
