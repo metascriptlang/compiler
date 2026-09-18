@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, runtimeRef,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -1414,6 +1414,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 	if (stmt == null) return stmt;
 	const sloc = stmt.location;
 	dctx.stmtBorrowReads = [];
+	setNeedsTryIfRaises(stmt, dctx);
 
 	// Push outer context for cross-scope last-read analysis
 	pushOuterStmts(dctx, stmts, idx + 1, false);
@@ -1442,11 +1443,6 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 
 	popOuterStmts(dctx);
 
-	// Blocker 28: only set needsTry when a statement could actually throw.
-	if (scopeDepth(dctx) > 0 && stmtCanThrow(stmt) && currentScope(dctx).varsToCleanup.length > 0) {
-		currentScope(dctx).needsTry = true;
-	}
-
 	return result;
 }
 
@@ -1458,25 +1454,19 @@ function callCanThrow(callExpr: Node): boolean {
 	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-// Blocker 28: Check if a statement could throw — stricter than old stmtMayCall.
-// Only returns true for ThrowStmt or user function calls that could throw.
-function stmtCanThrow(node: Node): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.ThrowStmt) return true;
-	if (node.kind == NodeKind.ExprStmt) {
-		const expr = (node.data as ExprStmtData).expr;
-		if (expr != null && expr.kind == NodeKind.CallExpr) return callCanThrow(expr);
-		if (expr != null && expr.kind == NodeKind.BinaryExpr) {
-			const bd = expr.data as BinaryExprData;
-			if (bd.right != null && bd.right.kind == NodeKind.CallExpr) return callCanThrow(bd.right);
-		}
-		return false;
+function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr
+		|| node.kind == NodeKind.ClassDecl
+		|| node.kind == NodeKind.ActorDecl
+		|| node.kind == NodeKind.TestDecl) return;
+	if (node.kind == NodeKind.CallExpr && callCanThrow(node)) {
+		setNeedsTryAll(dctx);
+		return;
 	}
-	if (node.kind == NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		return vd.initializer != null && vd.initializer.kind == NodeKind.CallExpr && callCanThrow(vd.initializer);
-	}
-	return false;
+	forEachChild(node, (child: Node): void => { setNeedsTryIfRaises(child, dctx); });
 }
 
 // ===== Loop-Aware Last-Read =====
@@ -2448,26 +2438,6 @@ test "number type needs no cleanup" {
 	}
 }
 
-test "stmtCanThrow detects user call in ExprStmt" {
-	const loc = testLoc();
-	const call = makeExprStmt(makeCall(makeIdent("foo", loc), [], loc), loc);
-	assert stmtCanThrow(call);
-}
-
-test "stmtCanThrow detects user call in VarDecl init" {
-	const loc = testLoc();
-	const decl = makeVarDecl("x", makeCall(makeIdent("foo", loc), [], loc), DeclKind.Const, loc);
-	assert stmtCanThrow(decl);
-}
-
-test "stmtCanThrow false for non-call" {
-	const loc = testLoc();
-	const stmt = makeExprStmt(makeIdent("x", loc), loc);
-	assert !stmtCanThrow(stmt);
-}
-
-test "stmtCanThrow false for null" { assert !stmtCanThrow(null as unknown as Node); }
-
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
 	const call = makeCall(runtimeRef("msStringDecref", loc), [], loc);
@@ -2480,16 +2450,58 @@ test "callCanThrow true for user functions" {
 	assert callCanThrow(call);
 }
 
-test "stmtCanThrow true for ThrowStmt" {
-	const loc = testLoc();
-	const throwStmt = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeNull(loc) }, loc);
-	assert stmtCanThrow(throwStmt);
+function scanSetsNeedsTry(stmt: Node): boolean {
+	const dctx = testDrcContext("const n: number = 0;");
+	pushScope(dctx, false, true);
+	pushScope(dctx, false, false);
+	setNeedsTryIfRaises(stmt, dctx);
+	const inner = popScope(dctx);
+	const outer = popScope(dctx);
+	return inner.needsTry && outer.needsTry;
 }
 
-test "stmtCanThrow false for ms-prefixed call in VarDecl" {
+function userCallStmt(): Node {
 	const loc = testLoc();
-	const decl = makeVarDecl("x", makeCall(runtimeRef("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
-	assert !stmtCanThrow(decl);
+	return makeExprStmt(makeCall(makeIdent("parseExpr", loc), [], loc), loc);
+}
+
+test "setNeedsTryIfRaises marks every open scope for a user call statement" {
+	assert scanSetsNeedsTry(userCallStmt());
+}
+
+test "setNeedsTryIfRaises finds a user call inside an if body" {
+	const loc = testLoc();
+	const guarded = makeIf(makeIdent("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
+	assert scanSetsNeedsTry(guarded);
+}
+
+test "setNeedsTryIfRaises finds a user call in an if condition" {
+	const loc = testLoc();
+	const cond = makeCall(makeIdent("parseExpr", loc), [], loc);
+	assert scanSetsNeedsTry(makeIf(cond, makeBlock([], loc), null as unknown as Node, loc));
+}
+
+test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
+	const loc = testLoc();
+	const inner = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
+	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
+}
+
+test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
+	const loc = testLoc();
+	const stmt = makeExprStmt(makeCall(runtimeRef("msStringDecref", loc), [], loc), loc);
+	assert !scanSetsNeedsTry(stmt);
+}
+
+test "setNeedsTryIfRaises stops at a nested function declaration" {
+	const loc = testLoc();
+	const nested = makeFnDecl("inner", [], [], makeBlock([userCallStmt()], loc), "", "void", loc);
+	assert !scanSetsNeedsTry(nested);
+}
+
+test "setNeedsTryIfRaises ignores a null node" {
+	assert !scanSetsNeedsTry(null as unknown as Node);
 }
 
 test "needsReturnIncref false for call expr (fresh)" {
