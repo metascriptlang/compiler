@@ -1492,7 +1492,9 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 function callCanThrow(callExpr: Node): boolean {
 	const cd = callExpr.data as CallExprData;
 	const sym = cd.callee.resolvedSym;
-	return sym == null || !hasFlag(sym, SymbolFlag.ImportC);
+	if (sym == null) return true;
+	if (hasFlag(sym, SymbolFlag.Throws)) return true;
+	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
 // Blocker 28: Check if a statement could throw — stricter than old stmtMayCall.

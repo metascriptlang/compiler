@@ -31,6 +31,7 @@
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
+import { bindCompilerFuncs } from "./util";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
@@ -99,6 +100,7 @@ import { lowerEnumToString } from "./native/enumToStringLower";
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	bindCompilerFuncs(checkerCtx.compilerFuncs);
 	let result = eraseBrandTypes(program);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;

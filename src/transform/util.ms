@@ -169,8 +169,16 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 }
 
 let _runtimeSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _compilerFuncs: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function bindCompilerFuncs(declared: HashMap<string, Symbol>): void {
+	_compilerFuncs = declared;
+	_runtimeSyms = new HashMap<string, Symbol>();
+}
 
 export function runtimeProcSym(procName: string): Symbol {
+	const declared = _compilerFuncs.get(procName);
+	if (declared != null) return declared;
 	const existing = _runtimeSyms.get(procName);
 	if (existing != null) return existing;
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
