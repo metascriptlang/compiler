@@ -400,7 +400,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// replaces the AST node AFTER the variable's symbol type is set.
 			const expanded = callEvalComptimeBlock(node, ctx);
 			let expandedValue = expanded;
-			if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+			const hoists = isHoistingSplice(ctx, node, expanded);
+			if (hoists) {
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) { node.nodeType = errorType(); return; }
 			}
@@ -412,6 +413,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
 			checkExpr(ctx, node, expectedType);
+			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			node.nodeType = node.nodeType; return;
 		},
 		NodeKind.Identifier => {
@@ -1949,7 +1951,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					node.nodeType = errorType(); return;
 				}
 				let expandedValue = expanded;
-				if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+				const hoists = isHoistingSplice(ctx, node, expanded);
+				if (hoists) {
 					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 					if (expandedValue == null) {
 						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
@@ -1964,6 +1967,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.flags = 0 as BitSet<NodeFlag>;
 				node.variantSlot = 0;
 				checkExpr(ctx, node, expectedType);
+				if (hoists) bindRefsToHoistedPrefix(node, expanded);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 				node.nodeType = node.nodeType; return;
 			}
@@ -2497,7 +2501,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

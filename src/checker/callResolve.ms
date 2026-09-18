@@ -18,6 +18,7 @@ import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, reco
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
+import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
@@ -216,6 +217,32 @@ export function unwrapSpliceManyAtExpr(ctx: CheckerContext, node: Node, expanded
 		i = i + 1;
 	}
 	return d.spliceNodes[lastIdx];
+}
+
+export function isHoistingSplice(ctx: CheckerContext, node: Node, expanded: Node): boolean {
+	return expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr;
+}
+
+export function bindRefsToHoistedPrefix(value: Node, expanded: Node): void {
+	const d = expanded.data as SpliceManyData;
+	const prefixSyms: Symbol[] = [];
+	for (let i = 0; i < d.spliceNodes.length - 1; i += 1) {
+		const sym = d.spliceNodes[i].resolvedSym;
+		if (d.spliceNodes[i].kind == NodeKind.VariableDecl && sym != null) prefixSyms.push(sym);
+	}
+	if (prefixSyms.length == 0) return;
+	bindRefsTo(value, prefixSyms);
+}
+
+function bindRefsTo(node: Node, syms: Symbol[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
+		for (const s of syms) {
+			if (node.resolvedSym == s) { node.flags = node.flags.incl(NodeFlag.BoundSym); break; }
+		}
+		return;
+	}
+	forEachChild(node, (child: Node): void => { bindRefsTo(child, syms); });
 }
 
 // Walk `nodes` with the unconsumed-JSX leak check suppressed. A raw JSX node is legal as a
@@ -799,7 +826,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return errorType();
 			}
 			let expandedValue = expanded;
-			if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+			const hoists = isHoistingSplice(ctx, node, expanded);
+			if (hoists) {
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) {
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
@@ -821,6 +849,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// If the expanded result is itself a macro call, this recurses through
 			// checkCallExpr → eager expand again, bounded by macroExpansionDepth.
 			callCheckExpr(ctx, node, expectedType);
+			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 			return node.nodeType;
 		}
