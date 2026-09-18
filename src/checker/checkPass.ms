@@ -6,7 +6,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -1130,8 +1130,56 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			}
 			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
 		},
+		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
 	};
+}
+
+function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {
+	const pending: Node[] = [];
+	if (owner == null) return pending;
+	const decl = classDeclNodeOf(owner!);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return pending;
+	let pastBlock = false;
+	for (const raw of (decl.data as ClassDeclData).classBody) {
+		if (raw == block) {
+			pastBlock = true;
+			continue;
+		}
+		if (!pastBlock) continue;
+		let member = raw;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) member = dd.decoratedNode;
+		}
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic && pd.propInitializer != null) pending.push(member);
+	}
+	return pending;
+}
+
+function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol | null): void {
+	if (owner != null && owner!.symbolKind == SymbolKind.Actor) {
+		addError(ctx, `static blocks are not supported in actors`, node.location.line, node.location.column);
+		return;
+	}
+	const savedClass = ctx.staticBlockClass;
+	const savedPending = ctx.staticBlockPending;
+	const savedFunction = ctx.currentFunction;
+	const savedInLoop = ctx.inLoop;
+	const savedInSwitch = ctx.inSwitch;
+	ctx.staticBlockClass = owner;
+	ctx.staticBlockPending = staticFieldsInitializedAfter(owner, node);
+	ctx.currentFunction = null;
+	ctx.inLoop = false;
+	ctx.inSwitch = false;
+	checkBlock(ctx, node);
+	ctx.staticBlockClass = savedClass;
+	ctx.staticBlockPending = savedPending;
+	ctx.currentFunction = savedFunction;
+	ctx.inLoop = savedInLoop;
+	ctx.inSwitch = savedInSwitch;
 }
 
 function checkExportDecl(ctx: CheckerContext, node: Node): void {

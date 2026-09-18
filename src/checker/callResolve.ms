@@ -3100,6 +3100,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym != null) {
 		const staticField = findStaticField(d.object.resolvedSym, d.property);
 		if (staticField != null) {
+			if (ctx.currentFunction == null) {
+				for (const pending of ctx.staticBlockPending) {
+					if (pending == staticField.declNode) {
+						addError(ctx, `property '${d.property}' is used before its initialization`, node.location.line, node.location.column);
+					}
+				}
+			}
 			node.resolvedSym = staticField;
 			return staticField.symbolType;
 		}

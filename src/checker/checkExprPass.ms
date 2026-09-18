@@ -123,6 +123,12 @@ function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+function isDeclaringStaticBlockWrite(ctx: CheckerContext, declaring: Symbol): boolean {
+	const cls = ctx.staticBlockClass;
+	if (cls == null) return false;
+	return cls == declaring || classDeclNodeOf(cls) == classDeclNodeOf(declaring);
+}
+
 function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: Symbol): boolean {
 	let receiverNode = object;
 	while (receiverNode != null && receiverNode.kind == NodeKind.HiddenDeref) {
@@ -516,7 +522,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								d.left.location.line, d.left.location.column);
 						}
 						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
-						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
+						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring) && !isDeclaringStaticBlockWrite(ctx, declaring)) {
 							addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
 								d.left.location.line, d.left.location.column);
 						}
