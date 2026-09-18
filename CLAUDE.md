@@ -21,6 +21,9 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 ## Build Commands
 
 ```bash
+# Verify a change: picks the lanes from the diff, names every NEW red.
+tools/gate.sh                         # --dry-run = show the choice, --release = full ladder
+
 # Tests. `msc test <file>` runs that file + its transitive dep tests.
 # NOTE: no --filter/--jobs flags.
 msc test src/index.ms                 # full compiler suite, native
@@ -60,22 +63,15 @@ Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
 ## Verification Cost — lanes follow the change; the full ladder follows a release
 
-**"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/sync-local-binary.sh` are not shipping, and neither asks for the full ladder. Measured over 2026-09-10 → 09-17: 229 commits landed, 52 of them touched codegen/DRC/runtime/transform, yet sessions launched the full corpus 66 times and SAN 16 times, rebuilt the compiler ~400 times and ran `rm -rf out` 976 times, on a 14-core box shared by ~26 sessions at load 22–40. Every lane ran 2–5× its documented cost, runs were killed for memory and relaunched on the same state, and the user objected to the waiting six times in ten days.
+**"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/sync-local-binary.sh` are not shipping, and neither asks for the full ladder.
 
-| the change touches | run before landing | at idle |
-|---|---|---|
-| anything | build + `msc test src/index.ms` + the one or two guards/probes that exercise the change | ~1 min |
-| codegen / DRC / runtime / transform | + `msc run src/test/corpus/run.ms` | ~19 min |
-| DRC hooks, lifetimes, ownership | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` | ~10 min |
-| a narrow checker/codegen rule | emit-diff selector (`src/test/CLAUDE.md` §5.3), then `MSCORPUS_FILTER` on the programs whose C changed | ~6 min |
-| a release cut, or a refactor across phases | the full ladder, `src/test/CLAUDE.md` §5.0 | ~35 min |
-
-- **Adjacent lands share one gate.** An intermediate state that a later step rewrites gets the suite only; a rebase that touches none of your files gets build + suite.
-- **No `rm -rf out` before a suite or a build.** The object cache is fingerprint-keyed and correct (`src/test/CLAUDE.md` §5.2); wiping it turns a 40-second suite into minutes and triggers the cold-build link race. Wipe only for a named stale-cache symptom.
-- **A control binary is for an A/B that needs one,** not for every land. Two from-scratch compiler builds cost more than every other lane combined.
-- **Probe binaries answer one question.** Read the probe output from the cheapest lane that triggers it; never run gate lanes on them.
-- **A red lane is not automatically yours.** Diff the fail SET against the known red set on main before anything else; a rerun on the same state costs a full lane and answers nothing.
-- **Check load first:** `uptime` against `sysctl -n hw.ncpu`; load above the core count ⇒ wait; never two heavy lanes from one session at once.
+- **One command picks and runs the lanes** — `tools/gate.sh` maps the paths a change touches to lanes (the table at the top of the script), runs them one after another and stops at the first new red; `--dry-run` shows the choice and why, `--release` runs the full ladder, and `tools/wt.sh land` calls it.
+- **A red is yours only when it is new** — each lane's failures are compared by name with `src/test/known-red.json`; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
+- **The machine is shared** — the gate waits while load exceeds the core count and never runs two lanes at once; do not start a second heavy lane beside it.
+- **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct (`src/test/CLAUDE.md` §5.2), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
+- **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
+- **A narrow checker/codegen rule has a cheaper proof** — the emit-diff selector (`src/test/CLAUDE.md` §5.3), then `tools/gate.sh --lanes build,suite` plus `MSCORPUS_FILTER` on the programs whose C changed.
+- **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
 

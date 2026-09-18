@@ -376,6 +376,11 @@ done
 
 ### 5.0 Which command, when — read this first
 
+**Run `tools/gate.sh`.** It enforces the table below from the paths a change
+touches and compares every red with `src/test/known-red.json`; `--dry-run`
+prints the lanes it would run and the paths that pulled each one in. The table
+documents what the tool does; reach for a row by hand only inside a debug loop.
+
 | Situation | Command | Cost |
 |---|---|---|
 | **Inner loop** — any compiler edit | `msc test src/index.ms` | ~40s |
