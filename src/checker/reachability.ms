@@ -12,7 +12,7 @@ import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule } from "../codegen/c/context";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { isMaybeType } from "./types";
+import { isMaybeType, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
@@ -331,6 +331,8 @@ function markUnionHookEdges(t: Type): void {
 function markTypeInfoEdge(node: Node, modulePath: string): void {
 	let t = node.nodeType;
 	if (t == null) return;
+	const nullableRef = unwrapRefNullUnion(t);
+	if (nullableRef != null) t = nullableRef;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
 		if (t.typeReturn != null) {
 			t = t.typeReturn;
@@ -790,4 +792,23 @@ test "endsWith helper" {
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false);
 	assert aliveSet.entries.length == 0;
+}
+
+import { parseSource } from "../parser/statements/validation";
+import "../parser/statements/core";
+import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { aliveSetHas } from "../codegen/c/context";
+
+test "nullable reference allocation keeps its concrete TypeInfo alive" {
+	const parsed = parseSource("const HolderTypeInfo = 0; let value = { label: \"held\" };");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const stmts = (parsed.value.data as ProgramData).programStmts;
+	const allocation = (stmts[1].data as VariableDeclData).initializer;
+	assert allocation != null;
+	if (allocation == null) return;
+	const body = createStruct("Holder", ["label"], [stringType()], true);
+	allocation.nodeType = createUnion([createRef(body), nullType()]);
+	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false);
+	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
 }
