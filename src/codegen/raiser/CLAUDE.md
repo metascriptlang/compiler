@@ -26,6 +26,7 @@ src/codegen/raiser/
   statements.ms      -- compileStmt: statement nodes → bytecode
   rgen.ms            -- generateRaiser(program), generateRaiserProject(modules), class compilation, tests
   eval.ms            -- evalSourceFull/evalASTFull (full pipeline), project + class integration tests
+  valueCopy.ms       -- static Type → flat RaiserCopyPlan, CopyValue emission
 ```
 
 ## Handled NodeKinds
@@ -38,7 +39,7 @@ src/codegen/raiser/
 | StringLiteral | LoadConst (string value) |
 | BooleanLiteral | LoadConst |
 | NullLiteral | LoadConst (nil) |
-| Identifier | Move (from local register) |
+| Identifier | Move (local) or LoadGlobal (module global) |
 | BinaryExpr (+,-,*,/,%,==,!=,<,<=,>,>=,&&,\|\|,&,\|,^,<<,>>) | AddI64/SubI64/MulI64/DivI64/ModI64 + compare-branch + BitAnd/BitOr/BitXor/ShiftLeft/ShiftRight |
 | UnaryExpr (-,!,~) | NegI64, BitNot |
 | CallExpr | Call/CallIndirect/Print (dispatch by callee kind) |
@@ -64,7 +65,7 @@ Compile-time-known-bad sites (unresolvable identifier, unsupported node kind, `n
 | ReturnStmt | Ret |
 | ExprStmt | (delegates to compileExpr; non-emit macro directives — @include/@compile — are skipped) |
 | BlockStmt | (iterates children, scoped locals) |
-| VariableDecl | LoadConst/compileExpr + declareLocal |
+| VariableDecl | LoadConst/compileExpr + declareLocal, or StoreGlobal for module storage |
 | IfStmt | BranchIfFalsy + Jump (with else patching) |
 | WhileStmt | BranchIfFalsy + Jump (backward loop) |
 | DoWhileStmt | BranchIfFalsy + Jump (body-first loop) |
@@ -95,6 +96,7 @@ Compile-time-known-bad sites (unresolvable identifier, unsupported node kind, `n
 | ClassDecl (extends) | Inheritance deferred |
 | ClassDecl (static) | Static methods/properties deferred |
 | ClassDecl (get/set) | Getter/setter deferred |
+| `out` parameter rebinding | Writes through heap targets work; rebinding the caller slot is not implemented |
 
 ## Architecture
 
@@ -102,8 +104,9 @@ Compile-time-known-bad sites (unresolvable identifier, unsupported node kind, `n
 
 ```
 generateRaiserProject(modules: RaiserModuleInput[]) → RaiserModule
+  ├── Collect module globals into stable slots keyed by module + symbol
   ├── Pass 1a: Collect functions + enums (all modules)
-  │     funcIdx assigned in order: functions across all modules
+  │     funcIdx assigned in order; routines also get module-qualified keys
   ├── Pass 1b: Collect classes (all modules)
   │     methods first, then constructor per class
   ├── Register builtins (defineConfig, etc.)
@@ -112,11 +115,28 @@ generateRaiserProject(modules: RaiserModuleInput[]) → RaiserModule
   │     compiled (and its compile warnings never fire)
   ├── Emit builtin stubs → functions[]
   ├── Pass 3: Compile init functions (top-level code per module)
-  │     Dependencies init first, entry module last
+  │     Dependencies init once, entry module last; abrupt exit remains Halt
   └── Assemble RaiserModule(functions, initIndices, ...)
 ```
 
 **Critical invariant**: collection order (Pass 1a/1b) defines funcIdx, and projectDecls[funcIdx] must describe that same declaration — demandBody(funcIdx) fills functions[funcIdx] in place.
+
+### Whole-program tooling contracts
+
+- Routine lookup uses the resolved symbol's module path and original name. Raw
+  spelling is only a fallback for single-program compilation.
+- Each module-level variable owns one VM global slot. Initializers execute in
+  dependency order and imported modules initialize once per project run.
+- Every compiled function carries a flat copy-plan table. `CopyValue` gives
+  arrays and structs value semantics at assignment, argument, return and
+  container-store boundaries while preserving shared references and `Span`.
+- A spawned strand receives a graph copy of the parent's global slots. Globals
+  are therefore strand-local snapshots, not shared mutable state.
+- Object and array spread are lowered before bytecode generation. Each source
+  is evaluated once and array insertion routes through the VM `push` builtin.
+- Pending generic instances are attached to their owning module before
+  monomorphization, macro expansion and Raiser lowering. On-demand compilation
+  is scoped to the project image and restored afterwards.
 
 ### Function Value Calling Convention
 
@@ -177,13 +197,13 @@ The codegen imports types from `src/raiser/bytecode`, `src/raiser/value`, `src/r
 
 ## Available Opcodes (src/raiser/bytecode.ms)
 
-**Memory (3):** LoadConst (ABx), Move (ABC), LoadNil (ABC)
+**Memory/project:** LoadConst (ABx), Move, LoadNil, CopyValue, LoadGlobal, StoreGlobal
 **i64 Arithmetic (6):** AddI64, SubI64, MulI64, DivI64, ModI64, NegI64 (all ABC)
 **i64 Compare-Branch (6):** BeqI64, BneI64, BltI64, BleI64, BgtI64, BgeI64 (ABC: if cond skip C)
 **Control (5):** Jump (Ax: signed 24-bit), Call, Ret, Halt, Print (all ABC)
 **Array (5):** NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush (all ABC)
 **Object (3):** NewObject, LoadField, StoreField (all ABC)
-**String (6):** ConcatStr, EqStr, NeStr, StrLen, StrCharAt, StrSlice (all ABC)
+**String:** ConcatStr, EqStr, NeStr, StrLen, StrByteLen, StrCharAt, StrSlice
 **Indirect Call (1):** CallIndirect (ABC: func index from register)
 **f64 Arithmetic (5):** AddF64, SubF64, MulF64, DivF64, NegF64 (all ABC)
 **f64 Compare-Branch (6):** BeqF64, BneF64, BltF64, BleF64, BgtF64, BgeF64 (all ABC)

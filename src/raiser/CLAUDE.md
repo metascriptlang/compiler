@@ -231,8 +231,9 @@ stdlib, because they have nothing to delegate to.
   `./shared` as `index.cms:156`/`index.jms:263`, on two new kernel bridges
   `msAsBytes`/`msAsString` (`hostTable.ms` — the only bridges that create or
   read VM heap arrays) plus the byte trio as MS. Still dead by declaration:
-  `substring`, `padStart`/`padEnd`, `parseFloat`/`parseInt`, `fromCodePoint` —
-  kept for surface parity until each gets a bridge or an MS body.
+  `substring`, `parseFloat`/`parseInt`, `fromCodePoint` — kept for surface
+  parity until each gets a bridge or an MS body. `padStart`/`padEnd` are host
+  bridges and preserve Unicode string-length semantics.
 - Trap when editing `shared.ms`: the Raiser macro checker pulls a macro's
   helper closure through the prelude EXPORT surface — a module-private helper
   called by an exported function reads as "Undefined variable" inside macro
@@ -365,6 +366,32 @@ stdlib, because they have nothing to delegate to.
   This also unmasked a pre-existing raiser runtime crash in `checkPass.ms`
   (`initSysTypes` array OOB) that the exit-0 hole had been hiding.
 
+## Whole-program tooling runtime (2026-09-18)
+
+Raiser can execute a checked multi-module MetaScript project as a tooling
+program, not only isolated comptime expressions. The supported contract is:
+
+- module-level variables live in stable global slots; dependency initializers
+  run once and module-qualified symbols prevent same-name routine collisions;
+- owned arrays and structs copy at typed value boundaries, including nested
+  fields and containers, while shared references and `Span` preserve identity;
+- spawned strands receive independent graph copies of globals and captures;
+- object/array spread, pending generic instances, `Span<T>` inference from
+  owned/shared/fixed sequences, enum/container JSON encoding and Unicode-safe
+  output run through the normal checked pipeline;
+- explicit `exit(n)` preserves its integer status and aborts through imported
+  module initialization; implicit function fallthrough always returns nil;
+- prelude dependency snapshots are keyed by backend, so a native build that
+  invokes Raiser macros cannot poison the Raiser project cache.
+
+The measured consumer is Ion Generator: a typed manifest with ordinary
+functions/closures resolves a graph, emits an Xcode project, builds an app and
+runs its window smoke without a native manifest-evaluation fallback.
+
+Known boundary: `out` parameter rebinding is not implemented by Raiser yet.
+Writes through an existing heap target work; rebinding the caller's slot does
+not. This is a visible known-red, not a supported semantic.
+
 ## Execution budget — back-edges, not instructions
 
 The VM refuses programs that exceed `loopLimit` (default 10M) **loop
@@ -413,8 +440,9 @@ Skips Phase 5 (C/JS codegen). Phase 4 (DRC analyzer) is **bypassed today**; the 
 ```
 src/raiser/
   CLAUDE.md          -- this file
-  bytecode.ms        -- RaiserOpcode (52 ops), RaiserInstruction, ABC/ABx/Ax encoding
+  bytecode.ms        -- append-only RaiserOpcode, RaiserInstruction, ABC/ABx/Ax encoding
   value.ms           -- RaiserValue (boxed today, target untagged), array/object heaps
+  valueCopy.ms       -- typed array/struct copy plans executed by CopyValue
   module.ms          -- RaiserFunction, RaiserModule, accessors
   vm.ms              -- if/else dispatch loop, boxed register file (Phase 0)
   disasm.ms          -- bytecode pretty-printer
@@ -438,7 +466,7 @@ Codegen lives in `src/codegen/raiser/` (separate dir): `context.ms`, `expression
 
 `RaiserInstruction` is a flat interface today. Phase 1d goal: pack to ≤8 bytes per instruction.
 
-### Opcode table (53 today)
+### Opcode table (74 today)
 
 | Family | Count | Notes |
 |---|---|---|
@@ -453,6 +481,11 @@ Codegen lives in `src/codegen/raiser/` (separate dir): `context.ms`, `expression
 | Object | 3 | NewObject, LoadField (string-keyed today), StoreField |
 | String | 6 | ConcatStr, EqStr, NeStr, StrLen, StrCharAt, StrSlice |
 | Indirect | 1 | CallIndirect (func index from register) |
+| Host/nil/string ordering | 4 | CallHost, IsNil, LtStr, LeStr |
+| Async | 3 | Yield, Spawn, Await |
+| Exceptions | 5 | Try, Catch, Finally, FinallyEnd, Throw |
+| Diagnostics/conversions | 5 | Trap, NarrowU, SignExtend, ShiftRightU, Conv |
+| Tooling runtime | 4 | CopyValue, LoadGlobal, StoreGlobal, StrByteLen |
 
 Phase 3 will add I32/U32/U64/F32 variants (~30 more opcodes).
 
@@ -529,6 +562,7 @@ msc run src/raiser/spike/bench.ms
 | Component | State |
 |---|---|
 | Phase 0 baseline | DONE — 1959 tests, comptime engine working |
+| Whole-program tooling runtime | DONE — typed multi-module manifests, globals/init-once, qualified routines, value-copy boundaries, spread and generic project compilation |
 | Phase 1 spike | DONE — 4–5× speedup confirmed on numeric loops |
 | Phase 1 commit (1a–1d) | NEXT — estimated 5 weeks for full untagged + packed pipeline |
 | Phase 2 (field offsets) | PLANNED |
