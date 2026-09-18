@@ -11,7 +11,7 @@ export class Array<T> {
 	length: number;
 }
 
-export extern function push<T>(this arr: T[], value: T): void from "&msGenericArrayPush";
+export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
 export extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
 // Negative index support (C kernel contract): -1 reads the last element.
