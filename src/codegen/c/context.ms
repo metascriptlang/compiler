@@ -4,7 +4,7 @@
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
 import { Node, Type, Symbol } from "../../ast/node";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 
 
@@ -174,9 +174,9 @@ export class CProc {
 	errorTargets: string[];    // stack of goto labels for error propagation (reference: p.nestedTryStmts[].label → raiseExit)
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
-	// Reference parity (sigConflicts + fillLocalName): per-name conflict counter.
-	// Each local gets name_N_ suffix. Unique name stored on resolvedSym.nativeName.
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
+	localSyms: Cursor<Symbol>[];
+	localSymNames: string[];
 	// Fallback name map for DRC-generated identifiers without resolvedSym.
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
 	// here so identifiers created by DRC (which lack resolvedSym) can resolve the unique name.
@@ -222,8 +222,29 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
 		sigConflicts: [],
+		localSyms: [],
+		localSymNames: [],
 		localNameMap: [],
 	};
+}
+
+export function setLocalSymName(p: CProc, sym: Symbol, name: string): void {
+	for (let i = 0; i < p.localSyms.length; i += 1) {
+		if (p.localSyms[i] == sym) {
+			p.localSymNames[i] = name;
+			return;
+		}
+	}
+	p.localSyms.push(sym);
+	p.localSymNames.push(name);
+}
+
+export function lookupLocalSymName(p: CProc, sym: Symbol | null): string {
+	if (p == null || sym == null) return "";
+	for (let i = p.localSyms.length - 1; i >= 0; i -= 1) {
+		if (p.localSyms[i] == sym) return p.localSymNames[i];
+	}
+	return "";
 }
 
 // Reference parity (fillLocalName): assign a unique C name for a local.
@@ -555,38 +576,36 @@ export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void 
 	aliveSet._modules.add(modulePath);
 }
 
-export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string): boolean {
+export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, name: string): boolean {
 	const key = modulePath + ":" + name;
 	return aliveSet._set.has(key);
 }
 
 // Check if any alive symbol belongs to a given module.
 // Used for module-level DCE: skip entire modules with zero reachable symbols.
-export function aliveSetHasModule(aliveSet: AliveSet, modulePath: string): boolean {
+export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
 	if (aliveSet.entries.length == 0) return true;  // DCE disabled
 	return aliveSet._modules.has(modulePath);
 }
 
-// TypeInfos gated out by DCE, recorded so a later codegen demand fails loud
-// instead of falling back to ensureTypeInfoDef's 2-field copy. Global (not
-// per-CGen): the demand can come from a different module than the declarer.
-let _skippedTypeInfos = new HashSet<string>();
-
-export function markTypeInfoSkipped(name: string): void {
-	_skippedTypeInfos.add(name);
+export class CEmissionFacts {
+	genericOwners: HashMap<string, string> = new HashMap<string, string>();
+	skippedTypeInfos: HashSet<string> = new HashSet<string>();
 }
 
-export function isTypeInfoSkipped(name: string): boolean {
-	return _skippedTypeInfos.has(name);
-}
-
-export function clearSkippedTypeInfos(): void {
-	_skippedTypeInfos = new HashSet<string>();
+export interface DeferredStructDef {
+	blocker: string;
+	def: string;
 }
 
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
+	emissionFacts: Readonly<CEmissionFacts>;
+	preparationFacts: CEmissionFacts | null;
+	errors: CheckerError[];
+	preparingDeclarations: boolean;
+	emittedInstances: HashSet<string>;
 	sections: Builder[];       // CSection enum-indexed (10 sections)
 	currentProc: CProc | null;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
@@ -594,12 +613,12 @@ export class CGen {
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
-	checkerCtx: CheckerContext;
+	checkerCtx: Readonly<CheckerContext>;
 	target: TargetInfo;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
-	aliveSet: AliveSet;        // global DCE reachability set (empty = no filtering)
+	aliveSet: Readonly<AliveSet>;        // global DCE reachability set (empty = no filtering)
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
 	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
@@ -607,6 +626,9 @@ export class CGen {
 	lastLineLine: number;      // #line dedup: last emitted line number
 	lastLineFile: string;      // #line dedup: last emitted file path
 	declaredGlobals: NameSet;  // module-local globals (for extern detection)
+	typesBeingDefined: string[];
+	unionsInProgress: string[];
+	deferredStructs: DeferredStructDef[];
 }
 
 export interface TestEntry {
@@ -614,7 +636,7 @@ export interface TestEntry {
 	funcName: string;   // C function name (__ms_test_0, __ms_test_1, ...)
 }
 
-export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
+export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): CGen {
 	const sections: Builder[] = [];
 	for (let i = 0; i < 10; i += 1) {
 		const b = createBuilder();
@@ -622,6 +644,11 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 	}
 	return {
 		sections,
+		emissionFacts: new CEmissionFacts(),
+		preparationFacts: null,
+		errors: [],
+		preparingDeclarations: false,
+		emittedInstances: new HashSet<string>(),
 		currentProc: null,
 		typeCache: createTypeCache(),
 		forwTypeCache: createTypeCache(),
@@ -641,7 +668,14 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		lastLineLine: 0,
 		lastLineFile: "",
 		declaredGlobals: createNameSet(),
+		typesBeingDefined: [],
+		unionsInProgress: [],
+		deferredStructs: [],
 	};
+}
+
+export function addCGenError(g: CGen, message: string, line: int32, column: int32): void {
+	g.errors.push({ message, line, column, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // Section accessor by enum index

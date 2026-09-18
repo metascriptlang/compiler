@@ -5,13 +5,12 @@
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
-import { addError } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
-	readProcStmts, emitLineDir, getTemp, fillLocalName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd,
+	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
+	CSection, addLine, sec, nameSetAdd, addCGenError,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
@@ -127,7 +126,7 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 		NodeKind.ThrowStmt => { genThrowStmt(g, p, node); },
 		NodeKind.TryCatchStmt => { genTryCatchStmt(g, p, node); },
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
-		NodeKind.AssertStmt => { addError(g.checkerCtx, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
+		NodeKind.AssertStmt => { addCGenError(g, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
 		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
 	};
@@ -329,20 +328,14 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const isTemp = d.declName.length > 0 && d.declName.byteAt(0) == "$".code;
 	let varName = safeName(d.declName);
 	let hoistDecl = p != null;
-	// Reference parity: skip if same DRC temp VarDecl node visited twice (nativeName already set).
-	// Only for temps — user vars with the same symbol in sibling scopes (e.g., `const lv` in
-	// different match arms) must get separate unique names via fillLocalName.
-	if (hoistDecl && isTemp && node.resolvedSym != null && node.resolvedSym.nativeName != "") {
-		varName = node.resolvedSym.nativeName;
+	const knownName = node.resolvedSym != null ? lookupLocalSymName(p, node.resolvedSym) : "";
+	if (hoistDecl && isTemp && knownName != "") {
+		varName = knownName;
 		hoistDecl = false;
-	} else if (hoistDecl && (node.resolvedSym != null || isTemp)) {
-		// Reference parity (fillLocalName + s.loc.snippet): unique name, stored on symbol.
+	}
+	if (hoistDecl && (node.resolvedSym != null || isTemp)) {
 		varName = fillLocalName(p, varName, isTemp);
-		if (node.resolvedSym != null) {
-			// Always store — shared symbols get overwritten, but localNameMap (recorded by
-			// fillLocalName) preserves all mappings for scope-accurate identifier resolution.
-			node.resolvedSym.nativeName = varName;
-		}
+		if (node.resolvedSym != null) setLocalSymName(p, node.resolvedSym, varName);
 	} else if (hoistDecl) {
 		// No resolvedSym (e.g., .cms prelude files): keep original name, don't hoist
 		hoistDecl = false;

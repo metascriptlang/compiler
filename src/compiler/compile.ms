@@ -19,16 +19,15 @@ import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
-import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher } from "../codegen/c/index";
+import { CModuleOutput, generatePreparedCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName } from "../codegen/c/names";
-import { resetEmittedInstances } from "../codegen/c/declarations";
-import { aliveSetHasModule, clearSkippedTypeInfos } from "../codegen/c/context";
+import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { TargetInfo, hostTargetInfo, isAwaitable } from "../checker/types";
+import { TargetInfo, hostTargetInfo, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { lookupSymbol, SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -539,6 +538,150 @@ interface ProcessedModule {
 	program: Node;
 	ctx: CheckerContext;
 	modPath: string;
+}
+
+interface ModuleEmissionJob {
+	slot: int32;
+	program: Node;
+	ctx: CheckerContext;
+	modPath: string;
+}
+
+class ModuleEmissionResult {
+	slot: int32 = 0;
+	output: CModuleOutput = new CModuleOutput();
+	failure: string = "";
+	completed: boolean = false;
+	started: float64 = 0;
+	finished: float64 = 0;
+}
+
+type ModuleEmitter = (job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean) => ModuleEmissionResult;
+
+function emitModuleJob(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
+	const result = new ModuleEmissionResult();
+	result.slot = job.slot;
+	result.started = performance.now();
+	try {
+		result.output = generatePreparedCModuleOutput(job.program, job.ctx, job.modPath, aliveSet, isTestBuild, isHcr, facts);
+	} catch (e) {
+		result.failure = e.message;
+	}
+	result.finished = performance.now();
+	result.completed = true;
+	return result;
+}
+
+function emissionOverlapped(results: ModuleEmissionResult[]): boolean {
+	for (let i = 0; i < results.length; i += 1) {
+		if (!results[i].completed) continue;
+		for (let j = i + 1; j < results.length; j += 1) {
+			if (!results[j].completed) continue;
+			if (results[i].started < results[j].finished && results[j].started < results[i].finished) return true;
+		}
+	}
+	return false;
+}
+
+function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, workers: int32, isTestBuild: boolean, isHcr: boolean, emitter: ModuleEmitter = emitModuleJob): ModuleEmissionResult[] {
+	const results: ModuleEmissionResult[] = [];
+	for (let i = 0; i < jobs.length; i += 1) results.push(new ModuleEmissionResult());
+	const order = emissionOrder(jobs);
+	const pending: Promise<ModuleEmissionResult>[] = [];
+	let next = 0;
+	let head = 0;
+	let failed = false;
+	while (true) {
+		while (!failed && next < order.length && next - head < workers) {
+			const job = jobs[order[next]];
+			pending.push(spawn(() => emitter(job, aliveSet, facts, isTestBuild, isHcr)));
+			next += 1;
+		}
+		if (head == next) break;
+		const result = await pending[head];
+		head += 1;
+		results[result.slot] = result;
+		if (result.failure != "" || result.output.errors.length > 0) failed = true;
+	}
+	return results;
+}
+
+function emissionWeight(job: Readonly<ModuleEmissionJob>): int32 {
+	const program: Node | null = job.program;
+	if (program == null) return 0;
+	return program.location.endLine;
+}
+
+function emissionOrder(jobs: ModuleEmissionJob[]): int32[] {
+	const order: int32[] = [];
+	const weights: int32[] = [];
+	for (let i = 0; i < jobs.length; i += 1) {
+		const weight = emissionWeight(jobs[i]);
+		let at = order.length;
+		order.push(i);
+		weights.push(weight);
+		while (at > 0 && weights[at - 1] < weight) {
+			order[at] = order[at - 1];
+			weights[at] = weights[at - 1];
+			at -= 1;
+		}
+		order[at] = i;
+		weights[at] = weight;
+	}
+	return order;
+}
+
+function probeModuleEmission(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
+	const result = new ModuleEmissionResult();
+	result.slot = job.slot;
+	result.output.modulePath = job.modPath;
+	result.started = performance.now();
+	while (performance.now() - result.started < 10) {}
+	result.finished = performance.now();
+	result.completed = true;
+	return result;
+}
+
+function probeFailedModuleEmission(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
+	const result = probeModuleEmission(job, aliveSet, facts, isTestBuild, isHcr);
+	if (job.slot == 2) result.failure = "injected";
+	return result;
+}
+
+function probeDiagnosticModuleEmission(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
+	const result = probeModuleEmission(job, aliveSet, facts, isTestBuild, isHcr);
+	if (job.slot == 2) result.output.errors.push({ message: "injected", line: 0, column: 0, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
+	return result;
+}
+
+test "bounded module emission preserves slots and joins before stopping" {
+	const jobs: ModuleEmissionJob[] = [];
+	for (let slot = 0; slot < 12; slot += 1) {
+		jobs.push({ slot, program: null as unknown as Node, ctx: null as unknown as CheckerContext, modPath: slot.toString() });
+	}
+	const aliveSet = createAliveSet();
+	const facts = new CEmissionFacts();
+	for (const workers of [1, 2, 4, 8]) {
+		const complete = emitModulesBounded(jobs, aliveSet, facts, workers, false, false, probeModuleEmission);
+		assert complete.length == jobs.length;
+		for (let slot = 0; slot < complete.length; slot += 1) {
+			assert complete[slot].completed;
+			assert complete[slot].slot == slot;
+			assert complete[slot].output.modulePath == slot.toString();
+		}
+		if (workers > 1) assert emissionOverlapped(complete);
+		for (const emitter of [probeFailedModuleEmission, probeDiagnosticModuleEmission]) {
+			const failed = emitModulesBounded(jobs, aliveSet, facts, workers, false, false, emitter);
+			let completed = 0;
+			for (let slot = 0; slot < failed.length; slot += 1) {
+				if (!failed[slot].completed) continue;
+				assert failed[slot].slot == slot;
+				assert failed[slot].output.modulePath == slot.toString();
+				completed += 1;
+			}
+			assert completed <= 2 + workers;
+		}
+	}
 }
 
 // Build state for C compilation: flags + include path registry.
@@ -1516,47 +1659,71 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
 
 	// Phase C: Codegen + compile each module
-	// Reset generic instance deduplication (first module to codegen wins).
-	resetEmittedInstances();
-	clearSkippedTypeInfos();
-	let codegenTime: float64 = 0;
+	setConcurrentTypeQueries(true);
+	const emissionFacts = new CEmissionFacts();
+	for (const p of processed) {
+		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
+		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+	}
+	const emissionJobs: ModuleEmissionJob[] = [];
+	for (const p of processed) {
+		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
+		emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath });
+	}
+	const emitStart = performance.now();
+	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
+	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr);
+	let codegenTime: float64 = performance.now() - emitStart;
+	if (opts.showTime) {
+		console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
+		let emitWork: float64 = 0;
+		let emitLongest: float64 = 0;
+		let emitLongestPath = "";
+		for (let eti = 0; eti < emissionResults.length; eti += 1) {
+			const spent = emissionResults[eti].finished - emissionResults[eti].started;
+			emitWork = emitWork + spent;
+			if (spent > emitLongest) {
+				emitLongest = spent;
+				emitLongestPath = emissionJobs[eti].modPath;
+			}
+		}
+		console.log(`    emit work=${emitWork}ms longest=${emitLongest}ms ${emitLongestPath}`);
+	}
+	let emissionFailed = false;
+	for (let eri = 0; eri < emissionResults.length; eri += 1) {
+		const result = emissionResults[eri];
+		if (!result.completed) continue;
+		const modPath = emissionJobs[eri].modPath;
+		if (result.failure != "") {
+			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			emissionFailed = true;
+		}
+		for (const diagnostic of result.output.errors) {
+			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			emissionFailed = true;
+		}
+	}
+	if (emissionFailed) exit(1);
+	for (const p of processed) {
+		p.program = null as unknown as Node;
+		p.ctx = null as unknown as CheckerContext;
+	}
 	let clangTime: float64 = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
 	const moduleOutputs: CModuleOutput[] = [];
 	const cd = cacheDir();
-	// GATHER — codegen stays serial (emitted-instance dedup + hook ownership are
-	// global codegen state); cache misses become parallel compile jobs. oSlots
-	// preserves the serial path's .o link order: cache hits fill their slot
-	// immediately, misses fill on compile success in COLLECT (failure leaves the
-	// slot empty — the serial path also only appended on success).
 	const oSlots: string[] = [];
 	oSlots.push(oFiles);
 	const cJobs: ModuleCompileJob[] = [];
-	for (const p of processed) {
-		// Module-level DCE: skip modules with zero alive symbols.
-		// This prevents dead TypeInfo globals, init guards, and DatInit/Init functions
-		// from being emitted — critical for BPF/contract targets where mutable globals are illegal.
-		if (!aliveSetHasModule(aliveSet, p.modPath)) {
-			if (opts.verbose) verboseLog(`  skip (dead) ${p.modPath}`);
-			continue;
-		}
+	for (let emitIndex = 0; emitIndex < emissionJobs.length; emitIndex += 1) {
+		const p = emissionJobs[emitIndex];
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
-		const tCg = performance.now();
-		const preCgErrors = p.ctx.errors.length;
-		const output = generateCModuleOutput(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
+		const output = emissionResults[emitIndex].output;
 		const cCode = output.code;
 		output.code = "";
 		moduleOutputs.push(output);
-		codegenTime = codegenTime + (performance.now() - tCg);
-
-		if (p.ctx.errors.length > preCgErrors) {
-			for (let ei = preCgErrors; ei < p.ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${p.modPath}: ${p.ctx.errors[ei].message}`);
-			}
-			exit(1);
-		}
 
 		// Process @compile("foo.c") directives
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
@@ -1917,27 +2084,47 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
-	// GATHER → DISPATCH → COLLECT, same shape as cmdBuildC. Test dispatcher
-	// joins the batch; any failure exits after the batch is fully collected.
-	resetEmittedInstances();
-	clearSkippedTypeInfos();
+	setConcurrentTypeQueries(true);
+	const emissionFacts = new CEmissionFacts();
+	for (const p of processed) {
+		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+	}
+	const emissionJobs: ModuleEmissionJob[] = [];
+	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath });
+	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
+	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr);
+	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
+	let emissionFailed = false;
+	for (let eri = 0; eri < emissionResults.length; eri += 1) {
+		const result = emissionResults[eri];
+		if (!result.completed) continue;
+		const modPath = emissionJobs[eri].modPath;
+		if (result.failure != "") {
+			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			emissionFailed = true;
+		}
+		for (const diagnostic of result.output.errors) {
+			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			emissionFailed = true;
+		}
+	}
+	if (emissionFailed) exit(1);
+	for (const p of processed) {
+		p.program = null as unknown as Node;
+		p.ctx = null as unknown as CheckerContext;
+	}
 	let compiled = 0;
 	const tcd = cacheDir();
 	const oSlots: string[] = [];
 	oSlots.push(oFiles);
 	const cJobs: ModuleCompileJob[] = [];
-	for (const p of processed) {
+	for (let emitIndex = 0; emitIndex < emissionJobs.length; emitIndex += 1) {
+		const p = emissionJobs[emitIndex];
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
-		const preCgErrors = p.ctx.errors.length;
-		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
-
-		if (p.ctx.errors.length > preCgErrors) {
-			for (let ei = preCgErrors; ei < p.ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${p.modPath}: ${p.ctx.errors[ei].message}`);
-			}
-			exit(1);
-		}
+		const output = emissionResults[emitIndex].output;
+		const cCode = output.code;
+		output.code = "";
 
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oSlots.push(compileObjs);
@@ -1962,6 +2149,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
+		p.program = null as unknown as Node;
+		p.ctx = null as unknown as CheckerContext;
 	}
 
 	// Generate test dispatcher (runs all module inits + test tables)

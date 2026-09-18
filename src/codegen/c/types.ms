@@ -11,8 +11,8 @@ import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, isTypeInfoSkipped } from "./context";
-import { SymbolFlag, hasFlag, lookupSymbol, makeSymbol, setFlag } from "../../checker/symbol";
+import { CGen, CSection, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
+import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext } from "../../checker/context";
 
@@ -55,14 +55,14 @@ export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string
 	return typeName;
 }
 
-export function hookBaseCName(typeName: string, t: Type | null, cc: CheckerContext | null): string {
+export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
 	if (typeName.slice(0, 1) == "$") return typeName;
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (cc == null) return named ? resolvedTypeCName(t, false) : typeName;
-	const sym = lookupSymbol(cc.table, typeName);
+	const sym = lookupSymbolReadonly(cc.table, typeName);
 	if (sym != null) {
 		const isTypeSym = sym.symbolKind == SymbolKind.Class
 			|| sym.symbolKind == SymbolKind.Interface
@@ -172,10 +172,8 @@ export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): voi
 // self-referential arrays (e.g., Type[] inside struct Type) and emit
 // Standard reference two-struct split pattern instead of MS_ARRAY macro.
 
-let typesBeingDefined: string[] = [];
-
-function isBeingDefined(key: string): boolean {
-	for (const k of typesBeingDefined) {
+function isBeingDefined(g: CGen, key: string): boolean {
+	for (const k of g.typesBeingDefined) {
 		if (k == key) return true;
 	}
 	return false;
@@ -191,29 +189,20 @@ function isBeingDefined(key: string): boolean {
 // two deferred structs are emitted FIFO — none exist today (deferral only
 // ever waits on unions, whose by-value embedders are plain structs).
 
-let unionsInProgress: string[] = [];
-
-function unionInProgress(cname: string): boolean {
-	for (const n of unionsInProgress) {
+function unionInProgress(g: CGen, cname: string): boolean {
+	for (const n of g.unionsInProgress) {
 		if (n == cname) return true;
 	}
 	return false;
 }
-
-interface DeferredStructDef {
-	blocker: string;
-	def: string;
-}
-
-let deferredStructs: DeferredStructDef[] = [];
 
 function flushDeferredStructs(g: CGen): void {
 	let emitted = true;
 	while (emitted) {
 		emitted = false;
 		const remaining: DeferredStructDef[] = [];
-		for (const d of deferredStructs) {
-			if (unionInProgress(d.blocker)) {
+		for (const d of g.deferredStructs) {
+			if (unionInProgress(g, d.blocker)) {
 				remaining.push(d);
 			} else {
 				const b = sec(g, CSection.Types);
@@ -222,7 +211,7 @@ function flushDeferredStructs(g: CGen): void {
 				emitted = true;
 			}
 		}
-		deferredStructs = remaining;
+		g.deferredStructs = remaining;
 	}
 }
 
@@ -812,8 +801,8 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	if (isTypeInfoSkipped(className)) {
-		addError(g.checkerCtx, "internal: TypeInfo '" + className + "' demanded in " + g.modulePath + " but reachability marked it dead — missing edge in markTypeInfoEdge (src/checker/reachability.ms)", 0, 0);
+	if (g.emissionFacts.skippedTypeInfos.has(className)) {
+		addCGenError(g, "internal: TypeInfo '" + className + "' demanded in " + g.modulePath + " but reachability marked it dead — missing edge in markTypeInfoEdge (src/checker/reachability.ms)", 0, 0);
 		return;
 	}
 	const defKey = "typeInfoDef:" + className;
@@ -932,7 +921,7 @@ export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn:
 // empty 2026-08-06 (battery + Neon sweep + self-build) before this was armed.
 function gateFlaglessUnknown(g: CGen, t: Type): void {
 	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
-	addError(g.checkerCtx, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
+	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
 }
 
 export function getTypeDesc(g: CGen, t: Type | null): string {
@@ -1181,7 +1170,7 @@ function genObjectType(g: CGen, t: Type): string {
 	// Cycle tracking (Standard implementation parity)
 	// Track this type as "being defined" so genArrayType can detect self-referential
 	// arrays (e.g., Type[] inside struct Type) and use the two-struct split.
-	typesBeingDefined.push(key);
+	g.typesBeingDefined.push(key);
 
 	// Pre-resolve field types BEFORE emitting struct body (Standard reference pattern).
 	// Natural recursion ensures nested struct bodies are emitted BEFORE this struct.
@@ -1208,10 +1197,10 @@ function genObjectType(g: CGen, t: Type): string {
 	// (see flushDeferredStructs) — emitting now would reference an incomplete type.
 	let blocker = "";
 	for (const ft of fieldTypes) {
-		if (unionInProgress(ft)) { blocker = ft; break; }
+		if (unionInProgress(g, ft)) { blocker = ft; break; }
 	}
 	if (blocker != "") {
-		deferredStructs.push({ blocker: blocker, def: structDef });
+		g.deferredStructs.push({ blocker: blocker, def: structDef });
 	} else {
 		const b = sec(g, CSection.Types);
 		add(b, structDef);
@@ -1219,7 +1208,7 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 
 	// Remove from cycle tracking
-	typesBeingDefined.pop();
+	g.typesBeingDefined.pop();
 
 	return cTypeName;
 }
@@ -1263,7 +1252,7 @@ function genUnionType(g: CGen, t: Type): string {
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
 	}
 	ensureForwardDecl(g, name);
-	unionsInProgress.push(name);
+	g.unionsInProgress.push(name);
 
 	const b = sec(g, CSection.Types);
 
@@ -1403,7 +1392,7 @@ function genUnionType(g: CGen, t: Type): string {
 	addNewline(b);
 
 	// Union definition is complete: structs deferred on it can now emit.
-	unionsInProgress.pop();
+	g.unionsInProgress.pop();
 	flushDeferredStructs(g);
 
 	return name;
@@ -1420,7 +1409,7 @@ function genArrayType(g: CGen, t: Type): string {
 	// Resolve element key for cycle detection and pointer classification.
 	const resolvedElem = t.typeReturn;
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
-	const selfRef = elemKey != "" && isBeingDefined(elemKey);
+	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
 	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);

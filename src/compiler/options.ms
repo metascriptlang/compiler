@@ -44,6 +44,7 @@ export interface CliOptions {
 	passC: string;
 	passL: string;
 	emitC: boolean;
+	emitJobs: int32;
 	splitModules: boolean;     // --split: js target emits one ES module per source module instead of a bundle
 	sourcemap: boolean;        // --sourcemap: js target writes a .map beside each output and links it
 	fmtCheck: boolean;
@@ -132,6 +133,7 @@ export function parseArgs(): CliOptions {
 		passC: "",
 		passL: "",
 		emitC: false,
+		emitJobs: 0,
 		splitModules: false,
 		sourcemap: false,
 		fmtCheck: false,
@@ -268,6 +270,12 @@ export function parseArgs(): CliOptions {
 			opts.autoYes = true;
 		} else if (arg == "--emit=c") {
 			opts.emitC = true;
+		} else if (arg.startsWith("--emit-jobs=")) {
+			opts.emitJobs = parseIntStr(arg.slice(12, arg.length));
+			if (opts.emitJobs < 1) {
+				console.log(error("error") + ": --emit-jobs must be at least 1");
+				exit(1);
+			}
 		} else if (arg == "--split") {
 			opts.splitModules = true;
 		} else if (arg == "--sourcemap") {

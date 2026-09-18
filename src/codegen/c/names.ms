@@ -208,7 +208,7 @@ export function isSharedStructuralName(name: string): boolean {
 	return false;
 }
 
-export function mangledTypeName(sym: Symbol | null, name: string): string {
+export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): string {
 	if (sym != null) {
 		const early = symExternOrImportName(sym, name);
 		if (early != "") return early;
@@ -237,7 +237,7 @@ export function staticFieldCName(qualifiedName: string): string {
 // from `from "c_name"` clause) and ImportC symbols (runtime/C FFI) use their
 // raw C name directly. Returns "" to signal the caller should fall through
 // to its own rule (proc vs global vs type).
-function symExternOrImportName(sym: Symbol | null, name: string): string {
+function symExternOrImportName(sym: Readonly<Symbol> | null, name: string): string {
 	if (sym != null && sym.nativeName != "") return sym.nativeName;
 	if (sym != null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
 	return "";

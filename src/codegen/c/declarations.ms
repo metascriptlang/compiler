@@ -8,7 +8,7 @@ import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types"
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, markTypeInfoSkipped,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString,
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
 import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
@@ -21,23 +21,6 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
-
-// ===== Generic Instance Deduplication =====
-// Across all modules in Phase C, each generic instance is emitted ONCE.
-// First module to codegen it emits the body; other modules get forward decls only.
-let _emittedInstances: HashSet<string> = new HashSet<string>();
-
-export function resetEmittedInstances(): void {
-	_emittedInstances = new HashSet<string>();
-}
-
-function isInstanceEmitted(name: string): boolean {
-	return _emittedInstances.has(name);
-}
-
-function markInstanceEmitted(name: string): void {
-	_emittedInstances.add(name);
-}
 
 // ===== genDecl — main declaration dispatcher =====
 
@@ -81,6 +64,9 @@ function isArraySeqHook(name: string): boolean {
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node == null) return;
+	if (g.preparingDeclarations && node.kind != NodeKind.FunctionDecl
+		&& node.kind != NodeKind.VariableDecl && node.kind != NodeKind.ExportDecl
+		&& node.kind != NodeKind.DecoratedDecl) return;
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
@@ -155,6 +141,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const fnType = node.nodeType;
 	if (fnType == null) return;
 	if (hasGenericParams(fnType)) return;
+	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
+	if (g.preparingDeclarations) {
+		if (isGenericInstance && g.preparationFacts != null
+				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
+			g.preparationFacts.genericOwners.set(name, g.modulePath);
+		}
+		return;
+	}
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn
 	if (fnType.typeReturn == null) cRetType = "void";
@@ -170,13 +164,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		|| (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp));
 	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
 
-	// Generic instance deduplication (reference parity).
-	// First module to codegen an instance emits the body; others get forward decl only.
-	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
-	const instanceAlreadyEmitted = isGenericInstance && isInstanceEmitted(name);
-	if (isGenericInstance && !instanceAlreadyEmitted) {
-		markInstanceEmitted(name);
-	}
+	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)
+		|| (g.emissionFacts.genericOwners.has(name) && g.emissionFacts.genericOwners.readonlyGet(name) != g.modulePath));
+	if (isGenericInstance && !instanceAlreadyEmitted) g.emittedInstances.add(name);
 
 	// Non-exported functions get static prefix (Standard implementation parity)
 	// main() is never static — called from dispatcher
@@ -647,15 +637,20 @@ function genGlobalVar(g: CGen, node: Node): void {
 		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 		if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
 			const skipBase = d.declName.slice(0, nameLen - 8);
-			markTypeInfoSkipped(skipBase);
-			const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
-			if (skipCBase != "") markTypeInfoSkipped(skipCBase);
+			if (g.preparingDeclarations) {
+				if (g.preparationFacts == null) return;
+				g.preparationFacts.skippedTypeInfos.add(skipBase);
+				const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
+				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
+			}
 			return;
 		}
+		if (g.preparingDeclarations) return;
 		genTypeInfoVar(g, d, varName);
 		return;
 	}
 
+	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
 	// Symbols without a modulePath (DRC/transform temps hoisted to top level) mangle to a
 	// bare name that repeats across modules (per-module tempCounter) — static linkage is
@@ -922,4 +917,3 @@ test "NRVO function signature" {
 	// Should have void return + __result param in the output
 	assert result.length > 50;
 }
-

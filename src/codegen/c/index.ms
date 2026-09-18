@@ -7,10 +7,11 @@
 //   DatInit000 (data/type init, runs first) + Init000 (user code, runs second)
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
-import { Node, NodeKind, ProgramData } from "../../ast/node";
-import { CheckerContext, GcMode } from "../../checker/context";
+import { Node, NodeKind, ProgramData, SymbolKind, TypeKind } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
+import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
 import {
-	CGen, CSection, AliveSet,
+	CGen, CSection, AliveSet, CEmissionFacts,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd,
 } from "./context";
 import { genDecl, registerDeclCName } from "./declarations";
@@ -30,14 +31,53 @@ export class CModuleOutput {
 	modulePath: string = "";
 	hasDatInit: boolean = false;
 	hasInit: boolean = false;
+	errors: CheckerError[] = [];
 }
 
-export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean): string {
-	return generateCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr).code;
+function prepareCanonicalCallTypes(node: Node, ctx: CheckerContext): void {
+	const sym = node.resolvedSym;
+	if (sym != null && sym.symbolKind == SymbolKind.Function
+			&& sym.symbolType != null && sym.symbolType.kind != TypeKind.Function
+			&& sym.modulePath != "" && ctx.exportRegistry != null) {
+		const lookupName = sym.originalName != "" ? sym.originalName : sym.name;
+		const info = findExportedSymbol(ctx.exportRegistry, sym.modulePath, lookupName);
+		if (info != null && info.symType != null && info.symType.kind == TypeKind.Function) sym.symbolType = info.symType;
+	}
+	forEachChild(node, (child: Node): void => { prepareCanonicalCallTypes(child, ctx); });
 }
 
-export function generateCModuleOutput(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean): CModuleOutput {
+export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, facts: CEmissionFacts): void {
+	if (program == null || program.kind != NodeKind.Program) return;
+	prepareCanonicalCallTypes(program, ctx);
 	const g = createCGen(ctx, modulePath);
+	g.aliveSet = aliveSet;
+	g.emissionFacts = facts;
+	g.preparationFacts = facts;
+	g.preparingDeclarations = true;
+	const pd = program.data as ProgramData;
+	for (const stmt of pd.programStmts) registerDeclCName(g, stmt);
+	for (const stmt of pd.programStmts) genDecl(g, stmt, false);
+}
+
+export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean, facts: CEmissionFacts | null = null): string {
+	const output = generateCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr, facts);
+	for (const diagnostic of output.errors) ctx.errors.push(diagnostic);
+	return output.code;
+}
+
+export function generateCModuleOutput(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean, facts: CEmissionFacts | null = null): CModuleOutput {
+	let preparedFacts = facts;
+	if (preparedFacts == null) {
+		const localFacts = new CEmissionFacts();
+		prepareCModuleEmission(program, ctx, modulePath, aliveSet, localFacts);
+		preparedFacts = localFacts;
+	}
+	return generatePreparedCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr, preparedFacts);
+}
+
+export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet>, isTestBuild: boolean, isHcr: boolean, facts: Readonly<CEmissionFacts>): CModuleOutput {
+	const g = createCGen(ctx, modulePath);
+	g.emissionFacts = facts;
 	g.aliveSet = aliveSet;
 	g.isTestBuild = isTestBuild;
 	g.isHcr = isHcr;
@@ -117,6 +157,7 @@ export function generateCModuleOutput(program: Node, ctx: CheckerContext, module
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
 
 	output.code = assembleOutput(g);
+	output.errors = g.errors;
 	return output;
 }
 
@@ -428,3 +469,80 @@ test "generateCModule produces code without dispatcher" {
 }
 
 
+
+import { SymbolKind } from "../../ast/node";
+import { createFunction, voidType } from "../../checker/types";
+import { makeSymbol } from "../../checker/symbol";
+import { createContext } from "../../checker/context";
+import { aliveSetAdd } from "./context";
+import { mangledFunctionName, mangledTypeName } from "./names";
+import { ensureTypeInfoDef } from "./types";
+
+test "generic module emission preserves defining owner under permutations" {
+	const parsed = parseSource("function generic__i32(): void {}");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const program = parsed.value;
+	const pd = program.data as ProgramData;
+	const node = pd.programStmts[0];
+	const fnType = createFunction([], [], voidType());
+	node.nodeType = fnType;
+	node.resolvedSym = makeSymbol("generic__i32", SymbolKind.Function, fnType, false);
+	node.resolvedSym.modulePath = "owner.ms";
+	pd.programStmts.push(node);
+	const ctx = null as unknown as CheckerContext;
+	const alive = createAliveSet();
+	const facts = new CEmissionFacts();
+	const paths = ["user.ms", "owner.ms", "other.ms"];
+	for (const path of paths) prepareCModuleEmission(program, ctx, path, alive, facts);
+	const name = mangledFunctionName(node.resolvedSym, "generic__i32", 0);
+	assert facts.genericOwners.get(name) == "owner.ms";
+	const original: CModuleOutput[] = [];
+	for (const path of paths) original.push(generateCModuleOutput(program, ctx, path, alive, false, false, facts));
+	const orders: number[] = [2, 1, 0, 1, 0, 2];
+	for (const slot of orders) {
+		const output = generateCModuleOutput(program, ctx, paths[slot], alive, false, false, facts);
+		assert output.code == original[slot].code;
+		const body = "void " + name + "(void) {";
+		assert output.code.split(body).length == (slot == 1 ? 2 : 1);
+	}
+	const dispatcher = genProjectDispatcher(paths, "user.ms", "", false, original);
+	assert dispatcher == genProjectDispatcher(paths, "user.ms", "", false, [original[2], original[1], original[0]]);
+	assert dispatcher == genProjectDispatcher(paths, "user.ms", "", false, [original[1], original[0], original[2]]);
+	const standalone = generateCModule(program, ctx, "owner.ms", alive, false, false);
+	assert standalone == generateCModule(program, ctx, "owner.ms", alive, false, false);
+	assert standalone == original[1].code;
+}
+
+test "TypeInfo facts use emission DCE predicates before any module emits" {
+	const parsed = parseSource("class Hidden {} const HiddenTypeInfo = 0; const AliveTypeInfo = 0;");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const ctx = createContext();
+	const path = "owner.ms";
+	const node = (parsed.value.data as ProgramData).programStmts[0];
+	node.resolvedSym = makeSymbol("Hidden", SymbolKind.Class, null, false);
+	node.resolvedSym.modulePath = path;
+	const alive = createAliveSet();
+	aliveSetAdd(alive, path, "AliveTypeInfo");
+	const facts = new CEmissionFacts();
+	prepareCModuleEmission(parsed.value, ctx, path, alive, facts);
+	const qualified = mangledTypeName(node.resolvedSym, "Hidden");
+	assert facts.skippedTypeInfos.has("Hidden");
+	assert facts.skippedTypeInfos.has(qualified);
+	assert !facts.skippedTypeInfos.has("Alive");
+	const consumer = createCGen(ctx, "consumer.ms");
+	consumer.emissionFacts = facts;
+	const before = consumer.errors.length;
+	ensureTypeInfoDef(consumer, qualified, null);
+	assert consumer.errors.length == before + 1;
+	assert consumer.errors[before].message.indexOf("reachability marked it dead") >= 0;
+	const unfiltered = new CEmissionFacts();
+	prepareCModuleEmission(parsed.value, ctx, path, createAliveSet(), unfiltered);
+	assert !unfiltered.skippedTypeInfos.has("Hidden");
+	ctx.gcMode = GcMode.Manual;
+	const manual = new CEmissionFacts();
+	prepareCModuleEmission(parsed.value, ctx, path, alive, manual);
+	assert !manual.skippedTypeInfos.has("Hidden");
+	assert !manual.skippedTypeInfos.has(qualified);
+}

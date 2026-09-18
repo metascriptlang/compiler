@@ -19,8 +19,8 @@ import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
-import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher } from "../codegen/c/index";
-import { AliveSet, createAliveSet } from "../codegen/c/context";
+import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
+import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
 import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
 import { createDefaultConfig, Backend } from "../module/resolver";
@@ -253,6 +253,9 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	// Full pipeline per module (same as compile.ms:358-411)
 	let combined = "";
 	const moduleOutputs: CModuleOutput[] = [];
+	const emissionPrograms: Node[] = [];
+	const emissionContexts: CheckerContext[] = [];
+	const emissionPaths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -279,7 +282,16 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
-		const output = generateCModuleOutput(analyzed, ctx, modPath, aliveSet, false, false);
+		emissionPrograms.push(analyzed);
+		emissionContexts.push(ctx);
+		emissionPaths.push(modPath);
+	}
+	const emissionFacts = new CEmissionFacts();
+	for (let i = 0; i < emissionPrograms.length; i += 1) {
+		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
+	}
+	for (let i = 0; i < emissionPrograms.length; i += 1) {
+		const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
 		combined = combined + output.code;
 		output.code = "";
 		moduleOutputs.push(output);
@@ -371,6 +383,9 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 
 	let combined = "";
 	const moduleOutputs: CModuleOutput[] = [];
+	const emissionPrograms: Node[] = [];
+	const emissionContexts: CheckerContext[] = [];
+	const emissionPaths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
@@ -399,7 +414,16 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
-		const output = generateCModuleOutput(analyzed, ctx, modPath, aliveSet, false, false);
+		emissionPrograms.push(analyzed);
+		emissionContexts.push(ctx);
+		emissionPaths.push(modPath);
+	}
+	const emissionFacts = new CEmissionFacts();
+	for (let i = 0; i < emissionPrograms.length; i += 1) {
+		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
+	}
+	for (let i = 0; i < emissionPrograms.length; i += 1) {
+		const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
 		combined = combined + output.code;
 		output.code = "";
 		moduleOutputs.push(output);

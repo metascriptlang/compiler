@@ -12,7 +12,7 @@ import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName, typeCacheGet, typeCacheHas, typeCacheSet,
+	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
@@ -21,7 +21,7 @@ import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
 import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
-import { GcMode, addError, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
+import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -791,7 +791,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
 			const safe = safeName(d.name);
 			let cName = "";
-			if (idSym != null && idSym.nativeName != "") {
+			const localSymName = lookupLocalSymName(p, idSym);
+			if (localSymName != "") {
+				cName = localSymName;
+			} else if (idSym != null && idSym.nativeName != "") {
 				cName = idSym.nativeName;
 			} else if (idSym != null && idSym.symbolKind == SymbolKind.EnumMember && node.nodeType != null) {
 				// Checker rewrote Enum.Member → Identifier("Enum_Member"); rebuild the
@@ -1184,7 +1187,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 			// translation unit. Only a foreign parent can end up called undeclared.
 			const parentIsForeign = parentSym.modulePath != "" && parentSym.modulePath != g.modulePath;
 			if (parentIsForeign && parentChildren == null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
-				addError(g.checkerCtx, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
+				addCGenError(g, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
 			}
 			if (parentChildren != null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
@@ -1345,7 +1348,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == "instanceof") {
 			if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) {
-				addError(g.checkerCtx, "instanceof requires RTTI, unavailable under --gc=manual", 0, 0);
+				addCGenError(g, "instanceof requires RTTI, unavailable under --gc=manual", 0, 0);
 				ctx.results.push("false");
 				return;
 			}
@@ -1353,7 +1356,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (target != null && target.kind == TypeKind.Ref && target.typeReturn != null) target = target.typeReturn;
 			if (target == null || target.kind != TypeKind.Struct) {
 				const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
-				addError(g.checkerCtx, "internal: instanceof RHS did not resolve to a class type in " + g.modulePath + " proc " + pn, 0, 0);
+				addCGenError(g, "internal: instanceof RHS did not resolve to a class type in " + g.modulePath + " proc " + pn, 0, 0);
 				ctx.results.push("false");
 				return;
 			}
@@ -1606,7 +1609,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					const idSym = walkObj.resolvedSym;
 					const safe = safeName(rawName);
 					let cName = "";
-					if (idSym != null && idSym.nativeName != "") {
+					const localSymName = lookupLocalSymName(p, idSym);
+					if (localSymName != "") {
+						cName = localSymName;
+					} else if (idSym != null && idSym.nativeName != "") {
 						cName = idSym.nativeName;
 					} else if (isModuleGlobalVar(idSym)) {
 						cName = mangledGlobalName(idSym, rawName);
@@ -2889,7 +2895,7 @@ function mapBinaryOp(g: CGen, op: string): string {
 	};
 	if (!isValidCOp) {
 		const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
-		addError(g.checkerCtx, "internal: operator '" + op + "' reached codegen unresolved in " + g.modulePath + " proc " + pn, 0, 0);
+		addCGenError(g, "internal: operator '" + op + "' reached codegen unresolved in " + g.modulePath + " proc " + pn, 0, 0);
 	}
 	return mapped;
 }
