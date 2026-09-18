@@ -100,9 +100,6 @@ let _pendingStmts: Node[] = [];
 let _pendingDone: boolean[] = [];
 let _pendingResults: Node[] = [];
 let _pendingExtras: Node[][] = [];
-let _nodeMetaNodes: Node[] = [];
-let _nodeMetaKeys: string[][] = [];
-let _nodeMetaValues: Node[][] = [];
 
 function applyStatementAt(ctx: CheckerContext, index: int32): void {
 	if (_pendingDone[index]) return;
@@ -184,7 +181,6 @@ export function applyDecoratedStmt(ctx: CheckerContext, stmt: Node, after: Node[
 	const rewritten = applyToStatement(ctx, stmt, after);
 	const decl = deferredDeclOf(rewritten);
 	if (decl != null && !replacementKeepsName(ctx, originalName, decl)) return stmt;
-	aliasPendingMetadata(decl, stmt);
 	return rewritten;
 }
 
@@ -273,40 +269,6 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 	};
 }
 
-function pendingMetadataSlot(decl: Node): int32 {
-	for (let i = 0; i < _nodeMetaNodes.length; i += 1) {
-		if (_nodeMetaNodes[i] == decl) return i;
-	}
-	return -1;
-}
-
-function recordPendingMetadata(plan: ClassPlan): void {
-	const slot = pendingMetadataSlot(plan.classNode);
-	if (slot >= 0) {
-		_nodeMetaKeys[slot] = plan.metaKeys;
-		_nodeMetaValues[slot] = plan.metaValues;
-		return;
-	}
-	_nodeMetaNodes.push(plan.classNode);
-	_nodeMetaKeys.push(plan.metaKeys);
-	_nodeMetaValues.push(plan.metaValues);
-}
-
-function aliasPendingMetadata(from: Node, to: Node): void {
-	if (from == null || to == null || from == to) return;
-	const slot = pendingMetadataSlot(from);
-	if (slot < 0) return;
-	const existing = pendingMetadataSlot(to);
-	if (existing >= 0) {
-		_nodeMetaKeys[existing] = _nodeMetaKeys[slot];
-		_nodeMetaValues[existing] = _nodeMetaValues[slot];
-		return;
-	}
-	_nodeMetaNodes.push(to);
-	_nodeMetaKeys.push(_nodeMetaKeys[slot]);
-	_nodeMetaValues.push(_nodeMetaValues[slot]);
-}
-
 function addInheritedPair(plan: ClassPlan, key: string, value: Node): void {
 	for (const k of plan.inheritedKeys) {
 		if (k == key) return;
@@ -330,12 +292,6 @@ function seedInheritedMetadata(ctx: CheckerContext, plan: ClassPlan): void {
 		}
 		const parentDecl = classDeclNodeOf(parentSym);
 		if (parentDecl == null || parentDecl.kind != NodeKind.ClassDecl) return;
-		const slot = pendingMetadataSlot(parentDecl);
-		if (slot >= 0) {
-			for (let i = 0; i < _nodeMetaKeys[slot].length; i += 1) {
-				addInheritedPair(plan, _nodeMetaKeys[slot][i], _nodeMetaValues[slot][i]);
-			}
-		}
 		parentName = (parentDecl.data as ClassDeclData).classExtends;
 		depth += 1;
 	}
@@ -889,8 +845,6 @@ function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 		if (sym != null) {
 			sym.metaKeys = plan.metaKeys;
 			sym.metaValues = plan.metaValues;
-		} else {
-			recordPendingMetadata(plan);
 		}
 	}
 	if (plan.memberInits.length > 0) {
