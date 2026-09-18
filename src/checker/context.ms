@@ -355,22 +355,19 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 // Single source of truth — used by orchestrator (multi-module) and TransAm (LSP).
 export function collectExports(ctx: CheckerContext, modulePath: string): ExportedSymInfo[] {
 	const exports: ExportedSymInfo[] = [];
+	const exportedNames = new HashSet<string>();
 	for (const sym of ctx.table.current.symbols.values()) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
 			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
+			exportedNames.add(sym.name);
 		}
 	}
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const extSym = ext.sym;
-			if (extSym != null && hasFlag(extSym, SymbolFlag.Exported)) {
-				let alreadyExported = false;
-				for (const e of exports) {
-					if (e.name == extSym.name) { alreadyExported = true; break; }
-				}
-				if (!alreadyExported) {
-					exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx));
-				}
+			if (extSym != null && hasFlag(extSym, SymbolFlag.Exported) && !exportedNames.has(extSym.name)) {
+				exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx));
+				exportedNames.add(extSym.name);
 			}
 		}
 	}
@@ -403,10 +400,20 @@ export class ExtensionMethod {
 export class ExtensionRegistry {
 	methods: ExtensionMethod[];
 	staticReceivers: string[];
+	// methods[] chained by methodName in registration order (-1 ends a chain);
+	// registerExtension and truncateExtensions keep it in step with methods[].
+	byNameHead: HashMap<string, int32>;
+	byNameTail: HashMap<string, int32>;
+	byNameNext: int32[];
+	byNamePrev: int32[];
 }
 
 export function createExtensionRegistry(): ExtensionRegistry {
-	return { methods: [], staticReceivers: [] };
+	return {
+		methods: [], staticReceivers: [],
+		byNameHead: new HashMap<string, int32>(), byNameTail: new HashMap<string, int32>(),
+		byNameNext: [], byNamePrev: [],
+	};
 }
 
 // Create an ExtensionMethod with proper ownership invariant enforced.
@@ -446,7 +453,17 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 			}
 		}
 	}
+	const idx = registry.methods.length;
 	registry.methods.push(method);
+	const tail = registry.byNameTail.get(method.methodName) ?? -1;
+	registry.byNameNext.push(-1);
+	registry.byNamePrev.push(tail);
+	if (tail >= 0) {
+		registry.byNameNext[tail] = idx;
+	} else {
+		registry.byNameHead.set(method.methodName, idx);
+	}
+	registry.byNameTail.set(method.methodName, idx);
 	if (method.isStatic) {
 		for (const known of registry.staticReceivers) {
 			if (known == method.receiverTypeName) return;
@@ -455,33 +472,56 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	}
 }
 
+// Drop every extension registered after the first `count` (instantiation
+// scratch). Entries leave from the end, so each is the tail of its name chain.
+export function truncateExtensions(registry: ExtensionRegistry, count: int32): void {
+	let i = registry.methods.length - 1;
+	while (i >= count) {
+		const name = registry.methods[i].methodName;
+		const prev = registry.byNamePrev[i];
+		if (prev >= 0) {
+			registry.byNameNext[prev] = -1;
+			registry.byNameTail.set(name, prev);
+		} else {
+			registry.byNameHead.delete(name);
+			registry.byNameTail.delete(name);
+		}
+		i -= 1;
+	}
+	registry.methods.length = count;
+	registry.byNameNext.length = count;
+	registry.byNamePrev.length = count;
+}
+
 export function findExtension(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod {
-	for (const m of registry.methods) {
-		if (m.receiverTypeName == receiverTypeName && m.methodName == methodName) return m;
+	let i = registry.byNameHead.get(methodName) ?? -1;
+	while (i >= 0) {
+		const m = registry.methods[i];
+		if (m.receiverTypeName == receiverTypeName) return m;
+		i = registry.byNameNext[i];
 	}
 	return null as unknown as ExtensionMethod;
 }
 
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
-	for (const m of registry.methods) {
-		if (m.methodName == methodName) return true;
-	}
-	return false;
+	return registry.byNameHead.has(methodName);
 }
 
 // findExtensionByName — find first extension with this method name (any receiver)
 export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
-	for (const m of registry.methods) {
-		if (m.methodName == methodName) return m;
-	}
+	const i = registry.byNameHead.get(methodName) ?? -1;
+	if (i >= 0) return registry.methods[i];
 	return null as unknown as ExtensionMethod;
 }
 
 // findExtensionByType — find extension matching method name + fnType identity (for overload export)
 export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
-	for (const m of registry.methods) {
-		if (m.methodName == methodName && m.fnType == fnType) return m;
+	let i = registry.byNameHead.get(methodName) ?? -1;
+	while (i >= 0) {
+		const m = registry.methods[i];
+		if (m.fnType == fnType) return m;
+		i = registry.byNameNext[i];
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -511,13 +551,10 @@ export function findAllExtensionsByName(registry: ExtensionRegistry, methodName:
 }
 function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	let i = 0;
-	while (i < registry.methods.length) {
-		const m = registry.methods[i];
-		if (m.methodName == methodName) {
-			results.push(m);
-		}
-		i = i + 1;
+	let i = registry.byNameHead.get(methodName) ?? -1;
+	while (i >= 0) {
+		results.push(registry.methods[i]);
+		i = registry.byNameNext[i];
 	}
 	return results;
 }
@@ -1497,6 +1534,32 @@ test "namespace receiver is name-keyed, not kind-keyed" {
 	assert hasStaticExtForReceiver(r, "String");
 	assert !hasStaticExtForReceiver(r, "helper");
 	assert !hasStaticExtForReceiver(r, "");
+}
+
+test "extension name lookups keep registration order across truncation" {
+	const r = createExtensionRegistry();
+	const a: ExtensionMethod = { methodName: "m", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const x: ExtensionMethod = { methodName: "other", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const b: ExtensionMethod = { methodName: "m", receiverTypeName: "B", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	registerExtension(r, a);
+	registerExtension(r, x);
+	registerExtension(r, b);
+	const both = findAllExtensionsByName(r, "m");
+	assert both.length == 2;
+	assert both[0] == a;
+	assert both[1] == b;
+	assert findExtension(r, "B", "m") == b;
+	truncateExtensions(r, 2);
+	assert findAllExtensionsByName(r, "m").length == 1;
+	assert findExtension(r, "B", "m") == null;
+	assert hasExtensionByName(r, "other");
+	truncateExtensions(r, 0);
+	assert !hasExtensionByName(r, "m");
+	assert !hasExtensionByName(r, "other");
+	const c: ExtensionMethod = { methodName: "m", receiverTypeName: "C", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	registerExtension(r, c);
+	assert findExtensionByName(r, "m") == c;
+	assert findAllExtensionsByName(r, "m").length == 1;
 }
 
 test "static ext filter keeps only statics of that receiver" {

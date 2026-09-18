@@ -9,7 +9,7 @@ import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, addError } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
@@ -273,7 +273,7 @@ function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): i
 
 function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: int32): void {
 	if (preCount < 0) return;
-	bodyCtx.extensionRegistry.methods.length = preCount;
+	truncateExtensions(bodyCtx.extensionRegistry, preCount);
 }
 
 function displayTypeArgs(types: Type[]): string {
