@@ -259,6 +259,17 @@ main_held() {
   done <<<"$paths"
 }
 
+main_index() {
+  local try
+  for try in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$MAIN/.git/index.lock" ] && { sleep 1; continue; }
+    git -C "$MAIN" update-index "$@" && return 0
+    sleep 1
+  done
+  say "land: the main checkout index stayed locked; could not record $*"
+  return 1
+}
+
 sync_main_path() {
   local p=$1 old=$2 new=$3 entry mode blob cur was
   was=$(git -C "$MAIN" ls-tree "$old" -- "$p")
@@ -266,19 +277,19 @@ sync_main_path() {
   mode=$(printf '%s' "$entry" | awk '{print $1}')
   blob=$(printf '%s' "$entry" | awk '{print $3}')
   if [ "$mode" = 160000 ] || [ "$(printf '%s' "$was" | awk '{print $1}')" = 160000 ]; then
-    if [ -n "$entry" ]; then git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"; else git -C "$MAIN" update-index --force-remove -- "$p"; fi
+    if [ -n "$entry" ]; then main_index --add --cacheinfo "$mode,$blob,$p"; else main_index --force-remove -- "$p"; fi
     return
   fi
   cur=$(main_blob "$p")
   [ "$cur" = "$(printf '%s' "$was" | awk '{print $3}')" ] || { say "  $p: changed in the main checkout during land, left for a manual merge"; return 1; }
   if [ -z "$entry" ]; then
-    git -C "$MAIN" update-index --force-remove -- "$p" && rm -f "$MAIN/$p"
+    main_index --force-remove -- "$p" && rm -f "$MAIN/$p"
     return
   fi
   mkdir -p "$(dirname "$MAIN/$p")"
   if [ "$mode" = 120000 ]; then
     rm -f "$MAIN/$p" && ln -s "$(git -C "$MAIN" cat-file blob "$blob")" "$MAIN/$p" || return 1
-    git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"
+    main_index --add --cacheinfo "$mode,$blob,$p"
     return
   fi
   git -C "$MAIN" cat-file blob "$blob" >"$MAIN/$p.wt-land" && mv "$MAIN/$p.wt-land" "$MAIN/$p" || return 1
@@ -286,7 +297,7 @@ sync_main_path() {
     100755) chmod 755 "$MAIN/$p" ;;
     *) chmod 644 "$MAIN/$p" ;;
   esac
-  git -C "$MAIN" update-index --add --cacheinfo "$mode,$blob,$p"
+  main_index --add --cacheinfo "$mode,$blob,$p"
 }
 
 cmd_land() {
