@@ -51,6 +51,19 @@ export class Error {
 	}
 }
 
+@builtin("compilerFunc")
+export extern function compilerFunc(): void;
+
+@builtin("throws")
+export extern function throws(): void;
+
+@compilerFunc @throws
+extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
+
+@compilerFunc @throws
+extern function msAwaitSlotResult(slot: unknown): unknown from "msAwaitSlotResult";
+
+@throws
 extern function msAbortThrow(): void from "msAbortThrow";
 
 export class AbortSignal {
