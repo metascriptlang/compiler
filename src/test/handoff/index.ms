@@ -72,3 +72,4 @@ import "./functionValueMisuse";
 import "./fnFormalArgFit";
 import "./maybeRefPayloadKey";
 import "./sinkParam";
+import "./callMagic";
