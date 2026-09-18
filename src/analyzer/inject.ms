@@ -1482,7 +1482,6 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 	popOuterStmts(dctx);
 
 	// Blocker 28: only set needsTry when a statement could actually throw.
-	// RC runtime calls (ms* prefix) and DRC synthetics ($ prefix) are nothrow.
 	if (scopeDepth(dctx) > 0 && stmtCanThrow(stmt) && currentScope(dctx).varsToCleanup.length > 0) {
 		currentScope(dctx).needsTry = true;
 	}
@@ -1490,16 +1489,10 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 	return result;
 }
 
-// Blocker 28: Check if a call expression could throw an exception.
-// RC runtime (ms*) and DRC synthetic ($*) calls are nothrow by convention.
 function callCanThrow(callExpr: Node): boolean {
 	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		const name = (cd.callee.data as IdentifierData).name;
-		if (name.startsWith("ms")) return false;
-		if (name.startsWith("$")) return false;
-	}
-	return true;
+	const sym = cd.callee.resolvedSym;
+	return sym == null || !hasFlag(sym, SymbolFlag.ImportC);
 }
 
 // Blocker 28: Check if a statement could throw — stricter than old stmtMayCall.
