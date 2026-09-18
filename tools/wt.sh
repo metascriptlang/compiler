@@ -16,9 +16,9 @@ usage: tools/wt.sh <command> [args]
                         unlanded commits or live processes, and names them;
                         --force discards exactly what it names
   land [name] [--also '<cmd>']...
-                        rebase onto main, gate (build + msc test src/index.ms +
-                        each --also command), then move main forward and sync
-                        the main checkout path by path
+                        rebase onto main, gate (tools/gate.sh picks the lanes
+                        from the diff, then each --also command), then move
+                        main forward and sync the main checkout path by path
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
 
@@ -310,10 +310,7 @@ cmd_land() {
   new=$(git -C "$w" rev-parse HEAD)
   [ "$new" != "$old" ] || die "land: nothing to land"
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
-  say "gate: build"
-  (cd "$w" && ./msc build src/index.ms --output=out/wt-land/msc) >&2 || die "land: gate build failed"
-  say "gate: msc test src/index.ms"
-  (cd "$w" && ./msc test src/index.ms) >&2 || die "land: gate suite failed"
+  (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
   for cmd in "${also[@]+"${also[@]}"}"; do
     say "gate: $cmd"
     (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
