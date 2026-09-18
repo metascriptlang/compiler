@@ -173,6 +173,7 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	let outPositions = "";
 	let refPositions = "";
 	let rdonlyPositions = "";
+	let sinkPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
 		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
@@ -189,6 +190,11 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 			if (rdonlyPositions == "") { rdonlyPositions = `${oi}`; }
 			else { rdonlyPositions = `${rdonlyPositions},${oi}`; }
 		}
+		if (params[oi].length > 5 && params[oi].slice(0, 5) == "sink:") {
+			params[oi] = params[oi].slice(5, params[oi].length);
+			if (sinkPositions == "") { sinkPositions = `${oi}`; }
+			else { sinkPositions = `${sinkPositions},${oi}`; }
+		}
 	}
 	if (outPositions != "") {
 		if (flags == "") { flags = `out:${outPositions}`; }
@@ -201,6 +207,10 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	if (rdonlyPositions != "") {
 		if (flags == "") { flags = `rdonly:${rdonlyPositions}`; }
 		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
+	}
+	if (sinkPositions != "") {
+		if (flags == "") { flags = `sink:${sinkPositions}`; }
+		else { flags = `${flags}|sink:${sinkPositions}`; }
 	}
 	// Encode generic param names
 	if (genericNames != "") {

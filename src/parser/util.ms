@@ -244,6 +244,10 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			advance(state);
 			paramPrefix = `${paramPrefix}rdonly:`;
 		}
+		if (current(state).kind == TokenKind.Ident && current(state).value == "sink" && isIdentLike(peek(state, 1))) {
+			advance(state);
+			paramPrefix = `${paramPrefix}sink:`;
+		}
 		// Extension method receiver (must be first param)
 		if (params.length == 0 && current(state).kind == TokenKind.This) {
 			const thisToken = current(state);
