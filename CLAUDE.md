@@ -142,8 +142,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **One worktree per feature or named arc, many sessions on it** — the unit has a name and a card; `claude --worktree <name>` (or `tools/wt.sh new <name>` by hand) creates branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready, and re-enters the same worktree on every later session; from branch-off to done the arc's work happens only there.
 - **A second worktree needs a reason** — (1) two pieces run at the same time in different sessions and write no common path, or (2) a stray change that belongs to no open arc, which gets a short `fix-<name>` worktree, lands and is retired. Sequential steps of one arc are commits in its worktree, never new worktrees; work that needs a path another worktree is ahead of `main` on (`tools/wt.sh ls`, then `git diff --name-only main...wt/<other>`) waits for that land.
 - **Land a slice as soon as it stands alone, not when the arc ends** — `land` rebases onto `main`, so the worktree stays current and keeps going after the land; a worktree that has neither landed nor rebased for two days while `main` moved rebases before more work.
-- **The unit's goal lives in its card, `$MSC_WT_ROOT/<name>.md`** — `tools/wt.sh new` seeds it beside the worktree, outside every checkout, so it never dirties a tree, reaches the gate or lands; it holds the Goal, a "Done when" a session can run, and a State of a few lines naming the step in flight, written for a reader who has seen none of the arc — no stage codes, and the step in flight can be started without opening another file; progress itself is the commits on `wt/<name>`. The SessionStart hook prints it (`tools/wt.sh card` by hand) with the compiler inbox tallied by `State:`, `tools/wt.sh ls` shows each goal, marks a worktree without one `NO CARD` and lists every card left without a branch, a fresh card gets its Goal and "Done when" before the first commit, and the card is deleted once "Done when" holds on `main`.
-- **A session ends with its work committed and the card's State current** — the next session continues from the card and the branch, not from rediscovery; memory keeps a pointer to the card, never a copy of its state.
+- **The card is `$MSC_WT_ROOT/<name>.md`** — `tools/wt.sh new` seeds it; its State is written for a reader who has seen none of the arc: no stage codes, and the step in flight can be started without opening another file. The SessionStart hook prints it (`tools/wt.sh card` by hand) with the compiler inbox tallied by `State:`; `tools/wt.sh ls` shows each goal, marks a worktree without one `NO CARD` and lists every card left without a branch. A fresh card gets its Goal and "Done when" before the first commit.
 - **The main checkout only receives lands** — `tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
 - **A gate verdict survives a `main` that moved only by paths no lane tests** — when `main` moves during the gate, `land` rebases onto it and lands without a second gate if every path the move changed picks no lane (`tools/gate.sh --inert <from> <to>`, the gate's own inert list); a move that changes a path a lane tests re-gates. Nobody re-runs a lane on what is already known safe.
 - **A worktree is retired from outside it, with `tools/wt.sh rm`** — a session cannot remove the worktree it runs in (its own processes hold it), so it reports the land and leaves the worktree; `rm` names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
@@ -156,7 +155,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 **"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/sync-local-binary.sh` are not shipping, and neither asks for the full ladder.
 
 - **One command picks and runs the lanes** — `tools/gate.sh` maps the paths a change touches to lanes (the table at the top of the script), runs them one after another and stops at the first new red; `--dry-run` shows the choice and why, `--release` runs the full ladder, and `tools/wt.sh land` calls it.
-- **A red is yours only when it is new** — each lane's failures are compared by name with `src/test/known-red.json`; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
+- **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
 - **The machine is shared** — the gate waits while load exceeds the core count and never runs two lanes at once; do not start a second heavy lane beside it.
 - **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct ([`docs/TESTING.md`](docs/TESTING.md)), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
 - **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
@@ -178,18 +177,13 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 | The fix tracks the reference implementation and stays inside the task | do it, gate it, report after |
 | Two directions both track the reference, or the fix crosses a recorded intentional divergence | ask — one question, with a recommendation |
 | The work has to leave the task's scope | stop and report |
-| The user asks an open design question | answer first, code after sign-off |
 | A unit of work is done on your own `wt/<name>` branch | commit without asking, through `/split-commit` |
 | Time to push, or to land with `--no-gate` | ask, every time |
-| A tool or the harness refuses an action on purpose (a guard, a denied permission) | leave it, say what was refused, do not route around it |
 
 ## Commits
 
 - **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `tools/wt.sh land`, and nothing is pushed without a yes.
 - **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s); the lanes belong to the gate before a land, not to each commit.
-- **Small and logical** — one concern per commit, each commit builds on its own; shared types land before the code that uses them.
-- **`type(scope): subject`, one line, no body** — types `feat fix refactor docs test chore perf ci`; take the scope from `git log --oneline -15`.
-- **Only what this session wrote** — commit by explicit path, never `git add -A` or a directory; build outputs (`out/`, `*.o`, `.cache`) and scratch probes stay out.
 
 IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 
