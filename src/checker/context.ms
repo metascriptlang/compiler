@@ -909,9 +909,14 @@ export function isExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "ext:") != "";
 }
 
+function declaredName(sym: Symbol): string {
+	return sym.originalName != "" ? sym.originalName : sym.name;
+}
+
 export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
 	for (const known of ctx.runtimeConverters) {
 		if (known == sym) return;
+		if (known.modulePath == sym.modulePath && declaredName(known) == declaredName(sym) && known.disamb == sym.disamb) return;
 	}
 	ctx.runtimeConverters.push(sym);
 }
