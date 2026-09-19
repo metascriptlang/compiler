@@ -90,7 +90,7 @@ msc build src/index.ms --gc=drc --danger --cc=clang --output=msc   # macOS, +13%
 Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] --> [5 Codegen] --> output
 ```
 
-All five phases COMPLETE. Parse: 37 NodeKind, 80+ TokenKind, recursive descent + Pratt. TypeCheck: 3-pass (collect, resolve, check), cross-module via ExportRegistry. Transform: 20 general + 4 C-backend. Analyzer: DRC injection (~2500 lines, cross-scope last-read, branch-aware optimizer). Codegen: C primary, JS secondary.
+All five phases run the self-host build. Parse: recursive descent + Pratt over `NodeKind` / `TokenKind` (`std/meta/node.ms`, `std/meta/token.ms`). TypeCheck: 3-pass (collect, resolve, check), cross-module via ExportRegistry. Transform: one ordered pass list in `src/transform/index.ms`, JS-only passes behind `jsBackend`, the C-only tail in `src/transform/native/index.ms`. Analyzer: DRC injection (`src/analyzer/inject.ms`: cross-scope last-read, branch-aware optimizer). Codegen: C primary, JS secondary.
 
 `generatorLower` runs BEFORE `lambdaLifting` (reversed from the standard reference's order) — intentional: generator creates `$state` + FunctionExpr, lambda lifting then captures `$state` into env. Output is identical to the reference; the reversed order keeps the two transforms decoupled.
 
@@ -137,7 +137,7 @@ Looks like TypeScript, differs semantically. Full reference with examples: [`doc
 
 **`"a".code`** — compile-time character code, zero runtime cost. Works in match patterns.
 
-**Numeric types — no bare `number` in this compiler.** Project convention, not a language rule. `number` **is** `float64` (8-byte double) and ~98% of values here are integers, so bare `number` wastes memory and is a soundness footgun: `int32[]` was silently accepted where `number[]` was expected and reinterpreted by a raw pointer cast (4- vs 8-byte elements) → out-of-bounds read. Use `int32` for index/length/count/depth/offset/id (`int64` past 2^31), `float64` when genuinely fractional. Bare int literals infer `int32`. Migration tracked in `NUMBER-MIGRATE.md`.
+**Numeric types — no bare `number` in this compiler.** Project convention, not a language rule. `number` **is** `float64` (8-byte double) and ~98% of values here are integers, so bare `number` wastes memory and is a soundness footgun: `int32[]` was silently accepted where `number[]` was expected and reinterpreted by a raw pointer cast (4- vs 8-byte elements) → out-of-bounds read. Use `int32` for index/length/count/depth/offset/id (`int64` past 2^31), `float64` when genuinely fractional. Bare int literals infer `int32`.
 
 **Null** — MetaScript has no `undefined`. `null as unknown as T` is the idiom for nullable typed fields.
 
