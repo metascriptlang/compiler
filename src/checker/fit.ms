@@ -785,6 +785,7 @@ export function operandConverter(ctx: CheckerContext, op: string, operand: Node,
 	if (isUnresolvedType(other) || isUnknownType(other) || hasGenericParams(other) || other.kind == TypeKind.Null) return null;
 	const target = operandTarget(other);
 	if (sameConverterEnd(self, target) || convertsBetween(ctx, target, self)) return null;
+	if (bop == "+" && isStringLike(target) && hasValueOfProtocol(ctx, self)) return null;
 	if (ctx.extensionRegistry != null && resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) != null) return null;
 	return tryApplyConverter(ctx, operand, self, target);
 }
