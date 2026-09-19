@@ -17,7 +17,7 @@ import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -50,7 +50,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const dataExpr = makeCall(makeIdent("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const dataExpr = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						dataExpr.nodeType = createPtr(spanTarget.typeReturn);
 						const lenExpr = makeMember(d.convExpr, "length", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
@@ -61,7 +61,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const dataExpr2 = makeCall(makeIdent("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const dataExpr2 = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						dataExpr2.nodeType = createPtr(spanTarget.typeReturn);
 						const lenExpr2 = makeMember(d.convExpr, "len", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
@@ -220,7 +220,7 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataBase = makeMember(d.array, "data", loc);
 	} else if (arrType.kind == TypeKind.String) {
 		// String: msArrDataOr0(str.p) + start — msString holds the bytes in its payload
-		dataBase = makeCall(makeIdent("msArrDataOr0", loc), [makeMember(d.array, "p", loc)], loc);
+		dataBase = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.array, "p", loc)], loc);
 	} else {
 		return node;
 	}

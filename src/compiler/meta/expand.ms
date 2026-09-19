@@ -61,7 +61,7 @@ import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "
 import { rewriteCallAsMacroInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage } from "./typeQuery";
 import { TypeKind } from "../../ast/node";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -1203,6 +1203,22 @@ function tryRewriteEnumMember(node: Node): Node {
 //
 // Limitation: D must be an ObjectLiteral at the call site. A variable like
 // `createNodeAt(K, dataVar, L)` can't be statically merged — left as-is.
+function peelHiddenConv(n: Node): Node {
+	let cur = n;
+	while (cur != null) {
+		if (cur.kind == NodeKind.HiddenStdConv || cur.kind == NodeKind.HiddenSubConv) {
+			cur = (cur.data as HiddenStdConvData).convExpr;
+			continue;
+		}
+		if (cur.kind == NodeKind.HiddenDeref) {
+			cur = (cur.data as HiddenDerefData).expr;
+			continue;
+		}
+		break;
+	}
+	return cur;
+}
+
 function tryRewriteCreateNodeAt(node: Node): Node {
 	if (node == null || node.kind != NodeKind.CallExpr) return node;
 	const c = node.data as CallExprData;
@@ -1211,9 +1227,9 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	if (calleeName != "createNodeAt" && calleeName != "createNode") return node;
 	if (c.arguments.length != 3) return node;
 
-	const kindArg = c.arguments[0];
-	const dataArg = c.arguments[1];
-	const locArg = c.arguments[2];
+	const kindArg = peelHiddenConv(c.arguments[0]);
+	const dataArg = peelHiddenConv(c.arguments[1]);
+	const locArg = peelHiddenConv(c.arguments[2]);
 
 	// D must be an ObjectLiteral for v1 — otherwise we can't statically merge
 	if (dataArg.kind != NodeKind.ObjectLiteral) return node;
@@ -1274,24 +1290,21 @@ function tryRewriteCompileError(node: Node): Node {
 	const hasLoc = cd.arguments.length == 2;
 	const locNode = hasLoc ? cd.arguments[1] : null;
 	if (name == "error") {
-		// error("msg") → return { __compileError: 1, message: "msg" }
-		// error("msg", node) → return { ..., line, column, endLine, endColumn }
-		const keys: string[] = ["__compileError", "message"];
-		const props: Node[] = [mkNumber(1, loc), msgArg];
-		if (locNode != null) {
-			keys.push("line");
-			props.push(mkMember(locNode, "line", loc));
-			keys.push("column");
-			props.push(mkMember(locNode, "column", loc));
-			keys.push("endLine");
-			props.push(mkMember(locNode, "endLine", loc));
-			keys.push("endColumn");
-			props.push(mkMember(locNode, "endColumn", loc));
-		}
-		const sentinel = createNodeAt(NodeKind.ObjectLiteral, {
-			properties: props, keys, keyLocations: [],
+		let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
+			operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: msgArg,
 		}, loc);
-		return createNodeAt(NodeKind.ReturnStmt, { argument: sentinel }, loc);
+		if (locNode != null) {
+			const fields: string[] = ["line", "column", "endLine", "endColumn"];
+			for (const f of fields) {
+				payload = createNodeAt(NodeKind.BinaryExpr, {
+					operator: "+", left: payload, right: mkString("\t", loc),
+				}, loc);
+				payload = createNodeAt(NodeKind.BinaryExpr, {
+					operator: "+", left: payload, right: mkMember(locNode, f, loc),
+				}, loc);
+			}
+		}
+		return createNodeAt(NodeKind.ThrowStmt, { throwArg: payload }, loc);
 	}
 	// warning("msg") / warning("msg", node) → console.log with encoded location.
 	// Non-halting — macro continues after the warning.
@@ -1724,6 +1737,23 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	const resultVal = vmCallFunction(vm, cm.funcIdx, marshalArgs);
 	popActiveMetaCtx();
 
+	if (vm.diagMessage != "") {
+		const diagMsg = vm.diagMessage;
+		const diagLine = vm.diagLine > 0 ? vm.diagLine as int32 : node.location.line;
+		const diagCol = vm.diagColumn > 0 ? vm.diagColumn as int32 : node.location.column;
+		vm.diagMessage = "";
+		if (vm.diagEndLine > 0 || vm.diagEndColumn > 0) {
+			const diagEndLine = vm.diagEndLine > 0 ? vm.diagEndLine as int32 : diagLine;
+			const diagEndCol = vm.diagEndColumn > 0 ? vm.diagEndColumn as int32 : diagCol + 1;
+			addErrorFullRange(ctx, `Macro '${d.macroName}': ${diagMsg}`, diagLine, diagCol, diagEndLine, diagEndCol);
+		} else {
+			addError(ctx, `Macro '${d.macroName}': ${diagMsg}`, diagLine, diagCol);
+		}
+		clearObjectHeap(vm.objectHeap);
+		clearArrayHeap(vm.arrayHeap);
+		return node;
+	}
+
 	let vmCtx: RaiserContext | null = {
 		mod: vm.mod,
 		hasModule: true,
@@ -1744,37 +1774,6 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		return node;
 	}
 
-	// Check for compile-time error sentinel.
-	// error("msg") → { __compileError: 1, message: "msg" }
-	// error("msg", node) → { __compileError: 1, message: "msg", line: N, column: N }
-	const lastVal = vmCtx.lastResult;
-	if (lastVal.kind == RaiserValueKind.Object) {
-		const errFlag = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "__compileError");
-		if (errFlag.kind == RaiserValueKind.Int && errFlag.intVal == 1) {
-			const errMsg = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "message");
-			const msg = errMsg.kind == RaiserValueKind.String ? errMsg.strVal : "compile error in macro";
-			// 2-arg form: use the input node's location if provided.
-			// Supports both point (line, column) and range (+ endLine, endColumn).
-			const errLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "line");
-			const errCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "column");
-			const errEndLine = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endLine");
-			const errEndCol = heapObjectGetField(vmCtx.objectHeap, lastVal.intVal, "endColumn");
-			const diagLine = errLine.kind == RaiserValueKind.Int ? errLine.intVal as int32 : (errLine.kind == RaiserValueKind.Float ? errLine.floatVal as int32 : node.location.line);
-			const diagCol = errCol.kind == RaiserValueKind.Int ? errCol.intVal as int32 : (errCol.kind == RaiserValueKind.Float ? errCol.floatVal as int32 : node.location.column);
-			const hasEndLine = errEndLine.kind == RaiserValueKind.Int || errEndLine.kind == RaiserValueKind.Float;
-			const hasEndCol = errEndCol.kind == RaiserValueKind.Int || errEndCol.kind == RaiserValueKind.Float;
-			if (hasEndLine || hasEndCol) {
-				const diagEndLine = hasEndLine ? (errEndLine.kind == RaiserValueKind.Int ? errEndLine.intVal as int32 : errEndLine.floatVal as int32) : diagLine;
-				const diagEndCol = hasEndCol ? (errEndCol.kind == RaiserValueKind.Int ? errEndCol.intVal as int32 : errEndCol.floatVal as int32) : diagCol + 1;
-				addErrorFullRange(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol, diagEndLine, diagEndCol);
-			} else {
-				addError(ctx, `Macro '${d.macroName}': ${msg}`, diagLine, diagCol);
-			}
-			clearObjectHeap(vmCtx.objectHeap);
-			clearArrayHeap(vmCtx.arrayHeap);
-			return node;
-		}
-	}
 	// Check for compile-time warnings in Raiser output.
 	// warning("msg") → "__MACRO_WARN__:msg"
 	// warning("msg", node) → "__MACRO_WARN__:msg\tline\tcol"
@@ -1847,6 +1846,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 }
 
 // ===== walkExpand: recursive AST walker =====
+
+function walkExpandExprArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
+	for (let i = 0; i < arr.length; i += 1) arr[i] = walkExpand(arr[i], ctx, depth);
+}
 
 // Walks an array of nodes, replacing each with its expansion in place.
 function walkExpandArray(arr: Node[], ctx: CheckerContext, depth: int32): void {
@@ -1974,7 +1977,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			walkExpandArray(d.caseTests, ctx, depth);
+			walkExpandExprArray(d.caseTests, ctx, depth);
 			walkExpandArray(d.caseStmts, ctx, depth);
 			return node;
 		},
@@ -1992,7 +1995,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.MatchCase => {
 			const d = node.data as MatchCaseData;
-			walkExpandArray(d.casePatterns, ctx, depth);
+			walkExpandExprArray(d.casePatterns, ctx, depth);
 			d.caseGuard = walkExpand(d.caseGuard, ctx, depth);
 			d.caseBody = walkExpand(d.caseBody, ctx, depth);
 			return node;
@@ -2019,7 +2022,7 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			d.callee = walkExpand(d.callee, ctx, depth);
-			walkExpandArray(d.arguments, ctx, depth);
+			walkExpandExprArray(d.arguments, ctx, depth);
 			return node;
 		},
 		NodeKind.MemberExpr => {
@@ -2042,12 +2045,12 @@ function walkExpand(node: Node | null, ctx: CheckerContext, depth: int32): Node 
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
-			walkExpandArray(d.properties, ctx, depth);
+			walkExpandExprArray(d.properties, ctx, depth);
 			return node;
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
-			walkExpandArray(d.elements, ctx, depth);
+			walkExpandExprArray(d.elements, ctx, depth);
 			return node;
 		},
 		NodeKind.ArrowFunction => {
@@ -2121,6 +2124,9 @@ registerExpandMacroInvocation(expandMacroInvocation);
 registerMacroBodyPreparer((body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
 	preprocessMacroBody(body);
 	return bakeTypeIntrinsics(body, ctx, regCtx, macroName, "");
+});
+registerComptimeHelperPreparer((decl: Node): void => {
+	preprocessMacroBody(decl);
 });
 
 // ===== Tests =====

@@ -1218,6 +1218,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	// `const f: (n) => N = arrow; f(10)` would be miscompiled as a native FFI call,
 	// emitting `f_1_(10)` instead of dispatching through genClosureCall.
 	if (sym != null && sym.nativeName != ""
+		&& callMagicOf(sym) == CallMagic.None
 		&& sym.symbolKind != SymbolKind.Variable
 		&& sym.symbolKind != SymbolKind.Temp
 		&& sym.symbolKind != SymbolKind.Parameter
@@ -1946,6 +1947,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseVariantError(${tmp}.value._tag, ${nvi});`);
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${tmp}.value.v${nvi}, .present=true} : (${targetC}){0})`);
 			return;
 		}
@@ -2463,6 +2465,36 @@ function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: st
 
 // ===== Emit CallExpr =====
 
+enum CallMagic {
+	None,
+	StringConcatArr, StringArrayFromArr, StringAppendArr, NumberArrayFrom,
+	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
+	BoxLocked, LockedLoad, LockedStore,
+	FutureCreateInline, SpawnInto, WaitForStruct,
+}
+
+function callMagicOf(sym: Symbol | null): CallMagic {
+	if (sym == null || sym.builtinKind == "") return CallMagic.None;
+	return match (sym.builtinKind) {
+		"StringConcatArr" => CallMagic.StringConcatArr,
+		"StringArrayFromArr" => CallMagic.StringArrayFromArr,
+		"StringAppendArr" => CallMagic.StringAppendArr,
+		"NumberArrayFrom" => CallMagic.NumberArrayFrom,
+		"BoxStruct" => CallMagic.BoxStruct,
+		"SinkBoxStruct" => CallMagic.SinkBoxStruct,
+		"UnboxStruct" => CallMagic.UnboxStruct,
+		"BoxRefArray" => CallMagic.BoxRefArray,
+		"BoxArc" => CallMagic.BoxArc,
+		"BoxLocked" => CallMagic.BoxLocked,
+		"LockedLoad" => CallMagic.LockedLoad,
+		"LockedStore" => CallMagic.LockedStore,
+		"FutureCreateInline" => CallMagic.FutureCreateInline,
+		"SpawnInto" => CallMagic.SpawnInto,
+		"WaitForStruct" => CallMagic.WaitForStruct,
+		_ => CallMagic.None,
+	};
+}
+
 function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
 	const node = item.node;
 	const cd = node.data as CallExprData;
@@ -2519,6 +2551,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 
 	// Direct or closure: first child is callee, rest are args
 	const callee = peekResult(ctx, cc, 0);
+	const magic = callMagicOf(sym != null ? sym : cd.callee.resolvedSym);
 
 	// Stack-local array calls (ABI-portable, avoids aarch64-windows-gnu variadic
 	// 16-byte struct ABI bug — LLVM #89615):
@@ -2527,7 +2560,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	//   msStringAppendArr(dest, count, a, b, c) → msStringAppendArr(dest, arr, count)
 	// Each variant shares the stack-array fill; differs only in the surrounding
 	// call shape.
-	if (callee == "msStringConcatArr" || callee == "msStringArrayFromArr") {
+	if (magic == CallMagic.StringConcatArr || magic == CallMagic.StringArrayFromArr) {
 		if (cc >= 3) {
 			const countStr = peekResult(ctx, cc, 1);
 			const tmpName = emitStringArrayLocal(g, p, ctx, cc, 2, "_mscc");
@@ -2535,7 +2568,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			ctx.results.push(`${callee}(${tmpName}, ${countStr})`);
 			return;
 		}
-	} else if (callee == "msStringAppendArr" && cc >= 4) {
+	} else if (magic == CallMagic.StringAppendArr && cc >= 4) {
 		const destStr = peekResult(ctx, cc, 1);
 		const countStr = peekResult(ctx, cc, 2);
 		const tmpName = emitStringArrayLocal(g, p, ctx, cc, 3, "_msap");
@@ -2545,7 +2578,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	}
 
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
-	const isNumberArrayFrom = callee == "msNumberArrayFrom";
+	const isNumberArrayFrom = magic == CallMagic.NumberArrayFrom;
 	// Resolve callee's function type for parameter type checking. For
 	// closure-pair callees (post-lift IIFE), neither sym.symbolType nor
 	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
@@ -2568,7 +2601,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		let arg = peekResult(ctx, cc, i);
 		if (isNumberArrayFrom && i > 1) {
 			arg = `(double)(${arg})`;
-		} else if (hasParamTypes) {
+		} else if (hasParamTypes && magic == CallMagic.None) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
 				const callMutBits: int32 = sym != null ? sym.mutatedParams : 0;
@@ -2593,13 +2626,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// On-demand cross-module prototype (reference parity: genProcPrototype)
 	const protoSym = sym != null ? sym : (cd.callee.resolvedSym);
 	const protoType = protoSym != null && protoSym.symbolType != null ? protoSym.symbolType : calleeType;
-	ensureCrossModuleProto(g, callee, protoType, protoSym);
+	if (magic == CallMagic.None) ensureCrossModuleProto(g, callee, protoType, protoSym);
 	// DRC hooks — emit forward declaration on-demand
 	ensureDrcProto(g, callee, protoSym);
 
 	// msBoxStruct(val) → msBoxStruct(&val, sizeof(TypeName))
 	// spawnLower emits this for struct returns. nodeType carries the type.
-	if (callee == "msBoxStruct" && node.nodeType != null) {
+	if (magic == CallMagic.BoxStruct && node.nodeType != null) {
 		const boxType = getTypeDesc(g, node.nodeType);
 		// Explicitly add & — ccgIntroducedPtr won't fire for synthetic calls
 		const addrArg = argsStr.length > 0 && argsStr.charAt(0) == "&" ? argsStr : "&(" + argsStr + ")";
@@ -2613,7 +2646,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// void* (heap pointer). Reading T from args[0] keeps `nodeType` = result type
 	// throughout, preserving DRC's cross-pass contract.
 	// After memcpy, zeros source so DRC destroy is no-op on ref-counted fields.
-	if (callee == "msSinkBoxStruct" && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null) {
+	if (magic == CallMagic.SinkBoxStruct && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null) {
 		const sinkType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const boxTmp = getTemp(p, "void*");
 		// `&` needs an lvalue; a call/rvalue arg (e.g. a boxed array literal) is first
@@ -2638,7 +2671,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Ref<Array<T>> reference semantics. The cell's TypeInfo.destroyFn frees the
 	// array payload when rc hits 0; the DRC then frees the cell. The source value
 	// is neutralized (move) so the boxed payload has a single owner.
-	if (callee == "msBoxRefArray" && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
+	if (magic == CallMagic.BoxRefArray && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
 		const elemT = cd.arguments[0].nodeType.typeReturn;
@@ -2660,7 +2693,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// msBoxArc(value) → atomic-rc heap cell holding the pointee inline, allocated at
 	// rc=MS_RC_INCREMENT (msAllocArc) per the atomic-decref convention. Source is moved
 	// (memset) so the boxed payload has a single owner.
-	if (callee == "msBoxArc" && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
+	if (magic == CallMagic.BoxArc && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const pointeeType = cd.arguments[0].nodeType;
 		const cType = getTypeDesc(g, pointeeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
@@ -2680,7 +2713,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// allocator zeroes the payload, and a zeroed ticket lock is the unlocked state.
 	// The store goes through the generated struct's own field, so the payload's
 	// offset is never hand-computed.
-	if (callee == "msBoxLocked" && node.nodeType != null && node.nodeType.typeReturn != null
+	if (magic == CallMagic.BoxLocked && node.nodeType != null && node.nodeType.typeReturn != null
 			&& argList.length == 1) {
 		const cellType = node.nodeType.typeReturn;
 		const cellCType = getTypeDesc(g, cellType);
@@ -2699,18 +2732,18 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// They exist as intercepts because the surface cannot spell them: a bare
 	// `l.value` read escapes the critical section and a write through an atomic
 	// handle is rejected by the checker (PARALOCK Amendment I).
-	if (callee == "msLockedLoad" && argList.length == 1) {
+	if (magic == CallMagic.LockedLoad && argList.length == 1) {
 		ctx.results.push(`(${argList[0]})->value`);
 		return;
 	}
-	if (callee == "msLockedStore" && argList.length == 2) {
+	if (magic == CallMagic.LockedStore && argList.length == 2) {
 		ctx.results.push(`((${argList[0]})->value = (${argList[1]}))`);
 		return;
 	}
 
 	// msUnboxStruct(ptr) → copy out + free shell (DRC-aware unboxing)
 	// WaitFor builtin emits this for struct returns from spawn. nodeType carries the target type.
-	if (callee == "msUnboxStruct" && node.nodeType != null) {
+	if (magic == CallMagic.UnboxStruct && node.nodeType != null) {
 		const unboxType = getTypeDesc(g, node.nodeType);
 		const ptrTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, unboxType);
@@ -2726,7 +2759,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// overflow the generic msFutureCreate() 16-byte value slot. The call's own nodeType
 	// is Promise<T> (its true result type); T is extracted via awaitedType so DRC's
 	// cross-pass contract (`nodeType = result type`) is preserved.
-	if (callee == "msFutureCreateInline" && node.nodeType != null) {
+	if (magic == CallMagic.FutureCreateInline && node.nodeType != null) {
 		const innerT = awaitedType(node.nodeType);
 		if (innerT != null) {
 			const innerC = getTypeDesc(g, innerT);
@@ -2745,7 +2778,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// nodeType is Promise<T>, so we extract T via awaitedType. sizeof + offsetof are
 	// needed because the worker memcpys into the typed inline value slot, whose offset
 	// differs from msFuture_ptr.value on 32-bit WASM due to alignment.
-	if (callee == "msSpawnInto" && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null) {
+	if (magic == CallMagic.SpawnInto && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null) {
 		const arg0T = cd.arguments[0].nodeType;
 		const innerT = awaitedType(arg0T) != null ? awaitedType(arg0T) : arg0T;
 		const innerC = getTypeDesc(g, innerT);
@@ -2764,7 +2797,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Casts to the actual typed future struct (msFuture_<T>) to read .value at the
 	// correct offset — msFuture_ptr cast would be wrong on 32-bit (WASM) where
 	// double/struct alignment differs from void* alignment.
-	if (callee == "msWaitForStruct" && node.nodeType != null) {
+	if (magic == CallMagic.WaitForStruct && node.nodeType != null) {
 		const structType = getTypeDesc(g, node.nodeType);
 		const futStructName = "msFuture_" + mangle(structType);
 		// Ensure the typed future struct is defined

@@ -19,7 +19,7 @@ import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, typeDisplayName } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeAssign, makeBinary, makeCall, makeIdent, makeNumber, makeString } from "../util";
+import { makeAssign, makeBinary, makeCall, makeIdent, makeNumber, makeString, runtimeRef } from "../util";
 
 export function lowerBigIntOps(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => rewriteBigIntOp(node, ctx));
@@ -40,7 +40,7 @@ function bigType(): Type {
 }
 
 function bigCall(fnName: string, args: Node[], loc: SourceLocation, t: Type | null): Node {
-	const call = makeCall(makeIdent(fnName, loc), args, loc);
+	const call = makeCall(runtimeRef(fnName, loc), args, loc);
 	call.nodeType = t;
 	return call;
 }

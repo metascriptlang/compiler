@@ -83,3 +83,29 @@ function main(): void {
 	assert c.ok;
 	assert c.value.contains("asFlex");
 }
+
+test "E2E C: narrowing a nullable union by member builds the carrier, never a reinterpret" {
+	const src = `
+function main(): void {
+	const a: number | string | null = "row";
+	const n: string | null = a as string | null;
+	console.log(n === null ? "N" : "V");
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+	assert !c.value.contains("*(Maybe_p1*)&");
+	assert c.value.contains("msRaiseVariantError");
+}
+
+test "E2E C: dropping only null needs no variant check" {
+	const src = `
+function main(): void {
+	const b: string | null = "row";
+	console.log(b as string);
+}
+`;
+	const c = compileToC(src);
+	assert c.ok;
+	assert !c.value.contains("msRaiseVariantError");
+}

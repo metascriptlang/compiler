@@ -6,7 +6,8 @@ import {
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
 import { RaiserValue, raiserInt, raiserString, raiserNil } from "../../raiser/value";
-import { Node, Symbol, SymbolKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, Type } from "../../ast/node";
+import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
 
 // --- Bytecode-compiler error queue ---
@@ -122,6 +123,10 @@ export interface RaiserCompState {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	builtins: RaiserBuiltinMap;
+	copyTypes: Type[];
+	copyPlans: RaiserCopyPlan[];
+	globals: RaiserFuncMap;
+	scopedFunctions: boolean;
 }
 
 export function createCompState(): RaiserCompState {
@@ -137,7 +142,22 @@ export function createCompState(): RaiserCompState {
 	const enumMap: RaiserFuncMap = { items: enumItems };
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
-	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack, funcMap, enumMap, builtins };
+	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
+		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], globals: { items: [] }, scopedFunctions: false };
+}
+
+export function globalSymbolKey(sym: Symbol): string {
+	const name = sym.originalName != "" ? sym.originalName : sym.name;
+	return sym.modulePath + ":" + name + ":" + sym.disamb;
+}
+
+export function resolveGlobal(s: RaiserCompState, sym: Symbol | null): int32 {
+	if (sym == null || !sym.symFlags.has(SymbolFlag.Global)) return -1;
+	const key = globalSymbolKey(sym);
+	for (const entry of s.globals.items) {
+		if (entry.name == key) return entry.index;
+	}
+	return -1;
 }
 
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
@@ -324,6 +344,17 @@ export function resolveFunc(s: RaiserCompState, name: string): int32 {
 	return -1;
 }
 
+export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: string): int32 {
+	if (sym != null && isRoutineSym(sym)) {
+		if (s.scopedFunctions && sym.modulePath != "") {
+			const originalName = sym.originalName != "" ? sym.originalName : sym.name;
+			return resolveFunc(s, sym.modulePath + ":" + originalName);
+		}
+		return resolveFunc(s, sym.name);
+	}
+	return resolveFunc(s, name);
+}
+
 // --- Enum helpers ---
 // Encodes enum entries as "EnumName.MemberName" → index, reusing RaiserFuncEntry.
 
@@ -424,8 +455,10 @@ let _raiserOnDemandFn: RaiserOnDemandFn = (_sym: Symbol): int32 => {
 	return -1;
 };
 
-export function registerRaiserOnDemand(fn: RaiserOnDemandFn): void {
+export function registerRaiserOnDemand(fn: RaiserOnDemandFn): RaiserOnDemandFn {
+	const previous = _raiserOnDemandFn;
 	_raiserOnDemandFn = fn;
+	return previous;
 }
 
 export function clearRaiserOnDemand(): void {

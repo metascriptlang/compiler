@@ -123,6 +123,12 @@ function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+function isDeclaringStaticBlockWrite(ctx: CheckerContext, declaring: Symbol): boolean {
+	const cls = ctx.staticBlockClass;
+	if (cls == null) return false;
+	return cls == declaring || classDeclNodeOf(cls) == classDeclNodeOf(declaring);
+}
+
 function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: Symbol): boolean {
 	let receiverNode = object;
 	while (receiverNode != null && receiverNode.kind == NodeKind.HiddenDeref) {
@@ -156,7 +162,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (node == null) return;
 	if (node.flags.has(NodeFlag.Sem) && node.nodeType != null) return;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { node.nodeType = errorType(); return; }
-	checkExprInner(ctx, node, expectedType);
+	const slotType = (expectedType != null && (expectedType.kind == TypeKind.Sink || expectedType.kind == TypeKind.Lent) && expectedType.typeReturn != null)
+		? expectedType.typeReturn
+		: expectedType;
+	checkExprInner(ctx, node, slotType);
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 }
@@ -383,6 +392,22 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.jsxSpreadArg, null);
 			node.nodeType = noneType(); return;
 		},
+		NodeKind.SpliceMany => {
+			if (node == ctx.stmtPosExpr) { node.nodeType = inferredType(); return; }
+			const splice = createNodeAt(NodeKind.SpliceMany, node.data, node.location);
+			const spliceValue = unwrapSpliceManyAtExpr(ctx, node, splice);
+			if (spliceValue == null) { node.nodeType = errorType(); return; }
+			node.kind = spliceValue.kind;
+			node.data = spliceValue.data;
+			if (spliceValue.location != null) node.location = spliceValue.location;
+			node.nodeType = null as unknown as Type;
+			node.resolvedSym = null;
+			node.flags = 0 as BitSet<NodeFlag>;
+			node.variantSlot = 0;
+			checkExpr(ctx, node, expectedType);
+			bindRefsToHoistedPrefix(node, splice);
+			node.nodeType = node.nodeType; return;
+		},
 		NodeKind.ComptimeBlock => {
 			// Eagerly fold @comptime block — mirrors Phase B+ macro eager
 			// expansion below. Without this, `const X = @comptime { ... }`
@@ -391,7 +416,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// replaces the AST node AFTER the variable's symbol type is set.
 			const expanded = callEvalComptimeBlock(node, ctx);
 			let expandedValue = expanded;
-			if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+			const hoists = isHoistingSplice(ctx, node, expanded);
+			if (hoists) {
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) { node.nodeType = errorType(); return; }
 			}
@@ -403,6 +429,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
 			checkExpr(ctx, node, expectedType);
+			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			node.nodeType = node.nodeType; return;
 		},
 		NodeKind.Identifier => {
@@ -513,7 +540,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								d.left.location.line, d.left.location.column);
 						}
 						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
-						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
+						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring) && !isDeclaringStaticBlockWrite(ctx, declaring)) {
 							addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
 								d.left.location.line, d.left.location.column);
 						}
@@ -1940,7 +1967,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					node.nodeType = errorType(); return;
 				}
 				let expandedValue = expanded;
-				if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+				const hoists = isHoistingSplice(ctx, node, expanded);
+				if (hoists) {
 					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 					if (expandedValue == null) {
 						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
@@ -1955,6 +1983,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.flags = 0 as BitSet<NodeFlag>;
 				node.variantSlot = 0;
 				checkExpr(ctx, node, expectedType);
+				if (hoists) bindRefsToHoistedPrefix(node, expanded);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 				node.nodeType = node.nodeType; return;
 			}
@@ -2488,7 +2517,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

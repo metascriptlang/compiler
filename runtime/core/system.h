@@ -527,6 +527,7 @@ static inline int64_t msPtrFold(const void* p) {
    Inline condition (fast path), helper call only on error (slow path). */
 
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
+_Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 
 static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) {
 	int64_t iv = (int64_t)v;

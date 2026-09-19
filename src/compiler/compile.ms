@@ -436,7 +436,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 	}
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
-		if (config.stdPath != "") captureStdGraphDeps(graph);
+		if (config.stdPath != "") captureStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt));
 	}
 	loadExtraGlobalImportModules(graph, provider, config);
 }
@@ -487,7 +487,7 @@ function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: 
 // deps writer. Element-wise copies: the graph outlives this function and
 // the snapshot outlives the graph — sharing arrays would couple their DRC
 // lifetimes for no gain.
-function captureStdGraphDeps(graph: ModuleGraph): void {
+function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 	const mods: DepsModuleRow[] = [];
 	for (const p of graph.loadOrder) {
 		const m = findModule(graph, p);
@@ -520,7 +520,7 @@ function captureStdGraphDeps(graph: ModuleGraph): void {
 		circulars.push({ fromPath: c.fromPath, toPath: c.toPath, cycle, importLine: c.importLine as int32, importNames });
 		ci = ci + 1;
 	}
-	setStdGraphDepsSnapshot({ mods, circulars });
+	setStdGraphDepsSnapshot({ mods, circulars }, key);
 }
 
 // Parse source or exit with error message.
@@ -2571,6 +2571,9 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
+	const unitPaths: string[] = [];
+	const unitPrograms: Node[] = [];
+	const unitCtxs: CheckerContext[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -2582,15 +2585,41 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		modCtx.errors = [];
 
 
-		const macroExpanded = expandMacros(program, modCtx);
-		exitOnCheckerErrors(modCtx, modPath, mod.source);
+		unitPaths.push(modPath);
+		unitPrograms.push(program);
+		unitCtxs.push(modCtx);
+	}
+	for (const instNode of drainPendingInstances()) {
+		if (instNode.nodeType == null && instNode.resolvedSym != null) {
+			instNode.nodeType = instNode.resolvedSym.symbolType;
+		}
+		const owner = instNode.resolvedSym != null ? instNode.resolvedSym.modulePath : "";
+		let targetIdx: int32 = -1;
+		for (let i = 0; i < unitPaths.length; i += 1) {
+			if (unitPaths[i] == owner) targetIdx = i;
+		}
+		if (targetIdx < 0) {
+			for (let i = 0; i < unitPaths.length; i += 1) {
+				if (unitPaths[i] == entryCanonical) targetIdx = i;
+			}
+		}
+		if (targetIdx >= 0) {
+			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
+		}
+	}
+	for (let i = 0; i < unitPrograms.length; i += 1) {
+		const modCtx = unitCtxs[i];
+		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
+		const macroExpanded = expandMacros(monoed, modCtx);
+		const mod = findModule(graph, unitPaths[i]);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
 		const transformed = transformForRaiser(refined, modCtx);
 
-		const input: RaiserModuleInput = { modulePath: modPath, program: transformed };
+		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
 		modules.push(input);
 	}
 
@@ -2618,8 +2647,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	if (ctx.lastOutput.length > 0) {
 		// Print captured output (strip trailing newline for clean display)
 		const lastOut = ctx.lastOutput;
-		if (lastOut.byteLength > 0 && lastOut.slice(lastOut.byteLength - 1, lastOut.byteLength) == "\n") {
-			console.log(lastOut.slice(0, lastOut.byteLength - 1));
+		if (lastOut.byteLength > 0 && lastOut.byteSlice(lastOut.byteLength - 1, lastOut.byteLength) == "\n") {
+			console.log(lastOut.byteSlice(0, lastOut.byteLength - 1));
 		} else {
 			console.log(lastOut);
 		}

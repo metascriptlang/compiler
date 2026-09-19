@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt, SymbolKind,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
 import { hasGenericParams } from "../../checker/types";
 
@@ -166,6 +166,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 						emit(gen, ";\n");
 					}
 				}
+			},
+			NodeKind.BlockStmt => {
+				emitIndent(gen);
+				emit(gen, "static ");
+				emitBlockInline(gen, member);
+				emitNewline(gen);
 			},
 			_ => { emitNode(gen, member); },
 		};

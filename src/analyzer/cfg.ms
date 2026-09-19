@@ -12,6 +12,7 @@ import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
+import { makeIdent, makeIdentResolved } from "../transform/util";
 import { parseInput } from "../transform/testUtil";
 
 // ===== Data Structures =====
@@ -283,9 +284,9 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			walkExpr(d.initializer, ctx);
 			// Match by symbol on the decl node, or by name fallback
 			if (ctx.rootSym != null && node.resolvedSym != null && node.resolvedSym == ctx.rootSym) {
-				emitDef(ctx, node.location.line, node.location.column, node);
+				emitDef(ctx, node.location.line, node.location.column, makeIdentResolved(ctx.rootSym, node.location));
 			} else if (d.declName == ctx.vn) {
-				emitDef(ctx, node.location.line, node.location.column, node);
+				emitDef(ctx, node.location.line, node.location.column, makeIdent(d.declName, node.location));
 			}
 		},
 		NodeKind.ReturnStmt => {
@@ -860,6 +861,20 @@ test "field-level: x.b last-read when only x.a used later" {
 	const d = (body.data as ProgramData).programStmts;
 	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
 	assert isLastReadCfgNode(cfg, firstArg);  // x.b IS last-read (x.a is different field)
+}
+
+test "field-level: x.f last-read when x is redeclared each loop iteration" {
+	const ts = "while (c) { const x = mk(); foo(x.f); }";
+	const body = getBody(ts);
+	if (body == null) { assert false; return; }
+	const symX = makeTestSym("x");
+	attachSymToStmts(body, "x", symX);
+	const cfg = buildCfgForSym(body, symX);
+	const d = (body.data as ProgramData).programStmts;
+	const loopBody = (d[0].data as WhileStmtData).whileBody;
+	const stmts = (loopBody.data as BlockStmtData).statements;
+	const arg = ((stmts[1].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	assert isLastReadCfgNode(cfg, arg);
 }
 
 test "field-level: x.a not last-read when x.a used again" {

@@ -108,6 +108,7 @@ function lowerRest(node: Node): Node {
 		}
 	}
 	if (sym == null) return node;
+	if (sym.builtinKind != "") return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
 	const typeChildren = sym.symbolType.typeChildren;

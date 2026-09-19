@@ -25,9 +25,9 @@ export class Array<T> {
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push(this arr: uint8[], value: uint8): void from "&msUint8ArrayPush";
+export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
 
-export extern function push(this arr: number[], value: number): void from "&msNumberArrayPush";
+export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
 
 /**
  * Removes the last element from an array and returns it.
@@ -108,7 +108,7 @@ export extern function splice(this arr: number[], start: number, deleteCount: nu
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push(this arr: string[], value: string): void from "&msStringArrayPush";
+export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
 
 /**
  * Removes the last element from an array and returns it.
@@ -191,7 +191,7 @@ export extern function splice(this arr: string[], start: number, deleteCount: nu
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push<T>(this arr: T[], value: T): void from "&msGenericArrayPush";
+export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
 
 /**
  * Removes the last element from an array and returns it.

@@ -216,7 +216,7 @@ function typeToEnvStr(t: Type | null): string {
 // (transform must not import codegen to avoid circular dependency).
 function isCcgPtrType(t: Type): boolean {
 	if (t == null) return false;
-	return t.kind == TypeKind.Array || t.kind == TypeKind.Union || t.kind == TypeKind.Span;
+	return t.kind == TypeKind.Array || t.kind == TypeKind.Span;
 }
 // Note: ccgIntroducedPtr also promotes GenericInstance and large Tuples.
 // Those are rare as captured params — add here if needed.
@@ -1086,7 +1086,10 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		if (orig != null && orig.nodeType != null) {
 			let resolvedType = orig.nodeType;
 			// Intentional divergence from standard reference (see CLAUDE.md):
-			// ccgIntroducedPtr params (Array, Union, Span): store POINTER in shared env.
+			// ccgIntroducedPtr params (Array, Span): store POINTER in shared env.
+			// A Union param is NOT one of them: its C repr is a payload pointer held in
+			// the frame slot, so addressing the slot outlives it once the closure escapes
+			// (reference lambdalifting.nim:216 — capture through a param is a copy).
 			// Standard ref copies param value + forbids capturing var params (illegalCapture).
 			// MetaScript arrays are reference types (JS semantics) — closure and caller must
 			// share the same array. Without Ptr, closure pushes to env copy, caller never sees changes.

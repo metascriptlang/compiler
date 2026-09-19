@@ -3,7 +3,7 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData,
+	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag,
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
@@ -25,6 +25,7 @@ import {
 	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
+	globalSymbolKey,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -88,10 +89,12 @@ function isExpressionBody(node: Node): boolean {
 
 // --- Compile a function body ---
 
-export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false, globals: RaiserFuncMap | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
+	if (globals != null) s.globals = globals;
+	s.scopedFunctions = globals != null;
 
 	// Declare params as locals R[0..arity-1]
 	for (let i = 0; i < arity; i += 1) {
@@ -116,21 +119,13 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 		compileStmt(s, body);
 	}
 
-	// Ensure function terminates with Ret
-	if (s.code.length == 0) {
-		const nilReg = allocReg(s);
-		emitLoadConst(s, nilReg, raiserNil());
-		emitRet(s, nilReg);
-	} else {
-		const lastInst = s.code[s.code.length - 1];
-		if (lastInst.op != RaiserOpcode.Ret) {
-			const nilReg = allocReg(s);
-			emitLoadConst(s, nilReg, raiserNil());
-			emitRet(s, nilReg);
-		}
-	}
+	const nilReg = allocReg(s);
+	emitLoadConst(s, nilReg, raiserNil());
+	emitRet(s, nilReg);
 
-	return createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.maxRegSeen);
+	compiled.copyPlans = s.copyPlans;
+	return compiled;
 }
 
 // --- Class constructor compilation ---
@@ -140,11 +135,13 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 function compileClassConstructor(
 	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
 	className: string, classBody: Node[],
-	ctorParams: string[], ctorBody: Node | null
+	ctorParams: string[], ctorBody: Node | null, globals: RaiserFuncMap | null = null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
+	if (globals != null) s.globals = globals;
+	s.scopedFunctions = globals != null;
 
 	// Declare ctor params
 	const arity = ctorParams.length;
@@ -191,7 +188,9 @@ function compileClassConstructor(
 	// Always return this
 	emitRet(s, thisReg);
 
-	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
+	compiled.copyPlans = s.copyPlans;
+	return compiled;
 }
 
 // --- Incremental append into a shared image (comptime engine) ---
@@ -266,6 +265,17 @@ interface RaiserProjectDecl {
 
 export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
 	const functions: RaiserFunction[] = [];
+	const globals: RaiserFuncMap = { items: [] };
+	for (const moduleInput of modules) {
+		const program = moduleInput.program.data as ProgramData;
+		for (const statement of program.programStmts) {
+			const declaration = unwrapToKind(statement, NodeKind.VariableDecl);
+			if (declaration == null || declaration.resolvedSym == null) continue;
+			const sym = declaration.resolvedSym;
+			if (!sym.symFlags.has(SymbolFlag.Global)) continue;
+			globals.items.push({ name: globalSymbolKey(sym), index: globals.items.length });
+		}
+	}
 
 	// --- Pass 1: Global declaration collection ---
 	const globalFuncMapItems: RaiserFuncEntry[] = [];
@@ -287,6 +297,10 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				const fd = fnNode.data as FunctionDeclData;
 				const entry: RaiserFuncEntry = { name: fd.fnName, index: funcIdx };
 				globalFuncMap.items.push(entry);
+				globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + fd.fnName, index: funcIdx });
+				if (fnNode.resolvedSym != null && fnNode.resolvedSym.modulePath != "") {
+					globalFuncMap.items.push({ name: fnNode.resolvedSym.modulePath + ":" + fnNode.resolvedSym.name, index: funcIdx });
+				}
 				projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 				funcIdx += 1;
 			}
@@ -317,6 +331,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						const methodKey = `${cd.className}_${md.methodName}`;
 						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
 						globalFuncMap.items.push(mEntry);
+						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + methodKey, index: funcIdx });
 						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: true, fnName: methodKey, params: md.methodParams, body: md.methodBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 						funcIdx += 1;
 					}
@@ -374,9 +389,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 		const prevModule = getRaiserModulePath();
 		setRaiserModulePath(dcl.modulePath);
 		if (dcl.isCtor) {
-			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody);
+			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody, globals);
 		} else {
-			functions[idx] = compileFuncBody(globalFuncMap, globalEnumMap, dcl.fnName, dcl.params, dcl.body, dcl.params.length, dcl.isMethod);
+			functions[idx] = compileFuncBody(globalFuncMap, globalEnumMap, dcl.fnName, dcl.params, dcl.body, dcl.params.length, dcl.isMethod, globals);
 		}
 		setRaiserModulePath(prevModule);
 	};
@@ -405,6 +420,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 		s.funcMap = globalFuncMap;
 		s.enumMap = globalEnumMap;
 		s.builtins = builtinMap;
+		s.globals = globals;
+		s.scopedFunctions = true;
 
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			compileStmt(s, pd.programStmts[i]);
@@ -413,26 +430,17 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 
 		// Post-process: convert Halt → Ret (init functions return to caller)
 		for (let j = 0; j < s.code.length; j += 1) {
-			if (s.code[j].op == RaiserOpcode.Halt) {
+			if (s.code[j].op == RaiserOpcode.Halt && s.code[j].b != 1) {
 				s.code[j] = raiserABC(RaiserOpcode.Ret, s.code[j].a, 0, 0);
 			}
 		}
 
-		// Ensure init terminates with Ret
-		if (s.code.length == 0) {
-			const nilReg = allocReg(s);
-			emitLoadConst(s, nilReg, raiserNil());
-			emitRet(s, nilReg);
-		} else {
-			const lastOp = s.code[s.code.length - 1].op;
-			if (lastOp != RaiserOpcode.Ret) {
-				const nilReg = allocReg(s);
-				emitLoadConst(s, nilReg, raiserNil());
-				emitRet(s, nilReg);
-			}
-		}
+		const nilReg = allocReg(s);
+		emitLoadConst(s, nilReg, raiserNil());
+		emitRet(s, nilReg);
 
 		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.maxRegSeen);
+		initFunc.copyPlans = s.copyPlans;
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}
@@ -453,7 +461,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.maxRegSeen);
 	functions.push(entryFunc);
 
-	return createRaiserModule("project", functions, functions.length - 1);
+	const compiled = createRaiserModule("project", functions, functions.length - 1);
+	compiled.globalCount = globals.items.length;
+	return compiled;
 }
 
 // --- Public API ---

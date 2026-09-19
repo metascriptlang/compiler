@@ -199,7 +199,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	const resolvedName = (t.typeName != "" && !isAnonTypeName(t.typeName))
 		? t.typeName
 		: (t.typeNames.length > 0 ? anonTypeName(t) : "");
-	if (resolvedName.startsWith("msAnon_") && isDuVariantHashName(resolvedName)) return noRcInfo();
+	if (isDuVariantHashName(resolvedName)) return noRcInfo();
 	if (resolvedName != "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
@@ -285,7 +285,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => noRcInfo(),
-		TypeKind.Distinct => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
+		TypeKind.Distinct | TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
 			// codegen lowers this to a bare T* (see types.ms unwrapRefNullUnion +

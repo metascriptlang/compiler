@@ -376,12 +376,17 @@ done
 
 ### 5.0 Which command, when — read this first
 
+**Run `tools/gate.sh`.** It enforces the table below from the paths a change
+touches and compares every red with `src/test/known-red.json`; `--dry-run`
+prints the lanes it would run and the paths that pulled each one in. The table
+documents what the tool does; reach for a row by hand only inside a debug loop.
+
 | Situation | Command | Cost |
 |---|---|---|
 | **Inner loop** — any compiler edit | `msc test src/index.ms` | ~40s |
 | Same, under the cycle collector | `msc test src/index.ms --gc=orc` | ~40s |
 | Touched **codegen / DRC / runtime / transform** | + `msc run src/test/corpus/run.ms` | ~19 min |
-| Narrow checker/codegen rule fix, corpus confidence cheaply | emit-diff selector (§5.3), lanes only on the differing set | ~6 min |
+| Same, through `tools/gate.sh` | the gate narrows both corpus lanes to the programs whose emitted C or JS differs from the merge base (§5.3) | select ~8 min + the differing set |
 | Touched **DRC hooks, lifetimes, ownership** | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` | ~10 min |
 | Same, targeted lifecycle invariants | + `src/test/guard/run.sh` | ~2 min |
 | Touched **std/** or anything users compile against | rebuild + `tools/sync-local-binary.sh` first, then re-run the above | — |
@@ -587,6 +592,46 @@ byte-identical C means no lane outcome can change (same precedent as the
 C ⇒ the changed checker branch never fired for that program ⇒ the JS emitter
 saw the same checker output as before.
 
+**`tools/gate.sh` runs this recipe itself** whenever the diff pulls in the
+corpus or SAN lane. Control = the compiler at the merge base (`git archive src`
+built into `out/gate/ctl/msc`, kept per sha); both binaries sit under
+`out/gate/`, so they resolve the same `std/` and `runtime/`, and every program
+emits from its own cwd at one path (`out/gate/emit/work/<name>`, moved to
+`emit/ctl` and `emit/cand` afterwards for diffing). The signature per program
+is the C of `--gc=drc` plus `--gc=drc --danger` and the JS bundle; the differing
+set goes to the runner as `MSCORPUS_ONLY=<exact names>` (SAN: the C set only),
+a JS-only set adds `MSCORPUS_LANES=c,drc,js,esm`, and `known-red.json` is read
+for those programs alone. Changed files under `corpus/programs/` always join
+the set.
+
+Measured 2026-09-19 (14 cores, load 15–20), candidate `832301f3` against
+control `08ac0858`, a range that holds the `needsTry` analyzer fix:
+
+| step | result | time |
+|---|---|---|
+| select (control build + 2 × 215 programs × 3 emits) | 104 differ in C · 3 in JS · 2 touched · 110 byte-identical | 8m27s |
+| corpus on 105 programs | 5 red · 5 known · 0 new | 12m32s |
+| SAN on 104 programs | 4 red · 4 known · 0 new | 5m27s |
+
+Same day, candidate against control `c6311440` (one transform refactor in
+between): select 7m49s · 0 differ in C · 0 in JS ⇒ corpus skipped, gate GREEN
+in 10m55s. A zero set on a FIX means the corpus has no coverage of it (step 4
+below), and the gate says so.
+
+The 110 identical programs are the A/A evidence (two different binaries, no
+path or cwd noise); `011-truthy` is the sensitivity evidence (its C gained the
+`msErr` check the fix adds). Which emits carry signal, measured on all 215
+programs: `--gc=orc` C is byte-identical to `--gc=drc` C on 215/215, so it is
+not emitted; `--danger` C differs on 34/215 (range checks dropped), so it is.
+
+The gate does NOT narrow — it runs the lane whole and says why — under
+`--lanes`, `--release`, `--record`, and when a changed path cannot show in
+emitted code: `runtime/`, `std/`, `vendor/`, or a file directly under
+`src/test/corpus/` (the runner). NOT verified: the give-up paths (control fails
+to build, an emit pass loses programs) have never fired, and no gate run has
+yet produced a JS-only set (`MSCORPUS_LANES` was exercised by hand on two
+programs: 8 pass, parity `js↔esm↔c`).
+
 Why not just run the corpus: the toolchain stamp content-hashes the msc
 binary + `runtime/` + `vendor/` (`src/compiler/cache.ms`), so EVERY new
 candidate binary starts cold — the 19 minutes never get cheaper while
@@ -620,7 +665,9 @@ Traps, all paid for on 2026-09-05:
   composite temp on the control binary and compiled fine there. Build values
   through a function call so the argument is a real local.
 - `MSCORPUS_FILTER` is substring (`name.contains`), not prefix — "2" matches
-  012/102/202/…. Use exact program names.
+  012/102/202/…. `MSCORPUS_ONLY=a,b` takes exact names and fails loud on a
+  name that is not a program; `MSCORPUS_LANES=c,drc,js,esm` builds those
+  parity cells alone (unknown lane, or combined with `MSCORPUS_SAN=1`: error).
 - The selector degenerates for broad changes (codegen/runtime/analyzer work
   that rewrites most programs' C): |A| large ⇒ the full run is the honest
   option. |A| is self-calibrating, no guessing up front.

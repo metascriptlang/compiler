@@ -23,7 +23,7 @@ import { walkExpandBlocks } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
-	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken,
+	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef,
 } from "../util";
 
 function isLowerableSpreadLiteral(node: Node): boolean {
@@ -75,7 +75,11 @@ function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	return deref;
 }
 
-function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation): Node {
+function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	if (ctx.keepBuiltinMemberCalls) {
+		const receiver = typedRef(accSym, accT, loc);
+		return makeExprStmt(makeCall(makeMember(receiver, "push", loc), [arg], loc), loc);
+	}
 	const args: Node[] = [];
 	if (isRefArray(accT)) {
 		args.push(typedRef(accSym, accT, loc));
@@ -83,7 +87,7 @@ function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocat
 		args.push(makeHiddenAddr(typedRef(accSym, accT, loc), loc));
 	}
 	args.push(arg);
-	return makeExprStmt(makeCall(makeIdent("msGenericArrayPush", loc), args, loc), loc);
+	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), args, loc), loc);
 }
 
 function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
@@ -100,7 +104,7 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 	for (const e of d.elements) {
 		if (e == null) continue;
 		if (e.kind != NodeKind.SpreadExpr) {
-			out.push(pushStmt(accSym, litT, e, loc));
+			out.push(pushStmt(accSym, litT, e, loc, ctx));
 			continue;
 		}
 		const sd = e.data as SpreadExprData;
@@ -119,7 +123,7 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 		const bareSrc = bareArrayType(srcT);
 		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
 		const bodyStmts: Node[] = [];
-		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc));
+		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc, ctx));
 		bodyStmts.push(makeExprStmt(makeAssign(
 			typedRef(iSym, int32Type(), loc),
 			makeBinary(typedRef(iSym, int32Type(), loc), "+", makeNumber(1, loc), loc),

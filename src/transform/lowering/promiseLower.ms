@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture } from "../util";
+import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, runtimeRef } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -114,7 +114,7 @@ export function typedFutureReadFn(t: Type): string {
 // Consolidates the "makeCall + nodeType + return" pattern used by builtin
 // replacements.
 function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: SourceLocation): Node {
-	const call = makeCall(makeIdent(fnName, loc), args, loc);
+	const call = makeCall(runtimeRef(fnName, loc), args, loc);
 	call.nodeType = nodeType;
 	return call;
 }
@@ -126,10 +126,10 @@ function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 	if (node == null) return makeNull(loc);
 	if (node.nodeType == null) return node;
 	return match (node.nodeType.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [node], loc),
-		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [node], loc),
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [node], loc),
+		TypeKind.Boolean => makeCall(runtimeRef("msBoxBool", loc), [node], loc),
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 |
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [node], loc),
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(runtimeRef("msBoxInt32", loc), [node], loc),
 		_ => node,
 	};
 }
@@ -174,7 +174,7 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
 	const boxed = boxValueForFuture(cd.arguments[0], loc);
-	const resolveCall = makeCall(makeIdent("msPromiseResolve", loc), [boxed], loc);
+	const resolveCall = makeCall(runtimeRef("msPromiseResolve", loc), [boxed], loc);
 	resolveCall.nodeType = node.nodeType;
 	return resolveCall;
 }
@@ -191,13 +191,13 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const innerType = awaitedType(node.nodeType);
 	if (inlineInFuture(innerType)) {
-		const futAlloc = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		const futAlloc = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		futAlloc.nodeType = node.nodeType;  // Promise<T>
-		const spawnInto = makeCall(makeIdent("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
+		const spawnInto = makeCall(runtimeRef("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
 		spawnInto.nodeType = node.nodeType;  // Promise<T>
 		return spawnInto;
 	}
-	const spawnCall = makeCall(makeIdent("msSpawn", loc), cd.arguments, loc);
+	const spawnCall = makeCall(runtimeRef("msSpawn", loc), cd.arguments, loc);
 	spawnCall.nodeType = node.nodeType;
 	return spawnCall;
 }
@@ -220,7 +220,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
 	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
-	const typedCall = makeCall(makeIdent(typedFn, loc), cd.arguments, loc);
+	const typedCall = makeCall(runtimeRef(typedFn, loc), cd.arguments, loc);
 	typedCall.nodeType = node.nodeType;
 	return typedCall;
 }
@@ -252,7 +252,7 @@ export function lowerNewPromise(node: Node): Node {
 		const d = node.data as NewExprData;
 		if (d.newArguments.length == 1) {
 			const loc = node.location;
-			const newCall = makeCall(makeIdent("msPromiseNew", loc), d.newArguments, loc);
+			const newCall = makeCall(runtimeRef("msPromiseNew", loc), d.newArguments, loc);
 			newCall.nodeType = node.nodeType;
 			return newCall;
 		}

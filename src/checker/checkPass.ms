@@ -6,12 +6,12 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
+import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
@@ -22,7 +22,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType } from "./types";
 setConditionalAssignFn(isAssignable);
-import { resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { getGenericDecl } from "../parser/context";
@@ -32,7 +32,8 @@ import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite } from "./callResolve";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
+import { gensymSplicePrefix } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -278,10 +279,19 @@ function checkClassStmt(ctx: CheckerContext, node: Node): void {
 		checkClassDecl(ctx, node);
 		return;
 	}
-	if (!claimLocalTypeName(ctx, node, "class")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
-	collectClass(ctx, node);
+	const minted = node.resolvedSym;
+	if (minted != null && hasFlag(minted, SymbolFlag.Forward)) {
+		fillForwardSymbol(ctx, minted);
+	} else if (!claimLocalTypeName(ctx, node, "class")) {
+		return;
+	} else if (callDecoratorDefers(ctx, node)) {
+		mintClass(ctx, node);
+		after = applyNestedDecorators(ctx, node);
+		fillClass(ctx, node);
+	} else {
+		collectClass(ctx, node);
+	}
 	resolveClass(ctx, node);
 	checkClassDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
@@ -321,25 +331,60 @@ function checkActorStmt(ctx: CheckerContext, node: Node): void {
 		checkActorDecl(ctx, node);
 		return;
 	}
-	if (!claimLocalTypeName(ctx, node, "actor")) return;
 	let after: Node[] = [];
-	if (callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
-	collectActor(ctx, node);
+	const minted = node.resolvedSym;
+	if (minted != null && hasFlag(minted, SymbolFlag.Forward)) {
+		fillForwardSymbol(ctx, minted);
+	} else if (!claimLocalTypeName(ctx, node, "actor")) {
+		return;
+	} else if (callDecoratorDefers(ctx, node)) {
+		mintActor(ctx, node);
+		after = applyNestedDecorators(ctx, node);
+		fillActor(ctx, node);
+	} else {
+		collectActor(ctx, node);
+	}
 	resolveActor(ctx, node);
 	checkActorDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
 	hoistNestedInits(ctx, after);
 }
 
+function localTypeDeclOf(stmt: Node): Node {
+	let node = stmt;
+	if (node.kind == NodeKind.DecoratedDecl) node = (node.data as DecoratedDeclData).decoratedNode;
+	if (node == null) return null as unknown as Node;
+	if (node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl) return node;
+	return null as unknown as Node;
+}
+
+function mintDecoratedLocalType(ctx: CheckerContext, stmt: Node): boolean {
+	const decl = localTypeDeclOf(stmt);
+	if (decl == null || decl == stmt) return true;
+	const isActor = decl.kind == NodeKind.ActorDecl;
+	if (!claimLocalTypeName(ctx, decl, isActor ? "actor" : "class")) return false;
+	if (isActor) {
+		mintActor(ctx, decl);
+	} else {
+		mintClass(ctx, decl);
+	}
+	const sym = decl.resolvedSym;
+	if (sym != null) setFlag(sym, SymbolFlag.Forward);
+	return true;
+}
+
 function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
 	const after: Node[] = [];
+	const declared = localTypeDeclOf(node);
+	const sym = declared != null ? declared.resolvedSym : null;
 	const rewritten = callApplyDecoratedStmt(ctx, node, after);
 	if (rewritten != node) {
 		node.kind = rewritten.kind;
 		node.data = rewritten.data;
 		if (rewritten.location != null) node.location = rewritten.location;
 		node.nodeType = null as unknown as Type;
-		node.resolvedSym = null;
+		node.resolvedSym = sym;
+		if (sym != null) sym.declNode = node;
 		node.flags = rewritten.flags;
 		node.variantSlot = rewritten.variantSlot;
 	}
@@ -357,7 +402,10 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
-	if (local && callDecoratorDefers(ctx, node)) after = applyNestedDecorators(ctx, node);
+	if (local && callDecoratorDefers(ctx, node)) {
+		if (!mintDecoratedLocalType(ctx, node)) return;
+		after = applyNestedDecorators(ctx, node);
+	}
 	if (node.kind == NodeKind.DecoratedDecl) {
 		const inner = (node.data as DecoratedDeclData).decoratedNode;
 		if (inner != null) checkStmt(ctx, inner);
@@ -437,19 +485,22 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 		node.data = { statements: [] } as BlockStmtData;
 		return;
 	}
-	for (const stmt of sd.spliceNodes) {
-		stampCallSite(stmt, node.location);
-		collectSplicedDecl(ctx, stmt);
+	if (spliceEndsInValue(splice)) {
+		const value = unwrapSpliceManyAtExpr(ctx, node, splice);
+		const prefixSyms = hoistedPrefixSyms(splice);
+		(node.data as ExprStmtData).expr = value;
+		checkStmt(ctx, node);
+		bindRefsTo(value, prefixSyms);
+		return;
 	}
 	const lastIdx = sd.spliceNodes.length - 1;
-	let i = 0;
-	while (i < lastIdx) {
-		const stmt = sd.spliceNodes[i];
-		checkStmt(ctx, stmt);
-		ctx.pendingHoisted.push(stmt);
-		i = i + 1;
-	}
 	const last = sd.spliceNodes[lastIdx];
+	for (const stmt of sd.spliceNodes) stampCallSite(stmt, node.location);
+	const prefix: Node[] = [];
+	for (let c = 0; c < lastIdx; c += 1) {
+		collectSplicedDecl(ctx, sd.spliceNodes[c]);
+		prefix.push(sd.spliceNodes[c]);
+	}
 	node.kind = last.kind;
 	node.data = last.data;
 	if (last.location != null) node.location = last.location;
@@ -457,6 +508,11 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
+	collectSplicedDecl(ctx, node);
+	for (const stmt of prefix) {
+		checkStmt(ctx, stmt);
+		ctx.pendingHoisted.push(stmt);
+	}
 	checkStmt(ctx, node);
 }
 
@@ -706,6 +762,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
 	// for self-recursive closure binding, update type and re-record.
 	const existing = lookupLocal(ctx.table, d.declName);
+	if (existing != null && existing.declNode != node && node.resolvedSym == null) {
+		addError(ctx, `Duplicate symbol '${d.declName}'`, d.nameLocation.line, d.nameLocation.column);
+	}
 	if (existing != null) {
 		existing.symbolType = varType;
 		if (d.declKind != DeclKind.Const) {
@@ -1083,8 +1142,56 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			}
 			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
 		},
+		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
 	};
+}
+
+function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {
+	const pending: Node[] = [];
+	if (owner == null) return pending;
+	const decl = classDeclNodeOf(owner!);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return pending;
+	let pastBlock = false;
+	for (const raw of (decl.data as ClassDeclData).classBody) {
+		if (raw == block) {
+			pastBlock = true;
+			continue;
+		}
+		if (!pastBlock) continue;
+		let member = raw;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) member = dd.decoratedNode;
+		}
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic && pd.propInitializer != null) pending.push(member);
+	}
+	return pending;
+}
+
+function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol | null): void {
+	if (owner != null && owner!.symbolKind == SymbolKind.Actor) {
+		addError(ctx, `static blocks are not supported in actors`, node.location.line, node.location.column);
+		return;
+	}
+	const savedClass = ctx.staticBlockClass;
+	const savedPending = ctx.staticBlockPending;
+	const savedFunction = ctx.currentFunction;
+	const savedInLoop = ctx.inLoop;
+	const savedInSwitch = ctx.inSwitch;
+	ctx.staticBlockClass = owner;
+	ctx.staticBlockPending = staticFieldsInitializedAfter(owner, node);
+	ctx.currentFunction = null;
+	ctx.inLoop = false;
+	ctx.inSwitch = false;
+	checkBlock(ctx, node);
+	ctx.staticBlockClass = savedClass;
+	ctx.staticBlockPending = savedPending;
+	ctx.currentFunction = savedFunction;
+	ctx.inLoop = savedInLoop;
+	ctx.inSwitch = savedInSwitch;
 }
 
 function checkExportDecl(ctx: CheckerContext, node: Node): void {
@@ -2096,8 +2203,16 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		call.flags = call.flags.incl(NodeFlag.Sem);
 		out.push(stmt);
 	} else if (expanded.kind == NodeKind.SpliceMany) {
-		for (const emittedStmt of (expanded.data as SpliceManyData).spliceNodes) {
+		const emittedStmts = (expanded.data as SpliceManyData).spliceNodes;
+		const endsInValue = spliceEndsInValue(expanded);
+		if (endsInValue) gensymSplicePrefix(ctx, expanded);
+		for (let i = 0; i < emittedStmts.length; i += 1) {
+			let emittedStmt = emittedStmts[i];
 			stampCallSite(emittedStmt, stmt.location);
+			if (endsInValue && i == emittedStmts.length - 1) {
+				(stmt.data as ExprStmtData).expr = emittedStmt;
+				emittedStmt = stmt;
+			}
 			expandCollectStmt(ctx, emittedStmt, out, true);
 		}
 	} else {
@@ -2638,6 +2753,10 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 // for-of creates cursor bindings that skip RC — pushing cursors into another
 // container creates dangling pointers when the source is destroyed.
 export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+	// A `@compilerFunc` routine is reachable by name from every module a
+	// synthesized call lands in, whether or not the declaring module exported it —
+	// so the table travels whole, like the reference keeps it on the module graph.
+	ctx.compilerFuncs = preludeCtx.compilerFuncs;
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
 	for (const sym of preludeCtx.table.current.symbols.values()) {

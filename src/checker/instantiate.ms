@@ -229,6 +229,15 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		}
 		return;
 	}
+	if (t.kind == TypeKind.Function) {
+		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		if (t.typeChildren != null) {
+			for (const param of t.typeChildren) {
+				injectConcreteTypeSyms(param, ctx, callerCtx, injected);
+			}
+		}
+		return;
+	}
 	if (t.kind == TypeKind.GenericInstance && t.typeChildren != null) {
 		for (const child of t.typeChildren) {
 			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
@@ -333,12 +342,31 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter;
+
 // ===== clearCheckerState =====
 // Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
 // cloned AST so the re-check regenerates them against concrete types. forEachChild drives
 // the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
 // Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
 export function clearCheckerState(node: Node): void {
+	if (node == null) return;
+	const redeclared: Symbol[] = [];
+	collectDeclaredSyms(node, redeclared);
+	clearStateKeepingOuterBindings(node, redeclared);
+}
+
+function collectDeclaredSyms(node: Node, into: Symbol[]): void {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) into.push(node.resolvedSym);
+	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredSyms(child, into); });
+}
+
+function bindsInto(node: Node, redeclared: Symbol[]): boolean {
+	for (const s of redeclared) { if (node.resolvedSym == s) return true; }
+	return false;
+}
+
+function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
 	while (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv) {
 		const inner = node.kind == NodeKind.HiddenStdConv
@@ -354,12 +382,14 @@ export function clearCheckerState(node: Node): void {
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
+	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym) && bindsInto(node, redeclared);
+	if (rebinds) node.flags = node.flags.excl(NodeFlag.BoundSym);
 	const keepBound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (!keepBound && (node.resolvedSym == null || node.resolvedSym.symbolKind != SymbolKind.EnumMember)) {
 		node.resolvedSym = null;
 	}
-	node.flags = node.flags.has(NodeFlag.BoundSym) ? (0 as BitSet<NodeFlag>).incl(NodeFlag.BoundSym) : (0 as BitSet<NodeFlag>);
-	forEachChild(node, (child: Node): void => { clearCheckerState(child); });
+	node.flags = node.flags.intersection(SYNTAX_NODE_FLAGS);
+	forEachChild(node, (child: Node): void => { clearStateKeepingOuterBindings(child, redeclared); });
 }
 
 // ===== replaceTypeVars =====

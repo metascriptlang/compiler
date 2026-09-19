@@ -1,5 +1,5 @@
-.claude/
-/CLAUDE.md
+**/.claude/*
+!/.claude/settings.json
 .metascript-cache/
 .DS_Store
 
@@ -82,4 +82,4 @@ docs/*
 /mscH*
 /mscP*
 /*.pdb
-paper/
+/paper

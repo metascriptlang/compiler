@@ -17,9 +17,9 @@ import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, Matc
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,
+	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
 } from "../util";
 import { booleanType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -80,7 +80,7 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	hoisted.push(letDecl);
 
 	// if-chain assigning to $matchres_N
-	hoisted.push(buildIfChain(matchData.matchCases, matchSym.name, discType!, loc, "assign", resultSym.name, resultSym, ctx));
+	hoisted.push(buildIfChain(matchData.matchCases, matchSym, discType!, loc, "assign", resultSym.name, resultSym, ctx));
 
 	// Replace MatchExpr with $matchres_N
 	return makeIdentResolved(resultSym, loc);
@@ -193,17 +193,16 @@ export function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const d = matchNode.data as MatchStmtData;
 	const loc = matchNode.location;
 	const matchSym = freshTempSym(ctx, "match", d.matchStmtDisc.nodeType);
-	const tempName = matchSym.name;
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	const matchDecl = makeVarDecl(tempName, d.matchStmtDisc, DeclKind.Const, loc);
+	const matchDecl = makeVarDecl(matchSym.name, d.matchStmtDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = d.matchStmtDisc.nodeType;
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType!, loc, "stmt", "", null, ctx);
+	const ifChain = buildIfChain(d.matchStmtCases, matchSym, discType!, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -215,13 +214,12 @@ function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const d = matchNode.data as MatchExprData;
 	const loc = matchNode.location;
 	const matchSym = freshTempSym(ctx, "match", d.matchDisc.nodeType);
-	const tempName = matchSym.name;
 	const result: Node[] = [];
-	const matchDecl = makeVarDecl(tempName, d.matchDisc, DeclKind.Const, loc);
+	const matchDecl = makeVarDecl(matchSym.name, d.matchDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = d.matchDisc.nodeType;
-	const ifChain = buildIfChain(d.matchCases, tempName, discType!, loc, "stmt", "", null, ctx);
+	const ifChain = buildIfChain(d.matchCases, matchSym, discType!, loc, "stmt", "", null, ctx);
 	result.push(ifChain);
 	return result;
 }
@@ -233,11 +231,10 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const matchData = varData.initializer.data as MatchExprData;
 	const loc = stmt.location;
 	const matchSym = freshTempSym(ctx, "match", matchData.matchDisc.nodeType);
-	const tempName = matchSym.name;
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	const matchDecl = makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc);
+	const matchDecl = makeVarDecl(matchSym.name, matchData.matchDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = matchData.matchDisc.nodeType;
@@ -250,7 +247,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	}
 	result.push(letDecl);
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType!, loc, "assign", varData.declName, stmt.resolvedSym, ctx);
+	const ifChain = buildIfChain(matchData.matchCases, matchSym, discType!, loc, "assign", varData.declName, stmt.resolvedSym, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -263,16 +260,15 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	const matchData = retData.argument.data as MatchExprData;
 	const loc = stmt.location;
 	const matchSym = freshTempSym(ctx, "match", matchData.matchDisc.nodeType);
-	const tempName = matchSym.name;
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	const matchDecl = makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc);
+	const matchDecl = makeVarDecl(matchSym.name, matchData.matchDisc, DeclKind.Const, loc);
 	matchDecl.resolvedSym = matchSym;
 	result.push(matchDecl);
 	const discType = matchData.matchDisc.nodeType;
 	// if-chain with return: return armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType!, loc, "return", "", null, ctx);
+	const ifChain = buildIfChain(matchData.matchCases, matchSym, discType!, loc, "return", "", null, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -313,7 +309,7 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 
 // Build switch dispatch for enum/int patterns with guard support.
 // Groups same-pattern arms with different guards into one switch case.
-function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
+function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
 	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
 	// becomes: if (g1) { b1 } else if (g2) { b2 } else { b3 }
@@ -442,7 +438,7 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	}
 
 	// Build final switch
-	const discIdent = makeTypedIdent(tempName, discType, loc);
+	const discIdent = makeTypedIdentResolved(matchSym, discType, loc);
 	const switchNode = makeSwitch(discIdent, switchCases, loc);
 
 	const stmts: Node[] = [];
@@ -462,15 +458,15 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	return makeBlock(stmts, loc);
 }
 
-function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
+function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
-		return buildHashSwitch(cases, tempName, discType, loc, mode, varName, assignSym, ctx);
+		return buildHashSwitch(cases, matchSym, discType, loc, mode, varName, assignSym, ctx);
 	}
 
 	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
 	if (canUseSwitchDispatch(cases, discType)) {
-		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName, assignSym, ctx);
+		return buildSwitchDispatch(cases, matchSym, discType, loc, mode, varName, assignSym, ctx);
 	}
 
 	// Check if any case is a wildcard/binding — if not, last arm becomes the else
@@ -501,7 +497,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 
 		if (isBindingPattern(caseData.casePatterns)) {
 			const bindingName = getBindingName(caseData.casePatterns);
-			const bindDecl = makeVarDecl(bindingName, makeTypedIdent(tempName, discType, loc), DeclKind.Const, loc);
+			const bindDecl = makeVarDecl(bindingName, makeTypedIdentResolved(matchSym, discType, loc), DeclKind.Const, loc);
 			if (caseData.caseGuard != null) {
 				// Bind first, then check guard
 				const guardedBody = makeIf(caseData.caseGuard, body, elseNode, loc);
@@ -519,7 +515,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 			continue;
 		}
 
-		let cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
+		let cond = buildPatternCondition(caseData.casePatterns, matchSym, discType, loc);
 		if (caseData.caseGuard != null) {
 			cond = makeBinary(cond, "&&", caseData.caseGuard, loc);
 		}
@@ -693,18 +689,18 @@ function patternSetKey(patterns: Node[], caseIdx: number): string {
 }
 
 // Build condition from pattern list: $m === p1 || $m === p2 || ...
-function buildPatternCondition(patterns: Node[], tempName: string, discType: Type, loc: SourceLocation): Node {
-	let cond = makePatternTest(patterns[0], tempName, discType, loc);
+function buildPatternCondition(patterns: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation): Node {
+	let cond = makePatternTest(patterns[0], matchSym, discType, loc);
 	for (let i = 1; i < patterns.length; i += 1) {
-		const nextTest = makePatternTest(patterns[i], tempName, discType, loc);
+		const nextTest = makePatternTest(patterns[i], matchSym, discType, loc);
 		cond = makeBinary(cond, "||", nextTest, loc);
 	}
 	return cond;
 }
 
 // Build a single pattern test: $m === pattern
-function makePatternTest(pattern: Node, tempName: string, discType: Type, loc: SourceLocation): Node {
-	return makeBinary(makeTypedIdent(tempName, discType, loc), "===", pattern, loc);
+function makePatternTest(pattern: Node, matchSym: Symbol, discType: Type, loc: SourceLocation): Node {
+	return makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", pattern, loc);
 }
 
 // ===== String Hash Dispatch =====
@@ -747,7 +743,7 @@ interface HashBucket {
 // Collision-safe: patterns sharing a hash are chained in the same case arm.
 // Return mode: matched arms `return`, so default body placed unconditionally after switch.
 // Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
-function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
+function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
 	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
@@ -793,7 +789,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 				guardedBodyStmts.push(body);
 				guardedBlock = makeBlock(guardedBodyStmts, loc);
 			}
-			const guard = makeBinary(makeTypedIdent(tempName, discType, loc), "===", pat, loc);
+			const guard = makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", pat, loc);
 			const guardedIf = ctx.jsBackend ? guardedBlock : makeIf(guard, guardedBlock, makeBlock([], loc), loc);
 
 			// Find existing bucket or create new one
@@ -832,12 +828,12 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	// C cannot switch on a string, so it switches on msStringHash (a runtime symbol
 	// always linked). js switches on the string itself — reference jsgen genCaseJS —
 	// which is both native and strictly less work than hashing then comparing.
-	const discNode = makeTypedIdent(tempName, discType, loc);
+	const discNode = makeTypedIdentResolved(matchSym, discType, loc);
 	let switchDisc = discNode;
 	if (!ctx.jsBackend) {
 		const hashCallArgs: Node[] = [];
 		hashCallArgs.push(discNode);
-		switchDisc = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
+		switchDisc = makeCall(runtimeRef("msStringHash", loc), hashCallArgs, loc);
 	}
 	const switchNode = makeSwitch(switchDisc, switchCases, loc);
 

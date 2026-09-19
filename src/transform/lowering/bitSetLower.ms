@@ -3,7 +3,7 @@ import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../che
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeBinary, makeUnary, makeNumber, makeIdent, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool } from "../util";
+import { makeBinary, makeUnary, makeNumber, makeIdent, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, runtimeRef } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { DeclKind } from "../../ast/node";
 
@@ -108,7 +108,7 @@ function lowerWordBinary(node: Node, repr: Type): Node {
 }
 
 function cardCall(word: Node, loc: SourceLocation): Node {
-	const call = makeCall(makeIdent("msSetCard32", loc), [word], loc);
+	const call = makeCall(runtimeRef("msSetCard32", loc), [word], loc);
 	call.nodeType = int32Type();
 	return call;
 }
@@ -120,7 +120,7 @@ function asUint32(operand: Node, loc: SourceLocation): Node {
 }
 
 function hashWordInto(acc: Node, word: Node, loc: SourceLocation): Node {
-	const call = makeCall(makeIdent("msSetHashWord", loc), [acc, word], loc);
+	const call = makeCall(runtimeRef("msSetHashWord", loc), [acc, word], loc);
 	call.nodeType = createPrimitive(TypeKind.Int64);
 	return call;
 }

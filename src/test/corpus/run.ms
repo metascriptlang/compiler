@@ -328,6 +328,36 @@ function joinWith(items: string[], sep: string): string {
 	return out;
 }
 
+function commaList(text: string): string[] {
+	const out: string[] = [];
+	for (const item of text.split(",")) { if (item != "") { out.push(item); } }
+	return out;
+}
+
+const ONLY: string[] = commaList(envOr("MSCORPUS_ONLY", ""));
+const LANES: string[] = commaList(envOr("MSCORPUS_LANES", ""));
+const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm"];
+
+function narrowingError(specs: Spec[]): string {
+	for (const lane of LANES) {
+		if (!listHas(PARITY_LANES, lane)) { return "MSCORPUS_LANES names '" + lane + "'; the parity lanes are " + joinWith(PARITY_LANES, "/"); }
+	}
+	if (SAN && LANES.length > 0) { return "MSCORPUS_LANES narrows the parity run; the SAN lane builds one cell per program"; }
+	for (const name of ONLY) {
+		let found = false;
+		for (const spec of specs) { if (spec.name == name) { found = true; } }
+		if (!found) { return "MSCORPUS_ONLY names '" + name + "', which is not a corpus program" + (FILTER != "" ? " matching MSCORPUS_FILTER=" + FILTER : ""); }
+	}
+	return "";
+}
+
+function keepChosenLanes(jobs: BuildJob[]): BuildJob[] {
+	if (LANES.length == 0) { return jobs; }
+	const out: BuildJob[] = [];
+	for (const job of jobs) { if (listHas(LANES, job.lane)) { out.push(job); } }
+	return out;
+}
+
 // A directive that cannot apply is a lie the runner used to keep (T9):
 // @xfail naming an impossible lane fails loud. @skip-js applies to every
 // program — @maxrss ones included, since they get a js cell alongside the
@@ -425,6 +455,7 @@ function discoverSpecs(): Spec[] {
 		}
 		if (entryNumber(name) < 0) { continue; }
 		if (FILTER != "" && !name.contains(FILTER)) { continue; }
+		if (ONLY.length > 0 && !listHas(ONLY, name)) { continue; }
 		specs.push(parseSpec(name, entry));
 	}
 	return specs;
@@ -894,7 +925,9 @@ function main(): void {
 	if (!ensureWintime()) { exit(1); }
 
 	const specs = discoverSpecs();
-	const jobs = planJobs(specs);
+	const narrowing = narrowingError(specs);
+	if (narrowing != "") { progress("  ✗ " + narrowing); exit(1); }
+	const jobs = keepChosenLanes(planJobs(specs));
 
 	progress("");
 	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
@@ -911,6 +944,13 @@ function main(): void {
 	}
 	if (!HAS_NODE && !SAN) {
 		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (drc/orc/danger), so C↔JS backend divergence is not covered");
+	}
+
+	if (ONLY.length > 0) {
+		progress("  !! MSCORPUS_ONLY — " + specs.length + " named program(s) run, the rest of the corpus does not");
+	}
+	if (LANES.length > 0) {
+		progress("  !! MSCORPUS_LANES — only " + joinWith(LANES, "/") + " cells are built; parity compares those lanes alone");
 	}
 
 	const stale = stalenessWarning();

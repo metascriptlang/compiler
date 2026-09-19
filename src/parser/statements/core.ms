@@ -108,7 +108,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		TokenKind.Interface => parseInterfaceDecl(state),
 		TokenKind.Struct => parseStructDecl(state),
 		TokenKind.Throw => parseThrowStmt(state),
-		TokenKind.Try => parseTryCatchStmt(state),
+		TokenKind.Try when peek(state, 1).kind == TokenKind.LBrace => parseTryCatchStmt(state),
 		TokenKind.Do => parseDoWhileStmt(state),
 		TokenKind.Switch => parseSwitchStmt(state),
 		TokenKind.Class | TokenKind.Abstract => parseClassDecl(state),

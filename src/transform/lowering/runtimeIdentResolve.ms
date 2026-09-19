@@ -26,7 +26,7 @@ export function resolveRuntimeIdents(program: Node, ctx: TransformContext): Node
 
 function bindSynthesizedIdent(node: Node): Node {
 	if (node.kind != NodeKind.Identifier) return node;
-	if (node.resolvedSym != null) return node;
+	if (node.resolvedSym != null && node.resolvedSym.state != SymbolState.Hollow) return node;
 	const d = node.data as IdentifierData;
 	const info = lookupRuntimeExport(d.name);
 	if (info == null) return node;

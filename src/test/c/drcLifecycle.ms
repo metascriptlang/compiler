@@ -209,3 +209,94 @@ test "E2E C: class with method compiles" {
 	assert c.ok;
 	assert c.value.contains("bar");
 }
+
+test "E2E C: last-read field of a local value struct is moved out" {
+	const c = compileToC(`
+		struct R { value: string; done: boolean; }
+		function next(i: int32): R { return { value: \`k\${i}\`, done: i > 3 }; }
+		function f(out: string[]): void {
+			const r = next(1);
+			const k = r.value;
+			out.push(k);
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("msStringWasMoved(r_1_.value)");
+	assert !c.value.contains("msStringCopy(&(k_1_), r_1_.value)");
+}
+
+test "E2E C: field read again later is not moved out" {
+	const c = compileToC(`
+		struct R { value: string; done: boolean; }
+		function next(i: int32): R { return { value: \`k\${i}\`, done: i > 3 }; }
+		function f(out: string[]): void {
+			const r = next(1);
+			const k = r.value;
+			out.push(k);
+			console.log(r.value);
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("msStringWasMoved(r_1_.value)");
+}
+
+test "E2E C: field behind a reference root is copied, never moved" {
+	const c = compileToC(`
+		interface R { value: string; done: boolean; }
+		function next(i: int32): R { return { value: \`k\${i}\`, done: i > 3 }; }
+		function f(out: string[]): void {
+			const r = next(1);
+			const k = r.value;
+			out.push(k);
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("msStringCopy(&(k_1_), (*r_1_).value)");
+	assert !c.value.contains("msStringWasMoved((*r_1_).value)");
+}
+
+test "E2E C: try unwrap moves the payload out of the result temp" {
+	const c = compileToC(`
+		function parse(i: int32): Result<string, string> {
+			if (i < 0) return { ok: false, error: "neg" };
+			return { ok: true, value: \`v\${i}\` };
+		}
+		function f(i: int32): Result<string, string> {
+			const v = try parse(i);
+			console.log(v);
+			return { ok: true, value: v };
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("msStringWasMoved(dollarresult_0_.v0.value)");
+}
+
+test "E2E C: a non-owning link field is never moved out" {
+	const c = compileToC(`
+		interface Tok { s: string; next: Cursor<Tok>; }
+		struct Holder { link: Cursor<Tok>; own: Tok; }
+		function mk(): Holder { const t: Tok = { s: "a", next: null as unknown as Tok }; return { link: t, own: t }; }
+		function f(): string {
+			const h = mk();
+			let body: Tok = h.own;
+			body = h.link;
+			return body.s;
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("WasMoved(h_1_.link)");
+}
+
+test "E2E C: a field reached through a non-owning local is never moved out" {
+	const c = compileToC(`
+		interface Tok { s: string; next: Cursor<Tok>; own: Tok; }
+		function f(head: Tok): string {
+			const rhs = head.next;
+			const k = rhs.own;
+			return k.s;
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("WasMoved(rhs_1_->own)");
+	assert !c.value.contains("WasMoved((*rhs_1_).own)");
+}

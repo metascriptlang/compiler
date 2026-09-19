@@ -11,8 +11,9 @@ import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, Sy
 import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeIdent, makeBlock, makeFnDecl, enumToStringName, enumToStringNameFor,
+	makeTypedIdentResolved, makeBlock, makeFnDecl, enumToStringName, enumToStringNameFor,
 } from "../util";
+import { makeSymbol } from "../../checker/symbol";
 import { createEnum, stringType, createFunction } from "../../checker/types";
 import { SourceLocation, makeLoc } from "../../ast/node";
 
@@ -42,11 +43,13 @@ function makeEnumToString(fnName: string, enumName: string, members: string[], l
 	// Default case: return "<unknown>"
 	cases.push(makeSwitchCase([], [makeReturn(makeString("<unknown>", loc), loc)], true, loc));
 
-	const switchStmt = makeSwitch(makeIdent("v", loc), cases, loc);
+	const enumType = createEnum(enumName, members, null as unknown as number[]);
+	const valueSym = makeSymbol("v", SymbolKind.Parameter, enumType, false);
+	const switchStmt = makeSwitch(makeTypedIdentResolved(valueSym, null, loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
-	const fn = makeFnDecl(fnName, ["v"], ["int32"], body, "", "string", loc);
+	const fn = makeFnDecl(fnName, [valueSym.name], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
-	fn.nodeType = createFunction([createEnum(enumName, members, null as unknown as number[])], ["v"], stringType());
+	fn.nodeType = createFunction([enumType], [valueSym.name], stringType());
 	return fn;
 }
 

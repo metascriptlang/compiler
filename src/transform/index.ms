@@ -31,6 +31,7 @@
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
+import { bindCompilerFuncs } from "./util";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
@@ -74,6 +75,7 @@ import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
@@ -99,11 +101,13 @@ import { lowerEnumToString } from "./native/enumToStringLower";
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	bindCompilerFuncs(checkerCtx.compilerFuncs);
 	let result = eraseBrandTypes(program);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	if (!jsBackend) { result = lowerStaticInit(result, ctx); }
 	result = lowerVoidBind(result, ctx);
 	result = lowerObjectSpread(result, ctx);
 	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);

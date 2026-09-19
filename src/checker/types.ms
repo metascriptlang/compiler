@@ -1596,6 +1596,14 @@ export function createVar(inner: Type): Type {
 	return t;
 }
 
+export function createSink(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Sink;
+	t.typeReturn = inner;
+	propagateToOwner(t, inner);
+	return t;
+}
+
 export function createTuple(elementTypes: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Tuple;
@@ -2264,6 +2272,7 @@ function typeKey(t: Type): string {
 		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		_ => t.kind.toString(),
 	};
@@ -2446,9 +2455,7 @@ export function propagateGenericParam(owner: Type, member: Type | null): void {
 }
 
 // ===== Ownership Modifiers =====
-// TypeKind.Sink/Lent have no producer since sink inference was removed (ea38c2a);
-// the see-through arms stay for a future explicit `sink T`. skipModifier also
-// unwraps Var, which is still constructed.
+// TypeKind.Lent has no producer; Sink is produced by an explicit `sink` param.
 
 export function skipModifier(t: Type | null): Type | null {
 	if (t == null) return t;
@@ -2619,6 +2626,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 			TypeKind.Ptr => createPtr(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Borrow => createBorrow(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Var => createVar(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Sink => createSink(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Cursor => createCursor(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete, active),
 			TypeKind.GenericInstance => {
@@ -2706,6 +2714,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Var => createVar(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes, active),
 			TypeKind.GenericInstance => {
@@ -2831,9 +2840,21 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		bindings.types.push(closureStorageType(withoutReadonlyView(concrete)));
 		return;
 	}
-	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor) && formal.typeReturn != null) {
+	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
 		unifyType(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
+	}
+	if (formal.kind == TypeKind.Span) {
+		const source = unwrapRef(concrete);
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray
+				|| source.kind == TypeKind.Span) {
+			unifyType(formal.typeReturn, source.typeReturn, bindings);
+			return;
+		}
+		if (source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) {
+			unifyType(formal.typeReturn, charType(), bindings);
+			return;
+		}
 	}
 	// Array/Span/Ref/Ptr: unify element types
 	if (formal.kind == concrete.kind
@@ -3848,6 +3869,28 @@ test "unify Array<T> vs Array<string>" {
 	assert b.names.length == 1;
 	assert b.names[0] == "T";
 	assert b.types[0].kind == TypeKind.String;
+}
+
+test "unify Span infers elements from owned shared fixed arrays and strings" {
+	const sources: Type[] = [
+		createArray(int32Type()),
+		createRef(createArray(int32Type())),
+		createSizedArray(int32Type(), 2),
+		createSpan(int32Type()),
+	];
+	for (const source of sources) {
+		const bindings = createUnifyBindings();
+		unifyType(createSpan(createGenericParam("T")), source, bindings);
+		assert bindings.names.length == 1;
+		assert bindings.types[0].kind == TypeKind.Int32;
+	}
+	const chars = createUnifyBindings();
+	unifyType(createSpan(createGenericParam("T")), stringType(), chars);
+	assert chars.names.length == 1;
+	assert chars.types[0].kind == TypeKind.Char;
+	const rejected = createUnifyBindings();
+	unifyType(createSpan(createGenericParam("T")), int32Type(), rejected);
+	assert rejected.names.length == 0;
 }
 
 test "unify Result<T, E> vs Result<number, string>" {

@@ -10,7 +10,7 @@ import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, T
 import { integerRank, isIntegerType, peelToRepr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber } from "../util";
+import { makeCall, makeIdent, makeNumber, runtimeRef } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 import { createTransformContext } from "../context";
@@ -156,7 +156,7 @@ export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVa
 	args.push(expr);
 	args.push(makeNumber(minVal, loc));
 	args.push(makeNumber(maxVal, loc));
-	return makeCall(makeIdent(fnName, loc), args, loc);
+	return makeCall(runtimeRef(fnName, loc), args, loc);
 }
 
 // ===== Test Helpers =====

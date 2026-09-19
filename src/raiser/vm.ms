@@ -12,13 +12,15 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
 	raiserFuture,
-	rcIncref, rcDecref, copyGraph
+	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getFuncCodeLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
+import { copyTypedValue } from "./valueCopy";
+import { parseIntStr } from "../utils/string";
 import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
@@ -57,6 +59,7 @@ export enum RaiserStrandStatus {
 
 export interface RaiserStrand {
 	id: number;
+	globals: RaiserValue[];
 	regs: RaiserRegFile;
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
@@ -109,6 +112,7 @@ export interface RaiserSched {
 
 export interface RaiserVM {
 	mod: RaiserModule;
+	globals: RaiserValue[];
 	regs: RaiserRegFile;
 	ip: number;
 	halted: boolean;
@@ -136,6 +140,11 @@ export interface RaiserVM {
 	currentException: RaiserValue;
 	unwinding: boolean;
 	savedIp: number;
+	diagMessage: string;
+	diagLine: number;
+	diagColumn: number;
+	diagEndLine: number;
+	diagEndColumn: number;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -185,14 +194,16 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const objectHeap = createStructHeap();
 	const mainResult = raiserNil();
 	const mainSafePoints: number[] = [];
-	const mainStrand: RaiserStrand = { id: 0, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const globals: RaiserValue[] = [];
+	for (let i = 0; i < mod.globalCount; i += 1) globals.push(raiserNil());
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
 	const futures: RaiserFutures = { items: futureItems };
 	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0 };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -277,6 +288,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
+	vm.diagMessage = "";
 	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
 	resetStrands(vm, funcIdx);
@@ -302,7 +314,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.savedIp = -1;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, expand.ms clears it).
-	const mainStrand: RaiserStrand = { id: 0, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -467,7 +479,24 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	return sp + 1;
 }
 
+const MACRO_ERROR_PREFIX = "__MACRO_ERROR__:";
+
+function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
+	if (thrown.kind != RaiserValueKind.String) return false;
+	if (!thrown.strVal.startsWith(MACRO_ERROR_PREFIX)) return false;
+	const payload = thrown.strVal.slice(MACRO_ERROR_PREFIX.length, thrown.strVal.length);
+	const parts = payload.split("\t");
+	vm.diagMessage = parts.length > 0 ? parts[0] : "compile error in macro";
+	vm.diagLine = parts.length > 1 ? parseIntStr(parts[1]) : 0;
+	vm.diagColumn = parts.length > 2 ? parseIntStr(parts[2]) : 0;
+	vm.diagEndLine = parts.length > 3 ? parseIntStr(parts[3]) : 0;
+	vm.diagEndColumn = parts.length > 4 ? parseIntStr(parts[4]) : 0;
+	vm.halted = true;
+	return true;
+}
+
 function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (!vm.unwinding && vmTakeMacroError(vm, getReg(vm, vm.baseReg + inst.a))) return;
 	if (!vm.unwinding) {
 		copyValueInto(vm.currentException, getReg(vm, vm.baseReg + inst.a));
 		vm.unwinding = true;
@@ -487,6 +516,7 @@ function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 
 function strandSave(vm: RaiserVM): void {
 	const s = vm.sched.strands.items[vm.current];
+	s.globals = vm.globals;
 	s.regs = vm.regs;
 	s.callStack = vm.callStack;
 	s.arrayHeap = vm.arrayHeap;
@@ -503,6 +533,7 @@ function strandSave(vm: RaiserVM): void {
 
 function strandResume(vm: RaiserVM, idx: number): void {
 	const s = vm.sched.strands.items[idx];
+	vm.globals = s.globals;
 	vm.current = idx;
 	vm.regs = s.regs;
 	vm.callStack = s.callStack;
@@ -570,6 +601,23 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 	vm.halted = true;
 }
 
+function copyStrandGlobals(
+	vm: RaiserVM,
+	arrays: RaiserArrayHeap,
+	objects: RaiserObjectHeap,
+	map: RaiserCopyMap,
+): RaiserValue[] {
+	const globals: RaiserValue[] = [];
+	for (const value of vm.globals) {
+		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
+		if (vm.gcMode == "orc") rcIncref(arrays, objects, copied);
+		const slot = raiserNil();
+		copyValueInto(slot, copied);
+		globals.push(slot);
+	}
+	return globals;
+}
+
 export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	if (funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
 		vmError(vm, `vmSpawnStrand: function index out of bounds: ${funcIdx}`);
@@ -587,7 +635,8 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, createCopyMap());
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return id;
 }
@@ -614,11 +663,13 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
+	const copyMap = createCopyMap();
+	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
 		// C hands the thunk a borrow of the parent's captures and the analyzer
 		// proves the parent outlives them; a handle means nothing in another
 		// heap, so the capture graph crosses as a copy the child owns.
-		const envSlot = copyGraph(vm.arrayHeap, vm.objectHeap, arrayHeap, objectHeap, envField);
+		const envSlot = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrayHeap, objectHeap, envField, copyMap);
 		rcIncref(arrayHeap, objectHeap, envSlot);
 		regs.slots[0] = envSlot;
 	}
@@ -629,7 +680,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -693,6 +744,7 @@ export function execLoop(vm: RaiserVM): void {
 		const main = vm.sched.strands.items[0];
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
+		vm.globals = main.globals;
 	}
 }
 
@@ -748,6 +800,21 @@ function runStrandSlice(vm: RaiserVM): void {
 			const copy = raiserNil();
 			copyValueInto(copy, src);
 			setReg(vm, base + inst.a, copy);
+		} else if (op == RaiserOpcode.LoadGlobal) {
+			const copied = raiserNil();
+			copyValueInto(copied, vm.globals[inst.b]);
+			setReg(vm, base + inst.a, copied);
+		} else if (op == RaiserOpcode.StoreGlobal) {
+			const source = getReg(vm, base + inst.a);
+			vmIncref(vm, source);
+			vmDecref(vm, vm.globals[inst.b]);
+			copyValueInto(vm.globals[inst.b], source);
+		} else if (op == RaiserOpcode.CopyValue) {
+			const source = getReg(vm, base + inst.b);
+			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
+				func.copyPlans, inst.c as int32, vm.gcMode == "orc");
+			setReg(vm, base + inst.a, copied);
+			vmMaybeCollect(vm);
 		} else if (op == RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op == RaiserOpcode.Halt) {
@@ -911,6 +978,9 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleLeStr(vm, inst);
 		} else if (op == RaiserOpcode.StrLen) {
 			vmHandleStrLen(vm, inst);
+		} else if (op == RaiserOpcode.StrByteLen) {
+			const value = getReg(vm, vm.baseReg + inst.b).strVal.byteLength;
+			setReg(vm, vm.baseReg + inst.a, raiserInt(value));
 		} else if (op == RaiserOpcode.StrCharAt) {
 			vmHandleStrCharAt(vm, inst);
 		} else if (op == RaiserOpcode.StrSlice) {
@@ -2610,6 +2680,28 @@ test "vmCallFunction: nested Call/Ret through trampoline" {
 }
 
 // --- Strand scheduling ---
+
+test "global slots remain independent across strand heaps" {
+	const main = createRaiserFunction("main", [
+		raiserABC(RaiserOpcode.Yield, 0, 0, 0),
+		raiserABC(RaiserOpcode.LoadGlobal, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [], 0, 0, 1);
+	const worker = createRaiserFunction("worker", [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.StoreGlobal, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], [raiserInt(9)], 0, 0, 1);
+	const mod = createRaiserModule("globals", [main, worker], 0);
+	mod.globalCount = 1;
+	const vm = createVM(mod, "orc");
+	copyValueInto(vm.globals[0], raiserInt(3));
+	vmSpawnStrand(vm, 1);
+	execLoop(vm);
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 3;
+	assert vm.sched.strands.items[1].globals[0].intVal == 9;
+}
 
 test "single strand: no scheduler involvement" {
 	const vm = execModule(makeTestModule(

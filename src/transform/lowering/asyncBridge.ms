@@ -26,7 +26,7 @@ import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames,
+	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames, runtimeRef,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
@@ -101,11 +101,11 @@ import { isStructLikeType, inlineInFuture, boxedInFuture } from "../util";
 // Promise<T> so DRC's cross-pass contract holds; codegen extracts T via awaitedType.
 function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	if (inlineInFuture(innerType)) {
-		const inlineCall = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		const inlineCall = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		inlineCall.nodeType = promiseTypeFor(innerType);
 		return inlineCall;
 	}
-	const call = makeCall(makeIdent("msFutureCreate", loc), [], loc);
+	const call = makeCall(runtimeRef("msFutureCreate", loc), [], loc);
 	call.nodeType = promiseTypeFor(innerType);
 	return call;
 }
@@ -168,7 +168,7 @@ let asyncNameCounter = 0;
 function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutName: string): Node[] {
 	if (isVoid || valueExpr == null) {
 		return [makeExprStmt(makeCall(
-			makeIdent("msFutureCompleteVoid", loc),
+			runtimeRef("msFutureCompleteVoid", loc),
 			[makeTypedIdent(retFutName, promiseType, loc)],
 			loc,
 		), loc)];
@@ -178,19 +178,19 @@ function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promis
 	// void* pointer. Codegen reads sizeof(T) from the box arg's nodeType.
 	if (boxedInFuture(fnReturnInner)) {
 		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
-		const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [valueExpr], loc);
+		const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [valueExpr], loc);
 		boxCall.nodeType = voidPtrType;
 		const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 		boxDecl.nodeType = voidPtrType;  // variable holds void* (the boxed pointer)
 		const completeStmt = makeExprStmt(makeCall(
-			makeIdent("msFutureComplete", loc),
+			runtimeRef("msFutureComplete", loc),
 			[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)],
 			loc,
 		), loc);
 		return [boxDecl, completeStmt];
 	}
 	return [makeExprStmt(makeCall(
-		makeIdent("msFutureCompleteT", loc),
+		runtimeRef("msFutureCompleteT", loc),
 		[makeTypedIdent(retFutName, promiseType, loc), valueExpr],
 		loc,
 	), loc)];
@@ -361,7 +361,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			// raises). The per-call check appends the goto to the catch.
 			const futName = "$yf" + voidPrevIdx;
 			const yfType = promiseTypeFor(sc.items[voidPrevIdx].yieldVarType);
-			const checkCall = makeCall(makeIdent("msFutureCheckErr", loc), [makeTypedIdent(futName, yfType, loc)], loc);
+			const checkCall = makeCall(runtimeRef("msFutureCheckErr", loc), [makeTypedIdent(futName, yfType, loc)], loc);
 			stateStmts.push(makeExprStmt(checkCall, loc));
 		}
 		if (prevIdx >= 0) {
@@ -374,14 +374,14 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			const readFn = readFnForAwait(varType);
 			let readExpr: Node | null = null;
 			if (readFn != "") {
-				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				readExpr = makeCall(runtimeRef(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
 			} else {
 				// Boxed types (struct/tuple/GI/array) — read the void* then copy out via
 				// msUnboxStruct. String never reaches here (readFnForAwait handles it).
-				const rawRead = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+				const rawRead = makeCall(runtimeRef("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 				if (boxedInFuture(varType)) {
-					readExpr = makeCall(makeIdent("msUnboxStruct", loc), [rawRead], loc);
+					readExpr = makeCall(runtimeRef("msUnboxStruct", loc), [rawRead], loc);
 					readExpr.nodeType = varType;
 				} else {
 					readExpr = rawRead;
@@ -439,7 +439,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				stateStmts.push(state.stmts[copyEnd - 2]); // $state = nextState
 
 				// Pre-resolved check: if (msFutureFinished($yf_N)) continue;
-				const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
+				const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
 				finishedCheck.nodeType = booleanType();
 				const continueStmt = makeContinue(loc);
 				const preResolvedIf = makeIf(finishedCheck, makeBlock([continueStmt], loc), makeBlock([], loc), loc);
@@ -460,7 +460,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 					const yfType = promiseTypeFor(state.yieldVarType);
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdent(futName, yfType, loc), yieldArg, loc), loc));
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.stateSym, null, loc), makeNumber(state.nextState, loc), loc), loc));
-					const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
+					const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
 					finishedCheck.nodeType = booleanType();
 					stateStmts.push(makeIf(finishedCheck, makeBlock([makeContinue(loc)], loc), makeBlock([], loc), loc));
 					stateStmts.push(makeReturn(makeTypedIdent(futName, yfType, loc), loc));
@@ -515,7 +515,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
-		makeIdent("msFutureCompleteVoid", loc),
+		runtimeRef("msFutureCompleteVoid", loc),
 		[makeTypedIdent(retFutName, retFutType, loc)],
 		loc,
 	), loc));
@@ -567,7 +567,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	const tryBody = makeBlock([loop], loc);
 	const failCall = makeExprStmt(
 		makeCall(
-			makeIdent("msFutureFail", loc),
+			runtimeRef("msFutureFail", loc),
 			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
 			loc,
 		),
@@ -634,7 +634,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// msAsyncStart($retFut, $stepper) — createCb pattern: C callback drives the stepper
 	const kickoffCall = makeCall(
-		makeIdent("msAsyncStart", loc),
+		runtimeRef("msAsyncStart", loc),
 		[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdentResolved(stepperSym, closureType, loc)],
 		loc,
 	);
@@ -664,21 +664,21 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 					const isVoid = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
 					let completeCall: Node | null = null;
 					if (isVoid || rd.argument == null) {
-						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
+						completeCall = makeCall(runtimeRef("msFutureCompleteVoid", loc),
 							[makeTypedIdent(retFutName, promiseType, loc)], loc);
 					} else if (boxedInFuture(fnReturnInner)) {
 						// Boxed types: msSinkBoxStruct is a multi-statement expansion (nesting it
 						// corrupts the result stack), so box via a separate VarDecl.
 						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
-						const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [rd.argument], loc);
+						const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [rd.argument], loc);
 						boxCall.nodeType = voidPtrType;
 						const boxDecl = makeVarDecl(retFutName + "_b", boxCall, DeclKind.Const, loc);
 						boxDecl.nodeType = voidPtrType;
 						newStmts.push(boxDecl);
-						completeCall = makeCall(makeIdent("msFutureComplete", loc),
+						completeCall = makeCall(runtimeRef("msFutureComplete", loc),
 							[makeTypedIdent(retFutName, promiseType, loc), makeIdent(retFutName + "_b", loc)], loc);
 					} else {
-						completeCall = makeCall(makeIdent("msFutureCompleteT", loc),
+						completeCall = makeCall(runtimeRef("msFutureCompleteT", loc),
 							[makeTypedIdent(retFutName, promiseType, loc), rd.argument], loc);
 					}
 					newStmts.push(makeExprStmt(completeCall, loc));
@@ -740,7 +740,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// msFutureDrcDestroy, balancing the rc=0 sole-owner allocation.
 	if (rewrittenStmts.length == 0 || rewrittenStmts[rewrittenStmts.length - 1].kind != NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
-			makeIdent("msFutureCompleteVoid", loc),
+			runtimeRef("msFutureCompleteVoid", loc),
 			[makeTypedIdent(retFutName, retFutType, loc)],
 			loc,
 		);
@@ -753,7 +753,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// NULL future (→ msWaitForReady crash). Mirrors the with-await stepper catch.
 	const failCall = makeExprStmt(
 		makeCall(
-			makeIdent("msFutureFail", loc),
+			runtimeRef("msFutureFail", loc),
 			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
 			loc,
 		),

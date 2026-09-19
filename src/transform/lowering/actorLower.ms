@@ -23,7 +23,7 @@ import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
-	isValueLayoutType, makeHiddenAddr, makeTryFinally,
+	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
@@ -164,7 +164,7 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramT
 		if (mk == "array" || mk == "struct") {
 			const paramIdent = makeIdent(params[ai], loc);
 			paramIdent.nodeType = paramTypes[ai];
-			const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [paramIdent], loc);
+			const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [paramIdent], loc);
 			boxCall.nodeType = VOID_PTR;
 			valueArg = boxCall;
 			setter = "msMsgSetPtr";
@@ -177,7 +177,7 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramT
 				setter = "msMsgSetPtrShared";
 			}
 		}
-		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
+		stmts.push(makeExprStmt(makeCall(runtimeRef(setter, loc), [
 			makeIdentResolved(msgSym, loc),
 			makeNumber(slot, loc),
 			valueArg,
@@ -189,7 +189,7 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramT
 function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
 	const msgSym = freshTempSym(ctx, "amsg", VOID_PTR);
 	const slotCount = totalSlotCount(params, paramTypes);
-	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
+	const msgAlloc = makeCall(runtimeRef("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeNull(loc),
 		makeNumber(slotCount, loc),
@@ -202,8 +202,8 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const thisPid = makeMember(makeIdent("this", loc), "pid", loc);
 	thisPid.nodeType = getSysType(TypeKind.Int64);
-	const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [thisPid], loc);
-	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
+	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [thisPid], loc);
+	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	return makeBlock(stmts, loc);
 }
@@ -219,19 +219,19 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 	const isStringReturn = retType != null && retType.kind == TypeKind.String;
 	let futCreate: Node;
 	if (isStringReturn) {
-		futCreate = makeCall(makeIdent("msFutureCreateInline", loc), [], loc);
+		futCreate = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		// nodeType MUST be Promise<T> (not raw T) so codegen's intercept can
 		// extract T via awaitedType — mirrors asyncBridge.makeRetFutAlloc.
 		futCreate.nodeType = createPromise(retType);
 	} else {
-		futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
+		futCreate = makeCall(runtimeRef("msFutureCreate", loc), [], loc);
 		futCreate.nodeType = createPromise(retType);
 	}
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
 	futDecl.nodeType = VOID_PTR;
 	const slotCount = totalSlotCount(params, paramTypes);
-	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
+	const msgAlloc = makeCall(runtimeRef("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeIdentResolved(futSym, loc),
 		makeNumber(slotCount, loc),
@@ -244,8 +244,8 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], retT
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const thisPid2 = makeMember(makeIdent("this", loc), "pid", loc);
 	thisPid2.nodeType = getSysType(TypeKind.Int64);
-	const actorPtr2 = makeCall(makeIdent("msActorFromPid", loc), [thisPid2], loc);
-	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
+	const actorPtr2 = makeCall(runtimeRef("msActorFromPid", loc), [thisPid2], loc);
+	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
 	stmts.push(retFut);
@@ -291,7 +291,7 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		const md = m.data as MethodDeclData;
 		const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
 		// Condition: msMsgKind(_dmsg) === N
-		const kindCall = makeCall(makeIdent("msMsgKind", loc), [makeIdent("_dmsg", loc)], loc);
+		const kindCall = makeCall(runtimeRef("msMsgKind", loc), [makeIdent("_dmsg", loc)], loc);
 		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
 		const selfRef = makeIdent("_self", loc);
 		selfRef.nodeType = actorRefType;
@@ -304,11 +304,11 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 			if (mk == "array" || mk == "struct") {
 				// "struct" needs explicit HiddenAddr (ccgIntroducedPtr=false for small structs);
 				// "array" gets & via shimCallArg (ccgIntroducedPtr=true unconditionally).
-				const getPtrCall = makeCall(makeIdent("msMsgGetPtr", loc), [
+				const getPtrCall = makeCall(runtimeRef("msMsgGetPtr", loc), [
 					makeIdent("_dmsg", loc),
 					makeNumber(dSlot, loc),
 				], loc);
-				const unboxCall = makeCall(makeIdent("msUnboxStruct", loc), [getPtrCall], loc);
+				const unboxCall = makeCall(runtimeRef("msUnboxStruct", loc), [getPtrCall], loc);
 				unboxCall.nodeType = mParamTypes[ai];
 				if (mk == "struct") {
 					handlerArgs.push(makeHiddenAddr(unboxCall, loc));
@@ -317,7 +317,7 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				}
 			} else {
 				const getter = msgGetterName(mk);
-				const getCall = makeCall(makeIdent(getter, loc), [
+				const getCall = makeCall(runtimeRef(getter, loc), [
 					makeIdent("_dmsg", loc),
 					makeNumber(dSlot, loc),
 				], loc);
@@ -349,22 +349,22 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 				// Select typed chain variant based on method's declared return type
 				// so msString (16B) and other typed values are copied correctly.
 				const chainFn = futureChainFnForReturn(m.nodeType);
-				const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
+				const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
 				const replyDecl = makeVarDecl("_replyFut", futAccessCall, DeclKind.Const, loc);
 				replyDecl.nodeType = VOID_PTR;
 				bodyStmts.push(replyDecl);
 				bodyStmts.push(makeExprStmt(
-					makeCall(makeIdent(chainFn, loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
+					makeCall(runtimeRef(chainFn, loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
 				replyFutArg = makeIdent("_replyFut", loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
 			const selfPid = makeMember(makeIdent("_self", loc), "pid", loc);
 			selfPid.nodeType = getSysType(TypeKind.Int64);
-			const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [
+			const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [
 				selfPid,
 			], loc);
 			bodyStmts.push(makeExprStmt(
-				makeCall(makeIdent("msActorSuspend", loc), [actorPtr, makeIdent("_implFut", loc), replyFutArg], loc), loc));
+				makeCall(runtimeRef("msActorSuspend", loc), [actorPtr, makeIdent("_implFut", loc), replyFutArg], loc), loc));
 			body = makeBlock(bodyStmts, loc);
 		} else if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
@@ -373,19 +373,19 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 			const retMk = typeMsgKind(retType);
 			const completeFn = msgCompleteName(retMk);
 			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
-			const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
+			const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
 			if ((retMk == "array" || retMk == "struct") && retType != null) {
 				// Heap-box: msSinkBoxStruct → msMsgCompletePtr → await side's
 				// msUnboxStruct unboxes. Reply future stays a uniform 8-byte slot.
 				// boxCall.nodeType = void* per PARALOCK I13 (asyncBridge canonical).
-				const boxCall = makeCall(makeIdent("msSinkBoxStruct", loc), [makeIdent("_result", loc)], loc);
+				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [makeIdent("_result", loc)], loc);
 				boxCall.nodeType = VOID_PTR;
 				const boxDecl = makeVarDecl("_boxed", boxCall, DeclKind.Const, loc);
 				boxDecl.nodeType = VOID_PTR;
-				const completeCall = makeCall(makeIdent(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
+				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
 				body = makeBlock([resultDecl, boxDecl, makeExprStmt(completeCall, loc)], loc);
 			} else {
-				const completeCall = makeCall(makeIdent(completeFn, loc), [futAccessCall, makeIdent("_result", loc)], loc);
+				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdent("_result", loc)], loc);
 				body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
 			}
 		}
@@ -499,7 +499,7 @@ function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: 
 		}
 		const argIdent = makeIdent(params[ai], loc);
 		argIdent.nodeType = t;
-		releases.push(makeExprStmt(makeCall(makeIdent(releaseFn, loc), [argIdent], loc), loc));
+		releases.push(makeExprStmt(makeCall(runtimeRef(releaseFn, loc), [argIdent], loc), loc));
 	}
 	if (releases.length == 0) return body;
 	// Wrap the try in a Block: asyncBridge's rewriteAsyncFnBody requires the
@@ -775,12 +775,12 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		// if (msMsgKind(_smsg) === -1 && hasOnExit) → call onExit_impl(_self, pid, reason)
 		if (hasOnExit) {
 			const kindCheck = makeBinary(
-				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				makeCall(runtimeRef("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
 				"===", makeNumber(-1, loc), loc);
 			const exitCall = makeCall(makeIdent(name + "_onExit_impl", loc), [
 				selfRef,
-				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
-				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
+				makeCall(runtimeRef("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
+				makeCall(runtimeRef("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
 			], loc);
 			stmts.push(createNode(NodeKind.IfStmt, {
 				condition: kindCheck, consequent: makeBlock([makeExprStmt(exitCall, loc)], loc),
@@ -790,13 +790,13 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		// if (msMsgKind(_smsg) === -2 && hasOnDown) → call onDown_impl(_self, ref, pid, reason)
 		if (hasOnDown) {
 			const kindCheck2 = makeBinary(
-				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				makeCall(runtimeRef("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
 				"===", makeNumber(-2, loc), loc);
 			const downCall = makeCall(makeIdent(name + "_onDown_impl", loc), [
 				selfRef,
-				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
-				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
-				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(2, loc)], loc),
+				makeCall(runtimeRef("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
+				makeCall(runtimeRef("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
+				makeCall(runtimeRef("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(2, loc)], loc),
 			], loc);
 			stmts.push(createNode(NodeKind.IfStmt, {
 				condition: kindCheck2, consequent: makeBlock([makeExprStmt(downCall, loc)], loc),
@@ -806,7 +806,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		// if (msMsgKind(_smsg) === -3 && hasOnIdle) → call onIdle_impl(_self)
 		if (hasOnIdle) {
 			const kindCheck3 = makeBinary(
-				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				makeCall(runtimeRef("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
 				"===", makeNumber(-3, loc), loc);
 			const idleCall = makeCall(makeIdent(name + "_onIdle_impl", loc), [selfRef], loc);
 			stmts.push(createNode(NodeKind.IfStmt, {
@@ -928,7 +928,7 @@ function generateActorWiring(varName: string, varSym: Symbol | null, actorName: 
 		m.nodeType = getSysType(TypeKind.Int64);
 		return m;
 	};
-	const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
+	const createCall = makeCall(runtimeRef("msActorCreatePid", loc), [
 		varRef(),
 		dispatchRef,
 	], loc);
@@ -938,33 +938,33 @@ function generateActorWiring(varName: string, varSym: Symbol | null, actorName: 
 	);
 	result.push(makeExprStmt(assignActor, loc));
 	const pidRef = pidMember();
-	const registerCall = makeCall(makeIdent("msActorRegister", loc), [
-		makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
+	const registerCall = makeCall(runtimeRef("msActorRegister", loc), [
+		makeCall(runtimeRef("msActorFromPid", loc), [pidRef], loc),
 	], loc);
 	result.push(makeExprStmt(registerCall, loc));
-	const increfCall = makeCall(makeIdent("msIncRef", loc), [
+	const increfCall = makeCall(runtimeRef("msIncRef", loc), [
 		varRef(),
 	], loc);
 	result.push(makeExprStmt(increfCall, loc));
 	const wi = findWireInfo(wireInfos, actorName);
 	if (wi != null && wi.hasOnTerminate) {
 		const pidRef2 = pidMember();
-		const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
-			makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
+		const setTermCall = makeCall(runtimeRef("msActorSetOnTerminate", loc), [
+			makeCall(runtimeRef("msActorFromPid", loc), [pidRef2], loc),
 			makeIdent(actorName + "_onTerminate_impl", loc),
 		], loc);
 		result.push(makeExprStmt(setTermCall, loc));
 	}
 	if (wi != null && wi.hasSysMsg) {
 		const pidRef3 = pidMember();
-		const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
-			makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
+		const setSysCall = makeCall(runtimeRef("msActorSetSystemMsgHandler", loc), [
+			makeCall(runtimeRef("msActorFromPid", loc), [pidRef3], loc),
 			makeIdent(actorName + "_systemMsg_impl", loc),
 		], loc);
 		result.push(makeExprStmt(setSysCall, loc));
 	}
 	if (wi != null && wi.hasTrapExits) {
-		const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
+		const trapCall = makeCall(runtimeRef("msActorTrapExits", loc), [
 			pidMember(),
 			makeNumber(1, loc),
 		], loc);
@@ -1191,7 +1191,7 @@ function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symb
 
 	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
-	pd.programStmts.push(makeExprStmt(makeCall(makeIdent("msActorPollAll", exitLoc), [], exitLoc), exitLoc));
+	pd.programStmts.push(makeExprStmt(makeCall(runtimeRef("msActorPollAll", exitLoc), [], exitLoc), exitLoc));
 
 	return program;
 }

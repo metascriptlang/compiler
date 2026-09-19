@@ -6,7 +6,7 @@ import {
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
-import { lookupSymbol, makeSymbol, hasFlag, markUsed, classDeclNodeOf, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, hasFlag, markUsed, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -41,6 +41,7 @@ const shapeTransformer: int32 = 2;
 
 interface MemberInits {
 	fieldName: string;
+	isStatic: boolean;
 	stmts: Node[];
 }
 
@@ -100,9 +101,6 @@ let _pendingStmts: Node[] = [];
 let _pendingDone: boolean[] = [];
 let _pendingResults: Node[] = [];
 let _pendingExtras: Node[][] = [];
-let _nodeMetaNodes: Node[] = [];
-let _nodeMetaKeys: string[][] = [];
-let _nodeMetaValues: Node[][] = [];
 
 function applyStatementAt(ctx: CheckerContext, index: int32): void {
 	if (_pendingDone[index]) return;
@@ -184,7 +182,6 @@ export function applyDecoratedStmt(ctx: CheckerContext, stmt: Node, after: Node[
 	const rewritten = applyToStatement(ctx, stmt, after);
 	const decl = deferredDeclOf(rewritten);
 	if (decl != null && !replacementKeepsName(ctx, originalName, decl)) return stmt;
-	aliasPendingMetadata(decl, stmt);
 	return rewritten;
 }
 
@@ -273,40 +270,6 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 	};
 }
 
-function pendingMetadataSlot(decl: Node): int32 {
-	for (let i = 0; i < _nodeMetaNodes.length; i += 1) {
-		if (_nodeMetaNodes[i] == decl) return i;
-	}
-	return -1;
-}
-
-function recordPendingMetadata(plan: ClassPlan): void {
-	const slot = pendingMetadataSlot(plan.classNode);
-	if (slot >= 0) {
-		_nodeMetaKeys[slot] = plan.metaKeys;
-		_nodeMetaValues[slot] = plan.metaValues;
-		return;
-	}
-	_nodeMetaNodes.push(plan.classNode);
-	_nodeMetaKeys.push(plan.metaKeys);
-	_nodeMetaValues.push(plan.metaValues);
-}
-
-function aliasPendingMetadata(from: Node, to: Node): void {
-	if (from == null || to == null || from == to) return;
-	const slot = pendingMetadataSlot(from);
-	if (slot < 0) return;
-	const existing = pendingMetadataSlot(to);
-	if (existing >= 0) {
-		_nodeMetaKeys[existing] = _nodeMetaKeys[slot];
-		_nodeMetaValues[existing] = _nodeMetaValues[slot];
-		return;
-	}
-	_nodeMetaNodes.push(to);
-	_nodeMetaKeys.push(_nodeMetaKeys[slot]);
-	_nodeMetaValues.push(_nodeMetaValues[slot]);
-}
-
 function addInheritedPair(plan: ClassPlan, key: string, value: Node): void {
 	for (const k of plan.inheritedKeys) {
 		if (k == key) return;
@@ -330,12 +293,6 @@ function seedInheritedMetadata(ctx: CheckerContext, plan: ClassPlan): void {
 		}
 		const parentDecl = classDeclNodeOf(parentSym);
 		if (parentDecl == null || parentDecl.kind != NodeKind.ClassDecl) return;
-		const slot = pendingMetadataSlot(parentDecl);
-		if (slot >= 0) {
-			for (let i = 0; i < _nodeMetaKeys[slot].length; i += 1) {
-				addInheritedPair(plan, _nodeMetaKeys[slot][i], _nodeMetaValues[slot][i]);
-			}
-		}
 		parentName = (parentDecl.data as ClassDeclData).classExtends;
 		depth += 1;
 	}
@@ -367,7 +324,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			if (inner == null || memberCategory(inner) != category) continue;
 			recordFieldDecorators(planClassSymbol(ctx, plan), dd);
 			const stmts: Node[] = [];
-			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", stmts: stmts };
+			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", isStatic: category == 0 || category == 2, stmts: stmts };
 			plan.activeInits = inits;
 			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
 			plan.activeInits = null as unknown as MemberInits;
@@ -751,6 +708,16 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		clearArrayHeap(arrHeap);
 		return target;
 	}
+	if (vm.diagMessage != "") {
+		const diagMsg = vm.diagMessage;
+		const diagLine = vm.diagLine > 0 ? vm.diagLine as int32 : loc.line;
+		const diagCol = vm.diagColumn > 0 ? vm.diagColumn as int32 : loc.column;
+		vm.diagMessage = "";
+		addError(ctx, `decorator '${name}': ${diagMsg}`, diagLine, diagCol);
+		clearObjectHeap(objHeap);
+		clearArrayHeap(arrHeap);
+		return target;
+	}
 	if (res.kind != RaiserValueKind.Object) {
 		addError(ctx, `decorator '${name}' produced no result object`, loc.line, loc.column);
 		clearObjectHeap(objHeap);
@@ -762,25 +729,10 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc);
 	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc);
 	for (const s of inits) {
-		if (info.isStatic || info.kind == "class" || plan.activeInits == null) plan.staticInits.push(s);
+		if (info.kind == "class" || plan.activeInits == null) plan.staticInits.push(s);
 		else plan.activeInits.stmts.push(s);
 	}
 	const rv = heapObjectGetField(objHeap, h, "result");
-	if (rv.kind == RaiserValueKind.Object) {
-		const errFlag = heapObjectGetField(objHeap, rv.intVal, "__compileError");
-		if (errFlag.kind == RaiserValueKind.Int && errFlag.intVal == 1) {
-			const errMsg = heapObjectGetField(objHeap, rv.intVal, "message");
-			const msg = errMsg.kind == RaiserValueKind.String ? errMsg.strVal : "compile error in decorator";
-			const el = heapObjectGetField(objHeap, rv.intVal, "line");
-			const ec = heapObjectGetField(objHeap, rv.intVal, "column");
-			const line = el.kind == RaiserValueKind.Int ? el.intVal as int32 : (el.kind == RaiserValueKind.Float ? el.floatVal as int32 : loc.line);
-			const column = ec.kind == RaiserValueKind.Int ? ec.intVal as int32 : (ec.kind == RaiserValueKind.Float ? ec.floatVal as int32 : loc.column);
-			addError(ctx, `decorator '${name}': ${msg}`, line, column);
-			clearObjectHeap(objHeap);
-			clearArrayHeap(arrHeap);
-			return target;
-		}
-	}
 	let outNode = target;
 	if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
@@ -833,6 +785,7 @@ function instanceInitStatements(plan: ClassPlan): Node[] {
 	const fields = instanceFieldNames(body);
 	const out: Node[] = [];
 	for (const inits of plan.memberInits) {
+		if (inits.isStatic) continue;
 		let declaredField = false;
 		for (const name of fields) {
 			if (name == inits.fieldName) declaredField = true;
@@ -847,7 +800,7 @@ function instanceInitStatements(plan: ClassPlan): Node[] {
 		if (pd.propIsStatic) continue;
 		if (pd.propInitializer != null) out.push(fieldInitAssignment(member, null));
 		for (const inits of plan.memberInits) {
-			if (inits.fieldName != pd.propName) continue;
+			if (inits.isStatic || inits.fieldName != pd.propName) continue;
 			for (const s of inits.stmts) out.push(s);
 		}
 	}
@@ -894,18 +847,62 @@ function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 		if (sym != null) {
 			sym.metaKeys = plan.metaKeys;
 			sym.metaValues = plan.metaValues;
-		} else {
-			recordPendingMetadata(plan);
 		}
 	}
 	if (plan.memberInits.length > 0) {
 		if (plan.isActor) {
 			addError(ctx, `addInitializer on actor members is not supported`, plan.classNode.location.line, plan.classNode.location.column);
 		} else {
-			injectIntoConstructor(plan, instanceInitStatements(plan));
+			const instanceInits = instanceInitStatements(plan);
+			if (instanceInits.length > 0) injectIntoConstructor(plan, instanceInits);
 		}
 	}
-	for (const s of plan.staticInits) after.push(s);
+	if (plan.isActor || !declaredAtModuleScope(ctx)) {
+		for (const inits of plan.memberInits) {
+			if (!inits.isStatic) continue;
+			for (const s of inits.stmts) after.push(s);
+		}
+		for (const s of plan.staticInits) after.push(s);
+		return;
+	}
+	insertStaticInitBlocks(plan);
+}
+
+function declaredAtModuleScope(ctx: CheckerContext): boolean {
+	const k = ctx.table.current.scopeKind;
+	return k == ScopeKind.Module || k == ScopeKind.Global;
+}
+
+function staticInitBlock(plan: ClassPlan, stmts: Node[]): Node {
+	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, plan.classNode.location);
+}
+
+function insertStaticInitBlocks(plan: ClassPlan): void {
+	let hasStatic = plan.staticInits.length > 0;
+	for (const inits of plan.memberInits) {
+		if (inits.isStatic) hasStatic = true;
+	}
+	if (!hasStatic) return;
+	const cd = plan.classNode.data as ClassDeclData;
+	const merged: Node[] = [];
+	for (const inits of plan.memberInits) {
+		if (inits.isStatic && inits.fieldName == "") merged.push(staticInitBlock(plan, inits.stmts));
+	}
+	for (const m of cd.classBody) {
+		merged.push(m);
+		const member = bareMember(m);
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (!pd.propIsStatic) continue;
+		for (const inits of plan.memberInits) {
+			if (!inits.isStatic || inits.fieldName != pd.propName) continue;
+			merged.push(staticInitBlock(plan, inits.stmts));
+		}
+	}
+	if (plan.staticInits.length > 0) merged.push(staticInitBlock(plan, plan.staticInits));
+	const body = cd.classBody;
+	body.length = 0;
+	for (const m of merged) body.push(m);
 }
 
 registerApplyDecorators(applyDecorators);
@@ -981,8 +978,8 @@ test "member initializers land in the constructor in tsc order" {
 	const loc = cls.location;
 	const mInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "mInit" }, loc) }, loc);
 	const bInit = createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.Identifier, { name: "bInit" }, loc) }, loc);
-	plan.memberInits.push({ fieldName: "b", stmts: [bInit] });
-	plan.memberInits.push({ fieldName: "", stmts: [mInit] });
+	plan.memberInits.push({ fieldName: "b", isStatic: false, stmts: [bInit] });
+	plan.memberInits.push({ fieldName: "", isStatic: false, stmts: [mInit] });
 	const after: Node[] = [];
 	finishPlan(ctx, plan, after);
 	const ctor = (body[4].data as ConstructorDeclData).ctorBody.data as BlockStmtData;

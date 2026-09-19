@@ -14,6 +14,10 @@ export function opName(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst => "LoadConst",
 		RaiserOpcode.Move => "Move",
+		RaiserOpcode.CopyValue => "CopyValue",
+		RaiserOpcode.LoadGlobal => "LoadGlobal",
+		RaiserOpcode.StoreGlobal => "StoreGlobal",
+		RaiserOpcode.StrByteLen => "StrByteLen",
 		RaiserOpcode.LoadNil => "LoadNil",
 		RaiserOpcode.AddI64 => "AddI64",
 		RaiserOpcode.SubI64 => "SubI64",

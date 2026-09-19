@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -173,6 +173,7 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	let outPositions = "";
 	let refPositions = "";
 	let rdonlyPositions = "";
+	let sinkPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
 		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
@@ -189,6 +190,11 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 			if (rdonlyPositions == "") { rdonlyPositions = `${oi}`; }
 			else { rdonlyPositions = `${rdonlyPositions},${oi}`; }
 		}
+		if (params[oi].length > 5 && params[oi].slice(0, 5) == "sink:") {
+			params[oi] = params[oi].slice(5, params[oi].length);
+			if (sinkPositions == "") { sinkPositions = `${oi}`; }
+			else { sinkPositions = `${sinkPositions},${oi}`; }
+		}
 	}
 	if (outPositions != "") {
 		if (flags == "") { flags = `out:${outPositions}`; }
@@ -201,6 +207,10 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	if (rdonlyPositions != "") {
 		if (flags == "") { flags = `rdonly:${rdonlyPositions}`; }
 		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
+	}
+	if (sinkPositions != "") {
+		if (flags == "") { flags = `sink:${sinkPositions}`; }
+		else { flags = `${flags}|sink:${sinkPositions}`; }
 	}
 	// Encode generic param names
 	if (genericNames != "") {
@@ -1140,6 +1150,10 @@ function parseClassMember(state: ParserState): NodeResult {
 	if (current(state).kind == TokenKind.Static) {
 		memberIsStatic = true;
 		advance(state);
+	}
+
+	if (memberIsStatic && current(state).kind == TokenKind.LBrace) {
+		return callBlockParser(state);
 	}
 
 	// Check for readonly
@@ -2253,6 +2267,16 @@ test "constructor" { assert programOk("class Foo { constructor(x: number) { this
 test "extends" { assert programOk("class Dog extends Animal { bark() { return 1; } }"); }
 
 test "static" { assert programOk("class Foo { static create() { return 1; } }"); }
+
+test "static block" { assert programOk("class Foo { static x: int32 = 0;\n\tstatic { Foo.x = 7; } }"); }
+
+test "static block keeps its statements" {
+	const cls = stmtAt("class Foo { static { Foo.x = 7; } }", 0);
+	assert cls.kind == NodeKind.ClassDecl;
+	const body = (cls.data as ClassDeclData).classBody;
+	assert body.length == 1;
+	assert body[0].kind == NodeKind.BlockStmt;
+}
 
 test "abstract" { assert programOk("abstract class Shape { abstract area(): number; }"); }
 

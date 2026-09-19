@@ -14,13 +14,15 @@ import {
 import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
+import { emitValueCopy } from "./valueCopy";
+import { getProperty, getElementType, unwrapRef } from "../../checker/types";
 import { SymbolFlag } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	callRaiserOnDemand, queueRaiserCompileError,
-	callRaiserStmtCompiler, emitTrapNil
+	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
+	callRaiserStmtCompiler, emitTrapNil, resolveGlobal,
 } from "./context";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
@@ -290,6 +292,12 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
+			const global = resolveGlobal(s, node.resolvedSym);
+			if (global >= 0) {
+				const destination = allocReg(s);
+				emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, destination, global, 0));
+				return destination;
+			}
 			const reg = resolveLocal(s, d.name);
 			if (reg >= 0) return reg;
 			// The checker rewrites `Enum.Member` into an Identifier "Enum_Member".
@@ -326,7 +334,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 					return r;
 				}
 			}
-			const funcIdx = resolveFunc(s, d.name);
+			const funcIdx = resolveRoutine(s, node.resolvedSym, d.name);
 			if (funcIdx >= 0) {
 				const r = allocReg(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
@@ -444,9 +452,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	// Assignment: x = expr  or  arr[i] = expr
 	if (op == "=") {
-		const srcReg = compileExpr(s, d.right);
+		const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
 		if (d.left.kind == NodeKind.Identifier) {
 			const id = d.left.data as IdentifierData;
+			const global = resolveGlobal(s, d.left.resolvedSym);
+			if (global >= 0) {
+				emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, srcReg, global, 0));
+				return srcReg;
+			}
 			const targetReg = resolveLocal(s, id.name);
 			if (targetReg >= 0) {
 				emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, srcReg, 0));
@@ -689,7 +702,8 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 
 	if (d.left.kind == NodeKind.Identifier) {
 		const id = d.left.data as IdentifierData;
-		const targetReg = resolveLocal(s, id.name);
+		const global = resolveGlobal(s, d.left.resolvedSym);
+		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, id.name);
 		if (targetReg >= 0) {
 			const rhsReg = compileExpr(s, d.right);
 			// String concat: += on string variable
@@ -698,6 +712,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 			} else {
 				emitInst(s, raiserABC(compoundBaseOpcode(op), targetReg, targetReg, rhsReg));
 			}
+			if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, targetReg, global, 0));
 			return targetReg;
 		}
 	}
@@ -877,8 +892,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 
 	// User function call: callee must be Identifier
 	if (d.callee.kind == NodeKind.Identifier) {
+		if (resolveGlobal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		const calleeId = d.callee.data as IdentifierData;
-		let funcIdx = resolveFunc(s, calleeId.name);
+		let funcIdx = resolveRoutine(s, d.callee.resolvedSym, calleeId.name);
 		if (funcIdx < 0 && d.callee.resolvedSym != null) {
 			funcIdx = callRaiserOnDemand(d.callee.resolvedSym);
 		}
@@ -985,7 +1001,8 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
 		const id = d.updateArg.data as IdentifierData;
-		const varReg = resolveLocal(s, id.name);
+		const global = resolveGlobal(s, d.updateArg.resolvedSym);
+		const varReg = global >= 0 ? compileExpr(s, d.updateArg) : resolveLocal(s, id.name);
 		if (varReg >= 0) {
 			const oneReg = allocReg(s);
 			emitLoadConst(s, oneReg, raiserInt(1));
@@ -997,6 +1014,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 				} else {
 					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
 				}
+				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return varReg;
 			} else {
 				// i++ / i--: save old value, then modify
@@ -1007,6 +1025,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 				} else {
 					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
 				}
+				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return oldReg;
 			}
 		}
@@ -1051,7 +1070,9 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 
 	// Set each field
 	for (let i = 0; i < d.keys.length; i = i + 1) {
-		const valReg = compileExpr(s, d.properties[i]);
+		const fieldType = node.nodeType != null
+			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
+		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
 		const nameIdx = addConst(s, raiserString(d.keys[i]));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
 	}
@@ -1103,7 +1124,9 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 
 	// Compile each element, move result to its slot
 	for (let i = 0; i < elemCount; i = i + 1) {
-		const elemReg = compileExpr(s, d.elements[i]);
+		const elementType = node.nodeType != null
+			? getElementType(unwrapRef(node.nodeType)) : d.elements[i].nodeType;
+		const elemReg = emitValueCopy(s, compileExpr(s, d.elements[i]), elementType);
 		const targetReg = dest + 1 + i;
 		if (elemReg != targetReg) {
 			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, elemReg, 0));
@@ -1143,6 +1166,13 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 			emitLoadConst(s, reg, raiserInt(ec >= 0 ? s.enumMap.items[ec].index : 0));
 			return reg;
 		}
+	}
+
+	if (d.property == "byteLength" && exprIsString(s, d.object)) {
+		const source = compileExpr(s, d.object);
+		const destination = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.StrByteLen, destination, source, 0));
+		return destination;
 	}
 
 	// .length — string vs array
@@ -1200,7 +1230,7 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): int32 {
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
-		const valReg = compileExpr(s, d.arguments[i]);
+		const valReg = emitValueCopy(s, compileExpr(s, d.arguments[i]), d.arguments[i].nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, valReg, 0));
 	}
 	return arrReg;
@@ -1232,7 +1262,9 @@ function isExitCall(callee: Node): boolean {
 
 function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const codeReg = compileExpr(s, d.arguments[0]);
+	const valueReg = compileExpr(s, d.arguments[0]);
+	const codeReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Conv, codeReg, valueReg, RaiserConvClass.I32));
 	// b=1 marks the halt abrupt: it skips the strand drain, the way
 	// process.exit bypasses msDrainUntilIdle on C.
 	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 1, 0));

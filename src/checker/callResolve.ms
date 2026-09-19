@@ -18,8 +18,9 @@ import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, reco
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
+import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
-import { expandTemplate, isTemplateSym } from "./template";
+import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -206,6 +207,7 @@ export function unwrapSpliceManyAtExpr(ctx: CheckerContext, node: Node, expanded
 			node.location.line, node.location.column);
 		return null as unknown as Node;
 	}
+	gensymSplicePrefix(ctx, expanded);
 	const lastIdx = d.spliceNodes.length - 1;
 	let i = 0;
 	while (i < lastIdx) {
@@ -216,6 +218,53 @@ export function unwrapSpliceManyAtExpr(ctx: CheckerContext, node: Node, expanded
 		i = i + 1;
 	}
 	return d.spliceNodes[lastIdx];
+}
+
+export function isHoistingSplice(ctx: CheckerContext, node: Node, expanded: Node): boolean {
+	return expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr;
+}
+
+export function spliceEndsInValue(splice: Node): boolean {
+	const d = splice.data as SpliceManyData;
+	if (d.spliceNodes.length == 0) return false;
+	return match (d.spliceNodes[d.spliceNodes.length - 1].kind) {
+		NodeKind.VariableDecl | NodeKind.DestructuringDecl | NodeKind.FunctionDecl
+		| NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt
+		| NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.BlockStmt | NodeKind.ExprStmt
+		| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt
+		| NodeKind.SwitchStmt | NodeKind.MatchStmt | NodeKind.UnreachableStmt
+		| NodeKind.ThrowStmt | NodeKind.TryCatchStmt | NodeKind.DeferStmt | NodeKind.AssertStmt
+		| NodeKind.ImportDecl | NodeKind.ExportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+		| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
+		| NodeKind.DecoratedDecl | NodeKind.TestDecl | NodeKind.ExternDecl | NodeKind.MacroDecl
+		| NodeKind.SpliceMany => false,
+		_ => true,
+	};
+}
+
+export function hoistedPrefixSyms(expanded: Node): Symbol[] {
+	const d = expanded.data as SpliceManyData;
+	const prefixSyms: Symbol[] = [];
+	for (let i = 0; i < d.spliceNodes.length - 1; i += 1) {
+		const sym = d.spliceNodes[i].resolvedSym;
+		if (d.spliceNodes[i].kind == NodeKind.VariableDecl && sym != null) prefixSyms.push(sym);
+	}
+	return prefixSyms;
+}
+
+export function bindRefsToHoistedPrefix(value: Node, expanded: Node): void {
+	bindRefsTo(value, hoistedPrefixSyms(expanded));
+}
+
+export function bindRefsTo(node: Node, syms: Symbol[]): void {
+	if (node == null || syms.length == 0) return;
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
+		for (const s of syms) {
+			if (node.resolvedSym == s) { node.flags = node.flags.incl(NodeFlag.BoundSym); break; }
+		}
+		return;
+	}
+	forEachChild(node, (child: Node): void => { bindRefsTo(child, syms); });
 }
 
 // Walk `nodes` with the unconsumed-JSX leak check suppressed. A raw JSX node is legal as a
@@ -799,7 +848,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return errorType();
 			}
 			let expandedValue = expanded;
-			if (expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr) {
+			const hoists = isHoistingSplice(ctx, node, expanded);
+			if (hoists) {
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) {
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
@@ -821,6 +871,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// If the expanded result is itself a macro call, this recurses through
 			// checkCallExpr → eager expand again, bounded by macroExpansionDepth.
 			callCheckExpr(ctx, node, expectedType);
+			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 			return node.nodeType;
 		}
@@ -2734,6 +2785,10 @@ function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symb
 
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t == null) return false;
+	if (t.kind == TypeKind.Cursor) {
+		const inner = t.typeReturn;
+		return inner != null && isPointerInC(inner, ctx);
+	}
 	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow || t.kind == TypeKind.Var;
 }
 
@@ -3012,11 +3067,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
-	const needsDeref = isPointerInC(objType, ctx);
+	const nullablePtr = objType.kind == TypeKind.Union ? unwrapRefNullUnion(objType) : null;
+	const ptrType = (nullablePtr != null && isPointerInC(nullablePtr, ctx)) ? nullablePtr : objType;
+	const needsDeref = isPointerInC(ptrType, ctx);
 	let resolvedObjType = objType;
 	if (needsDeref) {
-		if (objType.typeReturn != null) {
-			resolvedObjType = objType.typeReturn;
+		if (ptrType.typeReturn != null) {
+			resolvedObjType = ptrType.typeReturn;
 			if (resolvedObjType.kind == TypeKind.Ref && resolvedObjType.typeReturn != null) {
 				resolvedObjType = resolvedObjType.typeReturn;
 			}
@@ -3094,6 +3151,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym != null) {
 		const staticField = findStaticField(d.object.resolvedSym, d.property);
 		if (staticField != null) {
+			if (ctx.currentFunction == null) {
+				for (const pending of ctx.staticBlockPending) {
+					if (pending == staticField.declNode) {
+						addError(ctx, `property '${d.property}' is used before its initialization`, node.location.line, node.location.column);
+					}
+				}
+			}
 			node.resolvedSym = staticField;
 			return staticField.symbolType;
 		}
@@ -3241,8 +3305,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			const symT = d.object.resolvedSym != null ? d.object.resolvedSym.symbolType : null;
 			if (symT != null && symT.kind == TypeKind.Var && symT.typeReturn != null) {
 				derefNode.nodeType = symT.typeReturn;
-			} else if ((objType.kind == TypeKind.Var || objType.kind == TypeKind.Ref) && objType.typeReturn != null) {
-				derefNode.nodeType = objType.typeReturn;
+			} else if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
+				derefNode.nodeType = ptrType.typeReturn;
 			} else {
 				derefNode.nodeType = resolvedObjType;
 			}

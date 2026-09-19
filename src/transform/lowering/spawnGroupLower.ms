@@ -27,7 +27,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
-import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral } from "../util";
+import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
@@ -85,7 +85,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 
 	// 1. const $ag = msAwaitGroupInit(N);
 	const ag = makeTempDecl(ctx, "ag",
-		makeCall(makeIdent("msAwaitGroupInit", loc), [makeNumber(n, loc)], loc),
+		makeCall(runtimeRef("msAwaitGroupInit", loc), [makeNumber(n, loc)], loc),
 		VOID_PTR_TYPE, loc);
 	stmts.push(ag.decl);
 
@@ -141,7 +141,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		}
 		// msSpawnTaskSubmit($ag, i, closure);
 		stmts.push(makeExprStmt(
-			makeCall(makeIdent("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(si, loc), closure], loc), loc));
+			makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(si, loc), closure], loc), loc));
 		si = si + 1;
 	}
 
@@ -149,11 +149,11 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	if (isAsync) {
 		// Async: set doneFut, then emit await on it (asyncDesugar will convert to yield)
 		const doneFut = makeTempDecl(ctx, "doneFut",
-			makeCall(makeIdent("msFutureCreate", loc), [], loc),
+			makeCall(runtimeRef("msFutureCreate", loc), [], loc),
 			VOID_PTR_TYPE, loc);
 		stmts.push(doneFut.decl);
 		stmts.push(makeExprStmt(
-			makeCall(makeIdent("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
+			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
 		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
 		const awaitData: NodeData = { awaitArg: doneFut.ident };
 		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);
@@ -178,7 +178,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		let ri = 0;
 		while (ri < n) {
 			const res = makeTempDecl(ctx, "agr",
-				makeCall(makeIdent("msAwaitGroupResult", loc), [ag.ident, makeNumber(ri, loc)], loc),
+				makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(ri, loc)], loc),
 				VOID_PTR_TYPE, loc);
 			stmts.push(res.decl);
 			let rExpr = res.ident;
@@ -193,7 +193,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 
 	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
-		makeCall(makeIdent("msAwaitGroupFree", loc), [ag.ident], loc), loc));
+		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
 
 	return { stmts, resultExpr };
 }

@@ -33,6 +33,8 @@ export macro jsonValueOf(t: Node): Node {
 		let elemIsStruct: boolean = false;
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
+		} else if (elemType.kind == NodeKind.EnumDecl) {
+			en = elemType.enumName;
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
@@ -261,10 +263,10 @@ export macro jsonValueOf(t: Node): Node {
 		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions
 		// land as TypeUnion / TypeFunction kinds (not Identifier) → reject.
-		if (tt.kind != NodeKind.Identifier) {
-			error("jsonValueOf: unsupported field type — only atomic types, atomic arrays, and structs are supported in V1", t);
+		if (tt.kind != NodeKind.Identifier && tt.kind != NodeKind.EnumDecl) {
+			error("jsonValueOf: unsupported field type (kind=" + tt.kind + ")", t);
 		}
-		const tn: string = tt.name;
+		const tn: string = tt.kind == NodeKind.EnumDecl ? tt.enumName : tt.name;
 		// bigint has no JSON representation — silently wrapping through the
 		// jsonInt int64 carrier corrupts values >= 2^63. JSON.stringify(1n)
 		// throws in Node; the macro knows the static type, so refuse here at

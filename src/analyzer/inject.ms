@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -287,47 +287,11 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
-	// MS function params are borrows (Nim default — no sink params, ea38c2a).
-	// The only consumed argument positions are the hardcoded runtime sinks below.
 	const sym = node.resolvedSym;
 
-	// Reference parity: seq.add(y: sink T) — push takes ownership of its argument.
-	// After extension method lowering, push is a direct call with nativeName containing "ArrayPush".
-	// The value argument (last param, after the array receiver) must be treated as consumed (sink).
-	let isArrayPush = false;
-	if (sym != null && sym.nativeName != "") {
-		const nn = sym.nativeName;
-		if (nn == "&msGenericArrayPush" || nn == "&msStringArrayPush" || nn == "&msNumberArrayPush" || nn == "&msRefArrayPush") {
-			isArrayPush = true;
-		}
-	}
-
-	// `msFutureCompleteT(fut, value)` — future takes ownership of the struct value.
-	// Synthetic call emitted by asyncBridge for async struct returns. MS parser has no
-	// explicit `sink T` annotation syntax (sink is inferred from body, and externs have
-	// no body), so we hardcode the sink position here — same precedent as msArrayPush
-	// above. Without this, DRC wraps a fresh-call RHS in a scope-exit $tmp that
-	// double-frees the strings the future has just taken ownership of (observed on
-	// cross-module async struct returns; same-module worked only by accident because
-	// struct literals lower away the CallExpr wrapping before DRC sees it).
-	let isCompleteSink = false;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		const calleeName = (cd.callee.data as IdentifierData).name;
-		if (calleeName == "msFutureCompleteT" || calleeName.startsWith("msMsgComplete")) isCompleteSink = true;
-	}
-
-	// `msSpawnInto(fut, closure, ...)` — the spawn takes ownership of the
-	// pre-allocated future: thread.h's submit incref (Amendment G) and the
-	// worker's inline publish ride on it, and the CALL result (same future)
-	// carries the caller's ownership onward. Same precedent as msFutureCompleteT
-	// above: without this, DRC wraps the msFutureCreateInline argument in a
-	// scope-exit $tmp decref that double-owns against the spawn submit ref —
-	// the future is freed while the worker still publishes into it (heap
-	// corruption after a few thousand string spawns; string is the only
-	// spawn shape with a caller-side pre-allocated future).
-	let isSpawnIntoSink = false;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		if ((cd.callee.data as IdentifierData).name == "msSpawnInto") isSpawnIntoSink = true;
+	let sinkParams: Type[] | null = null;
+	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
+		sinkParams = sym.symbolType.typeChildren;
 	}
 
 	// Actor proxy call without a park = SEND-class handoff: the caller never
@@ -345,12 +309,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		// Push value arg (index 1, after receiver) is sink
-		if (isArrayPush && i == 1) argMode = DrcMode.Consumed;
-		// future/actor-reply completion value arg (index 1, after the future) is sink
-		if (isCompleteSink && i == 1) argMode = DrcMode.Consumed;
-		// spawn-into future arg (index 0) is sink — spawn owns the pre-allocated future
-		if (isSpawnIntoSink && i == 0) argMode = DrcMode.Consumed;
+		if (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink) {
+			argMode = DrcMode.Consumed;
+		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
 		if (isActorSendHandoff && i >= 1 && cd.arguments[i] != null && cd.arguments[i].nodeType != null) {
 			const sendRc = classifyRc(cd.arguments[i].nodeType, dctx);
@@ -876,7 +837,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 		// Use msStringIncref(x) directly for proper refcount bump.
 		if (srcName == "" && rcInfo.rcKind == RcKind.String) {
 			return makeExprStmt(
-				makeCall(makeIdent("msStringIncref", loc), [makeVarRef(destName, destSym, loc)], loc), loc);
+				makeCall(runtimeRef("msStringIncref", loc), [makeVarRef(destName, destSym, loc)], loc), loc);
 		}
 		// dest: pointer unless runtime macro (seqLike + empty typeName)
 		const destRef = makeVarRef(destName, destSym, loc);
@@ -1189,8 +1150,13 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			// Copy: shared reference (Reference: genCopy)
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
-		// Field/element access → always copy (borrow from shared object)
+		// Field/element access → analysable + last-read = move, else = copy
 		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.HiddenDeref => {
+			const srcOwns = rhs.nodeType != null && classifyRc(rhs.nodeType, dctx).needsCleanup;
+			if (srcOwns && rcInfo.wasMovedFn != "" && isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
+				addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
+				return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+			}
 			return genCopy(stmt, dest, destName, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
 		// Conditional → split branches (Reference: handleNestedTempl)
@@ -1448,6 +1414,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 	if (stmt == null) return stmt;
 	const sloc = stmt.location;
 	dctx.stmtBorrowReads = [];
+	setNeedsTryIfRaises(stmt, dctx);
 
 	// Push outer context for cross-scope last-read analysis
 	pushOuterStmts(dctx, stmts, idx + 1, false);
@@ -1476,46 +1443,30 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 
 	popOuterStmts(dctx);
 
-	// Blocker 28: only set needsTry when a statement could actually throw.
-	// RC runtime calls (ms* prefix) and DRC synthetics ($ prefix) are nothrow.
-	if (scopeDepth(dctx) > 0 && stmtCanThrow(stmt) && currentScope(dctx).varsToCleanup.length > 0) {
-		currentScope(dctx).needsTry = true;
-	}
-
 	return result;
 }
 
-// Blocker 28: Check if a call expression could throw an exception.
-// RC runtime (ms*) and DRC synthetic ($*) calls are nothrow by convention.
 function callCanThrow(callExpr: Node): boolean {
 	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind == NodeKind.Identifier) {
-		const name = (cd.callee.data as IdentifierData).name;
-		if (name.startsWith("ms")) return false;
-		if (name.startsWith("$")) return false;
-	}
-	return true;
+	const sym = cd.callee.resolvedSym;
+	if (sym == null) return true;
+	if (hasFlag(sym, SymbolFlag.Throws)) return true;
+	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-// Blocker 28: Check if a statement could throw — stricter than old stmtMayCall.
-// Only returns true for ThrowStmt or user function calls that could throw.
-function stmtCanThrow(node: Node): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.ThrowStmt) return true;
-	if (node.kind == NodeKind.ExprStmt) {
-		const expr = (node.data as ExprStmtData).expr;
-		if (expr != null && expr.kind == NodeKind.CallExpr) return callCanThrow(expr);
-		if (expr != null && expr.kind == NodeKind.BinaryExpr) {
-			const bd = expr.data as BinaryExprData;
-			if (bd.right != null && bd.right.kind == NodeKind.CallExpr) return callCanThrow(bd.right);
-		}
-		return false;
+function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr
+		|| node.kind == NodeKind.ClassDecl
+		|| node.kind == NodeKind.ActorDecl
+		|| node.kind == NodeKind.TestDecl) return;
+	if (node.kind == NodeKind.CallExpr && callCanThrow(node)) {
+		setNeedsTryAll(dctx);
+		return;
 	}
-	if (node.kind == NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		return vd.initializer != null && vd.initializer.kind == NodeKind.CallExpr && callCanThrow(vd.initializer);
-	}
-	return false;
+	forEachChild(node, (child: Node): void => { setNeedsTryIfRaises(child, dctx); });
 }
 
 // ===== Loop-Aware Last-Read =====
@@ -1588,10 +1539,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (node == null) return false;
 	// Gate: must be analysable field access (local, not global, not cursor, not param)
-	if (!isAnalysableFieldAccess(node, (name: string): boolean => {
-		const vi = findVarInfoInContext(dctx, name);
-		return vi != null && vi.isCursor;
-	})) return false;
+	if (!isAnalysableFieldAccess(node)) return false;
 	const rootSym = getRootSym(node);
 	if (rootSym == null) return false;
 	// Standard safety checks (same as isLastReadSafe)
@@ -1806,26 +1754,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
 	if (parkedFutInit) dctx.parkedInitDepth -= 1;
 	const init = d.initializer;
-
-	// Result field extraction: $result_N.value → wasMoved on source to prevent double-free.
-	// Reuse the original `md.object` Identifier so its nodeType/resolvedSym flow
-	// through to codegen — the post-migration Result lays out as a tagged union,
-	// and the Union-DU member access path needs the type info to route through
-	// the active variant slot (`r.v0.value`) instead of bare `r.value`.
-	if (init.kind == NodeKind.MemberExpr) {
-		const md = init.data as MemberExprData;
-		if (md.object.kind == NodeKind.Identifier && md.property == "value") {
-			const objName = (md.object.data as IdentifierData).name;
-			if (objName.startsWith("$result")) {
-				if (rcInfo.wasMovedFn != "") {
-					const valueMember = makeMember(md.object, "value", loc);
-					valueMember.nodeType = init.nodeType;
-					addPending(dctx, makeWasMovedOnExpr(valueMember, rcInfo, loc));
-				}
-				return stmt;
-			}
-		}
-	}
 
 	// Unified RC decision via moveOrCopy.
 	const destNode = makeVarRef(d.declName, stmt.resolvedSym, loc);
@@ -2121,9 +2049,9 @@ function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node 
 		tmpDecl.nodeType = at;
 		tmpDecl.resolvedSym = excSym;
 		const rcCopy = sinkClassify(at, dctx);
-		const increfFn = rcCopy.copyFn != "" ? rcCopy.copyFn : "msIncref";
+		const increfRef = rcCopy.copyFn != "" ? hookRef(rcCopy.copyFn, sloc) : runtimeRef("msIncref", sloc);
 		const incref = makeExprStmt(
-			makeCall(makeIdent(increfFn, sloc), [makeIdentResolved(excSym, sloc)], sloc), sloc);
+			makeCall(increfRef, [makeIdentResolved(excSym, sloc)], sloc), sloc);
 		td.throwArg = makeIdentResolved(excSym, sloc);
 		return makeBlock([tmpDecl, incref, stmt], sloc);
 	}
@@ -2136,9 +2064,9 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const tmpDecl = makeVarDecl(retSym.name, arg, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = retSym;
 	const rc = sinkClassify(arg.nodeType, dctx);
-	const increfFn = rc.copyFn != "" ? rc.copyFn : "msIncref";
+	const increfRef = rc.copyFn != "" ? hookRef(rc.copyFn, loc) : runtimeRef("msIncref", loc);
 	const incref = makeExprStmt(
-		makeCall(makeIdent(increfFn, loc), [makeIdentResolved(retSym, loc)], loc), loc);
+		makeCall(increfRef, [makeIdentResolved(retSym, loc)], loc), loc);
 	const retStmt = makeReturn(makeIdentResolved(retSym, loc), loc);
 	return makeBlock([tmpDecl, incref, retStmt], loc);
 }
@@ -2510,29 +2438,9 @@ test "number type needs no cleanup" {
 	}
 }
 
-test "stmtCanThrow detects user call in ExprStmt" {
-	const loc = testLoc();
-	const call = makeExprStmt(makeCall(makeIdent("foo", loc), [], loc), loc);
-	assert stmtCanThrow(call);
-}
-
-test "stmtCanThrow detects user call in VarDecl init" {
-	const loc = testLoc();
-	const decl = makeVarDecl("x", makeCall(makeIdent("foo", loc), [], loc), DeclKind.Const, loc);
-	assert stmtCanThrow(decl);
-}
-
-test "stmtCanThrow false for non-call" {
-	const loc = testLoc();
-	const stmt = makeExprStmt(makeIdent("x", loc), loc);
-	assert !stmtCanThrow(stmt);
-}
-
-test "stmtCanThrow false for null" { assert !stmtCanThrow(null as unknown as Node); }
-
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
-	const call = makeCall(makeIdent("msStringDecref", loc), [], loc);
+	const call = makeCall(runtimeRef("msStringDecref", loc), [], loc);
 	assert !callCanThrow(call);
 }
 
@@ -2542,16 +2450,58 @@ test "callCanThrow true for user functions" {
 	assert callCanThrow(call);
 }
 
-test "stmtCanThrow true for ThrowStmt" {
-	const loc = testLoc();
-	const throwStmt = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeNull(loc) }, loc);
-	assert stmtCanThrow(throwStmt);
+function scanSetsNeedsTry(stmt: Node): boolean {
+	const dctx = testDrcContext("const n: number = 0;");
+	pushScope(dctx, false, true);
+	pushScope(dctx, false, false);
+	setNeedsTryIfRaises(stmt, dctx);
+	const inner = popScope(dctx);
+	const outer = popScope(dctx);
+	return inner.needsTry && outer.needsTry;
 }
 
-test "stmtCanThrow false for ms-prefixed call in VarDecl" {
+function userCallStmt(): Node {
 	const loc = testLoc();
-	const decl = makeVarDecl("x", makeCall(makeIdent("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
-	assert !stmtCanThrow(decl);
+	return makeExprStmt(makeCall(makeIdent("parseExpr", loc), [], loc), loc);
+}
+
+test "setNeedsTryIfRaises marks every open scope for a user call statement" {
+	assert scanSetsNeedsTry(userCallStmt());
+}
+
+test "setNeedsTryIfRaises finds a user call inside an if body" {
+	const loc = testLoc();
+	const guarded = makeIf(makeIdent("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
+	assert scanSetsNeedsTry(guarded);
+}
+
+test "setNeedsTryIfRaises finds a user call in an if condition" {
+	const loc = testLoc();
+	const cond = makeCall(makeIdent("parseExpr", loc), [], loc);
+	assert scanSetsNeedsTry(makeIf(cond, makeBlock([], loc), null as unknown as Node, loc));
+}
+
+test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
+	const loc = testLoc();
+	const inner = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
+	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
+}
+
+test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
+	const loc = testLoc();
+	const stmt = makeExprStmt(makeCall(runtimeRef("msStringDecref", loc), [], loc), loc);
+	assert !scanSetsNeedsTry(stmt);
+}
+
+test "setNeedsTryIfRaises stops at a nested function declaration" {
+	const loc = testLoc();
+	const nested = makeFnDecl("inner", [], [], makeBlock([userCallStmt()], loc), "", "void", loc);
+	assert !scanSetsNeedsTry(nested);
+}
+
+test "setNeedsTryIfRaises ignores a null node" {
+	assert !scanSetsNeedsTry(null as unknown as Node);
 }
 
 test "needsReturnIncref false for call expr (fresh)" {

@@ -133,6 +133,12 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	exit(1);
 }
 
+_Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
+	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
+		(long long)tag, (long long)expected);
+	exit(1);
+}
+
 _Noreturn void msMapFatal(msString msg) {
 	fprintf(stderr, "fatal error: %.*s\n",
 		(int)msg.len, (msg.p != NULL) ? msg.p->data : "");

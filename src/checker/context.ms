@@ -1173,6 +1173,8 @@ export class CheckerContext {
 	targetInfo: TargetInfo;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
+	staticBlockClass: Symbol | null;
+	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;           // break/continue validation
@@ -1182,6 +1184,7 @@ export class CheckerContext {
 	moduleGraph: ModuleGraph;
 	currentModule: Module;
 	exportRegistry: ExportRegistry;
+	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
 	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
@@ -1235,6 +1238,8 @@ export function createContext(): CheckerContext {
 		targetInfo: hostTargetInfo(),
 		currentFunction: null,
 		currentActorName: "",
+		staticBlockClass: null,
+		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		inLoop: false,
@@ -1244,6 +1249,7 @@ export function createContext(): CheckerContext {
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
 		exportRegistry: createExportRegistry(),
+		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
 		macroBodyRegistry: new HashMap<string, Node>(),
 		converterTargets: new HashMap<string, string>(),

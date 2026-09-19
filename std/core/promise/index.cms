@@ -67,7 +67,9 @@ extern function msLockedRelease<T>(cell: Locked<T>): void from "msLockedRelease"
 // generated cell struct, so the payload offset always comes from the struct
 // itself. They are deliberately private — a load outside the critical section
 // would hand out a racy copy.
+@builtin("LockedLoad")
 extern function msLockedLoad<T>(cell: Locked<T>): T;
+@builtin("LockedStore")
 extern function msLockedStore<T>(cell: Locked<T>, value: T): void;
 
 // Read-modify-write under the lock. The callback IS the critical section, so it

@@ -8,13 +8,15 @@ export interface DecoratorInfo {
 	builtinKind: string;
 	nativeName: string;
 	exportName: string;
+	compilerFunc: boolean;
+	throws: boolean;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
 	"comptime", "builtin", "exportName",
 ];
-const intrinsicBuiltins: string[] = ["nonisolated"];
+const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws"];
 
 export function isBuiltinDirective(name: string): boolean {
 	for (const n of passThroughDirectives) {
@@ -129,6 +131,15 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 			}
 		}
 	}
+	let isCompilerFunc = false;
+	let canThrow = false;
+	for (let i = 0; i < dd.decorators.length; i += 1) {
+		const dec = dd.decorators[i];
+		if (dec.kind != NodeKind.MacroInvocation) continue;
+		const name = (dec.data as MacroInvocationData).macroName;
+		if (name == "compilerFunc") isCompilerFunc = true;
+		if (name == "throws") canThrow = true;
+	}
 	const exportDec = exportNameDecorator(dd.decorators);
 	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
 	// Extract nativeName from inner decorated node (from "c_name" clause)
@@ -144,5 +155,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		builtinKind: btKind,
 		nativeName: natName,
 		exportName: exportName,
+		compilerFunc: isCompilerFunc,
+		throws: canThrow,
 	};
 }
