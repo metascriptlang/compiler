@@ -66,6 +66,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	fnNode.flags = methodNode.flags;
 	fnNode.variantSlot = methodNode.variantSlot;
 	fnNode.paramLocations = methodNode.paramLocations;
+	fnNode.paramSyms = methodNode.paramSyms;
 	fnNode.typeExpr = methodNode.typeExpr;
 	fnNode.typeExprs = methodNode.typeExprs;
 	// Update sym.declNode so anyone resolving the symbol sees the FunctionDecl
@@ -148,6 +149,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	fnNode.flags = ctorNode.flags;
 	fnNode.variantSlot = ctorNode.variantSlot;
 	fnNode.paramLocations = ctorNode.paramLocations;
+	fnNode.paramSyms = ctorNode.paramSyms;
 	fnNode.typeExpr = ctorNode.typeExpr;
 	fnNode.typeExprs = ctorNode.typeExprs;
 	return fnNode;
