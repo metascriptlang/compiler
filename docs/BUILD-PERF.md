@@ -37,10 +37,11 @@ attributing a regression.
 
 `msc test src/index.ms` test-execution time: **419.6s → 17-19s (~23×)**,
 3342/3342 unchanged. Wall clock for the whole command is ~40s, because
-compiling the test binary (~21s warm) is now the larger half. Full cost
-model, entry-by-entry, lives in `src/test/CLAUDE.md` §5.1 — including the
-consequence that the full battery is now CHEAPER than most single-module
-entries, which inverts the old "run the smallest loop" advice.
+compiling the test binary (~21s warm) is now the larger half. The entry-by-entry
+cost table that followed from this (full battery cheaper than a single-module
+entry) was dropped on 2026-09-19: `msc test src/test/fixedbugs/bug048.ms` took
+12 s wall at load 18 that day, and the full suite was not timed beside it, so the
+comparison is open. Cache and load traps: [`TESTING.md`](TESTING.md).
 
 Root cause was not codegen or clang: `checkProgram()` — the convenience
 wrapper every inline test uses — called `buildPreludeContext()` on

@@ -21,13 +21,13 @@ msc test src/utils/string.ms          # one file (+ its deps)
 # codegen / DRC / runtime / transform; SAN when it touches DRC hooks; both
 # before a RELEASE cut (docs/GIT-FLOW.md). A land on main is not a ship.
 # Runners test ./msc when it exists, else installed msc; MSC=<path> overrides.
-# Which command when: src/test/CLAUDE.md §5.0
+# Which command when: src/test/CLAUDE.md
 msc run src/test/corpus/run.ms                 # parity (C↔JS) + RSS
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
 src/test/guard/run.sh                          # lifecycle guards (proven-red)
 
-MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: src/test/CLAUDE.md §5.3
+MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: docs/TESTING.md
 
 msc run src/index.ms                              # build + run natively
 msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
@@ -153,9 +153,9 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **One command picks and runs the lanes** — `tools/gate.sh` maps the paths a change touches to lanes (the table at the top of the script), runs them one after another and stops at the first new red; `--dry-run` shows the choice and why, `--release` runs the full ladder, and `tools/wt.sh land` calls it.
 - **A red is yours only when it is new** — each lane's failures are compared by name with `src/test/known-red.json`; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
 - **The machine is shared** — the gate waits while load exceeds the core count and never runs two lanes at once; do not start a second heavy lane beside it.
-- **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct (`src/test/CLAUDE.md` §5.2), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
+- **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct ([`docs/TESTING.md`](docs/TESTING.md)), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
 - **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
-- **The corpus lanes run on what the change alters** — the gate emits all programs with the merge-base compiler and the candidate and hands corpus and SAN only the programs whose C or JS differs; it runs them whole under `--lanes` / `--release`, or when the diff touches `runtime/`, `std/`, `vendor/` or the corpus runner (`src/test/CLAUDE.md` §5.3).
+- **The corpus lanes run on what the change alters** — the gate emits all programs with the merge-base compiler and the candidate and hands corpus and SAN only the programs whose C or JS differs; it runs them whole under `--lanes` / `--release`, or when the diff touches `runtime/`, `std/`, `vendor/` or the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
 - **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
 
 ## Docs Rule — never edit `docs/*.md` from reading alone
