@@ -164,6 +164,8 @@ Gates (snapshot `8506c8ff` + L1/L4/L2): probes 15/15 expected outcomes (subset/o
 
 ## L13. `std/http` does not type-check at HEAD `0f007c5a` — namespace-qualified extension calls
 
+**Status: RESOLVED — fixed 2026-09-19.** `checkCallExpr` ran extension-method dispatch on every `a.f(…)` callee, and a namespace object passed the receiver filter, so the local `this` function replaced the namespace member `checkMemberExpr` had already resolved. A namespace-qualified callee now skips extension dispatch, as the reference's dot handler resolves a module-qualified name before any method-call syntax. Measured on the candidate built from the fix: `msc check` of `import { createServer } from "std/http/server";` → 0 errors (installed `2e8cf49a`: 18); the two-module repro prints `1` on C (installed: `Too many arguments to 'setHeader': expected at most 2, got 3`). Pinned by `fixedbugs/bug191NamespaceCallBeforeExtension.ms` (direct and through a re-export shim, both red before the fix) and corpus `781-httpServerHeaders` (C lanes; `std/http/server` is `.cms`, no JS lane). On JS the checker error is gone but the program dies at run time on a separate defect, L49.
+
 **Problem:** any program importing `std/http` fails with 18 errors, all of one shape: `Too many arguments to 'hasHeader': expected at most 1, got 2` at `std/http/server.cms:140` (and `getHeader`/`removeHeader`/`setHeader` at 141, 230–237, 373…). The call is `hdrs.hasHeader(res.headers, "content-type")` where `hdrs` is `import * as hdrs from "./headers"`; the resolver binds `server.cms`'s own extension `hasHeader(this res: ServerResponse, name)` instead of the namespace member and then rejects the arity.
 **Repro (measured 2026-09-10):** HEAD-clean worktree at `0f007c5a`, `msc build` of a two-line program `import { createServer } from "std/http";` → rc=1, 18 errors. Identical set on the peer-built `./msc`.
 **Severity:** loud; `std/http` is unusable until fixed. Not in any green gate today (the compiler does not import it).
@@ -774,3 +776,26 @@ function type was expected; an array of them prints as `function[]`. Measured on
 `v0.2.55`, native and `--target=js`, standalone. Not measured: whether a named interface or a
 generic instance keeps its name in the same message, and whether the alias survives in the LSP
 hover for the same node.
+
+## L49. A namespace import read inside a function is undefined on JS (LIVE, measured 2026-09-19)
+
+```ms
+// headers.ms
+export interface Headers { names: string[]; values: string[]; }
+export function setHeader(h: Headers, name: string, value: string): void { h.names.push(name); h.values.push(value); }
+
+// main.ms
+import * as hdrs from "./headers";
+import { Headers } from "./headers";
+function put(h: Headers): void { hdrs.setHeader(h, "a", "b"); }
+const h: Headers = { names: [], values: [] };
+put(h);
+console.log(h.names.length);
+
+msc run main.ms --target=js → ReferenceError: hdrs is not defined
+```
+
+The bundle calls `hdrs.setHeader(...)` inside the emitted function and never binds `hdrs`.
+Measured on the installed `2e8cf49a`, `--target=js`, for a plain function and for a `this`
+function; C prints `1` for both. Not measured: a namespace read at top level (the probe hit an
+unrelated anonymous-literal type error there), `--target=esm`, and whether a re-export shim changes it.
