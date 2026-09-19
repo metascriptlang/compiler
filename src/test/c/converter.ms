@@ -137,6 +137,107 @@ test "converter: fmt preserves the converter keyword on a runtime source" {
 	assert out.contains("converter toSeconds(n: float64): Seconds"), out;
 }
 
+const BOX = `
+export interface Box { n: int32; }
+export converter boxToInt(b: Box): int32 { return b.n; }
+const b: Box = { n: 3 };
+`;
+
+test "converter: runtime converter applies at a typed slot" {
+	const e = errorOf(BOX + `const n: int32 = b;`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter applies at an argument of a single-signature call" {
+	const e = errorOf(BOX + `
+function take(n: int32): int32 { return n; }
+const n = take(b);
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter applies at a return" {
+	const e = errorOf(BOX + `
+function read(x: Box): int32 { return x; }
+const n = read(b);
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter applies at an as-conversion" {
+	const c = compileToCWithStd(BOX + `const n = b as int32;`);
+	assert c.ok, c.ok ? "" : c.error;
+	if (c.ok) assert c.value.contains("boxToInt__") && c.value.contains("_u0(b__"), c.value;
+}
+
+function twoMeters(use: string): string {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/a.ms", entrySource: `
+export type Meters = distinct float64;
+export converter metersToText(m: Meters): string { return "a"; }
+` },
+		{ entryPath: "src/b.ms", entrySource: `
+export type Meters = distinct float64;
+` },
+		{ entryPath: "src/main.ms", entrySource: `
+import { Meters, metersToText } from "./a";
+import { Meters as OtherMeters } from "./b";
+const a = 1.0 as Meters;
+const o = 2.0 as OtherMeters;
+` + use },
+	];
+	return compileProjectToCWithStd(entries, "src/main.ms");
+}
+
+test "converter: runtime converter applies to the type it was declared for" {
+	const cCode = twoMeters("const s: string = a;");
+	assert !cCode.contains("ERROR:"), cCode;
+}
+
+test "converter: runtime converter skips a same-named type of another module" {
+	const cCode = twoMeters("const s: string = o;");
+	assert cCode.contains("Type 'Meters' is not assignable to type 'string'"), cCode;
+}
+
+test "converter: two runtime converters for one pair are an error" {
+	const e = errorOf(BOX + `
+export converter boxToIntAgain(x: Box): int32 { return x.n + 1; }
+const n: int32 = b;
+`);
+	assert e.contains("'boxToInt' and 'boxToIntAgain' both convert 'Box' to 'int32'"), e;
+}
+
+test "converter: runtime converters do not chain" {
+	const e = errorOf(SECONDS + `
+export type Minutes = distinct float64;
+export converter toSeconds(n: float64): Seconds { return n as Seconds; }
+export converter toMinutes(s: Seconds): Minutes { return ((s as float64) / 60.0) as Minutes; }
+const x: float64 = 120.0;
+const m: Minutes = x;
+`);
+	assert e.contains("Minutes"), e;
+}
+
+test "converter: runtime converter stays out of an overloaded call" {
+	const e = errorOf(BOX + `
+function pick(n: int32): int32 { return n; }
+function pick(s: string): int32 { return 0; }
+const n = pick(b);
+`);
+	assert e != "", e;
+}
+
+test "converter: runtime converter does not apply inside its own body" {
+	const e = errorOf(`
+export interface Box { n: int32; }
+export converter boxToInt(b: Box): int32 {
+	const n: int32 = b;
+	return n;
+}
+`);
+	assert e.contains("'boxToInt' does not apply inside its own body"), e;
+}
+
 test "converter: missing return annotation is rejected" {
 	const c = compileToC(`
 import { Node } from "std/meta";
