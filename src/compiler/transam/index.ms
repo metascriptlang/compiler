@@ -10,7 +10,7 @@
 import { Node, NodeKind, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
+import { CheckerContext, isExportedBy, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -513,7 +513,7 @@ function hashCheckerResult(ctx: CheckerContext): number {
 	if (ctx.table != null && ctx.table.current != null) {
 		const scope = ctx.table.current;
 		for (const sym of scope.symbols.values()) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
+			if (isExportedBy(ctx, sym)) {
 				// Hash name + type kind so type changes invalidate dependents
 				const typeKind = sym.symbolType != null ? sym.symbolType.kind : 0;
 				h = (h * 31 + taHashString(sym.name) + typeKind) % 2147483647;

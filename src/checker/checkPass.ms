@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
+import { CheckerContext, isExportedBy, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -2720,7 +2720,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols.values()) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
+			if (isExportedBy(subCtx, sym)) {
 				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved, subCtx));
 			}
 		}
@@ -2735,7 +2735,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// Also register sub-module extensions into parent context
 		if (subCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
 			for (const ext of subCtx.extensionRegistry.methods) {
-				if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+				if (ext.sym != null && isExportedBy(subCtx, ext.sym)) {
 					registerExtension(ctx.extensionRegistry, ext);
 				}
 			}
@@ -2847,7 +2847,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 
 export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext): void {
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+		if (!isExportedBy(ctx, sym)) continue;
 		addSymbolToScope(preludeCtx.table.current, sym);
 		if (sym.symbolKind != SymbolKind.Macro) continue;
 		const body = ctx.macroBodyRegistry.get(sym.name);
@@ -2871,7 +2871,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 	let ei = 0;
 	while (ei < exts.length) {
 		const ext = exts[ei];
-		if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+		if (ext.sym != null && isExportedBy(ctx, ext.sym)) {
 			registerExtension(preludeCtx.extensionRegistry, ext);
 		}
 		ei = ei + 1;
