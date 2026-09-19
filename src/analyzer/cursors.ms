@@ -14,8 +14,8 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol, SymbolKind, Type,
-	VariableDeclData, IdentifierData, MemberExprData, ArrayAccessData,
+	Node, NodeKind, Symbol,
+	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
 	TryCatchStmtData, CallExprData, BinaryExprData,
@@ -27,8 +27,9 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, isCursorSym, makeSymbol, SymbolFlag } from "../checker/symbol";
-import { parseInput } from "../transform/testUtil";
+import { setFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
+import { parseSource } from "../parser/statements/validation";
+import { checkProgram } from "../checker/checkPass";
 
 // ===== Constants =====
 
@@ -61,11 +62,10 @@ interface Connection {
 }
 
 interface VarEntry {
-	name: string;
-	sym: Symbol | null;
+	sym: Symbol;
 	con: Connection;
 	flags: int32;
-	reassignedTo: string; // single source name ("" = none or multiple)
+	reassignedTo: Symbol | null;
 	aliveStart: int32;
 	aliveEnd: int32;
 }
@@ -96,23 +96,22 @@ function createPartitions(): Partitions {
 
 // ===== Variable Lookup =====
 
-function variableId(p: Partitions, name: string): int32 {
-	let i = 0;
-	while (i < p.vars.length) {
-		if (p.vars[i].name == name) return i;
-		i += 1;
+function variableId(p: Partitions, sym: Symbol | null): int32 {
+	if (sym == null) return -1;
+	for (let i = 0; i < p.vars.length; i += 1) {
+		if (p.vars[i].sym == sym) return i;
 	}
 	return -1;
 }
 
-function registerVariable(p: Partitions, name: string, isParam: boolean, sym: Symbol | null): void {
-	if (variableId(p, name) >= 0) return;
+function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
+	if (sym == null) return;
+	if (variableId(p, sym) >= 0) return;
 	p.vars.push({
-		name,
 		sym,
 		con: { kind: CK_EMPTY_ROOT, target: 0 },
 		flags: isParam ? VF_IS_PARAM : (0 as int32),
-		reassignedTo: "",
+		reassignedTo: null,
 		// Params: alive for full function. Locals: start at declaration time.
 		aliveStart: isParam ? 0 : p.abstractTime,
 		aliveEnd: isParam ? MAX_TIME : p.abstractTime,
@@ -139,10 +138,10 @@ function ufRoot(p: Partitions, start: int32): int32 {
 	return r;
 }
 
-function ufConnect(p: Partitions, aName: string, bName: string): void {
-	const aid = variableId(p, aName);
+function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
+	const aid = variableId(p, a);
 	if (aid < 0) return;
-	const bid = variableId(p, bName);
+	const bid = variableId(p, b);
 	if (bid < 0) return;
 
 	const ra = ufRoot(p, aid);
@@ -185,8 +184,8 @@ function ufConnect(p: Partitions, aName: string, bName: string): void {
 
 // ===== Mutation Tracking =====
 
-function potentialMutation(p: Partitions, name: string): void {
-	const id = variableId(p, name);
+function potentialMutation(p: Partitions, sym: Symbol): void {
+	const id = variableId(p, sym);
 	if (id < 0) return;
 	if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
 
@@ -215,17 +214,17 @@ function dangerousMutation(g: MutationInfo, v: VarEntry): boolean {
 
 // ===== Helpers =====
 
-function getIdentName(node: Node): string {
-	if (node == null) return "";
-	if (node.kind == NodeKind.Identifier) return (node.data as IdentifierData).name;
-	return "";
+function getIdentSym(node: Node): Symbol | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym;
+	return null;
 }
 
 // Find root identifiers in a path expression (e.g., obj.field → "obj")
-function collectPathRoots(node: Node, result: string[]): void {
+function collectPathRoots(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 	match (node.kind) {
-		NodeKind.Identifier => { result.push((node.data as IdentifierData).name); },
+		NodeKind.Identifier => { if (node.resolvedSym != null) result.push(node.resolvedSym); },
 		NodeKind.MemberExpr => collectPathRoots((node.data as MemberExprData).object, result),
 		NodeKind.ArrayAccess => collectPathRoots((node.data as ArrayAccessData).array, result),
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => collectPathRoots((node.data as { expr: Node }).expr, result),
@@ -255,13 +254,12 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
-			const name = (src.data as IdentifierData).name;
-			const srcId = variableId(p, name);
+			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
 				p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 			} else {
-				ufConnect(p, p.vars[destIdx].name, name);
+				ufConnect(p, p.vars[destIdx].sym, p.vars[srcId].sym);
 				// [x] or {field: x} context — container owns a copy
 				if (p.inConstructor > 0) {
 					p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
@@ -346,10 +344,10 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
-			registerVariable(p, d.declName, false, node.resolvedSym);
+			registerVariable(p, node.resolvedSym, false);
 			// Declared in loop body → effectively reassigned each iteration
 			if (p.inLoop > 0 && d.initializer != null) {
-				const vid = variableId(p, d.declName);
+				const vid = variableId(p, node.resolvedSym);
 				if (vid >= 0) markReassigned(p, vid);
 			}
 		},
@@ -359,13 +357,13 @@ function liveRanges(p: Partitions, node: Node | null): void {
 			liveRanges(p, d.left);
 			liveRanges(p, d.right);
 			if (d.operator == "=") {
-				const lhs = getIdentName(d.left);
-				if (lhs != "") {
+				const lhs = getIdentSym(d.left);
+				if (lhs != null) {
 					const vid = variableId(p, lhs);
 					if (vid >= 0) {
 						// Track single reassignment source (for it = it.next pattern)
-						const rhs = getIdentName(d.right);
-						if (rhs != "" && (p.vars[vid].reassignedTo == "" || p.vars[vid].reassignedTo == rhs)) {
+						const rhs = getIdentSym(d.right);
+						if (rhs != null && (p.vars[vid].reassignedTo == null || p.vars[vid].reassignedTo == rhs)) {
 							p.vars[vid].reassignedTo = rhs;
 							if (p.inConditional > 0 && p.inLoop > 0) {
 								p.vars[vid].flags = p.vars[vid].flags | VF_IS_COND_REASSIGNED;
@@ -380,13 +378,10 @@ function liveRanges(p: Partitions, node: Node | null): void {
 
 		NodeKind.Identifier => {
 			p.abstractTime -= 1; // Symbols don't advance time
-			const name = (node.data as IdentifierData).name;
 			// Auto-register referenced variables not yet seen (params, outer scope).
 			// Treat as "external" — alive for the full function, never a cursor candidate.
-			if (variableId(p, name) < 0) {
-				registerVariable(p, name, true, node.resolvedSym);
-			}
-			const id = variableId(p, name);
+			registerVariable(p, node.resolvedSym, true);
+			const id = variableId(p, node.resolvedSym);
 			if (id >= 0) {
 				if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
 				if (p.abstractTime < p.vars[id].aliveStart) p.vars[id].aliveStart = p.abstractTime;
@@ -524,8 +519,8 @@ function liveRanges(p: Partitions, node: Node | null): void {
 
 // ===== Pass 2: traverse (build graphs) =====
 
-function deps(p: Partitions, destName: string, src: Node): void {
-	const destId = variableId(p, destName);
+function deps(p: Partitions, dest: Symbol | null, src: Node): void {
+	const destId = variableId(p, dest);
 	if (destId < 0) return;
 	if (src == null) return;
 
@@ -533,11 +528,11 @@ function deps(p: Partitions, destName: string, src: Node): void {
 	destMightOwn(p, destId, src);
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
-	const srcRoots: string[] = [];
+	const srcRoots: Symbol[] = [];
 	collectPathRoots(src, srcRoots);
-	for (const srcName of srcRoots) {
-		if (srcName == destName) continue; // self-assign ok (it = it.next)
-		const srcId = variableId(p, srcName);
+	for (const srcSym of srcRoots) {
+		if (srcSym == dest) continue; // self-assign ok (it = it.next)
+		const srcId = variableId(p, srcSym);
 		if (srcId >= 0) {
 			// Source lives shorter than dest → can't borrow
 			if ((p.vars[srcId].flags & VF_IS_PARAM) == 0 &&
@@ -549,7 +544,7 @@ function deps(p: Partitions, destName: string, src: Node): void {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 			// Source reassigned to different target → can't borrow
-			if (p.vars[srcId].reassignedTo != "" && p.vars[srcId].reassignedTo != destName) {
+			if (p.vars[srcId].reassignedTo != null && p.vars[srcId].reassignedTo != dest) {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 		}
@@ -567,7 +562,7 @@ function trav(p: Partitions, node: Node | null): void {
 			p.inAsgnSource += 1;
 			trav(p, d.initializer);
 			p.inAsgnSource -= 1;
-			deps(p, d.declName, d.initializer);
+			deps(p, node.resolvedSym, d.initializer);
 		},
 
 		NodeKind.BinaryExpr => {
@@ -579,13 +574,13 @@ function trav(p: Partitions, node: Node | null): void {
 				p.inAsgnSource -= 1;
 
 				// Assignment to variable → mutation on LHS graph
-				const lhsRoots: string[] = [];
+				const lhsRoots: Symbol[] = [];
 				collectPathRoots(d.left, lhsRoots);
 				for (const r of lhsRoots) { potentialMutation(p, r); }
 
 				// Cursor deps for assignment
-				const lhs = getIdentName(d.left);
-				if (lhs != "") deps(p, lhs, d.right);
+				const lhs = getIdentSym(d.left);
+				if (lhs != null) deps(p, lhs, d.right);
 			} else {
 				trav(p, d.right);
 			}
@@ -602,7 +597,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 			// Method call (obj.method(...)) → obj is potentially mutated
 			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
-				const objRoots: string[] = [];
+				const objRoots: Symbol[] = [];
 				collectPathRoots((d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
 			}
@@ -610,7 +605,7 @@ function trav(p: Partitions, node: Node | null): void {
 			// HiddenAddr arguments → callee receives mutable pointer (var param)
 			for (const arg of d.arguments) {
 				if (arg != null && arg.kind == NodeKind.HiddenAddr) {
-					const addrRoots: string[] = [];
+					const addrRoots: Symbol[] = [];
 					collectPathRoots((arg.data as { expr: Node }).expr, addrRoots);
 					for (const r of addrRoots) {
 						potentialMutation(p, r);
@@ -658,11 +653,8 @@ function trav(p: Partitions, node: Node | null): void {
 			for (const elem of d.elements) { trav(p, elem); }
 			if (p.inAsgnSource > 0) {
 				for (const elem of d.elements) {
-					const eName = getIdentName(elem);
-					if (eName != "") {
-						const eid = variableId(p, eName);
-						if (eid >= 0) p.vars[eid].flags = p.vars[eid].flags | VF_OWNS_DATA;
-					}
+					const eid = variableId(p, getIdentSym(elem));
+					if (eid >= 0) p.vars[eid].flags = p.vars[eid].flags | VF_OWNS_DATA;
 				}
 			}
 		},
@@ -671,11 +663,8 @@ function trav(p: Partitions, node: Node | null): void {
 			for (const prop of d.properties) { trav(p, prop); }
 			if (p.inAsgnSource > 0) {
 				for (const prop of d.properties) {
-					const pName = getIdentName(prop);
-					if (pName != "") {
-						const pid = variableId(p, pName);
-						if (pid >= 0) p.vars[pid].flags = p.vars[pid].flags | VF_OWNS_DATA;
-					}
+					const pid = variableId(p, getIdentSym(prop));
+					if (pid >= 0) p.vars[pid].flags = p.vars[pid].flags | VF_OWNS_DATA;
 				}
 			}
 		},
@@ -683,11 +672,8 @@ function trav(p: Partitions, node: Node | null): void {
 		// Move prevents cursoring of source
 		NodeKind.MoveExpr => {
 			trav(p, (node.data as MoveExprData).moveArg);
-			const moveName = getIdentName((node.data as MoveExprData).moveArg);
-			if (moveName != "") {
-				const mid = variableId(p, moveName);
-				if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR;
-			}
+			const mid = variableId(p, getIdentSym((node.data as MoveExprData).moveArg));
+			if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR;
 		},
 
 		// Inner functions: skip
@@ -766,8 +752,8 @@ function trav(p: Partitions, node: Node | null): void {
 
 // ===== Cursor Decision =====
 
-function computeCursorDecisions(p: Partitions): string[] {
-	const result: string[] = [];
+function computeCursorDecisions(p: Partitions): Symbol[] {
+	const result: Symbol[] = [];
 	let i = 0;
 	while (i < p.vars.length) {
 		const v = p.vars[i];
@@ -787,34 +773,13 @@ function computeCursorDecisions(p: Partitions): string[] {
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
 
-		result.push(v.name);
+		result.push(v.sym);
 		i += 1;
 	}
 	return result;
 }
 
 // ===== Public API =====
-
-function nameListHas(names: string[], name: string): boolean {
-	for (const n of names) {
-		if (n == name) return true;
-	}
-	return false;
-}
-
-// Stamp every declaration whose name was decided a cursor. Names — not symbols —
-// key the union-find, so one decision covers every same-named declaration in the
-// body; stamping them all keeps that merge exact.
-function stampCursorSyms(node: Node | null, names: string[]): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		if (nameListHas(names, d.declName) && node.resolvedSym != null) {
-			setFlag(node.resolvedSym, SymbolFlag.Cursor);
-		}
-	}
-	forEachChild(node, (child: Node): void => { stampCursorSyms(child, names); });
-}
 
 // Main entry point — called once per function body, before DRC injection.
 export function inferCursors(body: Node): void {
@@ -833,15 +798,16 @@ export function inferCursors(body: Node): void {
 	trav(p, body);
 
 	// Decision: which variables can safely be cursors?
-	stampCursorSyms(body, computeCursorDecisions(p));
+	for (const sym of computeCursorDecisions(p)) { setFlag(sym, SymbolFlag.Cursor); }
 }
 
 // ===== Tests =====
 
 function getStmts(input: string): Node[] {
-	const result = parseInput(input);
+	const result = parseSource(input);
 	if (!result.ok) return [];
 	const prog = result.value;
+	checkProgram(prog);
 	const d = prog.data as ProgramData;
 	return d.programStmts;
 }
@@ -850,24 +816,8 @@ function getFuncBody(input: string): Node {
 	const stmts = getStmts(input);
 	if (stmts.length == 0) return null as unknown as Node;
 	const stmt = stmts[0];
-	if (stmt.kind == NodeKind.FunctionDecl) {
-		const body = (stmt.data as FunctionDeclData).fnBody;
-		stampFixtureSyms(body);
-		return body;
-	}
+	if (stmt.kind == NodeKind.FunctionDecl) return (stmt.data as FunctionDeclData).fnBody;
 	return null as unknown as Node;
-}
-
-// Fixtures come from parseInput — parsed, never type-checked — so declarations
-// carry no symbol. Mint one per declaration so the assertions can read the flag
-// the production path reads.
-function stampFixtureSyms(node: Node | null): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym == null) {
-		const d = node.data as VariableDeclData;
-		node.resolvedSym = makeSymbol(d.declName, SymbolKind.Variable, null as unknown as Type, true);
-	}
-	forEachChild(node, (child: Node): void => { stampFixtureSyms(child); });
 }
 
 function isCursorNamed(node: Node | null, name: string): boolean {
