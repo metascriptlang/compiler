@@ -1776,6 +1776,9 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 	};
 }
 
+let _instantiatedBodies: int32 = 0;
+export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
+
 // Reference parity (handleGenericInvocation): eagerly instantiate
 // GenericInstance body. Uses explicit param names from the parser's generic declaration
 // store. Produces a fully concrete body
@@ -1804,6 +1807,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const body = substituteAllParams(innerBase, names, args);
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
+	_instantiatedBodies = _instantiatedBodies + 1;
 }
 
 // ===== System Types (Standard reference parity) =====

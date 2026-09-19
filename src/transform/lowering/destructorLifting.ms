@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -91,6 +91,7 @@ class LiftCtx {
 	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msStringArray", "msRefArray")
 	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
 	scannedTypes: HashSet<Type>;
+	arrayRootEpochs: HashMap<Type, int32>;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -1964,15 +1965,22 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 	}
 }
 
+function scanRootForArrays(root: Type, lctx: LiftCtx): void {
+	const epoch = instantiatedBodyCount();
+	const seen = lctx.arrayRootEpochs.get(root);
+	if (seen != null && seen == epoch) return;
+	scanTypeForArrays(root, lctx, createNameSet());
+	if (instantiatedBodyCount() == epoch) lctx.arrayRootEpochs.set(root, epoch);
+}
+
 function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
 	if (stmt == null) return;
-	const visited: NameSet = createNameSet();
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
-			if (stmt.nodeType != null) scanTypeForArrays(stmt.nodeType, lctx, visited);
+			if (stmt.nodeType != null) scanRootForArrays(stmt.nodeType, lctx);
 		},
 		NodeKind.FunctionDecl => {
-			if (stmt.nodeType != null) scanTypeForArrays(stmt.nodeType, lctx, visited);
+			if (stmt.nodeType != null) scanRootForArrays(stmt.nodeType, lctx);
 			// Recurse into function body to find local array types
 			const fd = stmt.data as FunctionDeclData;
 			if (fd.fnBody != null) scanBlockForArrayTypes(fd.fnBody, lctx);
@@ -2003,10 +2011,9 @@ function scanBlockForArrayTypes(block: Node, lctx: LiftCtx): void {
 
 function scanCtrlFlowForArrayTypes(s: Node, lctx: LiftCtx): void {
 	if (s == null) return;
-	const visited: NameSet = createNameSet();
 	match (s.kind) {
 		NodeKind.VariableDecl => {
-			if (s.nodeType != null) scanTypeForArrays(s.nodeType, lctx, visited);
+			if (s.nodeType != null) scanRootForArrays(s.nodeType, lctx);
 		},
 		NodeKind.FunctionDecl => { scanStmtForArrayTypes(s, lctx); },
 		NodeKind.BlockStmt => { scanBlockForArrayTypes(s, lctx); },
@@ -2206,6 +2213,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		neededSeqHooks: createNameSet(),
 		seqElemTypes: [],
 		scannedTypes: new HashSet<Type>(),
+		arrayRootEpochs: new HashMap<Type, int32>(),
 	};
 
 	for (const stmt of pd.programStmts) {
