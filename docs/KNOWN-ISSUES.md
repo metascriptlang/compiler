@@ -914,5 +914,5 @@ requires explicit type arguments`), `lang/trycatch.ms`, `lang/closuresAdv.ms` an
 `fmt/roundtrip.ms`, `fixedbugs/bug089TsLiteralDiscUnionJson.ms`, `fixedbugs/bug087UnionAliasTypeArg.ms`.
 Among the messages: 5 `implicit number → int32 narrowing`, 8 `field 'value'/'error' exists only on some
 variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discriminated union.
-A single file still runs on its own with `msc test <file>`. Not measured: which of these are stale
+A single file still runs on its own with `msc test <file>`. Run that way, `msc test src/test/c/protocols.ms` is red on two tests the gate has never seen: `E2E C: JsonValue dynamic write via setDynamicField` (`protocols.ms:480`) and `E2E C: JsonValue dynamic access via protocol after migration` (`protocols.ms:499`), both failing `assert c.ok` (3119 passed, 2 failed across 146 files, installed `v0.2.55`). Not measured: which of these are stale
 test code and which are checker regressions.
