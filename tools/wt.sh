@@ -7,10 +7,13 @@ usage: tools/wt.sh <command> [args]
 
   new <name> [rev]      create branch wt/<name> at rev (default main) in
                         $MSC_WT_ROOT/wt-<name>, provision vendor, paper and a
-                        builder ./msc; prints the worktree path as the last line
+                        builder ./msc, seed the card $MSC_WT_ROOT/<name>.md;
+                        prints the worktree path as the last line
+  card [name|path]      print the card of a worktree (default: the current one):
+                        its path, then Goal, Done when and State
   ls [--stale]          one line per worktree: branch, dirty files, unlanded
-                        commits, live processes, out/ size; --stale hides the
-                        ones a process still works in
+                        commits, live processes, out/ size, the card's goal;
+                        --stale hides the ones a process still works in
   rm <name|path> [--force]
                         remove a worktree; refuses while it holds dirty files,
                         unlanded commits or live processes, and names them;
@@ -22,6 +25,7 @@ usage: tools/wt.sh <command> [args]
                         --no-gate lands on evidence gathered outside the gate
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
+  hook-session          SessionStart hook body (prints the current worktree's card)
 
 env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
 USAGE
@@ -36,6 +40,29 @@ ROOT=${MSC_WT_ROOT:-$HOME/metascript/.wt}
 BASE=main
 
 wt_dir() { printf '%s/%s\n' "$ROOT" "$(printf 'wt/%s' "$1" | tr '/' '-')"; }
+
+card_path() { printf '%s/%s.md\n' "$ROOT" "$(printf '%s' "$1" | tr '/' '-')"; }
+
+card_name_of() {
+  local br
+  br=$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null) || return 1
+  case "$br" in
+    wt/*) printf '%s\n' "${br#wt/}" ;;
+    *) return 1 ;;
+  esac
+}
+
+card_goal() {
+  awk '/^## /{on=($0=="## Goal"); next} on && NF{print; exit}' "$1" 2>/dev/null
+}
+
+seed_card() {
+  local c
+  c=$(card_path "$1")
+  [ -e "$c" ] && return 0
+  printf '# %s\n\n## Goal\n\n## Done when\n\n## State\n' "$1" >"$c" || return 1
+  say "card: $c"
+}
 
 worktrees() { git -C "$MAIN" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | tail -n +2; }
 
@@ -117,6 +144,7 @@ cmd_new() {
   if [ -e "$w" ]; then
     is_worktree "$(cd "$w" && pwd -P)" || die "new: $w exists and is not a worktree of $MAIN"
     say "reusing $w"
+    seed_card "$name" || die "step card: cannot write $(card_path "$name")"
     printf '%s\n' "$w"
     return 0
   fi
@@ -134,11 +162,36 @@ cmd_new() {
   dirty=$(git -C "$w" status --porcelain)
   [ -z "$dirty" ] || die "step status: fresh worktree is not clean:
 $dirty"
+  seed_card "$name" || die "step card: cannot write $(card_path "$name")"
   printf '%s\n' "$w"
 }
 
+cmd_card() {
+  local target=${1:-} w name c
+  if [ -n "$target" ] && [ ! -d "$target" ] && [ -e "$(card_path "$target")" ]; then
+    name=$target
+  else
+    if [ -n "$target" ]; then w=$(resolve_target "$target"); else w=$(git rev-parse --show-toplevel); fi
+    name=$(card_name_of "$w") || die "card: $w is not on a wt/<name> branch"
+  fi
+  c=$(card_path "$name")
+  [ -e "$c" ] || die "card: no card at $c"
+  printf '%s\n' "$c"
+  cat "$c"
+}
+
+hook_session() {
+  local w name c
+  w=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --show-toplevel 2>/dev/null) || return 0
+  name=$(card_name_of "$w") || return 0
+  c=$(card_path "$name")
+  [ -e "$c" ] || return 0
+  printf 'Card of this worktree, %s:\n' "$c"
+  cat "$c"
+}
+
 ls_row() {
-  local i=$1 w=$2 table br dirty ahead pids out
+  local i=$1 w=$2 table br dirty ahead pids out name goal=""
   table=$(cat "$WT_CWD_TABLE")
   pids=$(procs_in "$w" "$table" | wc -l | tr -d ' ')
   [ "${WT_STALE:-0}" -eq 1 ] && [ "$pids" -gt 0 ] && return
@@ -151,7 +204,8 @@ ls_row() {
   ahead=$(unlanded "$w" | wc -l | tr -d ' ')
   out=-
   [ -d "$w/out" ] && out=$(kib_human "$(du -sk "$w/out" 2>/dev/null | awk '{print $1}')")
-  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w"
+  name=$(card_name_of "$w") && goal=$(card_goal "$(card_path "$name")" | cut -c1-72)
+  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s%s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w" "${goal:+  · $goal}"
 }
 
 cmd_ls() {
@@ -235,6 +289,10 @@ cmd_rm() {
     wt/*) git -C "$MAIN" branch -D "$br" >/dev/null ;;
   esac
   say "removed $w"
+  case "$br" in
+    wt/*) [ -e "$(card_path "${br#wt/}")" ] && say "card: $(card_path "${br#wt/}") stays; delete it once its \"Done when\" holds" ;;
+  esac
+  return 0
 }
 
 main_blob() {
@@ -351,12 +409,14 @@ hook_field() {
 
 case "${1:-}" in
   new) shift; cmd_new "$@" ;;
+  card) shift; cmd_card "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   __ls_row) ls_row "${2%%$'\t'*}" "${2#*$'\t'}" ;;
   rm) shift; cmd_rm "$@" ;;
   land) shift; cmd_land "$@" ;;
   hook-create) name=$(hook_field name); cmd_new "$name" ;;
   hook-remove) path=$(hook_field worktree_path); cmd_rm "$path" ;;
+  hook-session) hook_session ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 2 ;;
 esac
