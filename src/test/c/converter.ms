@@ -199,6 +199,16 @@ test "converter: runtime converter skips a same-named type of another module" {
 	assert cCode.contains("Type 'Meters' is not assignable to type 'string'"), cCode;
 }
 
+test "converter: an extension named as<Target> is not an implicit conversion" {
+	const e = errorOf(`
+interface W { x: int32; }
+function asInt32(this w: W): int32 { return w.x; }
+const w: W = { x: 1 };
+const n: int32 = w;
+`);
+	assert e.contains("declare a converter to 'int32'"), e;
+}
+
 test "converter: runtime converter fills a nullable slot of its target" {
 	const e = errorOf(SECONDS + `
 export converter toSeconds(n: float64): Seconds { return n as Seconds; }
@@ -322,6 +332,30 @@ const o: Box = { n: 4 };
 const s = b + o;
 `);
 	assert e != "", e;
+}
+
+test "converter: runtime converter does not take a subtype of its source" {
+	const e = errorOf(`
+export class Animal {
+	n: int32;
+	constructor(n: int32) { this.n = n; }
+}
+export class Dog extends Animal {
+	constructor(n: int32) { super(n); }
+}
+export converter animalToInt(a: Animal): int32 { return a.n; }
+const d = new Dog(3);
+const n: int32 = d;
+`);
+	assert e.contains("Type 'Dog' is not assignable to type 'int32'"), e;
+}
+
+test "converter: runtime converter does not serve an increment target" {
+	const e = errorOf(BOX + `
+let c: Box = { n: 1 };
+c++;
+`);
+	assert e.contains("increment/decrement needs a numeric operand"), e;
 }
 
 test "converter: runtime converter does not serve a receiver" {
