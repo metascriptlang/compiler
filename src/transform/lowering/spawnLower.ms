@@ -155,6 +155,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 					arrowDefaults: [] as Node[],
 				}, syntheticToken(loc));
 				wrapper.nodeType = createFunction([], [], createPtr(voidType()));
+				wrapper.paramSyms = [];
 				cd.arguments[0] = wrapper;
 				return node;
 			}

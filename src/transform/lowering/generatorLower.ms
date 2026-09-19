@@ -821,6 +821,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		funcExprReturnType: "",
 	}, syntheticToken(loc));
 	if (nextFnType != null) nextFn.nodeType = nextFnType;
+	nextFn.paramSyms = [];
 
 	// 10. Build iterator object: { next: function() { ... } }
 	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
