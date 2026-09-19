@@ -298,8 +298,14 @@ export function makeWhile(cond: Node, body: Node, loc: SourceLocation): Node {
 	return createNode(NodeKind.WhileStmt, { whileCondition: cond, whileBody: body, whileLabel: "" }, syntheticToken(loc));
 }
 
-export function makeTryCatch(tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody, catchBindingLocation: makeLoc(0, 0), hasCatchClause: true }, syntheticToken(loc));
+export function makeTryCatch(tryBody: Node, catchSym: Symbol, catchBody: Node, finallyBody: Node, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.TryCatchStmt, { tryBody, catchName: catchSym.name, catchBody, finallyBody, catchBindingLocation: makeLoc(0, 0), hasCatchClause: true }, syntheticToken(loc));
+	n.resolvedSym = catchSym;
+	return n;
+}
+
+export function makeCatchSym(name: string): Symbol {
+	return makeSymbol(name, SymbolKind.Variable, null, true);
 }
 
 export function makeTryFinally(tryBody: Node, finallyBody: Node, loc: SourceLocation): Node {

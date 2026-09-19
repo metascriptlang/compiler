@@ -26,7 +26,7 @@ import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames, runtimeRef,
+	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames, runtimeRef,
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
@@ -567,16 +567,17 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// 7. Wrap in while(true) + try/catch
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 	const tryBody = makeBlock([loop], loc);
+	const excSym = makeCatchSym("$e");
 	const failCall = makeExprStmt(
 		makeCall(
 			runtimeRef("msFutureFail", loc),
-			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
+			[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdentResolved(excSym, null, loc)],
 			loc,
 		),
 		loc,
 	);
 	const catchBody = makeBlock([failCall, makeReturn(makeNull(loc), loc)], loc);
-	const tryCatch = makeTryCatch(tryBody, "$e", catchBody, makeBlock([], loc), loc);
+	const tryCatch = makeTryCatch(tryBody, excSym, catchBody, makeBlock([], loc), loc);
 
 	// 8. Build stepper as FunctionExpr
 	const stepperBody = makeBlock([tryCatch, makeReturn(makeNull(loc), loc)], loc);
@@ -755,16 +756,17 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// A throw in the body must FAIL $retFut and return it — otherwise the throw
 	// escapes past the `return $retFut`, leaving the caller with an uncompleted /
 	// NULL future (→ msWaitForReady crash). Mirrors the with-await stepper catch.
+	const excSym = makeCatchSym("$e");
 	const failCall = makeExprStmt(
 		makeCall(
 			runtimeRef("msFutureFail", loc),
-			[makeTypedIdent(retFutName, retFutType, loc), makeIdent("$e", loc)],
+			[makeTypedIdent(retFutName, retFutType, loc), makeTypedIdentResolved(excSym, null, loc)],
 			loc,
 		),
 		loc,
 	);
 	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdent(retFutName, retFutType, loc), loc)], loc);
-	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), "$e", catchBody, makeBlock([], loc), loc);
+	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), excSym, catchBody, makeBlock([], loc), loc);
 
 	return makeBlock([retFutDecl, tryCatch], loc);
 }

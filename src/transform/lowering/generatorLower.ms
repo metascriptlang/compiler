@@ -38,7 +38,7 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames, makeTryCatch, makeMoveExpr,
+	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr,
 } from "../util";
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -601,14 +601,14 @@ function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ:
 // Wrapping-catch body: capture the exception into $exc, then map the raising
 // state to its landing (reference exceptionTable[:state]) as an if-chain; a state
 // with no landing propagates out (go terminal + re-raise).
-export function buildExcRouting(sc: StateCollector, loc: SourceLocation): Node {
+export function buildExcRouting(sc: StateCollector, caughtSym: Symbol, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	// Carry the caught exception across the state boundary (reference :curExc) so
 	// the catch state can bind its variable from $curExc after control resumes.
 	// MOVE (reference nkFastAsgn — no incref): $curExc becomes the exception's sole
 	// owner and the env's DRC hooks free it once. A copy here over-owns (the sole
 	// currException ref is dropped by the clear without decref) → leak on every catch.
-	stmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.curExcSym, null, loc), makeMoveExpr(makeIdent("$excCaught", loc), loc), loc), loc));
+	stmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.curExcSym, null, loc), makeMoveExpr(makeTypedIdentResolved(caughtSym, null, loc), loc), loc), loc));
 	// Terminal re-raises $curExc — the slot the store above just filled — never
 	// $excCaught, which the store's move already nulled (reference closureiters
 	// wrapIntoTryExcept re-raises :curExc). Typed so the raise-arg sink fires.
@@ -634,7 +634,8 @@ export function hasExcLanding(sc: StateCollector): boolean {
 
 export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLocation): Node {
 	if (!hasExcLanding(sc)) return dispatch;
-	return makeTryCatch(dispatch, "$excCaught", buildExcRouting(sc, loc), null as unknown as Node, loc);
+	const caughtSym = makeCatchSym("$excCaught");
+	return makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
 }
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
