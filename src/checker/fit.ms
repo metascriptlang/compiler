@@ -5,7 +5,7 @@
 import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
@@ -674,8 +674,16 @@ function coercionMethodName(t: Type): string {
 //
 // Caller (e.g. fitNode, checkCallExpr arg coercion) substitutes the returned Node
 // for `expr` at its slot. Result type matches targetType exactly.
+function refusedInsideOwnBody(ctx: CheckerContext, ext: ExtensionMethod, site: Node | null): boolean {
+	if (ext.sym == null || ext.sym != ctx.currentFunction) return false;
+	if (site != null) {
+		addError(ctx, "'" + ext.sym.name + "' does not apply inside its own body — write the conversion explicitly", site.location.line, site.location.column);
+	}
+	return true;
+}
+
 export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
-	const methodName = asCoercionMethod(ctx, srcType, targetType);
+	const methodName = asCoercionMethod(ctx, srcType, targetType, expr);
 	if (methodName == "") return null as unknown as Node;
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
@@ -689,7 +697,7 @@ export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType
 	return synthCall;
 }
 
-function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type): string {
+function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type, site: Node | null = null): string {
 	if (ctx.extensionRegistry == null) return "";
 	// Nullable-ref target (`X | null`): coerce to the non-null member — the
 	// synthesized X then flows into X|null via the normal member rule. Interface
@@ -718,21 +726,27 @@ function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type):
 	if (targetType.typeName != "" && extRet.typeName != targetType.typeName) {
 		return "";
 	}
+	if (refusedInsideOwnBody(ctx, ext, site)) return "";
 	return methodName;
 }
 
-export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
-	if (t == null || ctx.extensionRegistry == null) return false;
+function valueOfProtocolOf(ctx: CheckerContext, t: Type | null): ExtensionMethod {
+	const none = null as unknown as ExtensionMethod;
+	if (t == null || ctx.extensionRegistry == null) return none;
 	let src = withoutReadonlyView(t);
-	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return false;
+	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return none;
 	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
-	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return false;
+	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return none;
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
-	if (exts.length == 0) return false;
+	if (exts.length == 0) return none;
 	const ext = findFirstMatchingExt(exts, src);
-	if (ext == null) return false;
+	if (ext == null) return none;
 	const srcName = typeNameOf(src);
-	return srcName != "" && srcName == ext.receiverTypeName;
+	return srcName != "" && srcName == ext.receiverTypeName ? ext : none;
+}
+
+export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
+	return valueOfProtocolOf(ctx, t) != null;
 }
 
 export function slotTakesValue(exprType: Type, formal: Type): boolean {
@@ -780,8 +794,10 @@ function needServedByOwnProtocol(ctx: CheckerContext, t: Type, need: ReadNeed, f
 
 export function valueOfInPlace(ctx: CheckerContext, node: Node, need: ReadNeed = ReadNeed.Value, formal: Type | null = null): boolean {
 	if (node == null as unknown as Node || node.flags.has(NodeFlag.ProtocolCall)) return false;
-	if (!hasValueOfProtocol(ctx, node.nodeType)) return false;
+	const valueOfExt = valueOfProtocolOf(ctx, node.nodeType);
+	if (valueOfExt == null) return false;
 	if (needServedByOwnProtocol(ctx, node.nodeType!, need, formal)) return false;
+	if (refusedInsideOwnBody(ctx, valueOfExt, node)) return false;
 	const inner = createNodeAt(node.kind, node.data, node.location);
 	inner.nodeType = node.nodeType;
 	inner.resolvedSym = node.resolvedSym;
