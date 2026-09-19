@@ -1364,6 +1364,7 @@ function walkLift(node: Node, state: LiftState): void {
 			state.currentStmts = savedStmts;
 			state.currentStmtIdx = savedIdx;
 		},
+		NodeKind.MacroDecl => {},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			// Generic template: never lifted. Monomorphization (instantiate.ms strips the `gen:`
@@ -2021,6 +2022,10 @@ test "multiple captures one env" { assert checkedLifted("function f() { let a = 
 test "non-capturing function expr lifted" {
 	assert checkedLifted("const f = function(x) { return x + 1; };").length == 2;
 	assert checkedLifted("const f = function(x) { return x + 1; };")[0].kind == NodeKind.FunctionDecl;
+}
+
+test "a macro body is not lifted" {
+	assert stmtCountAfter("macro twice(x: Node): Node { const f = (y: Node): Node => y; return f(x); }", lowerLambda) == 1;
 }
 
 test "isCaptureLastUse: var not used after closure" {
