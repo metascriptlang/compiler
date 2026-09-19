@@ -201,3 +201,4 @@ import "./bug186MaybeUnionNarrowCast";
 import "./bug187TryExprStatement";
 import "./bug188HoistSurvivesArrowRecheck";
 import "./bug189HoistedPrefixGensym";
+import "./bug190LocalRedeclaration";
