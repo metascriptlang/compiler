@@ -2216,7 +2216,7 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 			const rcInfo = classifyType(catchType, dctx.ctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);
-				registerVar(dctx, d.catchName, rcInfo, false, noSym);
+				registerVar(dctx, d.catchName, rcInfo, false, stmt.resolvedSym);
 				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
 				const scope = popScope(dctx);
 				const cleanup = generateCleanup(scope, emptyNameSet(), loc);
