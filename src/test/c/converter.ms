@@ -238,6 +238,58 @@ export converter boxToInt(b: Box): int32 {
 	assert e.contains("'boxToInt' does not apply inside its own body"), e;
 }
 
+test "converter: runtime converter reads an operand against a typed other side" {
+	const e = errorOf(BOX + `
+const a = b + 1;
+const c = 1 + b;
+const d = b * 2;
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter reads the operand of a compound assignment" {
+	const e = errorOf(BOX + `
+let t: int32 = 0;
+t += b;
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter reads an operand of a comparison" {
+	const c = compileToCWithStd(BOX + `const g = b > 2;`);
+	assert c.ok, c.ok ? "" : c.error;
+	if (c.ok) assert c.value.contains("_u0(b__"), c.value;
+}
+
+test "converter: runtime converter reads an operand of a string concatenation" {
+	const c = compileToCWithStd(`
+export interface Box { n: int32; }
+export converter boxToText(x: Box): string { return "box"; }
+const b: Box = { n: 3 };
+const s = "n=" + b;
+`);
+	assert c.ok, c.ok ? "" : c.error;
+	if (c.ok) assert c.value.contains("_u0(b__"), c.value;
+}
+
+test "converter: two converter sources in one operation stay an error" {
+	const e = errorOf(BOX + `
+const o: Box = { n: 4 };
+const s = b + o;
+`);
+	assert e != "", e;
+}
+
+test "converter: runtime converter does not serve a receiver" {
+	const e = errorOf(`
+export interface Box { n: int32; }
+export converter boxToText(x: Box): string { return "box"; }
+const b: Box = { n: 3 };
+const l = b.length;
+`);
+	assert e.contains("length"), e;
+}
+
 test "converter: missing return annotation is rejected" {
 	const c = compileToC(`
 import { Node } from "std/meta";
