@@ -908,7 +908,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (ctx.extensionRegistry != null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
-			if (objType != null) {
+			const isNamespaceQualified = me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module;
+			if (objType != null && !isNamespaceQualified) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
