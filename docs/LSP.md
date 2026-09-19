@@ -10,7 +10,7 @@ This document outlines the strategy for evolving the MetaScript Language Server 
 - **Architecture**: "Thin Server" adapter (~1600 lines). Intelligence lives in the compiler (`src/checker/suggest.ms`). Single-threaded with `select()`-based message draining.
 
 ### Trans-Am Engine (`src/compiler/transam/`)
-- **Status**: Core Engine Complete (~3,300 lines across 11 modules). Durability + stdlib optimizations landed.
+- **Status**: Core Engine Complete (3,510 lines across 10 modules, inline tests included). Durability + stdlib optimizations landed. Design: [`TRANSAM.md`](TRANSAM.md).
 - **Capabilities**: Red-Green query invalidation, content-addressed hashing, dependency tracking, ExportRegistry integration, version-based cancellation, module dep graph with cycle detection, stdlib durability (G2-G5).
 
 ### Intelligence (`src/checker/suggest.ms`)

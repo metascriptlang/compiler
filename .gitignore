@@ -69,6 +69,7 @@ docs/*
 !docs/PROJECT-STRUCTURE.md
 !docs/RAISER.md
 !docs/TESTING.md
+!docs/TRANSAM.md
 !docs/TRANSFORM.md
 !docs/WINDOWS-TRAPS.md
 
