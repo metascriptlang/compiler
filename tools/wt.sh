@@ -22,6 +22,8 @@ usage: tools/wt.sh <command> [args]
                         rebase onto main, gate (tools/gate.sh picks the lanes
                         from the diff, then each --also command), then move
                         main forward and sync the main checkout path by path;
+                        a main that moved during the gate only by paths no lane
+                        tests is rebased onto without a second gate;
                         --no-gate lands on evidence gathered outside the gate
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
@@ -360,7 +362,7 @@ sync_main_path() {
 }
 
 cmd_land() {
-  local target="" also=() w old new paths clash p failed=0 cmd gate=1
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -390,11 +392,22 @@ cmd_land() {
     say "gate: $cmd"
     (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
   done
-  paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
-  clash=$(main_held "$old" "$paths")
-  [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
+  while :; do
+    paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
+    clash=$(main_held "$old" "$paths")
+    [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
-  git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" || die "land: $BASE moved during the gate; run land again"
+    git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" 2>/dev/null && break
+    moved=$(git -C "$MAIN" rev-parse "$BASE")
+    (cd "$w" && tools/gate.sh --inert "$old" "$moved") || die "land: $BASE moved during the gate to $(git -C "$MAIN" rev-parse --short "$moved") with paths a lane tests; run land again"
+    say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved") by paths no lane tests; rebasing onto it without a second gate"
+    if ! git -C "$w" rebase "$moved" >&2; then
+      git -C "$w" rebase --abort >/dev/null 2>&1
+      die "land: rebase onto $BASE conflicts; rebase by hand in $w"
+    fi
+    old=$moved
+    new=$(git -C "$w" rev-parse HEAD)
+  done
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     sync_main_path "$p" "$old" "$new" || failed=1

@@ -29,6 +29,7 @@ after another, and compare every red against src/test/known-red.json.
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
+  --inert <from> <to>  exit 0 when every path changed from..to picks no lane
 
 corpus and san run on the programs whose emitted C or JS the change alters
 (control = the compiler at the merge base, kept in out/gate/ctl); they run whole
@@ -41,6 +42,12 @@ USAGE
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'gate: %s\n' "$*" >&2; exit 2; }
+
+inert_range() {
+  local paths
+  paths=$(git diff --name-only --no-renames "$1" "$2") || return 2
+  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -q .
+}
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
@@ -90,6 +97,7 @@ while [ $# -gt 0 ]; do
     --reuse) reuse=1 ;;
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
     --emit-one) emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0 ;;
+    --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
     -h|--help|help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
