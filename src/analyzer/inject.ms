@@ -1076,8 +1076,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				}
 				return makeBlock(hoisted, loc);
 			}
-			// Ref/Closure: delegate to genSink (Reference parity: Nim's nkCallKinds
-			// → c.genSink at injectdestructors.nim:1189). The callee-side
+			// Ref/Closure: delegate to genSink. The callee-side
 			// emitReturnWithIncref bumps rc on `return identifier` of Ref params,
 			// balancing rc accounting so save→assign→destroy is safe for aliased
 			// passthrough — no caller-side defensive incref needed.
