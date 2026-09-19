@@ -494,8 +494,8 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	// (DRC-owned) even when the handler never reads the catch var — otherwise the
 	// env field falls back to void* and the exception leaks (no destructor hook).
 	if (node.nodeType != null) sc.excType = node.nodeType;
-	if (td.catchName != "") {
-		renameIdentInSubtree(td.catchBody, td.catchName, "$curExc", node.nodeType, sc.curExcSym);
+	if (node.resolvedSym != null) {
+		renameIdentInSubtree(td.catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
 	}
 	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
 }
@@ -584,18 +584,17 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
 // stamping `typ` so member access (e.g. `$curExc.message`) resolves post-check.
-function renameIdentInSubtree(node: Node, oldName: string, newName: string, typ: Type | null, newSym: Symbol): void {
+function renameIdentInSubtree(node: Node, oldSym: Symbol, newName: string, typ: Type | null, newSym: Symbol): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		if (d.name == oldName) {
-			d.name = newName;
+		if (node.resolvedSym == oldSym) {
+			(node.data as IdentifierData).name = newName;
 			if (typ != null) node.nodeType = typ;
 			node.resolvedSym = newSym;
 		}
 		return;
 	}
-	forEachChild(node, (child: Node): void => { renameIdentInSubtree(child, oldName, newName, typ, newSym); });
+	forEachChild(node, (child: Node): void => { renameIdentInSubtree(child, oldSym, newName, typ, newSym); });
 }
 
 // Wrapping-catch body: capture the exception into $exc, then map the raising
