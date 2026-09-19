@@ -757,3 +757,20 @@ a conditional nullable handler: the wrapper that unwraps the text of `onChangeTe
 over the narrowed temp, so `direct` rejects a nullable handler outright and two fixtures pin that
 rejection. Not measured: a narrowed parameter, a `let` that is never reassigned, narrowing by
 `typeof` or by a discriminant rather than `!== null`, and a closure nested two levels deep.
+
+## L48. A function type alias is named `function` in a type error (LIVE, measured 2026-09-19)
+
+```ms
+type Node2 = (n: int32) => void;
+interface Props { child: Node2; }
+const kids: Node2[] = [];
+take({ child: kids });
+
+both backends: Type 'function[]' is not assignable to type 'function' for field 'child'
+```
+
+Neither side of the mismatch keeps the alias it was written with, so the message cannot say which
+function type was expected; an array of them prints as `function[]`. Measured on the installed
+`v0.2.55`, native and `--target=js`, standalone. Not measured: whether a named interface or a
+generic instance keeps its name in the same message, and whether the alias survives in the LSP
+hover for the same node.
