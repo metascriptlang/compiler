@@ -47,7 +47,7 @@ function makeEnumToString(fnName: string, enumName: string, members: string[], l
 	const valueSym = makeSymbol("v", SymbolKind.Parameter, enumType, false);
 	const switchStmt = makeSwitch(makeTypedIdentResolved(valueSym, null, loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
-	const fn = makeFnDecl(fnName, [valueSym.name], ["int32"], body, "", "string", loc);
+	const fn = makeFnDecl(fnName, [valueSym], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
 	fn.nodeType = createFunction([enumType], [valueSym.name], stringType());
 	return fn;

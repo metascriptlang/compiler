@@ -2503,7 +2503,7 @@ test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
 
 test "setNeedsTryIfRaises stops at a nested function declaration" {
 	const loc = testLoc();
-	const nested = makeFnDecl("inner", [], [], makeBlock([userCallStmt()], loc), "", "void", loc);
+	const nested = makeFnDecl("inner", [] as Symbol[], [], makeBlock([userCallStmt()], loc), "", "void", loc);
 	assert !scanSetsNeedsTry(nested);
 }
 

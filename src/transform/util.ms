@@ -453,8 +453,10 @@ export function makeMatchCase(patterns: Node[], guard: Node, body: Node, loc: So
 
 // ===== Declaration Builders =====
 
-export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node | null, flags: string, returnType: string, loc: SourceLocation): Node {
+export function makeFnDecl(name: string, paramSyms: Symbol[], paramTypes: string[], body: Node | null, flags: string, returnType: string, loc: SourceLocation): Node {
 	const emptyDefaults: Node[] = [];
+	const fnParams: string[] = [];
+	for (const ps of paramSyms) fnParams.push(ps.name);
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
@@ -467,6 +469,7 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 	}
 	const resolvedRet = resolveSimpleTypeStr(returnType);
 	n.nodeType = createFunction(resolvedParams, fnParams, resolvedRet);
+	n.paramSyms = paramSyms;
 	return n;
 }
 

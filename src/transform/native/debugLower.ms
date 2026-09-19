@@ -202,7 +202,7 @@ function ensureDumpFn(outerType: Type, structType: Type, ctx: TransformContext, 
 	}
 	stmts.push(makeReturn(buildJsonObjectFor(makeIdentResolved(valueSym, loc), structType, loc, ctx), loc));
 
-	const fnNode = makeFnDecl(name, ["x"], [structType.typeName], makeBlock(stmts, loc), "", "JsonValue", loc);
+	const fnNode = makeFnDecl(name, [valueSym], [structType.typeName], makeBlock(stmts, loc), "", "JsonValue", loc);
 	if (fnNode.nodeType != null && fnNode.nodeType.typeChildren != null
 		&& fnNode.nodeType.typeChildren.length > 0) {
 		fnNode.nodeType.typeChildren[0] = outerType;
