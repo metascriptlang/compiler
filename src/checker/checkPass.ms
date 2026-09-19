@@ -6,7 +6,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -818,9 +818,7 @@ function findFrameValueRead(node: Node): Symbol {
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym == null) return none;
-		if (sym.symbolKind == SymbolKind.Parameter) return sym;
-		if ((sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global)) return sym;
-		return none;
+		return isFrameValue(sym) ? sym : none;
 	}
 	const kids: Node[] = [];
 	forEachChild(node, (child: Node): void => { kids.push(child); });
@@ -1087,7 +1085,10 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 		NodeKind.PropertyDecl => {
 			const pd = node.data as PropertyDeclData;
 			if (pd.propInitializer != null) {
+				const savedBoundary = ctx.staticInitBoundary;
+				if (pd.propIsStatic) ctx.staticInitBoundary = ctx.table.current;
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				ctx.staticInitBoundary = savedBoundary;
 			}
 		},
 		NodeKind.MethodDecl => {
@@ -1181,7 +1182,9 @@ function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol |
 	const savedFunction = ctx.currentFunction;
 	const savedInLoop = ctx.inLoop;
 	const savedInSwitch = ctx.inSwitch;
+	const savedBoundary = ctx.staticInitBoundary;
 	ctx.staticBlockClass = owner;
+	ctx.staticInitBoundary = ctx.table.current;
 	ctx.staticBlockPending = staticFieldsInitializedAfter(owner, node);
 	ctx.currentFunction = null;
 	ctx.inLoop = false;
@@ -1192,6 +1195,7 @@ function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol |
 	ctx.currentFunction = savedFunction;
 	ctx.inLoop = savedInLoop;
 	ctx.inSwitch = savedInSwitch;
+	ctx.staticInitBoundary = savedBoundary;
 }
 
 function checkExportDecl(ctx: CheckerContext, node: Node): void {

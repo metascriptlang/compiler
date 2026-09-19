@@ -1144,6 +1144,7 @@ export class CheckerContext {
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
+	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
@@ -1211,6 +1212,7 @@ export function createContext(): CheckerContext {
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
+		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		inLoop: false,
 		inSwitch: false,
