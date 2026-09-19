@@ -93,14 +93,9 @@ export function createExportRegistry(): ExportRegistry {
 function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
 		if (sym.name.length == 0) continue;
-		const old = registry.nameIndex.get(sym.name);
-		if (old != null) {
-			const updated: ExportedSymInfo[] = [];
-			for (let ai = 0; ai < old.length; ai += 1) {
-				updated.push(old[ai]);
-			}
-			updated.push(sym);
-			registry.nameIndex.set(sym.name, updated);
+		const bucket = registry.nameIndex.get(sym.name);
+		if (bucket != null) {
+			bucket.push(sym);
 		} else {
 			registry.nameIndex.set(sym.name, [sym]);
 		}
@@ -110,17 +105,17 @@ function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): v
 export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
 	for (const sym of exports) {
 		if (sym.name.length == 0) continue;
-		const arr = registry.nameIndex.get(sym.name);
-		if (arr == null) continue;
-		const kept: ExportedSymInfo[] = [];
-		for (let ri = 0; ri < arr.length; ri += 1) {
-			if (arr[ri] != sym) kept.push(arr[ri]);
+		const bucket = registry.nameIndex.get(sym.name);
+		if (bucket == null) continue;
+		let ri = 0;
+		while (ri < bucket.length) {
+			if (bucket[ri] == sym) {
+				bucket.splice(ri, 1);
+			} else {
+				ri += 1;
+			}
 		}
-		if (kept.length == 0) {
-			registry.nameIndex.delete(sym.name);
-		} else {
-			registry.nameIndex.set(sym.name, kept);
-		}
+		if (bucket.length == 0) registry.nameIndex.delete(sym.name);
 	}
 }
 
@@ -1644,6 +1639,37 @@ test "missing symbol returns null" {
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
 	assert found == null;
+}
+
+function namedExportInfo(name: string): ExportedSymInfo {
+	return { name, kind: SymbolKind.Function, symType: noneType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [], primaryFlags: 0, overloadFlags: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [], declNode: null as unknown as Node, overloadDeclNodes: [], disamb: 0, overloadDisambs: [] };
+}
+
+test "the name index keeps registration order across export updates" {
+	const r = createExportRegistry();
+	const a1 = namedExportInfo("dup");
+	const b1 = namedExportInfo("dup");
+	const c1 = namedExportInfo("dup");
+	const b2 = namedExportInfo("dup");
+	registerModuleExports(r, "/src/a.ms", [a1]);
+	registerModuleExports(r, "/src/b.ms", [b1]);
+	registerModuleExports(r, "/src/c.ms", [c1]);
+	updateModuleExports(r, "/src/b.ms", [b2]);
+	const hits = findExportsByName(r, "dup");
+	assert hits.length == 3;
+	assert hits[0] == a1;
+	assert hits[1] == c1;
+	assert hits[2] == b2;
+	const shared = namedExportInfo("twice");
+	registerModuleExports(r, "/src/d.ms", [shared, shared]);
+	assert findExportsByName(r, "twice").length == 2;
+	updateModuleExports(r, "/src/d.ms", []);
+	assert findExportsByName(r, "twice").length == 0;
+	updateModuleExports(r, "/src/a.ms", []);
+	const rest = findExportsByName(r, "dup");
+	assert rest.length == 2;
+	assert rest[0] == c1;
+	assert rest[1] == b2;
 }
 
 test "extractGenericNames single" {
