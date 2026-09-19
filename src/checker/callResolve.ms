@@ -20,7 +20,7 @@ import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
-import { expandTemplate, isTemplateSym } from "./template";
+import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -207,6 +207,7 @@ export function unwrapSpliceManyAtExpr(ctx: CheckerContext, node: Node, expanded
 			node.location.line, node.location.column);
 		return null as unknown as Node;
 	}
+	gensymSplicePrefix(ctx, expanded);
 	const lastIdx = d.spliceNodes.length - 1;
 	let i = 0;
 	while (i < lastIdx) {
@@ -223,19 +224,40 @@ export function isHoistingSplice(ctx: CheckerContext, node: Node, expanded: Node
 	return expanded.kind == NodeKind.SpliceMany && node != ctx.stmtPosExpr;
 }
 
-export function bindRefsToHoistedPrefix(value: Node, expanded: Node): void {
+export function spliceEndsInValue(splice: Node): boolean {
+	const d = splice.data as SpliceManyData;
+	if (d.spliceNodes.length == 0) return false;
+	return match (d.spliceNodes[d.spliceNodes.length - 1].kind) {
+		NodeKind.VariableDecl | NodeKind.DestructuringDecl | NodeKind.FunctionDecl
+		| NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt
+		| NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.BlockStmt | NodeKind.ExprStmt
+		| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt
+		| NodeKind.SwitchStmt | NodeKind.MatchStmt | NodeKind.UnreachableStmt
+		| NodeKind.ThrowStmt | NodeKind.TryCatchStmt | NodeKind.DeferStmt | NodeKind.AssertStmt
+		| NodeKind.ImportDecl | NodeKind.ExportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+		| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
+		| NodeKind.DecoratedDecl | NodeKind.TestDecl | NodeKind.ExternDecl | NodeKind.MacroDecl
+		| NodeKind.SpliceMany => false,
+		_ => true,
+	};
+}
+
+export function hoistedPrefixSyms(expanded: Node): Symbol[] {
 	const d = expanded.data as SpliceManyData;
 	const prefixSyms: Symbol[] = [];
 	for (let i = 0; i < d.spliceNodes.length - 1; i += 1) {
 		const sym = d.spliceNodes[i].resolvedSym;
 		if (d.spliceNodes[i].kind == NodeKind.VariableDecl && sym != null) prefixSyms.push(sym);
 	}
-	if (prefixSyms.length == 0) return;
-	bindRefsTo(value, prefixSyms);
+	return prefixSyms;
 }
 
-function bindRefsTo(node: Node, syms: Symbol[]): void {
-	if (node == null) return;
+export function bindRefsToHoistedPrefix(value: Node, expanded: Node): void {
+	bindRefsTo(value, hoistedPrefixSyms(expanded));
+}
+
+export function bindRefsTo(node: Node, syms: Symbol[]): void {
+	if (node == null || syms.length == 0) return;
 	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
 		for (const s of syms) {
 			if (node.resolvedSym == s) { node.flags = node.flags.incl(NodeFlag.BoundSym); break; }

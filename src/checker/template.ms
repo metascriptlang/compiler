@@ -60,6 +60,7 @@ interface SubstState {
 	used: boolean[];
 	gsuffix: string;
 	localNames: string[];
+	rejectDestructuring: boolean;
 }
 
 function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type | null): Type {
@@ -103,6 +104,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	const st: SubstState = {
 		ctx, symName: sym.name, paramNames, args, used,
 		gsuffix: "$t" + String(_templateGensymCounter), localNames,
+		rejectDestructuring: true,
 	};
 	const rootMask: string[] = [];
 	mapChildren(cloned, (c: Node): Node => substituteInto(c, st, rootMask));
@@ -140,6 +142,24 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	callNode.resolvedSym = expandedExpr.resolvedSym;
 
 	return expandedExpr.nodeType != null ? expandedExpr.nodeType : inferredType();
+}
+
+export function gensymSplicePrefix(ctx: CheckerContext, splice: Node): void {
+	const d = splice.data as SpliceManyData;
+	const localNames: string[] = [];
+	for (let i = 0; i < d.spliceNodes.length - 1; i += 1) {
+		const stmt = d.spliceNodes[i];
+		if (stmt.kind == NodeKind.VariableDecl) localNames.push((stmt.data as VariableDeclData).declName);
+	}
+	if (localNames.length == 0) return;
+	_templateGensymCounter = _templateGensymCounter + 1;
+	const st: SubstState = {
+		ctx, symName: "", paramNames: [], args: [], used: [],
+		gsuffix: "$h" + String(_templateGensymCounter), localNames,
+		rejectDestructuring: false,
+	};
+	const rootMask: string[] = [];
+	mapChildren(splice, (c: Node): Node => substituteInto(c, st, rootMask));
 }
 
 // ===== Declared-type check =====
@@ -280,7 +300,7 @@ function substituteInto(n: Node, st: SubstState, masked: string[]): Node {
 	} else if (k == NodeKind.TryCatchStmt) {
 		const d = n.data as TryCatchStmtData;
 		if (nameIndex(st.localNames, d.catchName) >= 0) d.catchName = d.catchName + st.gsuffix;
-	} else if (k == NodeKind.DestructuringDecl) {
+	} else if (k == NodeKind.DestructuringDecl && st.rejectDestructuring) {
 		addError(st.ctx, `Template '${st.symName}': destructuring declarations in a template body are not supported yet`,
 			n.location.line, n.location.column);
 		return n;
