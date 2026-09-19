@@ -1105,9 +1105,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			// Skip body check for extern (no body) and generic methods (body re-checked
-			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
-			if (d.methodFlags != "extern" && !isGenericFn(d.methodFlags)) {
+			// Skip body check for generic methods (body re-checked per instantiation,
+			// like top-level generic fns at checkFunctionDecl:358).
+			if (!isGenericFn(d.methodFlags)) {
 				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
 				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
 				if (d.methodIsStatic) closeScope(ctx.table);
