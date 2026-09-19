@@ -8,7 +8,7 @@
 //   (srcType.kind === Unknown) but not the nilable-union form `{unknown, null}`
 //   (srcType.kind === Union, collapses to void*). Fix: peel unwrapRefNullUnion
 //   before the check — mirrors the already-present peel at the call-arg sites.
-// NIM-REF: §1 "unknown top type" — DIVERGE-INCOMPLETE -> SAME (diagnostic applied
+// NIM-REF CK-46 — DIVERGE-INCOMPLETE -> SAME (diagnostic applied
 //   to call-args but not the cast site).
 
 import { checkSource } from "./helpers";

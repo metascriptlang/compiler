@@ -1,4 +1,4 @@
-// Phase 0 guard for the TypeKind.Pending kind-split debt — NIM-REF.md row 58;
+// Phase 0 guard for the TypeKind.Pending kind-split debt — NIM-REF CK-46;
 // canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // Two holes were found by probe on 2026-08-04 and had NO test, so a refactor

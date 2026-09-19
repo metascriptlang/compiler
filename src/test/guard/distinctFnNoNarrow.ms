@@ -2,7 +2,7 @@
 //
 // INVARIANT (resolvePass distinct branch sets BrandWiden for a function base; compat.ms
 //   brand-widen clause): `type Thunk<T> = distinct (() => T)` flows implicitly into
-//   `() => T` — MetaScript's documented divergence (NIM-REF) standing in for the
+//   `() => T` — MetaScript's documented divergence (NIM-REF CK-13) standing in for the
 //   reference's explicit conversion to the base — while a bare closure never flows into
 //   the distinct without `as`, which is the reference's own rule for tyDistinct.
 //

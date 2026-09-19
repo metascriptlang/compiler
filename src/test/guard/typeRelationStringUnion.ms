@@ -6,8 +6,8 @@
 //   assignment site, so a pair that is assignable is by construction also
 //   matchable as an argument. Nim has no second, weaker relation that overload
 //   resolution alone consults.
-// NIM-REF: row 76 already records MS splitting Nim's single relation and names
-//   `isAssignable` "an incomplete stand-in for Nim typeRel"; row 80 records
+// NIM-REF CK-51 already records MS splitting Nim's single relation and names
+//   `isAssignable` "an incomplete stand-in for Nim typeRel"; CK-54 records
 //   `typeRelation` as the relation used for scoring. The split is documented —
 //   the two relations DISAGREEING on the same pair is not.
 //   -> DIVERGE-UNINTENTIONAL.

@@ -1,4 +1,4 @@
-// Phase 3 Batch 2 guard for TypeKind.None — NIM-REF.md row 58 (kind split);
+// Phase 3 Batch 2 guard for TypeKind.None — NIM-REF CK-46 (kind split);
 // canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // None answers "this node kind has no type" (RegexLiteral / QuoteExpr / JSXText

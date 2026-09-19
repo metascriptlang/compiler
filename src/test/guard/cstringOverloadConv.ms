@@ -6,7 +6,7 @@
 //   wraps the argument — paramTypesMatch calls implicitConv (sigmatch.nim:2179).
 //   Relation and conversion are one step; there is no state where a call
 //   resolved but its argument stayed unconverted.
-// NIM-REF: rows 76/80 — MS runs two relations where Nim runs one. `isAssignable`
+// NIM-REF CK-51/CK-54 — MS runs two relations where Nim runs one. `isAssignable`
 //   had the rule (compat.ms:354/:373, needsStdConv:441 names the conversion),
 //   `typeRelation` did not, so the overload path rejected what assignment took.
 //

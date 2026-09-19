@@ -6,7 +6,7 @@
 //   named object types compare nominally by id (`ifFastObjectTypeCheckFailed`).
 //   A control-flow join that dedups branch types must use IDENTITY — two DU
 //   variants are distinct types and must both survive the merge.
-// NIM-REF: row "Structural type-dedup keys" — verdict DIVERGE-UNINTENTIONAL ->
+// NIM-REF CK-52 — verdict DIVERGE-UNINTENTIONAL ->
 //   SAME ("type identity is structural everywhere"). Same class of bug: a key /
 //   relation that collapses structurally-different types into one.
 //

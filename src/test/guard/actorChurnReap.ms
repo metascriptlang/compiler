@@ -5,7 +5,7 @@
 //   (processing held, popped off the run queue) or the reap scan — and the
 //   scan reaps ONLY suspended-stopped shells, where the latched SUSPENDED
 //   flag keeps senders off the wasEmpty edge (no queue entry can exist).
-// NIM-REF: PARALOCK §7.4 R1 + Amendments I18/I19, §8 I18/I19.
+// PARALOCK §7.4 R1 + Amendments I18/I19, §8 I18/I19.
 //
 // WHAT IT CATCHES: (a) pre-I18 stop() freed the shell on the caller's thread
 //   while scheduler-reachable — deterministic panic "load of value 136/212

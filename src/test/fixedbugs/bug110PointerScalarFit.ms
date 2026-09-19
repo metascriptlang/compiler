@@ -11,7 +11,7 @@
 //             formal (sigmatch.nim:1577 `of tyPtr, tyRef`: same-kind or nil,
 //             everything else falls through to `discard`). fitNode now rejects
 //             the pointer-vs-scalar pair at every fit site. The Ref→Ptr cursor
-//             coercion (NIM-REF.md §4) is untouched — both sides are pointers.
+//             coercion (NIM-REF AN-10) is untouched — both sides are pointers.
 
 import { hasError, strictErrorCount } from "../handoff/helpers";
 

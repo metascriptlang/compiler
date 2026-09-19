@@ -12,7 +12,7 @@
 //   resolution. And a derived operator is derived from the RESOLVED base: Nim's
 //   `!=` is `template `!=`(x, y) = not (x == y)`, which re-resolves `==` through
 //   normal overload resolution and therefore lands on the user's proc.
-// NIM-REF: §0 — "track Nim most strictly where getting it wrong is a silent
+// NIM-REF §0 — "track Nim most strictly where getting it wrong is a silent
 //   miscompile". Pre-fix, `collectPass.ms` registered operators ONLY for
 //   receiver-form (`this`) declarations, so the flat `==` below was invisible in
 //   BOTH places that look for it: the direct resolution AND `resolveOpCall`, the

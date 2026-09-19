@@ -8,7 +8,7 @@
 //   destructuring in an EARLY pass (`destructuringLower`, pass 8) via the shared
 //   `walkExpandBlocksHooked`, and codegen has NO fallback (`DestructuringDecl`
 //   hits `/* unsupported stmt */`), so that early walk MUST be complete.
-// NIM-REF: §1 "Statement-expansion walk: uniform child traversal" — sibling of
+// NIM-REF TR-13 — sibling of
 //   "Lambda lifting: uniform child traversal" (row 76). Verdict
 //   DIVERGE-INCOMPLETE -> SAME: `walkExpandBlocksHooked`'s `_ => {}` default never
 //   descended into fn bodies sitting in expression position (VariableDecl.init,

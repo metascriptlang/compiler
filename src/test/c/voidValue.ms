@@ -5,7 +5,7 @@
 // against tsc --strict: flowing void into a typed slot (TS2322), testing it
 // for truthiness (TS1345), and arithmetic or ordering on it (TS2365 / TS2367).
 // The reference line is stricter still (every void use is an error); the
-// carrier divergence is recorded in docs/NIM-REF.md.
+// carrier divergence is recorded in paper/NIM-REF.md.
 
 import { compileToC } from "../helpers";
 

@@ -1,6 +1,6 @@
 // nim-guard: a read through the valueOf protocol is a call on BOTH backends, and only where the read would fail
 //
-// INVARIANT (checker valueOfInPlace; NIM-REF "valueOf" — a converter chosen by a failed resolution):
+// INVARIANT (checker valueOfInPlace; NIM-REF CK-14 — a converter chosen by a failed resolution):
 //   a read whose resolution fails (a value slot, an operand, a missing member) and whose receiver type
 //   declares `valueOf` is rewritten into `x.valueOf()` and lowered to a free call before any backend
 //   sees it; a string payload is a fresh owned temp (destroyed at scope exit), a captured accessor still

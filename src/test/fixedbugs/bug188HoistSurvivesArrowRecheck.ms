@@ -18,7 +18,7 @@
 //             `nkStmtListExpr`, and a checked identifier is an `nkSym` that a
 //             later sem pass never looks up by name again (semexprs.nim
 //             `semSym`); pragmas are syntax and survive any re-sem. MetaScript
-//             hoists instead of nesting (NIM-REF "Expression-with-statements"),
+//             hoists instead of nesting (NIM-REF AN-4),
 //             so the reference from the value to its own prefix has to travel
 //             as a bound symbol, and syntax flags are not checker state.
 import { compileToCWithStd, compileProjectToCWithStd, MapEntry } from "../helpers";

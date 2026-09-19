@@ -8,7 +8,7 @@
 //   must unwrap with NO field read. The checker owes BOTH carriers the same
 //   TYPE-LEVEL narrowing; it only narrowed the Maybe one, so `!` on a pointer
 //   union was a no-op and the null member survived into later inference.
-// NIM-REF: §1 "Value-type Maybe unwrap operators" — the pointer-carrier arm.
+// NIM-REF CK-61 — the pointer-carrier arm.
 //
 // WHAT IT CATCHES: the surviving null member poisons the next JOIN. `t!` joined
 //   with a string must be a 2-member union; without the narrowing it is

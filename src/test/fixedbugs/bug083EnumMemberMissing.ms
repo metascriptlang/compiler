@@ -5,7 +5,7 @@
 // `Color_Purple` (or a JS ReferenceError), with a mangled name and no source
 // location. Struct and class member access already reported it correctly.
 //
-// The rewrite itself is a deliberate divergence (NIM-REF row 72: the mangled
+// The rewrite itself is a deliberate divergence (NIM-REF CK-22: the mangled
 // name IS the C identifier, so codegen never special-cases enum MemberExpr).
 // What was missing is the reference's "not found" arm: tryReadingTypeField
 // returns nil for an unknown enum field and sem reports `undeclared field`.

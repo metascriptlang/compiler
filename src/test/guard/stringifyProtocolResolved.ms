@@ -6,7 +6,7 @@
 //   sigmatch.nim:2596; `implicitConv` :2179), so the `$` call it plants is
 //   produced BY overload resolution and carries the winning symbol. Nim has no
 //   backend pass that plants a call and hopes a later pass can bind it.
-// NIM-REF: §1 "Implicit stringification is inserted at check time".
+// NIM-REF CK-73.
 //
 // WHAT IT CATCHES: MS used to plant `x.toString()` in stringConcatFlatten — a
 //   post-checker, C-only transform. The synthesized MemberExpr never passed
@@ -99,7 +99,7 @@ function main(): void {
 	if (receiverEvals != 1) { throw "GUARD RED: receiver evaluated " + receiverEvals.toString() + " times, expected 1"; }
 
 	// Rvalue receiver: no named local exists to take the address of (the shape
-	// that broke the asBytes bridge, NIM-REF "zero-copy bridge ownership").
+	// that broke the asBytes bridge, NIM-REF RT-4).
 	const rvalue = "rv=" + new Money(3);
 	if (rvalue != "rv=$3") { throw "GUARD RED: rvalue receiver = " + rvalue; }
 

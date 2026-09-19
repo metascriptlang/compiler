@@ -5,7 +5,7 @@
 //   dead or reused slot returns NULL; send/stop/link/monitor on a stale pid is
 //   a no-op. Slot reuse bumps the generation, so a stale pid can never reach
 //   the fresh actor occupying the same slot.
-// NIM-REF: PARALOCK §7.4 Amendment I19, §8 I19.
+// PARALOCK §7.4 Amendment I19, §8 I19.
 //
 // WHAT IT CATCHES: pre-I19 pids were raw shell pointers — stop() on a reaped
 //   pid read the freed shell's alive flag (panic: "load of value 240, which is

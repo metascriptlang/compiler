@@ -39,7 +39,7 @@ test "float division is left alone" {
 }
 
 // Nim wraps `%` in Math.trunc; measured, that is a no-op once both operands are
-// genuinely integral, and MS deliberately emits nothing. docs/NIM-REF.md carries
+// genuinely integral, and MS deliberately emits nothing. NIM-REF CG-9 carries
 // the row. This test is what makes that divergence a decision rather than drift.
 test "remainder is left alone" {
 	const result = compileToJS("function f(a: int32, b: int32): int32 { return a % b; }");
@@ -155,7 +155,7 @@ test "uint32 right shift substitutes the unsigned operator" {
 }
 
 // The reference emits `(a * b) >>> 0` here and is measurably wrong against its
-// own C backend once the product passes 2^53. docs/NIM-REF.md carries the row.
+// own C backend once the product passes 2^53. NIM-REF CG-13 carries the row.
 test "uint32 multiplication uses an exact 32-bit multiply" {
 	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a * b; }");
 	assert result.ok;

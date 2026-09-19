@@ -1,6 +1,6 @@
 // nim-guard: value-type parameters are read-only views
 //
-// INVARIANT (Nim sem: "cannot assign to" a non-var param; NIM-REF —
+// INVARIANT (Nim sem: "cannot assign to" a non-var param; NIM-REF AN-5 —
 //   ccgIntroducedPtr passes value aggregates as T* for cost, and the checker
 //   ban is the ONLY thing keeping that pointer unobservable): interior
 //   mutation (elem/field write) through a param of value-aggregate type

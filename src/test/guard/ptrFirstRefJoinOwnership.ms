@@ -7,9 +7,9 @@
 //   return increfs freed memory. Nim never faces the choice — commonType
 //   (sem.nim:200-207) `return x` for a mismatched {tyRef, tyPtr} pair leaves a
 //   type the later fit rejects, so no such join is ever accepted. MS accepts it
-//   (the Ptr<T> cursor coercion, NIM-REF §4) and therefore owes the ownership
+//   (the Ptr<T> cursor coercion, NIM-REF AN-10) and therefore owes the ownership
 //   rule Nim gets for free.
-// NIM-REF: "Branch-type join — pointer-kind pair" row.
+// NIM-REF CK-74.
 //
 // WHAT IT CATCHES: the join keeping the first branch instead of the owning one.
 //   RED = wrong ids read back out of `kept` (measured 2000000 vs 1001000 on the

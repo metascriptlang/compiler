@@ -1,7 +1,7 @@
 // bug085 — `cond ? typedArray : []` left the empty branch typed Array<Inferred>
 //
 // Symptom:    the last pending-at-emission producer found by the B4 enumeration
-//             (kind-split final batch, NIM-REF.md row 58): an unannotated
+//             (kind-split final batch, NIM-REF CK-46): an unannotated
 //             `const xs = cond ? typed : []` kept Array<Inferred> on the `[]`
 //             branch node, emitted the §4.1 msRefArray fallback silently, and
 //             with the B4 seam armed became "internal: unresolved type reached

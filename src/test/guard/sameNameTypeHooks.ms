@@ -4,7 +4,7 @@
 // (modulegraphs.nim setAttachedOp), so two same-named types in different
 // modules can never share an entry. MetaScript keys those registries by NAME —
 // an intentional divergence (structural typing has no canonical ItemId,
-// NIM-REF row 72) that only holds while the name IS the emitted C name.
+// NIM-REF CK-22) that only holds while the name IS the emitted C name.
 //
 // RED MEANS: the second module's `Item` found the first module's hooks already
 // registered under the bare name, skipped its own, and its TypeInfo shipped

@@ -9,7 +9,7 @@
 //             `null` was still related to a function type as a legacy nullable kind.
 // Fix: one relation per argument, as Nim's paramTypesMatchAux relates every argument through typeRel; only a
 //      formal still holding a type parameter is deferred to the post-binding check when either side is a function;
-//      Function is dropped from the kinds `null` fits (function types are `not nil`, NIM-REF missing-fields row).
+//      Function is dropped from the kinds `null` fits (function types are `not nil`, NIM-REF CK-37).
 
 function take166(f: (x: number) => number): number { return f(2); }
 function takeMaybe166(f: ((x: number) => number) | null): number {

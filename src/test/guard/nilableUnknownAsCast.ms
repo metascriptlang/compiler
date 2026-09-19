@@ -7,7 +7,7 @@
 //   (Nim options.nim SomePointer split: nil is the sentinel, no `{value,present}`
 //   wrapper, no variant storage to borrow). Only a genuine tagged union has
 //   borrowable variant storage.
-// NIM-REF: §1 "unknown top type" collapse + "Value-type Maybe unwrap operators"
+// NIM-REF CK-46 collapse + CK-61
 //   OPEN-sibling. isUnionNarrowing (codegen) tested only `srcType.kind === Union`,
 //   TRUE for a pointer-collapsed nullable too -> `void** a = &(rvalue)` ->
 //   clang "cannot take the address of an rvalue". Fix: exclude

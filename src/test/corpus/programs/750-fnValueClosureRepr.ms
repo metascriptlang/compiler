@@ -4,7 +4,7 @@
 // representation on both sides of the slot — store and call — on both
 // backends. Nim keeps two representations (nimcall pointer vs closure pair,
 // jsgen.nim:2971 nkClosure / ccgcalls.nim:515 genClosureCall); MS has one
-// (msClosure, NIM-REF row 81 DIVERGE-INTENTIONAL), so the value-form of a
+// (msClosure, NIM-REF CK-39), so the value-form of a
 // bare function is always the pair on C and always the bare function on JS.
 // Pre-fix: inferred const broke C (raw fn ptr into msClosure), and every
 // annotated slot broke JS ({fn, env} record called as a function).

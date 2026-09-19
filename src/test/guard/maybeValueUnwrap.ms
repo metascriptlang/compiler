@@ -5,7 +5,7 @@
 //   unwraps — `x as T` (nullableLower rule 1c), `x ?? default` (checker
 //   inferBinaryOp), and `x!` (parser postfix -> TypeAssertion sentinel "!" ->
 //   rule 1c). Each must read `.value`, not leave the carrier struct.
-// NIM-REF: §1 "Value-type Maybe unwrap operators" — DIVERGE-INCOMPLETE -> SAME.
+// NIM-REF CK-61 — DIVERGE-INCOMPLETE -> SAME.
 //   The only working extraction was flow-narrow on an identifier (rule 1). `as`
 //   on a cast-expr, `??` (typed as the carrier), and `!` (absent in parser) all
 //   skipped it, leaking Maybe_pN into arithmetic ("operand ... where arithmetic

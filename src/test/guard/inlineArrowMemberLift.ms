@@ -5,7 +5,7 @@
 //   `for i in 0..<n.len: … n[i]`, lambdalifting.nim:511-515). No node kind is
 //   skipped, so an arrow nested inside a call held by ANY wrapper (member
 //   access, ternary, index, cast) is still discovered and lifted.
-// NIM-REF: §1 "Lambda lifting: uniform child traversal" — verdict was
+// NIM-REF TR-12 — verdict was
 //   DIVERGE-UNINTENTIONAL -> SAME (walkLift's `_ => {}` default skipped
 //   MemberExpr/ArrayAccess/ConditionalExpr/TypeAssertion; restored to a generic
 //   mapChildren+walkOrLift walk, MS's analog of Nim's `for i in 0..<n.len`).

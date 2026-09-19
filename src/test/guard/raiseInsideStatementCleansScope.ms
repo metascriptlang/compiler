@@ -12,7 +12,7 @@
 //   rewritten (our expression walk is not total: loop cond/init/update, switch
 //   discriminant and cursor-decl initializers are never walked), and propagated
 //   eagerly to every open scope — same result as the OR at close.
-//   NIM-REF: "needsTry is set by scanning the whole statement" — SAME
+//   NIM-REF TR-19 — SAME
 //   outcome, DIVERGE-INTENTIONAL mechanism.
 //
 // WHAT IT CATCHES:

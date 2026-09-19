@@ -14,7 +14,7 @@
 // Reference:  Nim builds `nkStmtListExpr` in place — `newTreeIT(nkStmtListExpr,
 //             …, hoistedParams, result)` (semexprs.nim:3481): hoisted statements
 //             followed by the value as the LAST child. MetaScript rejects the
-//             NODE and keeps the substance (docs/NIM-REF.md row 49, FINAL):
+//             NODE and keeps the substance (NIM-REF AN-4, FINAL):
 //             materialisation is hoist-to-preceding-statement, as already done
 //             by `callHoist` / `resultDesugar` / `matchLower`. SpliceMany is the
 //             transport only — it is consumed during macro expansion and never

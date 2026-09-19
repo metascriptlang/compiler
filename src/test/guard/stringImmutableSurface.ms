@@ -1,6 +1,6 @@
 // nim-guard: string immutable surface — the STRING-CONTRACT lock-in must keep firing
 //
-// INVARIANT (docs/STRING-CONTRACT.md §1 + NIM-REF row "String mutability
+// INVARIANT (docs/STRING-CONTRACT.md §1 + NIM-REF RT-4 "String mutability
 //   contract"): `string` is observably immutable at the language surface on
 //   every backend. The checker rejects index-assign (`s[i] = c`, compound
 //   forms too) and length-assign; the byte-mutation story is the uint8[]

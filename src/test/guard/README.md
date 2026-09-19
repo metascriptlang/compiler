@@ -37,7 +37,7 @@ Pass = clean exit, no `DOUBLE-DESTROY`, all declared balances hold.
 
 1. Pin the invariant + its Nim source + NIM-REF verdict (SAME vs
    DIVERGE-INTENTIONAL). If unsure, run `/trace-nim` first.
-2. Write a probe here whose header cites the Nim invariant, the NIM-REF row, and
+2. Write a probe here whose header cites the Nim invariant, the NIM-REF entry ID, and
    a "RED MEANS … run /trace-nim on the named type" line.
 3. Structure it so the invariant's violation is observable to the ledger
    (double-destroy for finalize-twice; per-type balance for leaks). Use high
@@ -65,8 +65,7 @@ an **uncaught `throw` on a wrong value** for a runtime RED (nonzero exit) if a
 drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
 
 - **`typeKeyFnSignature.ms`** — structural type-dedup keys must not drop a
-  function signature (`hashType` tyProc / `sameInstantiation`; NIM-REF §1
-  "Structural type-dedup keys"). Two nullable-fn fields of different arity: a
+  function signature (`hashType` tyProc / `sameInstantiation`; NIM-REF CK-52). Two nullable-fn fields of different arity: a
   collapse re-erases the 2nd's arity → checker "expected at most 0" → build RED.
   Proven RED on the pre-fix compiler, GREEN post-fix (drc+orc).
   - **Known gap:** the sibling `monoTypeKey` collapse is NOT guarded — its

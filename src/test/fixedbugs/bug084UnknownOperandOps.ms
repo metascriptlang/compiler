@@ -7,7 +7,7 @@
 //             `"a" + u` — same. TS and Nim both reject the shape at check time.
 // Root cause: the BinaryExpr arm gates bitwise operands and string '+' but had
 //             NO operand gate for user `unknown`. Pre-existing before the
-//             TypeKind.Unknown kind split (NIM-REF.md row 58) — found by its landing
+//             TypeKind.Unknown kind split (NIM-REF CK-46) — found by its landing
 //             probe matrix (identical crash under the pre-split binary).
 // Fix:        allowlist gate ahead of the operator branches — equality,
 //             logical/coalescing, and plain '=' stay legal on unknown; every

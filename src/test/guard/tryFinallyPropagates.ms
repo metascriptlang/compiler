@@ -6,7 +6,7 @@
 //   — a node-kind test, never "is the body pointer non-nil" or "is the body
 //   empty". A try with no except branch runs its finally and lets the error
 //   keep propagating; only a real handler clears the error flag.
-// NIM-REF: §1 "Try/finally handler presence is structural" — DIVERGE-UNINTENTIONAL -> SAME.
+// NIM-REF CG-22 — DIVERGE-UNINTENTIONAL -> SAME.
 //   `hasCatch = d.catchBody !== null` treated the NullLiteral "no catch clause"
 //   placeholder (parser try/finally + the DRC scope-cleanup try/finally from
 //   analyzer/inject.ms) as a bare catch, so EVERY cleanup scope swallowed a

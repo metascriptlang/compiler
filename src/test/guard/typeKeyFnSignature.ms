@@ -6,7 +6,7 @@
 //   caching/mangling; `sameInstantiation` (seminst.nim:78) compares generic
 //   type-args via `sameType`, which for tyProc compares params+return. A dedup
 //   key must never drop the signature.
-// NIM-REF: §1 "Structural type-dedup keys — function signature" — verdict was
+// NIM-REF CK-52 — verdict was
 //   DIVERGE-UNINTENTIONAL -> SAME (our own codegen typeKey already keyed fns
 //   structurally; the checker keyers + anonFieldKey were the outliers).
 //

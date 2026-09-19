@@ -4,7 +4,7 @@
 //   `sameTypeAux` (types.nim:1224) sends `tyRange` through `sameValue`, and
 //   `typeRel` (sigmatch.nim) inherits that identity — a candidate taking `1..5`
 //   does not match an argument of `6..10` merely because both are ranges.
-// NIM-REF: rows 76/80 record MS running `isAssignable` and `typeRelation` where
+// NIM-REF CK-51/CK-54 record MS running `isAssignable` and `typeRelation` where
 //   Nim runs one relation. `isAssignable` (:368/:384) and `sameType` (:651) both
 //   compare literal types by value; `typeRelation`'s same-kind dispatch fell
 //   through to its `_ => Exact` catch-all, so EVERY pair of string literals — and

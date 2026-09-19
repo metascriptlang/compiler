@@ -12,7 +12,7 @@
 //
 // Fix:        rvalueLower gains a walkExpandBlocks VariableDecl branch gated
 //             on builtinKind === "AsBytes": hoist the receiver into a peer
-//             temp statement (NIM-REF row 49 — receiver→temp in rvalueLower
+//             temp statement (NIM-REF AN-4 — receiver→temp in rvalueLower
 //             is the sanctioned home; flat splice, no scope-stealing block).
 //               const rv = (a + b).asBytes();
 //                 →  const $rval = a + b; const rv = $rval.asBytes();

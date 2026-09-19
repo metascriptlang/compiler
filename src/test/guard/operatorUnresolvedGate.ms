@@ -7,7 +7,7 @@
 //   the C file. Upstream of that, a call with no matching candidate dies at
 //   `notFoundError` -> "type mismatch" (semcall.nim:485/491) and never reaches
 //   codegen at all.
-// NIM-REF: no row sanctions a verbatim-token fallthrough. `mapBinaryOp`'s
+// NIM-REF: no entry sanctions a verbatim-token fallthrough. `mapBinaryOp`'s
 //   catch-all (`_ => op`) emitted the source token straight into C, so `x ** y`
 //   was handed to clang, which parses it as `x * (*y)` and reports the useless
 //   "indirection requires pointer operand" — pointing at a pointer bug that does
