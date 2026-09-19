@@ -32,7 +32,8 @@ import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite } from "./callResolve";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
+import { gensymSplicePrefix } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -482,6 +483,14 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 	if (sd.spliceNodes.length == 0) {
 		node.kind = NodeKind.BlockStmt;
 		node.data = { statements: [] } as BlockStmtData;
+		return;
+	}
+	if (spliceEndsInValue(splice)) {
+		const value = unwrapSpliceManyAtExpr(ctx, node, splice);
+		const prefixSyms = hoistedPrefixSyms(splice);
+		(node.data as ExprStmtData).expr = value;
+		checkStmt(ctx, node);
+		bindRefsTo(value, prefixSyms);
 		return;
 	}
 	for (const stmt of sd.spliceNodes) {
@@ -2191,8 +2200,16 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		call.flags = call.flags.incl(NodeFlag.Sem);
 		out.push(stmt);
 	} else if (expanded.kind == NodeKind.SpliceMany) {
-		for (const emittedStmt of (expanded.data as SpliceManyData).spliceNodes) {
+		const emittedStmts = (expanded.data as SpliceManyData).spliceNodes;
+		const endsInValue = spliceEndsInValue(expanded);
+		if (endsInValue) gensymSplicePrefix(ctx, expanded);
+		for (let i = 0; i < emittedStmts.length; i += 1) {
+			let emittedStmt = emittedStmts[i];
 			stampCallSite(emittedStmt, stmt.location);
+			if (endsInValue && i == emittedStmts.length - 1) {
+				(stmt.data as ExprStmtData).expr = emittedStmt;
+				emittedStmt = stmt;
+			}
 			expandCollectStmt(ctx, emittedStmt, out, true);
 		}
 	} else {
