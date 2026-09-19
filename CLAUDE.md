@@ -9,6 +9,27 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 - **Retire a worktree with `tools/wt.sh rm`** — it names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
 - **Data flows one way, repo → `~/.metascript/`** — through `tools/sync-local-binary.sh` only; nothing mirrors into a checkout.
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
+- **`land --no-gate` belongs to the person at the keyboard** — it lands on evidence gathered outside the gate and says so; an agent does not reach for it on its own.
+
+## When to Stop and Ask
+
+| Situation | Action |
+|---|---|
+| The fix tracks the reference implementation and stays inside the task | do it, gate it, report after |
+| Two directions both track the reference, or the fix crosses a recorded intentional divergence | ask — one question, with a recommendation |
+| The work has to leave the task's scope | stop and report |
+| The user asks an open design question | answer first, code after sign-off |
+| A unit of work is done on your own `wt/<name>` branch | commit without asking, through `/split-commit` |
+| Time to push, or to land with `--no-gate` | ask, every time |
+| A tool or the harness refuses an action on purpose (a guard, a denied permission) | leave it, say what was refused, do not route around it |
+
+## Commits
+
+- **The agent commits, the person pushes** — a session owns its worktree and its `wt/<name>` branch, so it commits there on its own through `/split-commit`; `main` moves only through `tools/wt.sh land`, and nothing is pushed without a yes.
+- **Checked before every commit** — `./msc check src/index.ms` is clean when a `.ms` under `src/` changed (~5 s); the lanes belong to the gate before a land, not to each commit.
+- **Small and logical** — one concern per commit, each commit builds on its own; shared types land before the code that uses them.
+- **`type(scope): subject`, one line, no body** — types `feat fix refactor docs test chore perf ci`; take the scope from `git log --oneline -15`.
+- **Only what this session wrote** — commit by explicit path, never `git add -A` or a directory; build outputs (`out/`, `*.o`, `.cache`) and scratch probes stay out.
 
 ## Docs Rule — never edit `docs/*.md` from reading alone
 
