@@ -141,7 +141,7 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 - **One session, one worktree** — the `WorktreeCreate` hook runs `tools/wt.sh new`, which gives branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready; start work with `claude --worktree <name>`, or `tools/wt.sh new <name>` by hand.
 - **The main checkout only receives lands** — `tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
-- **Retire a worktree with `tools/wt.sh rm`** — it names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
+- **A worktree is retired from outside it, with `tools/wt.sh rm`** — a session cannot remove the worktree it runs in (its own processes hold it), so it reports the land and leaves the worktree; `rm` names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
 - **Data flows one way, repo → `~/.metascript/`** — through `tools/sync-local-binary.sh` only, run from a clean worktree of `main` (it refuses uncommitted work under `src`, `std`, `runtime` and a binary older than `src`) and recording the commit in `~/.metascript/BUILD`; nothing mirrors into a checkout.
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 - **`land --no-gate` belongs to the person at the keyboard** — it lands on evidence gathered outside the gate and says so; an agent does not reach for it on its own.
