@@ -2160,7 +2160,7 @@ function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 function processTestDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as TestDeclData;
 	if (d.testBody == null) return stmt;
-	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], null, dctx, loc, stmt.nodeType!);
+	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], [], dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
