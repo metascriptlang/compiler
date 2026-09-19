@@ -440,6 +440,17 @@ decorators, macros or metadata. Consequence for tests: a guard needing this shap
 `// GUARD-JS` (see `src/test/guard/decoratorMetadataInheritOrder.ms`). Not investigated further —
 no fix attempted, and it is unknown whether hoisting class declarations is safe for the emitter.
 
+Re-measured 2026-09-19 on a build of `98886eb2`, with statics on both classes:
+
+```
+function seven(): int32 { return 7; }
+class Child extends Base { static c: int32 = seven() + 1; }
+class Base { static b: int32 = seven(); }
+console.log(`${Child.c} ${Base.b}`);
+    C:  8 7
+    JS: ReferenceError: Cannot access 'Base__…' before initialization
+```
+
 ## L29. A class cannot extend a class imported from another module (LIVE, measured 2026-09-13)
 
 ```
@@ -475,7 +486,17 @@ messages to dispatch. Every guard and corpus program gives its actors methods, w
 covers this shape. The failure reproduces on the published compiler as well, so it is not a
 regression from recent checker work. Root cause not investigated.
 
-## L31. A `static` field on an actor reads back as `<object>` (LIVE, measured 2026-09-13)
+## ~~L31. A `static` field on an actor reads back as `<object>`~~ (RESOLVED, measured 2026-09-19)
+
+An actor static must now be `static readonly` (a plain `static` is a check error naming the fix,
+`51832817`). The readonly form reads back on both backends, on a build of `98886eb2`:
+
+```ms
+actor Srv { static readonly tag: string = "t-init"; n: int32 = 1; ping(): int32 { return 1; } }
+console.log(Srv.tag);            // C: t-init   JS: t-init
+```
+
+The historical entry follows.
 
 ```ms
 actor Srv { static tag: string = "t-init"; n: int32 = 1; }
@@ -515,6 +536,7 @@ console.log(new Box<int32>(1).count);        tip 3dfadbb9, --gc=drc: 0   (expect
 ```
 
 Same shape without the type parameter prints 21. No import, no macro, no decorator involved.
+Re-measured 2026-09-19 on a build of `98886eb2`: C prints `0`, JS prints `21`.
 
 ## L34. A generic class with a `T[]` field crashes on first use (LIVE, measured 2026-09-16)
 
@@ -527,6 +549,8 @@ const g = new Bag<int32>(); g.add(1);
 
 The `[]` initializer never reaches the instance: the field is NULL when `add` runs. Likely the
 same missing-initializer path as L33, seen through a pointer instead of a value.
+Re-measured 2026-09-19 on a build of `98886eb2`: C panics as above, JS prints `1` for
+`g.items.length`.
 
 ## L35. `await` inside a string concatenation reaches C codegen unlowered (LIVE, measured 2026-09-16)
 
@@ -540,4 +564,134 @@ await main();
 
 `const s = await f(); console.log("a" + s + "b");` compiles and runs. The await lowering handles
 the statement position but not an operand inside the concat-array fill the string `+` chain
-emits. Not measured on the JS backend.
+emits. Re-measured 2026-09-19 on a build of `98886eb2`: the template form
+`` console.log(`a${await f()}b`) `` fails identically on C; both forms print `axb` on JS.
+
+## L36. A method of a function-body class cannot read the enclosing function's locals on C (LIVE, measured 2026-09-19)
+
+```
+function local(n: int32): int32 {
+	const k: int32 = n * 2;
+	class L { get(): int32 { return k; } static sget(): int32 { return k; } }
+	return new L().get() + L.sget();
+}
+console.log(`${local(1)}`);
+    build of 98886eb2, C:  clang "use of undeclared identifier 'k'" (both methods)
+                       JS: 4
+```
+
+Instance and static methods fail alike. The checker accepts the read; C lifts the methods to
+module-level functions that have no access to `k`. A static *initializer* reading an enclosing
+local is a check error (`1c7b6c7b`); methods have no such rule and no capture.
+
+## L37. A module-level `let` written from an actor method is not rejected (LIVE, measured 2026-09-19)
+
+```
+let hits: int32 = 0;
+actor Counter { bump(): void { hits = hits + 1; } read(): int32 { return hits; } }
+// main: c.bump(); c.bump(); console.log(await c.read());
+    build of 98886eb2, C: 2   JS: 2
+```
+
+The program runs, but the global is shared by every actor thread with no lock. `SymbolFlag.GcSafe`
+is declared in `std/meta/node.ms` but nothing under `src/` or `std/` sets or reads it, so no rule
+tracks which functions touch mutable globals. Only the actor-method write was measured; `spawn` bodies were not.
+
+## L38. A static written through a subclass name diverges between backends (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 1; }
+class Sub extends K {}
+Sub.a = 5;
+console.log(`${K.a} ${Sub.a}`);
+    build of 98886eb2, C: 5 5   JS: 1 5
+```
+
+C resolves `Sub.a` to `K`'s global; JS creates an own property on `Sub`. Silent: both type-check
+and run. `this` in a static method is the declaring class on both backends (a static method is
+emitted as a free function on both), so `Sub.bump()` writing `this.a` gives the C answer on both;
+TypeScript would bind `this` to `Sub`. Pinned by `src/test/guard/staticThis.ms`.
+
+## L39. A static method on an actor does not compile on C (LIVE, measured 2026-09-19)
+
+```
+actor A {
+	static readonly limit: int32 = 4;
+	static twice(): int32 { return A.limit * 2; }
+}
+console.log(`${A.twice()}`);
+    build of 98886eb2, C:  clang "use of undeclared identifier 'this'" in the body,
+                           and "passing 'msFuture_int32 *' … to parameter of incompatible type 'double'"
+                       JS: 8
+```
+
+The static method is lowered like a message handler: its body reads the receiver and its call
+returns a future. The same failure with `this.limit` in place of `A.limit`.
+
+## L40. A static getter is not found (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 6; static get doubled(): int32 { return K.a * 2; } }
+console.log(`${K.doubled}`);
+    build of 98886eb2, C and JS: Property 'doubled' does not exist on type 'K'
+```
+
+Fails at check on both backends. Static setters were not measured.
+
+## L41. `this` in a generic static method is undefined (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 1; static pick<T>(x: T): T { this.a = this.a + 1; return x; } }
+    build of 98886eb2, C and JS: Undefined variable 'this'
+```
+
+`this` in a non-generic static method, a `static { }` block and a static initializer names the
+class (`daa8a3c5`). A generic method body is checked again per instantiation, and that check
+does not know which class owns the method. Writing `K.a` instead works on both backends (`x 2`).
+
+## L42. A static field of a generic class does not link on C (LIVE, measured 2026-09-19)
+
+```
+class G<T> { static a: int32 = 4; v: T; constructor(v: T) { this.v = v; } }
+console.log(`${G.a}`);
+    build of 98886eb2, C:  link failed, undefined symbol: _G__a
+                       JS: 4
+```
+
+## L43. A static field of an imported class is rejected (LIVE, measured 2026-09-19)
+
+```
+// implib.ms
+export class P { static a: int32 = 9; static twice(): int32 { return P.a * 2; } }
+// use.ms
+import { P } from "./implib";
+console.log(`${P.a}`);        build of 98886eb2, C and JS: Property 'a' does not exist on type 'P'
+console.log(`${P.twice()}`);  build of 98886eb2, C and JS: 18
+```
+
+The static method crosses the module boundary; the static field does not.
+
+## L44. `Locked<T>` does not exist on the JS backend (LIVE, measured 2026-09-19)
+
+```
+actor A { static readonly box: Locked<int32> = new Locked<int32>(3); ping(): int32 { return 1; } }
+    build of 98886eb2, C:  runs
+                       JS: ReferenceError: Locked is not defined
+```
+
+`src/test/guard/actorStaticLocked.ms` is a C-only guard for this reason. `Arc<T>` on JS was not
+measured.
+
+## L45. Two corpus programs fail inside a macro body (LIVE, measured 2026-09-19)
+
+```
+704-macroExprHoist   Macro 'memo' body: Type 'NodeFlag' is not assignable to type 'BitSet<NodeFlag>'
+762-bitSetMacro      Macro 'inMacro' body: Type 'int32' is not assignable to type 'Node' …
+```
+
+Both fail to build on a build of `98886eb2` and on the installed `v0.2.55`; they are listed in
+`src/test/known-red.json` on every lane. Root cause not investigated.
+
+A class declared in the body of a generic function (`function wrap<T>(x: T) { class L { static a
+= 5; } return L.a; }`) was measured on the same build and prints `5` on C and JS; other shapes of
+that case were not measured.
