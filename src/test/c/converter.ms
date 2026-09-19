@@ -199,6 +199,24 @@ test "converter: runtime converter skips a same-named type of another module" {
 	assert cCode.contains("Type 'Meters' is not assignable to type 'string'"), cCode;
 }
 
+test "converter: runtime converter fills a nullable slot of its target" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds(n: float64): Seconds { return n as Seconds; }
+const x: float64 = 1.5;
+const s: Seconds | null = x;
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime converter matches a type imported by a second path" {
+	const c = compileToCWithStd(`
+import { JsonValue } from "std/serialize/json";
+function text(a: JsonValue): string { return a as string; }
+`);
+	assert c.ok, c.ok ? "" : c.error;
+	if (c.ok) assert c.value.contains("jsonToString"), c.value;
+}
+
 test "converter: two runtime converters for one pair are an error" {
 	const e = errorOf(BOX + `
 export converter boxToIntAgain(x: Box): int32 { return x.n + 1; }
