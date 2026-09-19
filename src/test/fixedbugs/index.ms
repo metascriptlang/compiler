@@ -205,3 +205,4 @@ import "./bug190LocalRedeclaration";
 import "./bug191NamespaceCallBeforeExtension";
 import "./bug192CallNonFunctionValue";
 import "./bug193ConverterExpansionNarrows";
+import "./bug194GenericCallChecksArrowArg";
