@@ -493,19 +493,14 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 		bindRefsTo(value, prefixSyms);
 		return;
 	}
-	for (const stmt of sd.spliceNodes) {
-		stampCallSite(stmt, node.location);
-		collectSplicedDecl(ctx, stmt);
-	}
 	const lastIdx = sd.spliceNodes.length - 1;
-	let i = 0;
-	while (i < lastIdx) {
-		const stmt = sd.spliceNodes[i];
-		checkStmt(ctx, stmt);
-		ctx.pendingHoisted.push(stmt);
-		i = i + 1;
-	}
 	const last = sd.spliceNodes[lastIdx];
+	for (const stmt of sd.spliceNodes) stampCallSite(stmt, node.location);
+	const prefix: Node[] = [];
+	for (let c = 0; c < lastIdx; c += 1) {
+		collectSplicedDecl(ctx, sd.spliceNodes[c]);
+		prefix.push(sd.spliceNodes[c]);
+	}
 	node.kind = last.kind;
 	node.data = last.data;
 	if (last.location != null) node.location = last.location;
@@ -513,6 +508,11 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
+	collectSplicedDecl(ctx, node);
+	for (const stmt of prefix) {
+		checkStmt(ctx, stmt);
+		ctx.pendingHoisted.push(stmt);
+	}
 	checkStmt(ctx, node);
 }
 
@@ -762,6 +762,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
 	// for self-recursive closure binding, update type and re-record.
 	const existing = lookupLocal(ctx.table, d.declName);
+	if (existing != null && existing.declNode != node && node.resolvedSym == null) {
+		addError(ctx, `Duplicate symbol '${d.declName}'`, d.nameLocation.line, d.nameLocation.column);
+	}
 	if (existing != null) {
 		existing.symbolType = varType;
 		if (d.declKind != DeclKind.Const) {
