@@ -968,3 +968,9 @@ test "connected variables share mutation graph" {
 	assert !isCursorNamed(body, "a");
 	assert !isCursorNamed(body, "b");
 }
+
+test "same-named declarations in sibling scopes are separate variables" {
+	const body = getFuncBody("function f(arr: string[]) { if (true) { const x = arr[0]; process(x); } else { const x = getValue(); } }");
+	inferCursors(body);
+	assert isCursorNamed(body, "x");
+}
