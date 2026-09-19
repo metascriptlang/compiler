@@ -238,6 +238,32 @@ export converter boxToInt(b: Box): int32 {
 	assert e.contains("'boxToInt' does not apply inside its own body"), e;
 }
 
+test "converter: a helper the converter calls cannot apply that converter" {
+	const e = errorOf(`
+export interface Box { n: int32; }
+function half(x: Box): int32 {
+	const n: int32 = x;
+	return n / 2;
+}
+export converter boxToInt(b: Box): int32 { return half(b) * 2; }
+`);
+	assert e.contains("'boxToInt' is applied implicitly in 'half', which 'boxToInt' reaches through its calls"), e;
+}
+
+test "converter: a helper the converter calls may apply another converter" {
+	const e = errorOf(`
+export interface Box { n: int32; }
+export converter boxToText(x: Box): string { return "box"; }
+function label(x: Box): string {
+	const s: string = x;
+	return s;
+}
+export converter boxToInt(b: Box): int32 { return label(b).length; }
+const n: int32 = { n: 1 } as Box;
+`);
+	assert e == "", e;
+}
+
 test "converter: runtime converter reads an operand against a typed other side" {
 	const e = errorOf(BOX + `
 const a = b + 1;
