@@ -695,3 +695,40 @@ Both fail to build on a build of `98886eb2` and on the installed `v0.2.55`; they
 A class declared in the body of a generic function (`function wrap<T>(x: T) { class L { static a
 = 5; } return L.a; }`) was measured on the same build and prints `5` on C and JS; other shapes of
 that case were not measured.
+
+## L46. A module-level destructuring binding read inside a closure is empty on C (LIVE, measured 2026-09-19)
+
+```ms
+const pair: [string, string] = ["p", "q"];
+const [a, b] = pair;
+function run(f: () => void): void { f(); }
+function main(): void { run(() => { console.log("a=" + a + " b=" + b); }); }
+main();
+
+C:  a= b=          JS: a=p b=q
+```
+
+The emitted C declares the bindings as module statics and assigns them in `__Init000`
+(`static msString a; … a = dollarborrow_1_;`), but the closure captures them as if they were
+locals of the enclosing function: the env struct carries `msString a; msString b;` fields, the
+lifted body reads `env->a`, and the caller only allocates the env — it never writes those fields,
+so the closure reads zeroed memory.
+
+| shape (module level unless stated) | C | JS |
+|---|---|---|
+| `const [a, b] = pair` of `string`, read in a closure | `a= b=` | `a=p b=q` |
+| the same of `int32` | `a=0 b=0` | `a=7 b=9` |
+| the binding is an accessor (`const [x, setX] = createSignal("v")`), read in a closure | SIGSEGV, `EXC_BAD_ACCESS address=0x0`, no frames | correct |
+| the same accessor read in a `test` block instead of a program | assertion fails, value empty | — |
+| `const { p, q } = rec` (object pattern) with or without a closure | clang: `initializer element is not a compile-time constant` | `p=p q=q` |
+| the same tuple read directly, no closure | correct | correct |
+| `const s = createSignal("v")` with `s[0]()` — no destructuring | correct | correct |
+| the whole shape inside a function instead of module level | correct | correct |
+
+Measured on a build of `660f3002` + two uncommitted fixes and on the installed `v0.2.55`, so it
+predates both. Found from Neon, where `const [count, setCount] = createSignal(0)` at module level
+is the ordinary idiom: every such program dies at the first closure that reads the accessor. The
+Neon suite does not see it because each test declares its signals inside the test block.
+
+Not measured: a destructured `let`, patterns with a default or a rest element, a struct or array
+element type, capture depth beyond one closure, and whether `--release` changes the C shape.
