@@ -1757,6 +1757,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 			const catchType = (errSym != null && errSym.symbolType != null) ? errSym.symbolType : inferredType();
 			node.nodeType = catchType;
 			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, catchType, false);
+			node.resolvedSym = catchSym;
 			defineSymbol(ctx.table, catchSym);
 			// Catch param is always initialized (exception runtime provides it)
 			markInitialized(ctx.initTracker, d.catchName);
