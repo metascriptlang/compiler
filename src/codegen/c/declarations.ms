@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, I
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
-	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
+	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, markTypeInfoSkipped,
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
@@ -358,7 +358,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d, false);
+		genStaticFieldGlobals(g, d);
 		return;
 	}
 
@@ -380,7 +380,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// The struct body emission below is separately guarded by typeAlreadyDeclared
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
-	genStaticFieldGlobals(g, d, node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Actor);
+	genStaticFieldGlobals(g, d);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -428,7 +428,7 @@ function genClassDecl(g: CGen, node: Node): void {
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function genStaticFieldGlobals(g: CGen, d: ClassDeclData, ownerIsActor: boolean): void {
+function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
@@ -451,20 +451,7 @@ function genStaticFieldGlobals(g: CGen, d: ClassDeclData, ownerIsActor: boolean)
 					addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
 				},
 				_ => {
-					if (!ownerIsActor) {
-						addError(g.checkerCtx, "internal: a computed static initializer for '" + d.className + "." + pd.propName + "' reached C codegen unlowered in " + g.modulePath, member.location.line, member.location.column);
-					} else {
-						const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
-						emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
-						// g.initProc is a scratch buffer nobody flushes — drain it
-						// into ModuleInit the way genTopLevelStmt does, or the
-						// assignment never runs.
-						const locals = readProcLocals(g.initProc);
-						const stmts = readProcStmts(g.initProc);
-						clearProcBuffers(g.initProc);
-						if (locals.length > 0) { add(sec(g, CSection.ModuleInit), locals); }
-						if (stmts.length > 0) { add(sec(g, CSection.ModuleInit), stmts); }
-					}
+					addError(g.checkerCtx, "internal: a computed static initializer for '" + d.className + "." + pd.propName + "' reached C codegen unlowered in " + g.modulePath, member.location.line, member.location.column);
 				},
 			};
 		}

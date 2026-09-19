@@ -74,6 +74,25 @@ export function isArcPointeeSendable(t: Type | null): boolean {
 	return isDeepSendable(t, SendLeaf.String as int32);
 }
 
+export function checkActorStaticField(ctx: CheckerContext, raw: Node): void {
+	let member = raw;
+	if (member.kind == NodeKind.DecoratedDecl) member = (member.data as DecoratedDeclData).decoratedNode;
+	if (member == null || member.kind != NodeKind.PropertyDecl) return;
+	const pd = member.data as PropertyDeclData;
+	if (!pd.propIsStatic) return;
+	if (!pd.propIsReadonly) {
+		addError(ctx, `an actor's static '${pd.propName}' is shared by every instance across threads, so it must be 'static readonly' — keep mutable state in an instance field, or share it through 'static readonly ${pd.propName} = new Locked<T>(…)' (PARALOCK I22)`,
+			member.location.line, member.location.column);
+		return;
+	}
+	let t = member.nodeType;
+	if ((t == null || t.kind == TypeKind.Inferred) && pd.propInitializer != null) t = pd.propInitializer.nodeType;
+	if (t == null || t.kind == TypeKind.Inferred || t.kind == TypeKind.Error) return;
+	if (isArcPointeeSendable(t) || isAtomicRef(t)) return;
+	addError(ctx, `'${typeDisplayName(t)}' can still be mutated through the readonly static '${pd.propName}', and its refcount is not atomic — an actor's static must be plain data, Arc<T> or Locked<T> (PARALOCK I22)`,
+		member.location.line, member.location.column);
+}
+
 export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: int32, column: int32): void {
 	if (isArcPointeeSendable(pointee)) return;
 	addError(ctx, `Arc<T> pointee must be deep-immutable data — '${typeDisplayName(pointee)}' contains a reference or array\nSHARE aliases the pointee across threads; shared mutable state is Locked<T> (PARALOCK Amendment I)`,

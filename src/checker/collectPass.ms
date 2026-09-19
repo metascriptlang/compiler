@@ -532,6 +532,18 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 			setFlag(sym, SymbolFlag.HasConstructor);
 		}
 	}
+	for (const raw of d.actorBody) {
+		const member = classMemberDecl(raw);
+		if (member.kind == NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			if (pd.propIsStatic) {
+				const staticSym = makeSymbol(d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
+				setFlag(staticSym, SymbolFlag.Static);
+				staticSym.declNode = member;
+				sym.staticFields.push(staticSym);
+			}
+		}
+	}
 	// Register methods as extensions (reuse collectClassMethod)
 	if (ctx.extensionRegistry != null) {
 		const actorGenerics = getGenericDecl(d.actorName);

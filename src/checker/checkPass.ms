@@ -35,6 +35,7 @@ import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
 import { gensymSplicePrefix } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { checkActorStaticField } from "./sendable";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -1066,6 +1067,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	ctx.currentActorName = d.actorName;
 	for (const member of d.actorBody) {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
+		checkActorStaticField(ctx, member);
 	}
 	ctx.currentActorName = prevActorName;
 	closeScope(ctx.table);
@@ -1173,10 +1175,6 @@ function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[]
 }
 
 function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol | null): void {
-	if (owner != null && owner!.symbolKind == SymbolKind.Actor) {
-		addError(ctx, `static blocks are not supported in actors`, node.location.line, node.location.column);
-		return;
-	}
 	const savedClass = ctx.staticBlockClass;
 	const savedPending = ctx.staticBlockPending;
 	const savedFunction = ctx.currentFunction;
