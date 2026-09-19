@@ -196,6 +196,17 @@ SECTIONS
 }
 `;
 
+function sbfCompilerBuiltins(): string {
+	const clang = resolveBpfClang();
+	if (clang == "") return "";
+	const libDir = join(dirname(dirname(dirname(clang))), `rust/lib/rustlib/${SBF_TARGET}/lib`);
+	if (!exists(libDir)) return "";
+	for (const entry of readDir(libDir)) {
+		if (entry.startsWith("libcompiler_builtins-") && entry.endsWith(".rlib")) return join(libDir, entry);
+	}
+	return "";
+}
+
 // Link SBF objects into a deployable Solana program (.so).
 //
 // One `ld.lld` invocation — no bitcode round-trip and no third-party linker.
@@ -238,7 +249,9 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 	// non-shared link fails with "undefined symbol: sol_log_". (2) It yields ELF
 	// type DYN, which is what the loader expects (the rustc target is
 	// `only-cdylib`); --unresolved-symbols=ignore-all also links but produces EXEC.
-	const cmd = `"${lld}" --threads=1 -z notext --Bdynamic -shared --script "${scriptPath}" --entry entrypoint --gc-sections -o "${outBinary}" ${oFileList}`;
+	const builtins = sbfCompilerBuiltins();
+	const builtinsArg = builtins == "" ? "" : ` "${builtins}"`;
+	const cmd = `"${lld}" --threads=1 -z notext --Bdynamic -shared --script "${scriptPath}" --entry entrypoint --gc-sections --no-undefined -o "${outBinary}" ${oFileList}${builtinsArg}`;
 	const r = exec(cmd);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
