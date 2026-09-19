@@ -1,7 +1,7 @@
 # PARALOCK runtime test tier
 
 Real C-compiled scenarios that exercise the three async primitives
-defined in `docs/PARALOCK.md` — `async` / `await`, `spawn`, and `actor` —
+defined in `paper/PARALOCK.md` — `async` / `await`, `spawn`, and `actor` —
 both in isolation and in the load-bearing nested combinations.
 
 The `lang/` tier validates **language semantics** for `async`/`await`
@@ -24,7 +24,7 @@ backend and executed as a native binary.
 
 ## Why these particular cases
 
-PARALOCK invariants I1-I15 (see `docs/PARALOCK.md` §8) are the contract
+PARALOCK invariants I1-I15 (see `paper/PARALOCK.md` §8) are the contract
 the runtime + compiler must uphold. The scenarios target the cross-
 cutting interactions — that's where regressions hide. In particular:
 
