@@ -204,6 +204,7 @@ export enum SymbolFlag {
 	                         // (msWaitForReady below) — its args pass as borrows; the scope outlives the flight
 	Cursor, // binding does not own its referent — DRC skips incref and destroy
 	Throws, // @throws — an extern routine that raises through the runtime error flag rather than returning
+	Converter,
 }
 
 // ===== Symbol =====
