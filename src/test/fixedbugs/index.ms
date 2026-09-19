@@ -203,3 +203,4 @@ import "./bug188HoistSurvivesArrowRecheck";
 import "./bug189HoistedPrefixGensym";
 import "./bug190LocalRedeclaration";
 import "./bug191NamespaceCallBeforeExtension";
+import "./bug192CallNonFunctionValue";
