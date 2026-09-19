@@ -47,21 +47,20 @@ export function createTransformContextWithChecker(cc: CheckerContext): Transform
 // a bare string[]. Using a class ensures mutations propagate through the call chain.
 export class NameSet {
 	items: string[];
+	index: HashSet<string>;
 }
 
 export function createNameSet(): NameSet {
-	return { items: [] };
+	return { items: [], index: new HashSet<string>() };
 }
 
 export function nameSetContains(ns: NameSet, name: string): boolean {
-	for (const n of ns.items) {
-		if (n == name) return true;
-	}
-	return false;
+	return ns.index.has(name);
 }
 
 export function nameSetAdd(ns: NameSet, name: string): void {
-	if (!nameSetContains(ns, name)) {
+	if (!ns.index.has(name)) {
+		ns.index.add(name);
 		ns.items.push(name);
 	}
 }
@@ -98,4 +97,16 @@ export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | n
 	ctx.tempCounter += 1;
 	const name = "__" + prefix + "_" + n.toString();
 	return makeSymbol(name, SymbolKind.Variable, t != null ? t : noneType(), false);
+}
+
+test "a name set keeps first-insertion order and ignores repeats" {
+	const ns = createNameSet();
+	nameSetAdd(ns, "b");
+	nameSetAdd(ns, "a");
+	nameSetAdd(ns, "b");
+	assert ns.items.length == 2;
+	assert ns.items[0] == "b";
+	assert ns.items[1] == "a";
+	assert nameSetContains(ns, "a");
+	assert !nameSetContains(ns, "c");
 }
