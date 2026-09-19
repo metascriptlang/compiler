@@ -1,7 +1,7 @@
 // Statement Printers — blocks, declarations, loops, etc.
 
 import {
-	Node, NodeKind, DeclKind, ProgramData, BlockStmtData, VariableDeclData,
+	Node, NodeKind, NodeFlag, DeclKind, ProgramData, BlockStmtData, VariableDeclData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
@@ -484,7 +484,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const isGen = flagHas(d.fnFlags, "generator") || flagHas(d.fnFlags, "async_generator");
 	const head = (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
-		+ "function" + (isGen ? "*" : "") + " "
+		+ (node.flags.has(NodeFlag.Converter) ? "converter" : "function") + (isGen ? "*" : "") + " "
 		+ d.fnName + wrapGenerics(flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
