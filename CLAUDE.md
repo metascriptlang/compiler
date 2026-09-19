@@ -190,6 +190,6 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **`type(scope): subject`, one line, no body** — types `feat fix refactor docs test chore perf ci`; take the scope from `git log --oneline -15`.
 - **Only what this session wrote** — commit by explicit path, never `git add -A` or a directory; build outputs (`out/`, `*.o`, `.cache`) and scratch probes stay out.
 
-IMPORTANT: never mention specific reference projects in all documents or comment inside our source code
+IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 
 @~/.claude/recompiler.local.md
