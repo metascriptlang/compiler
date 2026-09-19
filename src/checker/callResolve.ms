@@ -2080,8 +2080,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const restFormal = lastFormal != null && lastFormal.kind == TypeKind.Varargs ? lastFormal : null;
 	for (let ai = 0; ai < cd.arguments.length; ai += 1) {
 		const argT = ai < argTypes.length ? argTypes[ai] : null;
-		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error) continue;
-		if (bindingConflictSkipArg(cd.arguments[ai])) continue;
+		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error || isUnknownType(argT)) continue;
 		let reported = false;
 		for (const c of conflicted) { if (c == ai) reported = true; }
 		if (reported) continue;
