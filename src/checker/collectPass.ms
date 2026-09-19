@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -52,7 +52,7 @@ function collectDeclMint(ctx: CheckerContext, stmt: Node): void {
 	if (sym == null) return;
 	if (sym.symbolKind != SymbolKind.Class && sym.symbolKind != SymbolKind.Actor) return;
 	setFlag(sym, SymbolFlag.Forward);
-	if (exported) setFlag(sym, SymbolFlag.Exported);
+	if (exported) exportSym(ctx, sym);
 	if (stmt.kind == NodeKind.DecoratedDecl) applyDecoratedInfo(ctx, stmt);
 }
 
@@ -141,7 +141,7 @@ export function markDeclMethodsExported(ctx: CheckerContext, decl: Node): void {
 	for (let ai = 0; ai < ad.actorBody.length; ai += 1) {
 		const mSym = ad.actorBody[ai].resolvedSym;
 		if (mSym != null) {
-			setFlag(mSym, SymbolFlag.Exported);
+			exportSym(ctx, mSym);
 		}
 	}
 }
@@ -153,7 +153,7 @@ function markClassMethodsExported(ctx: CheckerContext, classNode: Node): void {
 		// Use resolvedSym set by collectClassMethod — avoids overload ambiguity
 		const methodSym = cd.classBody[ci].resolvedSym;
 		if (methodSym != null) {
-			setFlag(methodSym, SymbolFlag.Exported);
+			exportSym(ctx, methodSym);
 		}
 	}
 }
@@ -175,19 +175,19 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	// it or mark an unrelated same-named free function.
 	const staticMemberSym = staticExtSymOf(d.exportedDecl);
 	if (staticMemberSym != null) {
-		setFlag(staticMemberSym, SymbolFlag.Exported);
+		exportSym(ctx, staticMemberSym);
 		return;
 	}
 	const name = getDeclName(d.exportedDecl);
 	if (name != "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym != null) {
-			setFlag(sym, SymbolFlag.Exported);
+			exportSym(ctx, sym);
 			// For overloaded functions (e.g. asString on uint8[] and JsonValue),
 			// the just-defined symbol may be in overloads[]. Mark the latest overload
 			// as exported — it's the one that was just defined by collectDeclLocal above.
 			if (sym.overloads.length > 0) {
-				setFlag(sym.overloads[sym.overloads.length - 1], SymbolFlag.Exported);
+				exportSym(ctx, sym.overloads[sym.overloads.length - 1]);
 			}
 		}
 	}
@@ -199,7 +199,7 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 		for (let ai = 0; ai < ad.actorBody.length; ai += 1) {
 			const methodSym = ad.actorBody[ai].resolvedSym;
 			if (methodSym != null) {
-				setFlag(methodSym, SymbolFlag.Exported);
+				exportSym(ctx, methodSym);
 			}
 		}
 	}
@@ -1000,7 +1000,7 @@ function propagateImportedOverloads(
 				&& exportInfo.overloadDeclNodes[ovIdx] != null) {
 			ovSym.declNode = exportInfo.overloadDeclNodes[ovIdx];
 		}
-		if (markExported) setFlag(ovSym, SymbolFlag.Exported);
+		if (markExported) exportSym(ctx, ovSym);
 		primarySym.overloads.push(ovSym);
 		if (ctx.extensionRegistry != null && exportInfo.overloadExtReceiverTypes != null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] != "") {
 			registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.overloadExtReceiverTypes[ovIdx], sourcePath, exportInfo.overloadTypes[ovIdx], exportInfo.overloadExtIsStatic[ovIdx], ovSym, 1));
@@ -1224,7 +1224,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		// call typed as Result<unknown, _> at codegen.
 		if (expInfo.declNode != null) methSym.declNode = expInfo.declNode;
 		methSym.state = SymbolState.Shaped;
-		if (markExported) setFlag(methSym, SymbolFlag.Exported);
+		if (markExported) exportSym(ctx, methSym);
 		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
 		if (expInfo.overloadExtReceiverTypes != null && expInfo.overloadTypes != null) {
 			let ovi = 0;
@@ -1237,7 +1237,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 					if (ovi < expInfo.overloadDisambs.length) ovSym.disamb = expInfo.overloadDisambs[ovi];
 					if (expInfo.overloadNativeNames != null && ovi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[ovi] != "") ovSym.nativeName = expInfo.overloadNativeNames[ovi];
 					ovSym.state = SymbolState.Shaped;
-					if (markExported) setFlag(ovSym, SymbolFlag.Exported);
+					if (markExported) exportSym(ctx, ovSym);
 					const ovStatic = expInfo.overloadExtIsStatic != null && ovi < expInfo.overloadExtIsStatic.length ? expInfo.overloadExtIsStatic[ovi] : false;
 					registerExtension(ctx.extensionRegistry, createExtMethod(methName, ovRecv, sourcePath, expInfo.overloadTypes[ovi], ovStatic, ovSym, 0));
 				}
@@ -1275,7 +1275,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 							importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node);
 							const sym = lookupLocal(ctx.table, expInfo.name);
 							if (sym != null) {
-								setFlag(sym, SymbolFlag.Exported);
+								exportSym(ctx, sym);
 								// Propagate overloads through star re-export. Required
 								// for createNodeAt's per-kind overloads to flow from
 								// std/meta → src/ast/node → callers (compiler source).
@@ -1362,7 +1362,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 		for (const alias of imp.importAliases) {
 			const sym = lookupSymbol(ctx.table, alias);
 			if (sym != null) {
-				setFlag(sym, SymbolFlag.Exported);
+				exportSym(ctx, sym);
 			}
 		}
 		return;
@@ -1374,18 +1374,18 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 	// it or mark an unrelated same-named free function.
 	const staticMemberSym = staticExtSymOf(d.exportedDecl);
 	if (staticMemberSym != null) {
-		setFlag(staticMemberSym, SymbolFlag.Exported);
+		exportSym(ctx, staticMemberSym);
 		return;
 	}
 	const name = getDeclName(d.exportedDecl);
 	if (name != "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym != null) {
-			setFlag(sym, SymbolFlag.Exported);
+			exportSym(ctx, sym);
 			// For overloaded functions, also mark the latest overload as exported.
 			// defineSymbol appends to overloads[], so last entry is the just-defined one.
 			if (sym.overloads.length > 0) {
-				setFlag(sym.overloads[sym.overloads.length - 1], SymbolFlag.Exported);
+				exportSym(ctx, sym.overloads[sym.overloads.length - 1]);
 			}
 		}
 	}
@@ -1397,7 +1397,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 		for (let ai2 = 0; ai2 < ad2.actorBody.length; ai2 += 1) {
 			const mSym = ad2.actorBody[ai2].resolvedSym;
 			if (mSym != null) {
-				setFlag(mSym, SymbolFlag.Exported);
+				exportSym(ctx, mSym);
 			}
 		}
 	}
