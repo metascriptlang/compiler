@@ -394,7 +394,7 @@ function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
 function hoistNestedInits(ctx: CheckerContext, inits: Node[]): void {
 	for (const s of inits) {
 		checkStmt(ctx, s);
-		ctx.pendingHoisted.push(s);
+		ctx.pendingTrailing.push(s);
 	}
 }
 
@@ -1538,23 +1538,31 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 // be read. Ownership is fixed when the entry is queued, not when it is taken.
 function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32): int32 {
 	const n = ctx.pendingHoisted.length - from;
-	if (n <= 0) return 0;
+	const trailing = ctx.pendingTrailing.length;
+	if (n <= 0 && trailing == 0) return 0;
 	const rebuilt: Node[] = [];
 	let inserted = false;
 	let i = 0;
 	while (i < stmts.length) {
 		if (i == at) {
 			for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
+			rebuilt.push(stmts[i]);
+			for (const t of ctx.pendingTrailing) rebuilt.push(t);
 			inserted = true;
+		} else {
+			rebuilt.push(stmts[i]);
 		}
-		rebuilt.push(stmts[i]);
 		i = i + 1;
 	}
-	if (!inserted) { for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]); }
+	if (!inserted) {
+		for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
+		for (const t of ctx.pendingTrailing) rebuilt.push(t);
+	}
 	ctx.pendingHoisted.length = from;
+	ctx.pendingTrailing.length = 0;
 	stmts.length = 0;
 	for (const s of rebuilt) stmts.push(s);
-	return n;
+	return n + trailing;
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -2040,6 +2048,7 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 			merged.push(s);
 		}
 		stmts.programStmts = merged;
+		ctx.liftedLocalTypeDecls = ctx.pendingLocalTypeDecls;
 		ctx.pendingLocalTypeDecls = [];
 	}
 }
