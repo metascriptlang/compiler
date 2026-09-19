@@ -100,11 +100,12 @@ Gates (snapshot `8506c8ff` + L1/L4/L2): probes 15/15 expected outcomes (subset/o
 
 ---
 
-## L7. `std/compress` does not build — `cparse` gaps on the vendored miniz header
+## L7. `std/compress` (deflate/inflate) does not build — `cparse` gaps on the vendored miniz header
 
 **Problem:** Importing `std/compress` fails while parsing the vendored C header.
 **Repro (re-measured 2026-09-04):** `import { deflate } from "std/compress";` → first error is now `C header vendor/miniz/miniz.h:117:1: 'miniz_export.h' file not found`, followed by the original `miniz.h:179:1: 'time.h' file not found` (the `miniz_export.h` miss is new since the 2026-09-02 audit — the vendored tree was modified in-place).
-**Severity:** loud — the module has never been buildable.
+**Re-measured 2026-09-19 (`v0.2.55`):** `import { deflate, inflate } from "std/compress"` fails with the same three header errors (`miniz_export.h`, `time.h`, `miniz_common.h` not found). `std/compress/zip` is not affected: `openZip("/nonexistent.zip")` builds and runs, printing `false` for `r.ok`.
+**Severity:** loud — deflate/inflate have never been buildable.
 **Workaround:** none. `cparse` needs the missing includes resolved and, past that point, `__inline__` support.
 
 ---
@@ -799,3 +800,119 @@ The bundle calls `hdrs.setHeader(...)` inside the emitted function and never bin
 Measured on the installed `2e8cf49a`, `--target=js`, for a plain function and for a `this`
 function; C prints `1` for both. Not measured: a namespace read at top level (the probe hit an
 unrelated anonymous-literal type error there), `--target=esm`, and whether a re-export shim changes it.
+
+## L50. A declaration or assignment of the wrong primitive type is not checked (LIVE, measured 2026-09-19)
+
+```ms
+const a: string = 5;
+let b: string = "x";
+b = 5;
+console.log(a + b);
+
+msc check: OK no type errors
+C:  error: initializing 'msString' with an expression of incompatible type 'int'
+JS: prints 10
+```
+
+`const n: int32 = s` with `s: string` passes the same way. The return position is checked
+(`function f(): string { return 5; }` → `Return type mismatch in 'f': expected string, got int32`),
+and so is float → int narrowing in a declaration (`const i: int32 = f` with `f: float64` errors),
+so the hole is the plain kind mismatch at a declaration or assignment. Until it is fixed, probe
+whether a type resolves by returning a wrong value from a function annotated with it, never with
+`const a: T = wrong`. Measured on the installed `v0.2.55`, standalone. Not measured: field
+initializers, array elements, and object-literal properties.
+
+## L51. A compiler that cannot find `std/` reports an undefined `console` (LIVE, measured 2026-09-19)
+
+```
+cp ~/.metascript/bin/msc /tmp/x/a/b/msc
+cd /tmp/x && ./a/b/msc run h.ms          # h.ms: console.log("hi");
+    error: Undefined variable 'console'
+```
+
+The compiler looks for `std/core/system/index.ms` up to four directories above the binary and then
+in the cwd (`resolveRuntimeDir`, `src/utils/path.ms`). When both miss it returns an empty root and
+the build goes on without the prelude, so the first symptom is a missing global. Running the same
+copy from a cwd that has `std/` works. Measured with `v0.2.55`.
+
+## L52. Arguments of a method call are not type-checked (LIVE, measured 2026-09-19)
+
+```ms
+class Box { at(i: int32): int32 { return i + 1; } }
+const b = new Box();
+console.log(b.at("s"));
+
+msc check: OK no type errors
+C:  error: passing 'const msString' to parameter of incompatible type 'int32_t'
+JS: prints s1
+```
+
+The same call as a free function errors at check (`Argument type mismatch in 'at' arg 0: got string,
+expected int32`). Methods register as extensions, and the extension-call branch of `callResolve.ms`
+checks only arity before returning, so the shared argument loop never sees them. Measured on the
+installed `v0.2.55`. Not measured: static methods and imported extension functions called with
+method syntax.
+
+## L53. `==` between two structs throws on the JS backend (LIVE, measured 2026-09-19)
+
+```ms
+struct Pt { x: int32; y: int32; }
+const a: Pt = { x: 1, y: 2 };
+const b: Pt = { x: 1, y: 3 };
+console.log(a != b);
+
+C:  true
+JS: ReferenceError: PtEq is not defined
+```
+
+The build succeeds on both backends. The call to the derived `PtEq` is emitted for JS, but its body
+comes from `destructorLifting`, which runs only for C. Measured on the installed `v0.2.55`.
+
+## L54. Calling the comptime host table without the package path fails to link (LIVE, measured 2026-09-19)
+
+```ms
+import { ensureHostTableLoaded } from "<recompiler>/src/compiler/meta/hostTable";
+ensureHostTableLoaded();
+
+error: undefined symbol: _msZipReaderClose     (11 _msZip* symbols)
+```
+
+`hostTable.ms` includes `runtime/compress/zip.h` and declares 11 `msZip*` externs but compiles none
+of their C sources. The `@compile` lines live in `std/compress/zip.cms`, and the shipped compiler
+links only because `src/index.ms` also reaches the package downloader, which imports zip. Any
+program that embeds the comptime, macro or Raiser-eval path without that import fails at link.
+Measured with the installed `v0.2.55`.
+
+## L55. `405-lockedSharedCounter` and `410-awaitStructSpawnStored` sometimes hang (LIVE, recorded in `src/test/known-red.json`)
+
+The gate's known-red set carries `405-lockedSharedCounter` under `danger` and `san`, and
+`410-awaitStructSpawnStored` under `danger` and `orc`. They hang intermittently, so the cause is not
+SAN. One captured hang (2026-08-28) had every thread parked in `__ulock_wait` with nobody inside a
+critical section, and main in `msAwaitSlotWait → msPoolHelpOne` running a helped task blocked in
+`withLock → msTicketLockAcquire → msFutexWait`. `withLock` has since been replaced by `Locked<T>`
+(`c9353472`, 2026-09-03), and both programs are still in the known-red set recorded at `52ae61ea`
+(2026-09-19), so that capture no longer names the current code. The hang itself was not
+reproduced on 2026-09-19. To chase it, loop the cell until it hangs, then sample every thread of
+the program binary, not the `sh -c` wrapper.
+
+## L56. `closureCallMarker` builds a `Token` one field short (LIVE, measured 2026-09-19)
+
+`src/transform/native/closureCallMarker.ms` has 6 sites that build `{ kind, value, line, column } as
+unknown as Token`, while `Token` (`std/meta/token.ms`) also has `rawValue`. The cast reinterprets
+the smaller literal, so the emitted C reads `rawValue` past the end of the stack object. It prints
+nothing wrong today by accident. `syntheticToken()` builds a complete token and is the replacement.
+`as unknown as <T>` is safe only while both layouts are equal; the same cast in the checker's
+`sizeof` fold silently broke when the literal type gained fields.
+
+## L57. `src/test/index.ms` does not type-check and runs in no gate lane (LIVE, measured 2026-09-19)
+
+`src/index.ms` does not import the test tree, so `tools/gate.sh` never runs `lang/`, `fixedbugs/`,
+`handoff/` or `c/*.ms` through their aggregate. `./msc check src/test/index.ms` stops at 20 type
+errors in 10 files: `lang/result.ms` 6, `fixedbugs/bug129_classMethodOverload.ms` 3 (`'new Box()'
+requires explicit type arguments`), `lang/trycatch.ms`, `lang/closuresAdv.ms` and
+`handoff/unionNarrow.ms` 2 each, and one each in `lang/advanced.ms`, `handoff/ccgIntroducedPtr.ms`,
+`fmt/roundtrip.ms`, `fixedbugs/bug089TsLiteralDiscUnionJson.ms`, `fixedbugs/bug087UnionAliasTypeArg.ms`.
+Among the messages: 5 `implicit number → int32 narrowing`, 8 `field 'value'/'error' exists only on some
+variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discriminated union.
+A single file still runs on its own with `msc test <file>`. Not measured: which of these are stale
+test code and which are checker regressions.
