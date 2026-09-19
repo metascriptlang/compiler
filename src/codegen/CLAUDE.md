@@ -9,5 +9,5 @@ Three backends. C is primary (DRC, lifecycle hooks). JS is secondary (no analyze
 | **Raiser** | `raiser/` | `generateRaiser`, `generateRaiserProject` (`raiser/rgen.ms`) | no | `parse → check → transform → codegen → Raiser VM` |
 
 - C backend rules: [`c/CLAUDE.md`](c/CLAUDE.md).
-- Raiser backend rules, what it does not handle, tests: [`raiser/CLAUDE.md`](raiser/CLAUDE.md); the VM itself: [`src/raiser/CLAUDE.md`](../raiser/CLAUDE.md).
+- Raiser backend rules, what it does not handle, tests: [`raiser/CLAUDE.md`](raiser/CLAUDE.md); the VM itself: [`src/raiser/CLAUDE.md`](../raiser/CLAUDE.md); design and measured status: [`docs/RAISER.md`](../../docs/RAISER.md).
 - JS backend files: `js/emit.ms` (string buffer, generator state), `js/expressions.ms`, `js/statements.ms`, `js/declarations.ms`, `js/jsgen.ms` (dispatcher), `js/sourcemap.ms`, `js/valueCopy.ms`.

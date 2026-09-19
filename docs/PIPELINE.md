@@ -117,18 +117,20 @@ annotate/emit. Net: by Phase 5 the AST is a small, C-shaped subset.
 
 ---
 
-## RAISER VM — compile-time execution & metaprogramming (`src/codegen/raiser`, `runtime/raiser`)
+## RAISER VM — compile-time execution & metaprogramming (`src/codegen/raiser`, `src/raiser`)
 
-RAISER executes MetaScript at **compile time** (`@comptime`, macro bodies, const folding).
-It consumes the **post-transform AST** — so it never has to understand `match`/`defer`/`for`
-natively; Phase 3 already lowered them.
+RAISER executes MetaScript at **compile time** (`@comptime`, macro bodies, const folding),
+and whole programs under `msc run --target=raiser`. It consumes the **post-transform AST**
+(`transformForRaiser`) and skips Phase 4 and Phase 5.
 
 **Core architecture:**
-- **Register-based** instruction set (256 slots) — ~30% less dispatch overhead than stack VMs.
-- **Computed-goto** dispatch (`vm_dispatch.h` / `dispatch.c`).
-- **Handle-based arena** memory (`ObjectHeap`/`ArrayHeap`, monotonic growth — short-lived
-  comptime tasks).
+- **Register-based** instruction set; the register file starts at 256 slots and grows.
+- **`if` / `else if` dispatch** in `src/raiser/vm.ms`, one arm per opcode; there is no C dispatch.
+- **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
+  refcount + cycle collector under `gcMode = "orc"`.
 - **Flat tagged `RaiserValue`** (Nil/Bool/Int/Float/String/Array/Object), kind-dispatched.
+
+Design, measured status and what is not built: [`RAISER.md`](RAISER.md).
 
 Flow: `Source → Parse → Check → Transform → Raiser codegen (primitives→bytecode) → Raiser VM
 (execute, fold results back into the AST)`.
@@ -142,7 +144,7 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
 **Two layers:**
 - **Layer 1** — pure-MS wrappers in `std/*` (`readFile`, `exec`, `env`), compiled to bytecode,
   run inside the VM.
-- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers ~40
+- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers 105
   `RaiserHostFn` wrappers under the extern's native name
   (`registerHostFn("msFsReadFile", …)`).
 
@@ -159,9 +161,10 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
   calls the MS bridge (which itself calls the host compiler's std — the same
   `shared.ms`/std sources the C backend compiles), and boxes the result.
 
-Known gaps, tracked in `src/raiser/CLAUDE.md` §std Access: the table is
-hand-maintained (an extern added to `.rms` without a bridge fails at runtime
-with "Unknown host function"), and nothing yet enforces closure. The
+Known gaps, tracked in [`RAISER.md`](RAISER.md) §std access: the table is
+hand-maintained; an extern added to `.rms` without a bridge compiles with a
+`no host bridge` warning at the call site and fails at runtime with
+"Unknown host function". The
 originally-sketched alternative — a build-time-generated C table of
 `{name, fnPtr, sigTag}` letting the VM call statically linked natives
 directly — is the `CallExtern` direction on the roadmap (Phase 5), not the
