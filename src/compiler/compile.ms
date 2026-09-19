@@ -390,6 +390,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	}
 
 	reportGraphErrors(graph);
+	if (graph.errors.length > 0) exit(1);
 	exitOnModuleErrors(graph, "error");
 
 	if (verbose) verboseLog("cross-module type check");
