@@ -12,7 +12,8 @@ usage: tools/wt.sh <command> [args]
   card [name|path]      print the card of a worktree (default: the current one):
                         its path, then Goal, Done when and State
   ls [--stale]          one line per worktree: branch, dirty files, unlanded
-                        commits, live processes, out/ size, the card's goal;
+                        commits, live processes, out/ size, the card's goal or
+                        NO CARD, then every card that has no wt/<name> branch;
                         --stale hides the ones a process still works in
   rm <name|path> [--force]
                         remove a worktree; refuses while it holds dirty files,
@@ -27,7 +28,8 @@ usage: tools/wt.sh <command> [args]
                         --no-gate lands on evidence gathered outside the gate
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
-  hook-session          SessionStart hook body (prints the current worktree's card)
+  hook-session          SessionStart hook body (prints the current worktree's card
+                        and the compiler inbox tally by State)
 
 env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
 USAGE
@@ -62,8 +64,39 @@ seed_card() {
   local c
   c=$(card_path "$1")
   [ -e "$c" ] && return 0
-  printf '# %s\n\n## Goal\n\n## Done when\n\n## State\n' "$1" >"$c" || return 1
+  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\n\n## Goal\n\n## Done when\n\n## State\n' \
+    "$1" "$MAIN" "$(wt_dir "$1")" "$1" >"$c" || return 1
   say "card: $c"
+}
+
+card_is_foreign() {
+  local repo
+  repo=$(grep -m1 '^Repo:' "$1" 2>/dev/null) || return 1
+  case "$repo" in
+    *"$(basename "$MAIN")"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+orphan_cards() {
+  local c name
+  for c in "$ROOT"/*.md; do
+    [ -e "$c" ] || continue
+    card_is_foreign "$c" && continue
+    name=$(basename "$c" .md)
+    git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$name" || printf '%s\n' "$c"
+  done
+}
+
+inbox_tally() {
+  local dir=${MSC_INBOX:-$(dirname "$ROOT")/.inbox/compiler} n
+  n=$(find "$dir" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] || return 0
+  printf '%s card(s) in %s:' "$n" "$dir"
+  grep -h -m1 '^State:' "$dir"/*.md 2>/dev/null \
+    | awk -v n="$n" '{s=$2; sub(/[.,]$/, "", s); t[s]++; k++} END {for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d without a State line ·", n - k}' \
+    | sed 's/ ·$//'
+  printf '\n'
 }
 
 worktrees() { git -C "$MAIN" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | tail -n +2; }
@@ -185,11 +218,16 @@ cmd_card() {
 hook_session() {
   local w name c
   w=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --show-toplevel 2>/dev/null) || return 0
-  name=$(card_name_of "$w") || return 0
-  c=$(card_path "$name")
-  [ -e "$c" ] || return 0
-  printf 'Card of this worktree, %s:\n' "$c"
-  cat "$c"
+  if name=$(card_name_of "$w"); then
+    c=$(card_path "$name")
+    if [ -e "$c" ]; then
+      printf 'Card of this worktree, %s:\n' "$c"
+      cat "$c"
+    else
+      printf 'This worktree is on wt/%s and has no card at %s; write its Goal and "Done when" before the first commit.\n' "$name" "$c"
+    fi
+  fi
+  inbox_tally
 }
 
 ls_row() {
@@ -207,7 +245,7 @@ ls_row() {
   out=-
   [ -d "$w/out" ] && out=$(kib_human "$(du -sk "$w/out" 2>/dev/null | awk '{print $1}')")
   name=$(card_name_of "$w") && goal=$(card_goal "$(card_path "$name")" | cut -c1-72)
-  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s%s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w" "${goal:+  · $goal}"
+  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s  · %s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w" "${goal:-NO CARD}"
 }
 
 cmd_ls() {
@@ -221,6 +259,7 @@ cmd_ls() {
     | WT_CWD_TABLE=$table WT_STALE=$WT_STALE xargs -0 -P 8 -n 1 bash "$0" __ls_row \
     | sort -n | cut -f2-
   rm -f "$table"
+  orphan_cards | sed 's/^/card without a wt\/<name> branch: /'
 }
 
 wt_status() {
