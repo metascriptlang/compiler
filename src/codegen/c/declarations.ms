@@ -380,6 +380,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// The struct body emission below is separately guarded by typeAlreadyDeclared
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
+	genStaticFieldGlobals(g, d, node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Actor);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -405,10 +406,6 @@ function genClassDecl(g: CGen, node: Node): void {
 				fieldTypes.push(getTypeDesc(g, classStructType.typeChildren[i]));
 			}
 		}
-		// Static field globals + initializer emission (own decls only — parent's
-		// statics emitted by parent's genClassDecl).
-		genStaticFieldGlobals(g, d, node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Actor);
-
 		let structDef = `struct ${name} {\n`;
 		for (let i = 0; i < fieldTypes.length; i += 1) {
 			structDef = structDef + `  ${fieldTypes[i]} ${fieldNames[i]};\n`;
