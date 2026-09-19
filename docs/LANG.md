@@ -1976,9 +1976,45 @@ extern function ok<T>(val: T): Result<T, any>;
 | Decorator | Applies To | Purpose | Status |
 |-----------|-----------|---------|--------|
 | `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
+| `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
+| `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
+
+##### Which of the three a declaration wants
+
+The three marks above answer three different questions about one call. A routine
+can need any combination; they do not substitute for one another.
+
+| Question about the call | Mark | Consequence |
+|---|---|---|
+| Does the call **disappear**, replaced by emitted code? | `@builtin("Name")` | `builtinLower` rewrites the AST by tag; no function call survives |
+| Is the call **synthesized** by a lowering rather than written by hand? | `@compilerFunc` | the name a lowering emits resolves to this symbol, so later phases read a declared signature instead of guessing from the name |
+| Can the routine **raise**? | `@throws` | DRC keeps the scope's cleanup on the error path (`callCanThrow`, `analyzer/inject.ms`) |
+
+`msAssertFail` carries both `@compilerFunc` (the `assert` lowering emits the call)
+and `@throws` (it sets the error flag). `nonisolated` carries neither — it is
+`@builtin`-tagged because that is currently the only way to declare a decorator
+that has a symbol; see the note below.
+
+```typescript
+// std/core/system/index.ms
+@compilerFunc @throws
+extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
+```
+
+A `@compilerFunc` declaration lives in the prelude so every module a synthesized
+call lands in can reach it, and it needs no `export` — the table travels with the
+prelude scope, not through the export registry. The C name still comes from the
+`from "..."` clause, not from the mark.
+
+**Two known rough edges, so nobody copies them as patterns.** `@builtin` currently
+carries one declaration that is not an intrinsic at all (`nonisolated`, an actor
+field property), because declaring a decorator with a symbol has no mark of its
+own. And the `@include`/`@passC` family of directives is matched as plain strings
+in the checker, so unlike `@builtin`/`@compilerFunc`/`@throws` they have no
+declaration to jump to.
 
 #### Directives (standalone, module-level)
 
@@ -3040,6 +3076,24 @@ function parse(input: string, out result: AST): boolean {
     return true;
 }
 ```
+
+### Sink Parameters (extern declarations only)
+```typescript
+extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+```
+`sink name: T` says the routine takes ownership of the argument: the caller passes it
+consumed and does not destroy it afterwards. It is a contextual modifier like `out` /
+`ref` — a parameter may still be *named* `sink` (`f(sink: int32)` compiles). Overload
+scoring, literal fitting and generic binding look through it, so `a.push(0)` on a
+`uint8[]` picks the same overload as without the modifier.
+
+Measured 2026-09-18 (`src/test/handoff/sinkParam.ms`, 4/4): literal into a sink
+overload compiles and calls `msUint8ArrayPush`; a generic `sink value: T` binds `T`;
+`sink` as a parameter name compiles; and **a `sink` parameter on a function WITH a
+body is a compile error** — `'sink' parameter on 'eat': only an extern declaration can
+take ownership of an argument`. The callee-owns half (destroy at scope exit unless
+moved on) is not implemented, so accepting it there would leak every argument.
+NOT verified: `sink` on class methods and constructors, and the JS backend.
 
 ## Memory Management
 
