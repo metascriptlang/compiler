@@ -18,7 +18,7 @@ How work moves from `main` to a published release, and how a release gets fixed.
 - A fix for a release is cut from that release branch and merges back into it, never straight into `main`. It reaches `main` when the release merges back.
 - The version tag is created on the release branch, never on `main`.
 - A published tag never moves. A problem found after publishing ships as the next version.
-- Never switch branches in the main working tree while it holds uncommitted work: `git checkout` and `git switch` rewrite files under it. Release and fix branches each get their own worktree.
+- Release and fix branches each get their own worktree.
 
 ## 1. Cut the release branch
 

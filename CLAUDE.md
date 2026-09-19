@@ -6,7 +6,7 @@ Self-hosted compiler for the MetaScript language, written in MetaScript (.ms fil
 
 - **One session, one worktree** — the `WorktreeCreate` hook runs `tools/wt.sh new`, which gives branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready; start work with `claude --worktree <name>`, or `tools/wt.sh new <name>` by hand.
 - **The main checkout only receives lands** — `tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
-- **Uncommitted work is never discarded** — no `git stash`, `reset`, `checkout .` or `restore`; retire a worktree with `tools/wt.sh rm` (names what it would lose, `--force` discards only that), find idle ones with `tools/wt.sh ls --stale`.
+- **Retire a worktree with `tools/wt.sh rm`** — it names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
 - **Data flows one way, repo → `~/.metascript/`** — through `tools/sync-local-binary.sh` only; nothing mirrors into a checkout.
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 
