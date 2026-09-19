@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
+import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, isExportedBy, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
@@ -19,7 +19,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch } from "./compat";
+import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -524,7 +524,10 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			const fdFlags = (node.data as FunctionDeclData).fnFlags;
 			const fdScope = ctx.table.current.scopeKind;
 			const fdLocal = fdScope != ScopeKind.Module && fdScope != ScopeKind.Global;
-			if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
+			if (node.flags.has(NodeFlag.Converter) && fdLocal) {
+				const fd = node.data as FunctionDeclData;
+				addError(ctx, "converter '" + fd.fnName + "' is only allowed at module level", fd.nameLocation.line, fd.nameLocation.column);
+			} else if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
 				checkExternFunctionStmt(ctx, node);
 			} else if (ctx.currentFunction != null) {
 				rewriteNestedFunctionDecl(ctx, node);
@@ -865,6 +868,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	const fnType = sym.symbolType;
 	node.nodeType = fnType;
+	if (node.flags.has(NodeFlag.Converter)) checkConverterOwner(ctx, d, fnType);
 
 	// Mark async functions for return type unwrapping
 	if (d.fnFlags == "async" || d.fnFlags == "async_generator" || (d.fnFlags != "" && d.fnFlags.indexOf("async") >= 0)) {
@@ -2134,6 +2138,35 @@ function checkMacroDecl(ctx: CheckerContext, node: Node): void {
 	if (t.kind == TypeKind.Inferred || t.kind == TypeKind.Error || t.kind == TypeKind.None
 		|| t.kind == TypeKind.TypeReference || t.kind == TypeKind.Unknown) return;
 	ctx.converterTargetTypes.set(d.macroDeclName, t);
+}
+
+function checkConverterOwner(ctx: CheckerContext, d: FunctionDeclData, fnType: Type | null): void {
+	if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 1) return;
+	if (declaredInThisModule(ctx, fnType.typeChildren[0]) || declaredInThisModule(ctx, fnType.typeReturn)) return;
+	addError(ctx, "converter '" + d.fnName + "' must be declared in the module that declares '" + d.fnParamTypes[0] + "' or '" + d.fnReturnType + "'",
+		d.nameLocation.line, d.nameLocation.column);
+}
+
+function declaredInThisModule(ctx: CheckerContext, t: Type | null): boolean {
+	let cur = t;
+	let depth = 0;
+	while (cur != null && depth < PEEL_MAX_DEPTH) {
+		depth = depth + 1;
+		if (cur.kind == TypeKind.Alias) {
+			cur = cur.typeReturn;
+			continue;
+		}
+		const owner = cur.sym;
+		if (owner != null) return owner.modulePath == ctx.modulePath;
+		if (cur.kind == TypeKind.Ref || isMaybeType(cur)) {
+			cur = cur.typeReturn;
+		} else if (nonNullMemberOfNullable(cur) != null) {
+			cur = nonNullMemberOfNullable(cur);
+		} else {
+			return false;
+		}
+	}
+	return false;
 }
 
 // Macro bodies are not type-checked (they run in the Raiser VM), but their
