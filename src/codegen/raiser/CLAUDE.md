@@ -1,229 +1,49 @@
-# Raiser Codegen — AST → Bytecode Compiler
+# Raiser Codegen — AST → bytecode
 
-Compiles post-Phase-3 AST into Raiser bytecode. Parser/AST knowledge lives here; the VM (`src/raiser/`) knows nothing about AST nodes.
-
-## Pipeline Position
-
-```
-Source.ms → [1 Parse] → [2 Check] → [3 Transform] → Raiser Codegen → Raiser VM
-                                          ↓
-                                   Phase 3 eliminates:
-                                   MatchExpr/Stmt, DeferStmt, TryExpr,
-                                   ForStmt, ForOfStmt, DestructuringDecl,
-                                   AwaitExpr, closures with captures
-```
-
-Raiser skips Phase 4 (DRC analyzer) and Phase 5 (C/JS codegen). No ORC, no refcounting — the VM uses its own memory model.
+Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transform → Raiser codegen → Raiser VM`. Phase 4 (DRC) and Phase 5 (C/JS) are skipped; the VM has its own memory model. What each node kind emits is in `expressions.ms` and `statements.ms`, the emit helpers in `context.ms`, the opcodes in `src/raiser/bytecode.ms`.
 
 ## Files
 
-```
-src/codegen/raiser/
-  CLAUDE.md          -- this file
-  index.ms           -- hub: export { generateRaiser } from "./rgen"
-  context.ms         -- RaiserCompState, emit helpers, register allocator, loop/scope state
-  expressions.ms     -- compileExpr: expression nodes → bytecode
-  statements.ms      -- compileStmt: statement nodes → bytecode
-  rgen.ms            -- generateRaiser(program), generateRaiserProject(modules), class compilation, tests
-  eval.ms            -- evalSourceFull/evalASTFull (full pipeline), project + class integration tests
-  valueCopy.ms       -- static Type → flat RaiserCopyPlan, CopyValue emission
-```
+| File | Holds |
+|------|-------|
+| `index.ms` | hub |
+| `context.ms` | `RaiserCompState`, emit helpers, register allocator, loop and scope state |
+| `expressions.ms` / `statements.ms` | `compileExpr` / `compileStmt` |
+| `rgen.ms` | `generateRaiser`, `generateRaiserProject`, class compilation, tests |
+| `eval.ms` | full-pipeline evaluation, project and class integration tests |
+| `valueCopy.ms` | static `Type` → flat `RaiserCopyPlan`, `CopyValue` emission |
 
-## Handled NodeKinds
+## Rules
 
-### Expressions (expressions.ms)
+- **AST knowledge lives here, the VM has none** — this directory imports the types of `src/raiser/bytecode`, `value` and `module` and hands over a `RaiserModule`; `src/raiser/` never sees a node.
+- **A site known bad at compile time queues a warning AND emits `Trap`** — unresolvable identifier, unsupported node kind, `new` without a constructor, unsupported compound-assign or update target; reaching one at runtime is a fatal vmError, not a catchable raise.
+- **Collection order defines `funcIdx`, and `projectDecls[funcIdx]` must describe that same declaration** — functions and enums of all modules first, then classes (methods before their constructor), then builtins; bodies compile on demand (`resolveFunc → demandBody(funcIdx)` fills `functions[funcIdx]` in place), so a body nobody demands is never compiled and its warnings never fire.
+- **Routine lookup uses the resolved symbol's module path and original name** — raw spelling is only the fallback of single-program compilation.
+- **Each module-level variable owns one VM global slot** — initializers run in dependency order, an imported module initializes once per project run, the entry module last.
+- **`CopyValue` gives arrays and structs value semantics** — every compiled function carries a flat copy-plan table, applied at assignment, argument, return and container-store boundaries; shared references and `Span` are preserved.
+- **A spawned strand gets a graph copy of the parent's global slots** — globals are strand-local snapshots, not shared mutable state.
+- **Spread is lowered before bytecode generation** — each source is evaluated once; array insertion goes through the VM `push` builtin.
+- **Pending generic instances attach to their owning module before monomorphization, macro expansion and Raiser lowering** — on-demand compilation is scoped to the project image and restored afterwards.
+- **A function value is a closure pair `{ fn: funcIdx, env }`, `env = -1` when nothing is captured** — `compileClosureCall` branches on it at runtime and appends the env as the LAST argument, so it lands at `R[arity]`; a function identifier inside an expression stays a raw integer.
+- **Methods are top-level functions whose `this` is the closure env** — bound at `R[arity]`; `<Class>_new` creates the object, stores default properties and the method closures `{ fn, env: this }`, runs the constructor body and returns `this`; a method call is `LoadField` + `CallIndirect`.
+- **Registers are a bump allocator** — `resetTemps` after each top-level statement keeps the locals and reclaims the temps.
 
-| NodeKind | Opcodes Emitted |
-|----------|----------------|
-| NumberLiteral | LoadConst |
-| StringLiteral | LoadConst (string value) |
-| BooleanLiteral | LoadConst |
-| NullLiteral | LoadConst (nil) |
-| Identifier | Move (local) or LoadGlobal (module global) |
-| BinaryExpr (+,-,*,/,%,==,!=,<,<=,>,>=,&&,\|\|,&,\|,^,<<,>>) | AddI64/SubI64/MulI64/DivI64/ModI64 + compare-branch + BitAnd/BitOr/BitXor/ShiftLeft/ShiftRight |
-| UnaryExpr (-,!,~) | NegI64, BitNot |
-| CallExpr | Call/CallIndirect/Print (dispatch by callee kind) |
-| ConditionalExpr (ternary) | BranchIfFalsy + Jump |
-| AssignmentExpr (=,+=,-=,*=,/=,%=,&=,\|=,^=,<<=,>>=) | StoreLocal/StoreField/StoreIndex + arithmetic |
-| UpdateExpr (++/--) | AddI64/SubI64 with LoadConst(1) |
-| ArrayLiteral | NewArray + element compilation |
-| ArrayAccess | LoadIndex / StoreIndex |
-| MemberExpr | LoadField / StoreField |
-| ObjectLiteral | NewObject + StoreField per property |
-| BlockStmt | statement-list expression: n−1 statements via the statement compiler, last ExprStmt is the value |
-| NewExpr | Call to `<Class>_new` — the constructor rgen already compiles (Pass 2b) |
-| TypeAssertion (as) | (compiles inner expression, no-op cast) |
-| MoveExpr | (compiles inner expression) |
-| ParenExpr | (compiles inner expression) |
+## Not handled
 
-Compile-time-known-bad sites (unresolvable identifier, unsupported node kind, `new` without a constructor, unsupported compound-assign/update targets) queue a compile warning AND emit `Trap` — reaching one at runtime is a fatal vmError, not a catchable raise.
+Each probed on `msc run --target=raiser`:
 
-### Statements (statements.ms)
+- `new Array<T>(n)` — `raiser runtime error: expected an array, got value kind Object`.
+- `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
+- `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
+- `out` argument — `cannot compile node kind OutExpr`.
 
-| NodeKind | Opcodes Emitted |
-|----------|----------------|
-| ReturnStmt | Ret |
-| ExprStmt | (delegates to compileExpr; non-emit macro directives — @include/@compile — are skipped) |
-| BlockStmt | (iterates children, scoped locals) |
-| VariableDecl | LoadConst/compileExpr + declareLocal, or StoreGlobal for module storage |
-| IfStmt | BranchIfFalsy + Jump (with else patching) |
-| WhileStmt | BranchIfFalsy + Jump (backward loop) |
-| DoWhileStmt | BranchIfFalsy + Jump (body-first loop) |
-| ForStmt | init + BranchIfFalsy + body + update + Jump |
-| ForOfStmt | ArrayLen + BltI64 + LoadIndex iteration |
-| BreakStmt | Jump (patched to loop exit) |
-| ContinueStmt | Jump (backward to loop start) |
-| FunctionDecl | (handled by rgen.ms two-phase compilation) |
-| ClassDecl | (handled by rgen.ms two-phase compilation) |
-| ExportDecl | (unwraps inner declaration or compiles as halt) |
-| DecoratedDecl | (unwraps inner declaration) |
-| ImportDecl | (resolves builtin names into function registry) |
-| EnumDecl / InterfaceDecl / TypeAliasDecl | (compile-time only, skipped) |
-
-### Declarations (rgen.ms two-phase)
-
-| NodeKind | Compilation |
-|----------|-------------|
-| FunctionDecl | Phase 1: collect name→funcIdx. Phase 2: compileFuncBody → RaiserFunction |
-| ClassDecl | Phase 1b: collect methods + ctor→funcIdx. Phase 2b: methods via compileFuncBody with isMethod (`this` bound at R[arity] from the closure env), ctor via compileClassConstructor (NewObject + StoreField props/methods + body + Ret this) |
-| EnumDecl | Phase 1: collect member names→values in globalEnumMap |
-
-### Remaining TODO
-
-| NodeKind | Notes |
-|----------|-------|
-| `new Array<T>(n)` | Evaluates to an **empty** array — the length argument is dropped, so the first index raises `array index out of bounds: 0 (length 0)`. Loud, not silent. Measured 2026-09-05 identical on the pre-fix and post-fix compiler, in both the bare and the `const a: number[] = …` shape, so it is untouched by the class-`new` wiring. A `NewExpr` handler keyed on `node.nodeType.kind === TypeKind.Array` was written and **removed**: it never fired in any probed shape |
-| ClassDecl (extends) | Inheritance deferred |
-| ClassDecl (static) | Static methods/properties deferred |
-| ClassDecl (get/set) | Getter/setter deferred |
-| `out` parameter rebinding | Writes through heap targets work; rebinding the caller slot is not implemented |
-
-## Architecture
-
-### Compilation Flow (project)
-
-```
-generateRaiserProject(modules: RaiserModuleInput[]) → RaiserModule
-  ├── Collect module globals into stable slots keyed by module + symbol
-  ├── Pass 1a: Collect functions + enums (all modules)
-  │     funcIdx assigned in order; routines also get module-qualified keys
-  ├── Pass 1b: Collect classes (all modules)
-  │     methods first, then constructor per class
-  ├── Register builtins (defineConfig, etc.)
-  ├── Pass 2: Reserve placeholder slots — bodies compile ON DEMAND:
-  │     resolveFunc → demandBody(funcIdx); an un-demanded body is never
-  │     compiled (and its compile warnings never fire)
-  ├── Emit builtin stubs → functions[]
-  ├── Pass 3: Compile init functions (top-level code per module)
-  │     Dependencies init once, entry module last; abrupt exit remains Halt
-  └── Assemble RaiserModule(functions, initIndices, ...)
-```
-
-**Critical invariant**: collection order (Pass 1a/1b) defines funcIdx, and projectDecls[funcIdx] must describe that same declaration — demandBody(funcIdx) fills functions[funcIdx] in place.
-
-### Whole-program tooling contracts
-
-- Routine lookup uses the resolved symbol's module path and original name. Raw
-  spelling is only a fallback for single-program compilation.
-- Each module-level variable owns one VM global slot. Initializers execute in
-  dependency order and imported modules initialize once per project run.
-- Every compiled function carries a flat copy-plan table. `CopyValue` gives
-  arrays and structs value semantics at assignment, argument, return and
-  container-store boundaries while preserving shared references and `Span`.
-- A spawned strand receives a graph copy of the parent's global slots. Globals
-  are therefore strand-local snapshots, not shared mutable state.
-- Object and array spread are lowered before bytecode generation. Each source
-  is evaluated once and array insertion routes through the VM `push` builtin.
-- Pending generic instances are attached to their owning module before
-  monomorphization, macro expansion and Raiser lowering. On-demand compilation
-  is scoped to the project image and restored afterwards.
-
-### Function Value Calling Convention
-
-Function references stored in variables are wrapped as closure pairs `{ fn: funcIdx, env: -1 }` (sentinel -1 = no env). This enables uniform calling: `compileClosureCall` extracts `fn`/`env`, then runtime-branches on `env == -1` to either append env as the LAST arg — it lands at R[arity], after the declared params — or skip it (non-capturing). Expression-level function identifiers (e.g., inside `{ fn: myFunc, env: ... }`) remain raw integers.
-
-Expression-body functions (e.g., lifted arrows `(x) => x * 2`): detected in `compileFuncBody` — if body is not a statement kind, compiled as `compileExpr + emitRet`.
-
-### Class Compilation — Methods as Closures
-
-Methods compile as top-level functions; `this` arrives as the closure env — appended last, so compileFuncBody(isMethod) binds `this` at R[arity]. Constructor creates object, sets default properties, stores method closures `{ fn: funcIdx, env: this }`, runs ctor body, returns `this`. Method calls flow through existing `CallIndirect` path via `LoadField`.
-
-```
-Point_new(x, y):
-  R_this = NewObject
-  StoreField(R_this, "x", nil)          ← default property
-  StoreField(R_this, "getX", closure)   ← { fn: getX_idx, env: R_this }
-  <compile ctor body>                   ← this.x = x; etc.
-  Ret R_this
-
-Point_getX():                           ← this = env, bound at R[arity]
-  LoadField(R[arity], "x") → Ret
-```
-
-### Register Allocation
-
-Linear bump allocator. `allocReg(s)` returns `s.nextReg++`. `resetTemps(s)` after each top-level statement resets `s.nextReg = s.locals.items.length` (preserves locals, reclaims temps). VM pre-allocates 256 register slots per frame.
-
-### Emit Helpers (context.ms)
-
-- `emitInst(s, inst)` — push instruction to code buffer
-- `addConst(s, val)` — push constant, return index
-- `allocReg(s)` — bump register counter, return index
-- `emitLoadConst(s, reg, val)` — addConst + LoadConst ABx
-- `emitRet(s, reg)` / `emitHalt(s)` — control flow
-- `emitBranchIfFalsy(s, reg)` — BeqI64 R,zero + Jump placeholder
-- `emitJumpPlaceholder(s)` / `patchJumpTo(s, idx, target)` — forward jump patching
-- `pushLoop(s, startIp)` / `popLoop(s)` / `currentLoop(s)` — loop state for break/continue
-- `declareLocal(s, name, reg)` / `resolveLocal(s, name)` — scope-based variable binding
-- `registerFunc(s, name, idx)` / `resolveFunc(s, name)` — function resolution
-- `declareEnum(s, name, val)` — enum member binding
-- `registerBuiltin(s, name, idx)` / `resolveBuiltin(s, name)` — builtin function binding
-
-## Relationship to src/raiser/
-
-```
-src/codegen/raiser/         src/raiser/
-(Compiler — AST knowledge)  (VM — no AST knowledge)
-         │                         │
-    generates ──────────→  RaiserModule
-    (bytecode.ms types)     (executes bytecode)
-                                   │
-                            vmDispatch.c (computed goto)
-                            dispatch.h (C FFI header)
-                            vm.ms (MetaScript fallback for objects/strings/calls)
-```
-
-The codegen imports types from `src/raiser/bytecode`, `src/raiser/value`, `src/raiser/module`. It produces a `RaiserModule` that the VM executes.
-
-## Available Opcodes (src/raiser/bytecode.ms)
-
-**Memory/project:** LoadConst (ABx), Move, LoadNil, CopyValue, LoadGlobal, StoreGlobal
-**i64 Arithmetic (6):** AddI64, SubI64, MulI64, DivI64, ModI64, NegI64 (all ABC)
-**i64 Compare-Branch (6):** BeqI64, BneI64, BltI64, BleI64, BgtI64, BgeI64 (ABC: if cond skip C)
-**Control (5):** Jump (Ax: signed 24-bit), Call, Ret, Halt, Print (all ABC)
-**Array (5):** NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush (all ABC)
-**Object (3):** NewObject, LoadField, StoreField (all ABC)
-**String:** ConcatStr, EqStr, NeStr, StrLen, StrByteLen, StrCharAt, StrSlice
-**Indirect Call (1):** CallIndirect (ABC: func index from register)
-**f64 Arithmetic (5):** AddF64, SubF64, MulF64, DivF64, NegF64 (all ABC)
-**f64 Compare-Branch (6):** BeqF64, BneF64, BltF64, BleF64, BgtF64, BgeF64 (all ABC)
-**Bitwise (6):** BitAnd, BitOr, BitXor, BitNot, ShiftLeft, ShiftRight (all ABC)
-**Beyond the core set:** IsNil (null tests), Spawn/Await (strands), Throw/Try/Catch/Finally/FinallyEnd (exceptions), Trap (ABx: fatal vmError, message K[Bx]) — new opcodes append at the enum END (vmDispatch.c hardcodes the numbers)
-
-Compare-branch semantics: `BgtI64 A B C` — if R[A] > R[B], skip C instructions (ip already incremented).
-
-## Testing
-
-Lane totals 2026-09-05 (`msc test` = file + transitive dep tests): rgen.ms lane 1460 across 54 files; src/raiser/vm.ms lane 446 across 21 files. eval.ms adds full-pipeline + project + Phase 3 coverage.
+## Tests
 
 ```bash
-# Codegen-only tests (parse → codegen → VM, no checker/transforms)
-msc test src/codegen/raiser/rgen.ms
-
-# Full-pipeline tests (parse → check → transform → codegen → VM)
-msc test src/codegen/raiser/eval.ms
+msc test src/codegen/raiser/rgen.ms    # parse → codegen → VM
+msc test src/codegen/raiser/eval.ms    # parse → check → transform → codegen → VM
 ```
 
-eval.ms uses `jsBackend=false` in `transformProgram` to enable all general transforms (lambdaLifting, tailCallLower, stringConcatFlatten, etc.). This means lifted arrows and other Phase 3 features are tested end-to-end.
+## Not verified here
 
-Test groups: codegen basics, variables, comparisons, if-else, while, do-while, for-loops, functions, strings, string ops, string methods, logical, complex programs, ternary, update expressions, export unwrap, arrays, objects, compound assignments, compound assign targets, enums, closures, build.ms, bitwise, classes (31 tests), Phase 3 match/basics/tail-call/arrow (10 tests), project (14 tests), project classes (4 tests).
+Both test commands pass. The rules from "Routine lookup" to "Pending generic instances" are carried over from the previous text and were not exercised one by one.
