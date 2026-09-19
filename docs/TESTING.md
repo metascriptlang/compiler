@@ -216,7 +216,7 @@ Convention, applied by `corpus/run.ms` and `guard/run.sh` alike:
   to the cwd (`resolveRuntimeDir`, `src/utils/path.ms`). A binary copied to a
   directory with no `std/` above it, run from a cwd without one, fails with
   `Undefined variable 'console'` rather than naming the missing tree (KNOWN-ISSUES
-  L50); run tests from the tree root.
+  L51); run tests from the tree root.
 - Probing a `runtime/` or `std/` edit with the installed `msc`: build a private
   home that symlinks every entry of `~/.metascript` except the tree you replace.
   A home missing `zig`/`vendor` fails with `'stdint.h' file not found`. A header

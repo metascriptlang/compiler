@@ -46,7 +46,7 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 - **`msc run <runner>` runs the harness, `MSC` names the subject** — `./msc run <runner>` alone inverts that: the harness gets the new compiler while every program is still built by the old one.
 - **One `msc` build at a time per tree, and never `rm -rf out` first** — both produce a red that names a different file every run; check `uptime` before trusting a timing.
 - **A `fixedbugs/bugNNN` test runs the source checker** — it proves red and green for a checker or codegen rule before any rebuild.
-- **`src/test/index.ms` is in no gate lane** — `src/index.ms` does not import it, so `lang/`, `fixedbugs/`, `handoff/` and `c/*.ms` run only when named directly; the aggregate itself does not type-check (`./msc check src/test/index.ms`; KNOWN-ISSUES L56). Run the file you touched with `msc test <file>`.
+- **`src/test/index.ms` is in no gate lane** — `src/index.ms` does not import it, so `lang/`, `fixedbugs/`, `handoff/` and `c/*.ms` run only when named directly; the aggregate itself does not type-check (`./msc check src/test/index.ms`; KNOWN-ISSUES L57). Run the file you touched with `msc test <file>`.
 
 ## When you fix a bug
 
