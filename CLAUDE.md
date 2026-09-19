@@ -39,11 +39,10 @@ MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger, ~10 min
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
 src/test/guard/run.sh                          # lifecycle guards (proven-red)
 
-# Narrow fix, want corpus confidence without the ~19-min run? Emit-diff
-# selector: --emit=c every corpus program with HEAD vs candidate, hash-diff
-# the C. Identical C ⇒ no lane outcome can change. PROVE selector sensitivity
-# on a known-affected PLAIN program first (test-block repros diff 0).
-# Recipe + traps: src/test/CLAUDE.md §5.3
+# tools/gate.sh narrows both corpus lanes by itself: it emits every program
+# with the merge-base compiler and the candidate and runs only the programs
+# whose C or JS differs (identical emit ⇒ no lane outcome can change).
+# By hand: MSCORPUS_ONLY=<exact,names>. Recipe + traps: src/test/CLAUDE.md §5.3
 
 msc run src/index.ms                              # build + run natively
 msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
@@ -70,7 +69,7 @@ Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 - **The machine is shared** — the gate waits while load exceeds the core count and never runs two lanes at once; do not start a second heavy lane beside it.
 - **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct (`src/test/CLAUDE.md` §5.2), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
 - **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
-- **A narrow checker/codegen rule has a cheaper proof** — the emit-diff selector (`src/test/CLAUDE.md` §5.3), then `tools/gate.sh --lanes build,suite` plus `MSCORPUS_FILTER` on the programs whose C changed.
+- **The corpus lanes run on what the change alters** — the gate emits all programs with the merge-base compiler and the candidate (~8 min) and hands corpus and SAN only the programs whose C or JS differs; it runs them whole under `--lanes` / `--release`, or when the diff touches `runtime/`, `std/`, `vendor/` or the corpus runner (`src/test/CLAUDE.md` §5.3).
 - **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
