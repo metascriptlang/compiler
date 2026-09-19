@@ -34,7 +34,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
 import { gensymSplicePrefix } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -1371,7 +1371,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
-	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable)) {
+	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable, ReadNeed.Items)) {
 		elemType = iterableElemType(d.forOfIterable.nodeType);
 	}
 	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
