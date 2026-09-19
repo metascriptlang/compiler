@@ -3,7 +3,7 @@
 // user-facing surface (re-exports + JSON class) so existing JSON.parse<T> /
 // JSON.stringify<T> patterns work without explicit imports.
 
-export { JsonKind, JsonValue, JsonValueData } from "std/serialize/json/types";
+export { JsonKind, JsonValue, JsonValueData, jsonToString, jsonToNumber, jsonToBoolean, jsonToInt32, jsonToInt64 } from "std/serialize/json/types";
 export {
 	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt,
 	jsonArrayOfStrings, jsonArrayOfBooleans, jsonArrayOfNumbers, jsonArrayOfFloat32,

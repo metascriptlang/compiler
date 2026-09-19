@@ -1,59 +1,15 @@
 // JSON Accessors — extension methods on JsonValue
 //
 // Convention-based protocol methods (compiler synthesizes implicit calls):
-//   value.asString() / asNumber() / asBoolean() / asInt32()  — coercion (Phase 2 protocol)
 //   value.getDynamicField("key")                              — dynamic field (Phase 1 protocol)
 // Direct call still works for explicit invocation.
 // Other accessors:
 //   value.at(idx), value.length
 
-import { JsonKind, JsonValue } from "./types";
+import { JsonKind, JsonValue, asString, asNumber, asBoolean, asInt64 } from "./types";
 import { jsonNull } from "./builder";
 
-// ===== Type Accessors (coercion protocol — `as<TargetType>`) =====
-
-export function asString(this v: JsonValue, def: string = ""): string {
-	if (v != null && v.kind == JsonKind.String) return v.strVal;
-	return def;
-}
-
-// Bridge Int↔Number: parser stores `30` as JsonKind.Int (intVal slot) and
-// `30.5` as JsonKind.Number (numVal slot). Coercion accepts EITHER variant
-// for asNumber / asInt* — the JSON wire type "number" doesn't distinguish.
-export function asNumber(this v: JsonValue, def: number = 0): number {
-	if (v == null) return def;
-	return match (v.kind) {
-		JsonKind.Number => v.numVal,
-		JsonKind.Int    => v.intVal as number,
-		_ => def,
-	};
-}
-
-export function asBoolean(this v: JsonValue, def: boolean = false): boolean {
-	if (v != null && v.kind == JsonKind.Bool) return v.boolVal;
-	return def;
-}
-
-export function asInt32(this v: JsonValue, def: int32 = 0): int32 {
-	if (v == null) return def;
-	return match (v.kind) {
-		JsonKind.Int    => v.intVal as int32,
-		JsonKind.Number => v.numVal as int32,
-		_ => def,
-	};
-}
-
-// Read int64 directly from either variant. Macros emit calls to this for
-// sized-int fields when decoding; runtime branch covers parser's int/number
-// split so user struct fields don't read uninitialized slots.
-export function asInt64(this v: JsonValue, def: int64 = 0 as int64): int64 {
-	if (v == null) return def;
-	return match (v.kind) {
-		JsonKind.Int    => v.intVal,
-		JsonKind.Number => v.numVal as int64,
-		_ => def,
-	};
-}
+export { asString, asNumber, asBoolean, asInt32, asInt64 } from "./types";
 
 // ===== Collection Accessors =====
 
