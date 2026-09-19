@@ -39,16 +39,102 @@ test "converter: decl parses and compiles when unused" {
 	assert c.ok;
 }
 
-test "converter: runtime-typed source param is rejected" {
-	const c = compileToC(`
-import { Node, NodeKind } from "std/meta";
-export converter bad(x: number): number {
-	return { kind: NodeKind.NumberLiteral, line: 1, column: 1, value: 7 };
+const SECONDS = `
+export type Seconds = distinct float64;
+`;
+
+function errorOf(source: string): string {
+	const c = compileToCWithStd(source);
+	return c.ok ? "" : c.error;
 }
-function main(): void { }
+
+test "converter: runtime source declares in the module owning its target" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds(n: float64): Seconds { return n as Seconds; }
+const s = toSeconds(1.5);
 `);
-	assert !c.ok;
-	if (!c.ok) { assert c.error.contains("compile-time"); }
+	assert e == "", e;
+}
+
+test "converter: runtime source declares in the module owning its source" {
+	const e = errorOf(`
+export interface Box { n: int32; }
+export converter boxToInt(b: Box): int32 { return b.n; }
+const b: Box = { n: 3 };
+const n = boxToInt(b);
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime source owns a Ref alias of its own struct" {
+	const e = errorOf(`
+export struct Cell { n: int32; }
+export type CellRef = Ref<Cell>;
+export converter cellToInt(c: CellRef): int32 { return c.n; }
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime source owns the nullable target it declares" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds(n: float64): Seconds | null { return n as Seconds; }
+`);
+	assert e == "", e;
+}
+
+test "converter: runtime source owning neither type is rejected" {
+	const e = errorOf(`
+export converter numToBool(n: float64): boolean { return n != 0; }
+`);
+	assert e.contains("converter 'numToBool' must be declared in the module that declares 'float64' or 'boolean'"), e;
+}
+
+test "converter: runtime converter for a type of another module is rejected" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/time.ms", entrySource: SECONDS },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { Seconds } from "./time";
+			export converter toSeconds(n: float64): Seconds { return n as Seconds; }
+		` },
+	];
+	const cCode = compileProjectToCWithStd(entries, "src/main.ms");
+	assert cCode.contains("converter 'toSeconds' must be declared in the module that declares 'float64' or 'Seconds'"), cCode;
+}
+
+test "converter: runtime converter with a default parameter is rejected" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds(n: float64 = 0): Seconds { return n as Seconds; }
+`);
+	assert e.contains("converter 'toSeconds' parameter cannot have a default value"), e;
+}
+
+test "converter: runtime converter with two parameters is rejected" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds(n: float64, m: float64): Seconds { return n as Seconds; }
+`);
+	assert e.contains("converter 'toSeconds' must take exactly one parameter"), e;
+}
+
+test "converter: generic runtime converter is rejected" {
+	const e = errorOf(SECONDS + `
+export converter toSeconds<T>(n: T): Seconds { return 0 as Seconds; }
+`);
+	assert e.contains("converter 'toSeconds' cannot be generic"), e;
+}
+
+test "converter: runtime converter inside a function is rejected" {
+	const e = errorOf(SECONDS + `
+function outer(): void {
+	converter toSeconds(n: float64): Seconds { return n as Seconds; }
+}
+outer();
+`);
+	assert e.contains("converter 'toSeconds' is only allowed at module level"), e;
+}
+
+test "converter: fmt preserves the converter keyword on a runtime source" {
+	const out = fmtSource("export converter toSeconds(n: float64): Seconds { return n as Seconds; }");
+	assert out.contains("converter toSeconds(n: float64): Seconds"), out;
 }
 
 test "converter: missing return annotation is rejected" {
