@@ -1413,7 +1413,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
-	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner (docs/NIM-REF.md §5)", line, col);
+	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
