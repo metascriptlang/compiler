@@ -2220,6 +2220,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		ctx.pendingSpawnThunk = false;
 		ctx.readonlyBoundary = ctx.table.current;
 	}
+	const paramSyms: Symbol[] = [];
 	let pi = 0;
 	for (const p of params) {
 		let pType = inferredType();
@@ -2233,6 +2234,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			paramSym.location = paramLocs[pi];
 		}
+		paramSyms.push(paramSym);
 		defineSymbol(ctx.table, paramSym);
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			sgRecordSym(ctx, paramLocs[pi].line, paramLocs[pi].column,
@@ -2241,6 +2243,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		}
 		pi += 1;
 	}
+	fnNode.paramSyms = paramSyms;
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 	} else {
@@ -2550,7 +2553,7 @@ function registerSynthesizedFunction(
 	addSymbolToScope(rootScope, instSym);
 	fnNode.resolvedSym = instSym;
 	fnNode.nodeType = fnType;
-	callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
+	fnNode.paramSyms = callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
 	addPendingInstance(fnNode);
 	return instSym;
 }

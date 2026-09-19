@@ -604,7 +604,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturn = instType.typeReturn != null ? instType.typeReturn : inferredType();
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
-		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -766,7 +766,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
 		ctorSym.state = SymbolState.Checked;
-		callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		bodyCtx.modulePath = savedModulePath;
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		truncateCallerExtensions(bodyCtx, extPreCount);

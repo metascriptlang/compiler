@@ -908,7 +908,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
 
-	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
+	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind == TypeKind.Function
@@ -1109,7 +1109,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
 			if (d.methodFlags != "extern" && !isGenericFn(d.methodFlags)) {
 				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
-				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
 				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
@@ -1149,7 +1149,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			if (node.paramLocations != null) {
 				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
 			}
-			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
+			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
@@ -1949,7 +1949,8 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] {
+	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
@@ -1984,6 +1985,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
 			paramSym.location = paramLocs[i];
 		}
+		paramSyms.push(paramSym);
 		defineSymbol(ctx.table, paramSym);
 		// Ref parity: params are implicitly initialized
 		markInitialized(ctx.initTracker, param);
@@ -2018,6 +2020,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	if (_slowTrace && _fb1 - _fb0 > 500) {
 		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym != null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
 	}
+	return paramSyms;
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {
@@ -3000,7 +3003,7 @@ export function checkProgramWithRegistryCancellable(
 
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
-registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void => { checkFunctionBody(ctx, sym, params, body, paramLocs); });
+registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 
 // ===== Tests =====
 
@@ -4810,4 +4813,54 @@ test "directive arg: undefined Identifier silently skipped (no crash)" {
 	// inject a bogus flag.
 	const ctx = checkSource("@passC(unresolvedConst);\n");
 	assert ctx.compilerFlags.indexOf("unresolvedConst") < 0;
+}
+
+function checkedStmts(input: string): Node[] {
+	const pr = parseSource(input);
+	if (!pr.ok) return [];
+	checkProgram(pr.value);
+	return (pr.value.data as ProgramData).programStmts;
+}
+
+function firstIdentNamed(node: Node | null, name: string): Node | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == name) return node;
+	let found: Node | null = null;
+	forEachChild(node, (child: Node): void => { if (found == null) found = firstIdentNamed(child, name); });
+	return found;
+}
+
+test "a function declaration carries its parameter symbols and its body resolves to them" {
+	const fn = checkedStmts("function f(a: int32, b: string): int32 { return a + b.length; }")[0];
+	assert fn.paramSyms != null && fn.paramSyms.length == 2;
+	const d = fn.data as FunctionDeclData;
+	assert firstIdentNamed(d.fnBody, "a")!.resolvedSym == fn.paramSyms[0];
+	assert firstIdentNamed(d.fnBody, "b")!.resolvedSym == fn.paramSyms[1];
+}
+
+test "an arrow carries its parameter symbols" {
+	const decl = checkedStmts("const g = (x: int32): int32 => x + 1;")[0];
+	const arrow = (decl.data as VariableDeclData).initializer;
+	assert arrow.paramSyms != null && arrow.paramSyms.length == 1;
+	assert firstIdentNamed((arrow.data as ArrowFunctionData).arrowBody, "x")!.resolvedSym == arrow.paramSyms[0];
+}
+
+test "a method and a constructor carry their parameter symbols with the receiver first" {
+	const cls = checkedStmts("class C { v: int32; constructor(v: int32) { this.v = v; } get(k: int32): int32 { return this.v + k; } }")[0];
+	let seen = 0;
+	for (const m of (cls.data as ClassDeclData).classBody) {
+		if (m.kind == NodeKind.ConstructorDecl) {
+			assert m.paramSyms != null && m.paramSyms.length == 2;
+			assert m.paramSyms[0].name == "this";
+			assert firstIdentNamed((m.data as ConstructorDeclData).ctorBody, "v")!.resolvedSym == m.paramSyms[1];
+			seen += 1;
+		}
+		if (m.kind == NodeKind.MethodDecl) {
+			assert m.paramSyms != null && m.paramSyms.length == 2;
+			assert m.paramSyms[0].name == "this";
+			assert firstIdentNamed((m.data as MethodDeclData).methodBody, "k")!.resolvedSym == m.paramSyms[1];
+			seen += 1;
+		}
+	}
+	assert seen == 2;
 }
