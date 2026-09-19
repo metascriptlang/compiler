@@ -90,6 +90,7 @@ class LiftCtx {
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msStringArray", "msRefArray")
 	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
+	scannedTypes: HashSet<Type>;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -2058,7 +2059,8 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 	// (e.g. IteratorResult from createIterator), monomorphized class types
 	// (HashMap<K,V>, HashSet<K>), and any other type without a declared AST node.
 	walkNode(program, (node: Node): Node => {
-		if (node.nodeType != null) {
+		if (node.nodeType != null && !lctx.scannedTypes.has(node.nodeType)) {
+			lctx.scannedTypes.add(node.nodeType);
 			// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 			// with the defining module's emission or codegen's ensureTypeInfoDef.
 			//
@@ -2203,6 +2205,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		nonCyclicCache: createNameSet(),
 		neededSeqHooks: createNameSet(),
 		seqElemTypes: [],
+		scannedTypes: new HashSet<Type>(),
 	};
 
 	for (const stmt of pd.programStmts) {
