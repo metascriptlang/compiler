@@ -1653,6 +1653,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
+	const skippableRoot = opts.targetOs == "solana" ? resolveRuntimeDir() : "";
 	let cji = 0;
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
@@ -1665,7 +1666,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			exit(1);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			if (opts.targetOs != "solana") {
+			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
+				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
+			} else {
 				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
 			}
