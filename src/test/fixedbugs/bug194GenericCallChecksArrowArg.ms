@@ -6,7 +6,9 @@
 // Root cause: the check of each argument against the formal substituted with the inferred bindings
 //             skipped every function literal, so an annotated arrow was never compared with it.
 // Fix: that check reads the literal's own checked type like any other argument's; only an argument
-//      whose type is unresolved, unknown or already an error is left out.
+//      whose type is unresolved, unknown or already an error is left out. A literal with an
+//      unannotated parameter was typed under the first binding, so when a later argument widens
+//      the binding it is typed again from the final one before it is compared.
 
 import { compileToCWithStd } from "../helpers";
 
@@ -15,6 +17,9 @@ import { Node, NodeKind } from "std/meta";
 function apply(f: (s: string, i: number) => string): string { return f("a", 1); }
 function applyG<T>(x: T, f: (s: T, i: number) => string): string { return f(x, 1); }
 function named(s: string, flag: boolean): string { return s; }
+class Animal { name: string = "a"; }
+class Dog extends Animal { bark: string = "w"; }
+function pick<T>(a: T, b: T, f: (v: T) => string): string { return f(b); }
 function fits(s: string, i: number): string { return s; }
 macro lengthOfMapped(n: Node): Node {
 	return { kind: NodeKind.MemberExpr, line: n.line, column: n.column, object: n.callee.object, property: "length", isOptional: false };
@@ -66,4 +71,13 @@ test "bug194: a callback that fits compiles, annotated, untyped, shorter or name
 test "bug194: a mismatched return type is refused in a generic call" {
 	const e = errorsOf("console.log(applyG(\"a\", (s: string, i: number): boolean => true));");
 	assert e.contains("Argument type mismatch in 'applyG' arg 1"), e;
+}
+
+test "bug194: an unannotated arrow is typed from the widened binding, not the first one" {
+	assert errorsOf("console.log(pick(new Dog(), new Animal(), a => a.name));") == "";
+	assert errorsOf("console.log(pick(new Dog(), new Animal(), (a: Animal): string => a.name));") == "";
+	const reads = errorsOf("console.log(pick(new Dog(), new Animal(), a => a.bark));");
+	assert reads.contains("'bark'"), reads;
+	const annotated = errorsOf("console.log(pick(new Dog(), new Animal(), (a: Dog): string => a.bark));");
+	assert annotated.contains("Argument type mismatch in 'pick' arg 2"), annotated;
 }
