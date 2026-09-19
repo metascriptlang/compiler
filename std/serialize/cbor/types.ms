@@ -54,6 +54,49 @@ export type CborValueData = match (kind: CborKind) {
 
 export type CborValue = Ref<CborValueData>;
 
+// ===== Type accessors =====
+
+export function asString(this v: CborValue, def: string = ""): string {
+	if (v != null && v.kind == CborKind.Text) return v.textVal;
+	return def;
+}
+
+// CBOR's Int variant covers both major 0 (unsigned) and major 1 (negative)
+// — wire type "integer". Float is a distinct variant. asNumber accepts
+// both Int and Float; asInt* accepts only Int (numeric truncation of float
+// is lossy and the user almost never wants it implicitly).
+export function asNumber(this v: CborValue, def: number = 0): number {
+	if (v == null) return def;
+	return match (v.kind) {
+		CborKind.Int   => v.intVal as number,
+		CborKind.Float => v.floatVal,
+		_ => def,
+	};
+}
+
+export function asBoolean(this v: CborValue, def: boolean = false): boolean {
+	if (v != null && v.kind == CborKind.Bool) return v.boolVal;
+	return def;
+}
+
+export function asInt32(this v: CborValue, def: int32 = 0): int32 {
+	if (v != null && v.kind == CborKind.Int) return v.intVal as int32;
+	return def;
+}
+
+export function asInt64(this v: CborValue, def: int64 = 0 as int64): int64 {
+	if (v != null && v.kind == CborKind.Int) return v.intVal;
+	return def;
+}
+
+// ===== Converters =====
+
+export converter cborToString(v: CborValue): string { return v.asString(); }
+export converter cborToNumber(v: CborValue): number { return v.asNumber(); }
+export converter cborToBoolean(v: CborValue): boolean { return v.asBoolean(); }
+export converter cborToInt32(v: CborValue): int32 { return v.asInt32(); }
+export converter cborToInt64(v: CborValue): int64 { return v.asInt64(); }
+
 // ===== Tests =====
 
 test "CborKind enum values are stable" {

@@ -8,7 +8,7 @@
 import { Buffer } from "std/core/buffer";
 
 // Re-exports
-export { CborKind, CborValue } from "./types";
+export { CborKind, CborValue, cborToString, cborToNumber, cborToBoolean, cborToInt32, cborToInt64 } from "./types";
 export {
 	cborInt, cborBytes, cborText, cborArray, cborMap, cborTextMap,
 	cborTag, cborBool, cborNull, cborUndefined, cborFloat, cborSimple,
