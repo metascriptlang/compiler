@@ -798,7 +798,7 @@ function instanceInitStatements(plan: ClassPlan): Node[] {
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (pd.propIsStatic) continue;
-		if (pd.propInitializer != null) out.push(fieldInitAssignment(member, null));
+		if (pd.propInitializer != null) out.push(fieldInitAssignment(member, null, null));
 		for (const inits of plan.memberInits) {
 			if (inits.isStatic || inits.fieldName != pd.propName) continue;
 			for (const s of inits.stmts) out.push(s);

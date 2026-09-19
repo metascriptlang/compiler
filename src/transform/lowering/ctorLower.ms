@@ -11,24 +11,26 @@
 import {
 	Node, NodeKind, ClassDeclData, PropertyDeclData, ConstructorDeclData,
 	BlockStmtData, ProgramData, ExportDeclData, DecoratedDeclData,
-	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData,
-	createNodeAt, SymbolKind, Type,
+	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData, BinaryExprData, MemberExprData,
+	createNodeAt, SymbolKind, Symbol, Type,
 } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
-import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeBlock, makeCall, makeIdent } from "../util";
+import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
 import { createFunction, voidType } from "../../checker/types";
-import { getCtorParamTypes, parentClassSymOf } from "../../checker/symbol";
+import { getCtorParamTypes, parentClassSymOf, makeSymbol } from "../../checker/symbol";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts } from "../testUtil";
 
-export function fieldInitAssignment(member: Node, receiverType: Type | null): Node {
+export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null): Node {
 	const pd = member.data as PropertyDeclData;
 	// Untyped initializers (an empty array literal) codegen by their
 	// declared field type, not by a guessed default.
 	if (pd.propInitializer.nodeType == null && member.nodeType != null) {
 		pd.propInitializer.nodeType = member.nodeType;
 	}
-	const receiver = makeTypedIdent("this", receiverType, member.location);
+	const receiver = thisSym != null
+		? makeTypedIdentResolved(thisSym, receiverType, member.location)
+		: makeTypedIdent("this", receiverType, member.location);
 	const target = makeMember(receiver, pd.propName, member.location);
 	if (target.nodeType == null && member.nodeType != null) {
 		target.nodeType = member.nodeType;
@@ -40,13 +42,13 @@ export function fieldInitAssignment(member: Node, receiverType: Type | null): No
 	return makeExprStmt(assign, member.location);
 }
 
-function fieldInitStatements(classNode: Node, cd: ClassDeclData): Node[] {
+function fieldInitStatements(classNode: Node, cd: ClassDeclData, thisSym: Symbol | null): Node[] {
 	const stmts: Node[] = [];
 	for (const member of cd.classBody) {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic && pd.propInitializer != null) {
-				stmts.push(fieldInitAssignment(member, classNode.nodeType));
+				stmts.push(fieldInitAssignment(member, classNode.nodeType, thisSym));
 			}
 		}
 	}
@@ -65,7 +67,8 @@ function isSuperCallStmt(stmt: Node): boolean {
 function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
-	const inits = fieldInitStatements(classNode, cd);
+	const thisSym = ctorNode.paramSyms != null && ctorNode.paramSyms.length > 0 ? ctorNode.paramSyms[0] : null;
+	const inits = fieldInitStatements(classNode, cd, thisSym);
 	if (inits.length == 0) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	let at = 0;
@@ -106,9 +109,10 @@ function implicitSuperStmt(classNode: Node, cd: ClassDeclData): Node {
 function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
 	const loc = classNode.location;
 	const stmts: Node[] = [];
+	const thisSym = makeSymbol("this", SymbolKind.Parameter, classNode.nodeType, false);
 	const superStmt = implicitSuperStmt(classNode, cd);
 	if (superStmt != null) stmts.push(superStmt);
-	for (const s of fieldInitStatements(classNode, cd)) { stmts.push(s); }
+	for (const s of fieldInitStatements(classNode, cd, thisSym)) { stmts.push(s); }
 	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, {
 		ctorParams: [],
 		ctorParamTypes: [],
@@ -118,6 +122,7 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
 	// methodToFunction widens typeChildren with the receiver only when a Function
 	// type is already present; without it `this` lifts as void*.
 	ctorNode.nodeType = createFunction([], [], voidType());
+	ctorNode.paramSyms = [thisSym];
 	cd.classBody.push(ctorNode);
 }
 
@@ -228,6 +233,21 @@ function remainingInitializers(input: string): number {
 	return n;
 }
 
+function synthesizedReceiverIsItsParam(input: string): boolean {
+	const result = parseInput(input);
+	if (!result.ok) return false;
+	const prog = lowerCtorInit(result.value, null as unknown as TransformContext);
+	const cd = getStmts(prog)[0].data as ClassDeclData;
+	for (const member of cd.classBody) {
+		if (member.kind != NodeKind.ConstructorDecl) continue;
+		if (member.paramSyms == null || member.paramSyms.length != 1) return false;
+		const init = ((member.data as ConstructorDeclData).ctorBody.data as BlockStmtData).statements[0];
+		const assign = (init.data as ExprStmtData).expr.data as BinaryExprData;
+		return (assign.left.data as MemberExprData).object.resolvedSym == member.paramSyms[0];
+	}
+	return false;
+}
+
 // ===== Tests =====
 
 test "field initializers move into the constructor" {
@@ -252,6 +272,10 @@ test "a class without a constructor gets one" {
 
 test "the synthesized constructor takes the initializer with it" {
 	assert remainingInitializers("class A { x: number = 1; }") == 0;
+}
+
+test "a synthesized constructor's receiver is its one parameter symbol" {
+	assert synthesizedReceiverIsItsParam("class A { x: number = 1; }");
 }
 
 test "a class with no initializers keeps its body" {
