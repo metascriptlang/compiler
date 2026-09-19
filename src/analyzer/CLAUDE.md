@@ -32,3 +32,5 @@ Deterministic reference counting for the C backend: `analyzeProgram(program, che
 ```bash
 msc test src/analyzer/index.ms
 ```
+
+A passing `--gc=drc` probe says nothing about ORC: without `MSGC_ORC` the cycle collector is a no-op (`runtime/drc.h`). A DRC change is proven by the corpus, which builds every program under both `--gc=drc` and `--gc=orc`, not by small leak probes.
