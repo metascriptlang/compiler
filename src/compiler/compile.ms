@@ -1476,7 +1476,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -1900,7 +1900,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
