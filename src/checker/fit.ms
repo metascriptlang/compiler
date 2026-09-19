@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
@@ -10,6 +10,7 @@ import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
+import { ensureShaped } from "./resolvePass";
 
 // ===== Operator Inference =====
 
@@ -668,20 +669,102 @@ function coercionMethodName(t: Type): string {
 	};
 }
 
+function refusedInsideOwnBody(ctx: CheckerContext, routine: Symbol | null, site: Node | null): boolean {
+	if (routine == null || routine != ctx.currentFunction) return false;
+	if (site != null) {
+		addError(ctx, "'" + routine.name + "' does not apply inside its own body — write the conversion explicitly", site.location.line, site.location.column);
+	}
+	return true;
+}
+
+function converterEnd(t: Type): Type {
+	let cur = withoutReadonlyView(t);
+	let depth = 0;
+	while (cur.kind == TypeKind.Alias && cur.typeReturn != null && depth < PEEL_MAX_DEPTH) {
+		cur = cur.typeReturn;
+		depth = depth + 1;
+	}
+	return cur;
+}
+
+function sameConverterEnd(a: Type, b: Type): boolean {
+	const x = converterEnd(a);
+	const y = converterEnd(b);
+	if (x == y) return true;
+	if (x.kind != y.kind) return false;
+	if ((x.kind == TypeKind.Ref || x.kind == TypeKind.Ptr) && x.typeReturn != null && y.typeReturn != null) {
+		return sameConverterEnd(x.typeReturn, y.typeReturn);
+	}
+	if (x.sym != null || y.sym != null) return x.sym == y.sym;
+	return sameType(x, y);
+}
+
+function converterReaches(produced: Type, target: Type): boolean {
+	if (sameConverterEnd(produced, target)) return true;
+	if (isMaybeType(target) && target.typeReturn != null) return sameConverterEnd(produced, target.typeReturn);
+	const nonNull = nonNullMemberOfNullable(target);
+	return nonNull != null && sameConverterEnd(produced, nonNull);
+}
+
+function runtimeConverterFor(ctx: CheckerContext, srcType: Type, targetType: Type, site: Node | null): Symbol | null {
+	const matches: Symbol[] = [];
+	for (const conv of ctx.runtimeConverters) {
+		ensureShaped(conv, ctx);
+		const fnType = conv.symbolType;
+		if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 1 || fnType.typeReturn == null) continue;
+		if (sameConverterEnd(fnType.typeChildren[0], srcType) && converterReaches(fnType.typeReturn, targetType)) matches.push(conv);
+	}
+	if (matches.length == 0) return null;
+	if (matches.length > 1) {
+		if (site != null) {
+			addError(ctx, "'" + matches[0].name + "' and '" + matches[1].name + "' both convert '" + typeDisplayName(srcType) + "' to '" + typeDisplayName(targetType)
+				+ "' — the compiler never chooses; call one explicitly", site.location.line, site.location.column);
+		}
+		return null;
+	}
+	return matches[0];
+}
+
+export function convertsWithoutRoutine(srcType: Type, targetType: Type): boolean {
+	if (slotTakesValue(srcType, targetType)) return true;
+	const src = representation(srcType);
+	const target = representation(targetType);
+	if (isNumeric(src) && isNumeric(target)) return true;
+	return sameType(src, target);
+}
+
+function representation(t: Type): Type {
+	let cur = converterEnd(t);
+	let depth = 0;
+	while (depth < PEEL_MAX_DEPTH) {
+		const body = distinctBody(cur);
+		if (body == null) return cur;
+		cur = converterEnd(body);
+		depth = depth + 1;
+	}
+	return cur;
+}
+
+export function tryApplyConverter(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node | null {
+	if (ctx.runtimeConverters.length == 0 || hasGenericParams(targetType)) return null;
+	const conv = runtimeConverterFor(ctx, srcType, targetType, expr);
+	if (conv == null || refusedInsideOwnBody(ctx, conv, expr)) return null;
+	const callee = createNodeAt(NodeKind.Identifier, { name: conv.name }, expr.location);
+	callee.resolvedSym = conv;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
+	const call = createNodeAt(NodeKind.CallExpr,
+		{ callee: callee, arguments: [expr], isDirectCall: true, resolvedOverloadIdx: -1 }, expr.location);
+	callCheckExpr(ctx, call, null);
+	if (call.nodeType == null || call.nodeType.kind == TypeKind.Error || isUnresolvedType(call.nodeType)) return null;
+	return call;
+}
+
 // Try to synthesize `expr.as<TargetType>()` coercion. Returns the synthesized
 // CallExpr on success, or `null as unknown as Node` if no matching extension exists
 // or the synthesized call doesn't type-check.
 //
 // Caller (e.g. fitNode, checkCallExpr arg coercion) substitutes the returned Node
 // for `expr` at its slot. Result type matches targetType exactly.
-function refusedInsideOwnBody(ctx: CheckerContext, ext: ExtensionMethod, site: Node | null): boolean {
-	if (ext.sym == null || ext.sym != ctx.currentFunction) return false;
-	if (site != null) {
-		addError(ctx, "'" + ext.sym.name + "' does not apply inside its own body — write the conversion explicitly", site.location.line, site.location.column);
-	}
-	return true;
-}
-
 export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
 	const methodName = asCoercionMethod(ctx, srcType, targetType, expr);
 	if (methodName == "") return null as unknown as Node;
@@ -726,7 +809,7 @@ function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type, 
 	if (targetType.typeName != "" && extRet.typeName != targetType.typeName) {
 		return "";
 	}
-	if (refusedInsideOwnBody(ctx, ext, site)) return "";
+	if (refusedInsideOwnBody(ctx, ext.sym, site)) return "";
 	return methodName;
 }
 
@@ -787,7 +870,7 @@ function needServedByOwnProtocol(ctx: CheckerContext, t: Type, need: ReadNeed, f
 	return match (need) {
 		ReadNeed.Items => declaresOwnProtocol(ctx, t, "toItems"),
 		ReadNeed.Text => declaresOwnProtocol(ctx, t, "toString"),
-		ReadNeed.Slot => formal != null && asCoercionMethod(ctx, t, formal) != "",
+		ReadNeed.Slot => formal != null && (runtimeConverterFor(ctx, t, formal, null) != null || asCoercionMethod(ctx, t, formal) != ""),
 		_ => false,
 	};
 }
@@ -797,7 +880,7 @@ export function valueOfInPlace(ctx: CheckerContext, node: Node, need: ReadNeed =
 	const valueOfExt = valueOfProtocolOf(ctx, node.nodeType);
 	if (valueOfExt == null) return false;
 	if (needServedByOwnProtocol(ctx, node.nodeType!, need, formal)) return false;
-	if (refusedInsideOwnBody(ctx, valueOfExt, node)) return false;
+	if (refusedInsideOwnBody(ctx, valueOfExt.sym, node)) return false;
 	const inner = createNodeAt(node.kind, node.data, node.location);
 	inner.nodeType = node.nodeType;
 	inner.resolvedSym = node.resolvedSym;
@@ -1070,6 +1153,11 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		addError(ctx, "type 'void' is not assignable to type '" + typeDisplayName(formal)
 			+ "' — a void call produces no value", expr.location.line, expr.location.column);
 		return expr;
+	}
+	const payloadSlot = isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType) ? formal.typeReturn : formal;
+	if (!hasGenericParams(formal) && !slotTakesValue(exprType, payloadSlot)) {
+		const converted = tryApplyConverter(ctx, expr, exprType, formal);
+		if (converted != null) return fitNode(ctx, converted, formal, converted.nodeType);
 	}
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr, ReadNeed.Slot, formal)) {
 		return fitNode(ctx, expr, formal, expr.nodeType);
