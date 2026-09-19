@@ -1088,8 +1088,12 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const pd = node.data as PropertyDeclData;
 			if (pd.propInitializer != null) {
 				const savedBoundary = ctx.staticInitBoundary;
-				if (pd.propIsStatic) ctx.staticInitBoundary = ctx.table.current;
+				if (pd.propIsStatic) {
+					ctx.staticInitBoundary = ctx.table.current;
+					openStaticReceiverScope(ctx, classType.sym);
+				}
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (pd.propIsStatic) closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
 			}
 		},
@@ -1104,7 +1108,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// Skip body check for extern (no body) and generic methods (body re-checked
 			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
 			if (d.methodFlags != "extern" && !isGenericFn(d.methodFlags)) {
+				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
 				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
@@ -1150,6 +1156,11 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 	};
 }
 
+function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): void {
+	openScope(ctx.table, ScopeKind.Block);
+	if (owner != null) ctx.table.current.symbols.set(getIdentId(ctx.table.identCache, "this"), owner!);
+}
+
 function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {
 	const pending: Node[] = [];
 	if (owner == null) return pending;
@@ -1187,7 +1198,9 @@ function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol |
 	ctx.currentFunction = null;
 	ctx.inLoop = false;
 	ctx.inSwitch = false;
+	openStaticReceiverScope(ctx, owner);
 	checkBlock(ctx, node);
+	closeScope(ctx.table);
 	ctx.staticBlockClass = savedClass;
 	ctx.staticBlockPending = savedPending;
 	ctx.currentFunction = savedFunction;

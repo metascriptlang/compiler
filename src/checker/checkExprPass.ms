@@ -460,6 +460,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsed(sym);
+			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
