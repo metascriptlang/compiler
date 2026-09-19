@@ -80,7 +80,8 @@ CONTRIBUTING.md). C-backend-only sub-pipeline runs after: closureCallMarker, poi
 rangeCheckInject, optionalCoercion.
 
 ### What Phase 4 (Analyzer) requires Phase 3 to have done
-`defer`→try/finally · all `for`→`while` · all `match`→if/else · destructuring→explicit
+`defer`→try/finally · all `for`→`while` · all `match`→if/else, or a C `switch` when the
+discriminant is ordinal (`SwitchStmt`, the one control kind the analyzer still dispatches) · destructuring→explicit
 accesses · `try`-expr→result checks · closures→(fn,env) pairs · per-type
 `_destroy/_copy/_sink/_wasMoved` bodies (`destructorLifting`) · generators→state machines.
 If the analyzer needs to know something the source still encodes structurally, the rule is
@@ -112,7 +113,7 @@ structs, per-type lifecycle hooks, etc.
 Phase 1 introduces the full surface syntax (~58 NodeKinds: literals, expressions, statements,
 declarations, error-handling). Phase 2 adds macro/check synthetic kinds. Phase 3 *removes*
 rich kinds (match, for, defer, try-expr, ternary-in-stmt) and adds lowered forms (while,
-if/else, state machines, lifted functions, temps). Phases 4–5 add ~0 new kinds — they
+if/else, ordinal switch, state machines, lifted functions, temps). Phases 4–5 add ~0 new kinds — they
 annotate/emit. Net: by Phase 5 the AST is a small, C-shaped subset.
 
 ---
