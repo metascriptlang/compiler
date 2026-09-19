@@ -2543,8 +2543,15 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
 | `toString(this T): string` | implicit string context | type concat with string |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
+| `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `as<TargetType>(this T): U` | `expr` → `expr.asU()` | T not assignable to U at use site |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+
+**Order**: a position that needs one form tries the protocol for that form before `valueOf` — `asU` for a
+slot of type `U` and for `as U`, `toItems` for `for..of` — and reads through `valueOf` only when the type
+declares none for it, or declares one for another target (a type with `asInt64` meeting an `int32` slot
+reads `valueOf`). `+` with a string reads `valueOf` first, as JavaScript does. The choice is made while
+checking, by the static type; the chosen call runs at run time.
 
 **Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.
 
@@ -2565,11 +2572,11 @@ const alias = count;               // the accessor itself: nothing failed
 ```
 
 It fires only where the bare read is already an error, at that error: a typed slot (declaration,
-assignment, return, non-overloaded or extension-method argument, `as U`); an operand that the operator
+assignment, return, non-overloaded or extension-method argument, `as U`; after `asU`); an operand that the operator
 check refuses (arithmetic, `===`/`!==`, relational, compound assignment) or a string concatenation, beside
 `toString`; a function tested for truthiness (`if`/`while`/`for`/ternary, `!`, the left of `&&`/`||`);
 unary `-`; an index or an indexed function; a spread; a `switch` whose case cannot equal it; `for..of`
-(before `toItems`); a receiver that lacks the member (before `toString`). Each of those positions is an
+(after `toItems`); a receiver that lacks the member (before `toString`). Each of those positions is an
 error for a function value on its own — "a function is always truthy", "unary '-' needs a numeric
 operand", "an array index must be a number" — so a type without `valueOf` gets that error. It never fires
 at a callee, an assignment or `++` target, a formal that still has generic parameters, a slot that
