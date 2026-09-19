@@ -2,7 +2,7 @@
 //
 // Coverage:
 //   - Phase 1: `getDynamicField` synthesis — `obj.foo` rewrites to `obj.getDynamicField("foo")`
-//   - Phase 2: `asTarget` family — `const n: T = expr` rewrites to `expr.asT()`
+//   - Phase 2: runtime converters — `const n: T = expr` calls the converter from expr's type to T
 //   - Cross-protocol: both protocols co-exist on same type
 //   - Edge cases: real field priority, LHS guard, generic interface, chaining
 //
@@ -112,14 +112,14 @@ function main(): void {
 }
 
 // =====================================================================
-// Phase 2: asTarget coercion protocol
+// Phase 2: runtime converters
 // =====================================================================
 
-test "E2E C: var-decl coercion via asNumber synthesizes" {
+test "E2E C: var-decl converter call synthesizes" {
 	const src = `
 interface Wrap { v: int32; }
 
-export function asNumber(this w: Wrap): number {
+export converter wrapToNumber(w: Wrap): number {
 	return w.v as number;
 }
 
@@ -132,11 +132,11 @@ function main(): void {
 	assert c.ok;
 }
 
-test "E2E C: call-arg coercion synthesizes" {
+test "E2E C: call-arg converter call synthesizes" {
 	const src = `
 interface Wrap { v: int32; }
 
-export function asNumber(this w: Wrap): number {
+export converter wrapToNumber(w: Wrap): number {
 	return w.v as number;
 }
 
@@ -151,11 +151,11 @@ function main(): void {
 	assert c.ok;
 }
 
-test "E2E C: return-statement coercion synthesizes" {
+test "E2E C: return-statement converter call synthesizes" {
 	const src = `
 interface Wrap { v: int32; }
 
-export function asNumber(this w: Wrap): number {
+export converter wrapToNumber(w: Wrap): number {
 	return w.v as number;
 }
 
@@ -170,12 +170,12 @@ function main(): void { const _ = unwrap(); }
 	assert c.ok;
 }
 
-test "E2E C: exact return-type match (asInt32 vs asInt64)" {
+test "E2E C: converter picked by exact target (int32 vs int64)" {
 	const src = `
 interface IntBox { v: int32; }
 
-export function asInt32(this b: IntBox): int32 { return b.v; }
-export function asInt64(this b: IntBox): int64 { return b.v as int64; }
+export converter boxToInt32(b: IntBox): int32 { return b.v; }
+export converter boxToInt64(b: IntBox): int64 { return b.v as int64; }
 
 function main(): void {
 	const x: IntBox = { v: 100 };
@@ -199,7 +199,7 @@ export function getDynamicField(this d: Doc, key: string): Doc {
 	return { tag: d.tag + "." + key };
 }
 
-export function asString(this d: Doc): string {
+export converter docToText(d: Doc): string {
 	return "[" + d.tag + "]";
 }
 

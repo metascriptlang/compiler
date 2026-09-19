@@ -17,10 +17,10 @@ function errorOf(source: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug197: asX does not apply inside its own body" {
+test "bug197: a converter does not apply inside its own body" {
 	const e = errorOf(`
 interface Box { n: int32; }
-function asString(this b: Box): string {
+converter boxToText(b: Box): string {
 	const t: string = b;
 	return t;
 }
@@ -31,7 +31,7 @@ function main(): void {
 }
 main();
 `);
-	assert e.contains("'asString' does not apply inside its own body"), e;
+	assert e.contains("'boxToText' does not apply inside its own body"), e;
 }
 
 test "bug197: valueOf does not apply inside its own body" {
@@ -51,12 +51,12 @@ main();
 	assert e.contains("'valueOf' does not apply inside its own body"), e;
 }
 
-test "bug197: another type's protocol still applies inside the body" {
+test "bug197: another type's converter still applies inside the body" {
 	const e = errorOf(`
 interface Inner { n: int32; }
 interface Outer { inner: Inner; }
-function asString(this i: Inner): string { return "inner"; }
-function asString(this o: Outer): string {
+converter innerToText(i: Inner): string { return "inner"; }
+converter outerToText(o: Outer): string {
 	const t: string = o.inner;
 	return t;
 }
