@@ -77,7 +77,7 @@ Deterministic Reference Counting: walks the post-transform AST, inserts
 `=destroy/=copy/=sink/=wasMoved` calls at the right points. Direct AST rewrite + scope-based
 cleanup + conservative last-read (Mohnen graph-free CFG). Three stages: hook lifting
 (`destructorLifting`) → injection (`inject.ms` + `classify` + `scope` + `lastRead`) →
-optimization (`optimize.ms`, redundant-op elimination). See the analyzer's own CLAUDE.md
+optimization (`optimize.ms`, redundant-op elimination). See [`ANALYZER.md`](ANALYZER.md)
 for the RC insertion-point table and the moveOrCopy decision tree. DRC convention:
 `msAlloc` returns rc=0 = sole owner; `msDecRefIsLast` true at rc==0 (rc counts the owners beyond the first).
 

@@ -59,6 +59,7 @@ docs/*
 !docs/LANG-RUNTIME.md
 !docs/LANG-STRUCT.md
 !docs/LANG-TEST.md
+!docs/ANALYZER.md
 !docs/BARE.md
 !docs/BUILD-PERF.md
 !docs/FEATURES.md
