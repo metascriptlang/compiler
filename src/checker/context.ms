@@ -1214,6 +1214,7 @@ export class CheckerContext {
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
+	preludeInterf: HashMap<string, Symbol[]>;
 }
 
 // ===== Constructors =====
@@ -1284,6 +1285,7 @@ export function createContext(): CheckerContext {
 		preludeCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
+		preludeInterf: new HashMap<string, Symbol[]>(),
 	};
 }
 
