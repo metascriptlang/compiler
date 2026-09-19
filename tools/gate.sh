@@ -283,7 +283,7 @@ select_programs() {
   sort -u "$EMIT/differ.c" "$EMIT/differ.js" "$EMIT/touched" >"$EMIT/only.corpus"
   sort -u "$EMIT/differ.c" "$EMIT/touched" >"$EMIT/only.san"
   line="gate: select $(fmt_secs $((SECONDS - t0))) · $n_all programs · $(grep -c . "$EMIT/differ.c" | tr -d ' ') differ in C · $(grep -c . "$EMIT/differ.js" | tr -d ' ') in JS · $(grep -c . "$EMIT/touched" | tr -d ' ') touched"
-  [ -s "$EMIT/only.corpus" ] || line="$line — no corpus program exercises this change; its repro belongs in corpus/programs"
+  [ -s "$EMIT/only.corpus" ] || line="$line — byte-neutral for the corpus; if this is a fix, its repro belongs in corpus/programs"
   say "$line"
   selected=1
 }
