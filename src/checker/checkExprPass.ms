@@ -27,7 +27,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, tryApplyConverter, convertsWithoutRoutine, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
+import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -575,10 +575,20 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					refuseFunctionTruthiness(ctx, d.left);
 					leftType = d.left.nodeType;
 				}
+				const leftConverted = operandConverter(ctx, d.operator, d.left, leftType, rightType, true);
+				if (leftConverted != null) { d.left = leftConverted; leftType = leftConverted.nodeType; }
+				const rightConverted = leftConverted != null ? null : operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
+				if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
 				if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
 				if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
-			} else if (isAsgn && operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
-				rightType = d.right.nodeType;
+			} else if (isAsgn) {
+				const rightConverted = operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
+				if (rightConverted != null) {
+					d.right = rightConverted;
+					rightType = rightConverted.nodeType;
+				} else if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
+					rightType = d.right.nodeType;
+				}
 			}
 			if (d.operator == "=" && isObjectShapeMismatch(rightType, leftType)) {
 				addError(ctx,

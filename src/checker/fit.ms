@@ -759,6 +759,35 @@ export function tryApplyConverter(ctx: CheckerContext, expr: Node, srcType: Type
 	return call;
 }
 
+function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
+	for (const conv of ctx.runtimeConverters) {
+		ensureShaped(conv, ctx);
+		const fnType = conv.symbolType;
+		if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 1 || fnType.typeReturn == null) continue;
+		if (sameConverterEnd(fnType.typeChildren[0], src) && converterReaches(fnType.typeReturn, target)) return true;
+	}
+	return false;
+}
+
+function operandTarget(t: Type): Type {
+	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
+	return t;
+}
+
+export function operandConverter(ctx: CheckerContext, op: string, operand: Node, leftType: Type | null, rightType: Type | null, selfIsLeft: boolean): Node | null {
+	if (leftType == null || rightType == null || ctx.runtimeConverters.length == 0) return null;
+	const bop = compoundBase(op);
+	if (binaryOperandClass(bop) == "" && bop != "<" && bop != ">" && bop != "<=" && bop != ">=") return null;
+	const self = selfIsLeft ? leftType : rightType;
+	const other = selfIsLeft ? rightType : leftType;
+	if (isUnresolvedType(other) || isUnknownType(other) || hasGenericParams(other) || other.kind == TypeKind.Null) return null;
+	const target = operandTarget(other);
+	if (sameConverterEnd(self, target) || convertsBetween(ctx, target, self)) return null;
+	if (ctx.extensionRegistry != null && resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) != null) return null;
+	return tryApplyConverter(ctx, operand, self, target);
+}
+
 // Try to synthesize `expr.as<TargetType>()` coercion. Returns the synthesized
 // CallExpr on success, or `null as unknown as Node` if no matching extension exists
 // or the synthesized call doesn't type-check.
