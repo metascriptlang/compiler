@@ -705,13 +705,7 @@ function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type):
 	if (methodName == "") return "";
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, methodName);
 	if (exts.length == 0) return "";
-	// Receiver and declared return may sit behind unnamed Ref wrappers
-	// (interface values) — peel for matching, same as the target peel above.
-	let srcForMatch = srcType;
-	if ((srcForMatch.kind == TypeKind.Ref || srcForMatch.kind == TypeKind.Ptr) && srcForMatch.typeReturn != null) {
-		srcForMatch = srcForMatch.typeReturn;
-	}
-	const ext = findFirstMatchingExt(exts, srcForMatch);
+	const ext = findFirstMatchingExt(exts, srcType);
 	if (ext == null) return "";
 	// Verify return type matches target exactly (asInt32 vs asInt64 disambiguation).
 	const extFnT = getExtFnType(ext);
