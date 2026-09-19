@@ -18,7 +18,7 @@ import {
 	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf,
 } from "../transform/util";
-import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
+import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
@@ -26,7 +26,7 @@ import {
 	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar,
 	addPre,
 	pushOuterStmts, popOuterStmts,
-	testStringRc,
+	testStringRc, classifyRc,
 } from "./scope";
 import { isLastReadInContext } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
@@ -189,7 +189,7 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	if (node.kind == NodeKind.HiddenDeref) {
 		hd.expr = processNode(hd.expr, dctx, DrcMode.Normal);
 		if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null) {
-			const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
+			const rcInfo = sinkClassify(node.nodeType, dctx);
 			if (rcInfo.needsCleanup) {
 				return passCopyToSink(node, dctx);
 			}
@@ -262,7 +262,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// double-frees (PARALOCK). A genuine discarded fire-and-forget future is captured by the
 	// ordinary discarded-call path, where this flag is false.
 	if (dctx.skipAwaitableCapture && isAwaitable(exprType)) return node;
-	const rcInfo = classifyType(exprType, dctx.ctx);
+	const rcInfo = classifyRc(exprType, dctx);
 	if (!rcInfo.needsCleanup) return node;
 	// Capture in temp, register for scope-exit destroy
 	const loc = node.location;
@@ -353,7 +353,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		if (isSpawnIntoSink && i == 0) argMode = DrcMode.Consumed;
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
 		if (isActorSendHandoff && i >= 1 && cd.arguments[i] != null && cd.arguments[i].nodeType != null) {
-			const sendRc = classifyType(cd.arguments[i].nodeType, dctx.ctx);
+			const sendRc = classifyRc(cd.arguments[i].nodeType, dctx);
 			if (sendRc.needsCleanup && sendRc.rcKind == RcKind.Ref && !isAtomicRef(cd.arguments[i].nodeType)) {
 				argMode = DrcMode.Consumed;
 			}
@@ -387,12 +387,12 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // stores a counted object — the consumer's destroy/decref WILL run on it, so the
 // materialization must incref it like any borrow. Ptr to non-Ref pointees
 // (Ptr<void>, Ptr<struct> from malloc/FFI) stays unmanaged — no header to count.
-function sinkClassify(t: Type | null, ctx: TransformContext): RcInfo {
+function sinkClassify(t: Type | null, dctx: DrcContext): RcInfo {
 	if (t != null && (t.kind == TypeKind.Ptr || t.kind == TypeKind.Cursor) && t.typeReturn != null) {
-		const inner = classifyType(t.typeReturn, ctx);
+		const inner = classifyRc(t.typeReturn, dctx);
 		if (inner.needsCleanup && inner.rcKind == RcKind.Ref) return inner;
 	}
-	return classifyType(t, ctx);
+	return classifyRc(t, dctx);
 }
 
 // Reference parity: passCopyToSink — when a non-identifier expression (ArrayAccess, MemberExpr)
@@ -411,7 +411,7 @@ function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
 }
 
 function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
-	const rcInfo = sinkClassify(srcExpr.nodeType, dctx.ctx);
+	const rcInfo = sinkClassify(srcExpr.nodeType, dctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 	reportFailedMove(srcExpr, dctx);
 
@@ -509,7 +509,7 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Reference parity (MemberExpr sinkArg): field access is a borrow —
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode == DrcMode.SinkArg && node.nodeType != null) {
-		const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
+		const rcInfo = sinkClassify(node.nodeType, dctx);
 		if (rcInfo.needsCleanup) {
 			// Always copy from MemberExpr: source field may belong to a shared object.
 			return passCopyToSink(node, dctx);
@@ -529,7 +529,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// array-owned object to be double-freed when both the field destructor and
 	// the array destructor decref it.
 	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null) {
-		const rcInfo = sinkClassify(node.nodeType, dctx.ctx);
+		const rcInfo = sinkClassify(node.nodeType, dctx);
 		if (rcInfo.needsCleanup) {
 			return passCopyToSink(node, dctx);
 		}
@@ -640,7 +640,7 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
 	const moveType = md.moveArg.nodeType;
 	if (moveType != null) {
-		const rcInfo = classifyType(moveType, dctx.ctx);
+		const rcInfo = classifyRc(moveType, dctx);
 		if (rcInfo.needsCleanup) {
 			if (md.moveArg.kind == NodeKind.Identifier) {
 				const srcName = (md.moveArg.data as IdentifierData).name;
@@ -686,7 +686,7 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// processAssignment inside each branch can find it and emit proper RC ops
 	// (copy/move). Without this, the branch assignment `$cond = src.field`
 	// falls through processAssignment (no resolvedSym, no VarInfo → no copy).
-	const rcInfo = classifyType(resultType, dctx.ctx);
+	const rcInfo = classifyRc(resultType, dctx);
 	registerVar(dctx, tmpName, rcInfo, false, tmpSym);
 	markUninitialized(dctx, tmpName);
 	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
@@ -752,12 +752,12 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// have TypeKind.Function but are not heap-allocated closures.
 	if (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method) return node;
 
-	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
+	const rcInfo = classifyRc(sym.symbolType, dctx);
 	if (!rcInfo.needsCleanup) {
 		// A Ptr-typed var holds a borrow — it owns no rc share to move, so sinking it
 		// into an owning slot must ALWAYS materialize a copy (incref), never a move.
 		if (mode == DrcMode.SinkArg || mode == DrcMode.Consumed) {
-			const sinkRc = sinkClassify(sym.symbolType, dctx.ctx);
+			const sinkRc = sinkClassify(sym.symbolType, dctx);
 			if (sinkRc.needsCleanup) {
 				if (node.nodeType == null) node.nodeType = sym.symbolType;
 				return passCopyToSink(node, dctx);
@@ -1232,7 +1232,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 // violation — fail loud instead of re-deriving the type downstream and masking the transform
 // that dropped it (which would silently emit the save-temp as C `double`).
 function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
-	if (memberExpr.nodeType != null) return classifyType(memberExpr.nodeType, dctx.ctx);
+	if (memberExpr.nodeType != null) return classifyRc(memberExpr.nodeType, dctx);
 	const md = memberExpr.data as MemberExprData;
 	console.log("DRC INTERNAL ERROR: RC member access '." + md.property + "' reached DRC without a type at " + memberExpr.location.line + ":" + memberExpr.location.column + " — a transform built it without setting nodeType");
 	return noRcInfo();
@@ -1241,7 +1241,7 @@ function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
 // Classify RC type of an array element
 function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 	if (arrayExpr.nodeType == null) return noRcInfo();
-	return classifyType(arrayExpr.nodeType, dctx.ctx);
+	return classifyRc(arrayExpr.nodeType, dctx);
 }
 
 // Emit wasMoved on MoveExpr source. Handles identifier, field, array element.
@@ -1629,7 +1629,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 		const pName = paramNames[pi];
 		// Skip closure env params (item 11) — they're managed by msClosure infrastructure
 		if (!isEnvParam(pName)) {
-			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
+			const pRcInfo = classifyRc(paramTypes[pi], dctx);
 			if (pRcInfo.needsCleanup) {
 				// Params are borrows registered as cursors (Nim default — no sink
 				// params, ea38c2a): the caller owns the value; stores inside the
@@ -1729,7 +1729,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	}
 	if (varType == null) return stmt;
 
-	const rcInfo = classifyType(varType, dctx.ctx);
+	const rcInfo = classifyRc(varType, dctx);
 
 	// Cursor detection must happen BEFORE the needsCleanup early-return.
 	// Even if the variable's own type doesn't need cleanup, it may be a pointer alias
@@ -1883,7 +1883,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 		const lhsIsNonOwning = bd.left.nodeType != null
 			&& (bd.left.nodeType.kind == TypeKind.Ptr || bd.left.nodeType.kind == TypeKind.Cursor);
 		if (!rcInfo.needsCleanup && !lhsIsNonOwning && bd.right.nodeType != null) {
-			rcInfo = classifyType(bd.right.nodeType, dctx.ctx);
+			rcInfo = classifyRc(bd.right.nodeType, dctx);
 		}
 		if (!rcInfo.needsCleanup) return stmt;
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
@@ -1899,7 +1899,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	}
 
 	if (bd.left.kind == NodeKind.HiddenDeref) {
-		const rcInfo = bd.left.nodeType != null ? classifyType(bd.left.nodeType, dctx.ctx) : noRcInfo();
+		const rcInfo = bd.left.nodeType != null ? classifyRc(bd.left.nodeType, dctx) : noRcInfo();
 		if (!rcInfo.needsCleanup) return stmt;
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
 		return moveOrCopy(stmt, bd.left, "", bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
@@ -1913,7 +1913,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	const vi = findVarInfoInContext(dctx, leftD.name);
 	let rcInfo: RcInfo = noRcInfo();
 	if (sym != null) {
-		rcInfo = classifyType(sym.symbolType, dctx.ctx);
+		rcInfo = classifyRc(sym.symbolType, dctx);
 	} else {
 		// Synthetic variables (e.g. $matchres from match lowering) lack resolvedSym.
 		// Use registered VarInfo to get the correct RcInfo.
@@ -2027,7 +2027,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		// we skip DRC on cursor init, so we incref at the return instead.
 		if (isCursorSym(expr.resolvedSym)) {
 			if (expr.nodeType != null) {
-				const rc = sinkClassify(expr.nodeType, dctx.ctx);
+				const rc = sinkClassify(expr.nodeType, dctx);
 				return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 			}
 		}
@@ -2035,12 +2035,12 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		if (vi != null) return false;  // function-local var — moved out via destructiveMoveVar at the return
 		// Not a local var (parameter or global) — check if RC pointer type
 		if (expr.nodeType != null) {
-			const rc = sinkClassify(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, name);
 		if (sym == null || sym.symbolType == null) return false;
-		const rc = sinkClassify(sym.symbolType, dctx.ctx);
+		const rc = sinkClassify(sym.symbolType, dctx);
 		// Only Ref types use msIncref. Strings/arrays use deep copy (handled by processReturn).
 		return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 	}
@@ -2049,7 +2049,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	// Reference parity: the reference reads n.typ on the node, never re-does scope lookup in DRC.
 	if (expr.kind == NodeKind.MemberExpr) {
 		if (expr.nodeType != null) {
-			const rc = sinkClassify(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
 		// Fallback: look up object type via symbol table (module-scope symbols only)
@@ -2061,7 +2061,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		const objType = objSym.symbolType;
 		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
 			if (objType.typeNames[fi] == md.property) {
-				const rc = sinkClassify(objType.typeChildren[fi], dctx.ctx);
+				const rc = sinkClassify(objType.typeChildren[fi], dctx);
 				return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 			}
 		}
@@ -2070,7 +2070,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	// ArrayAccess: use nodeType first, fallback to symbol lookup
 	if (expr.kind == NodeKind.ArrayAccess) {
 		if (expr.nodeType != null) {
-			const rc = sinkClassify(expr.nodeType, dctx.ctx);
+			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
 		const ad = expr.data as ArrayAccessData;
@@ -2079,7 +2079,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, arrName);
 		if (sym == null || sym.symbolType == null) return false;
 		if (sym.symbolType.typeReturn == null) return false;
-		const elemRc = sinkClassify(sym.symbolType.typeReturn, dctx.ctx);
+		const elemRc = sinkClassify(sym.symbolType.typeReturn, dctx);
 		return elemRc.needsCleanup && elemRc.rcKind == RcKind.Ref;
 	}
 
@@ -2087,7 +2087,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	// callee scope frees pointer before caller's field-assign incref runs. Extend
 	// this function when new return shapes (CastExpr, TernaryExpr) need handling.
 	if (expr.nodeType != null) {
-		const rc = sinkClassify(expr.nodeType, dctx.ctx);
+		const rc = sinkClassify(expr.nodeType, dctx);
 		if (rc.needsCleanup && rc.rcKind == RcKind.Ref) {
 			dctx.ctx.checkerCtx.errors.push({
 				message: "needsReturnIncref: unhandled NodeKind=" + (expr.kind as number) + " for Ref-typed return — extend inject.ms",
@@ -2109,7 +2109,7 @@ function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node 
 	const td = stmt.data as ThrowStmtData;
 	const at = td.throwArg.nodeType;
 	if (at == null || at.kind == TypeKind.String) return stmt;
-	const rc = classifyType(at, dctx.ctx);
+	const rc = classifyRc(at, dctx);
 	if (!rc.needsCleanup) return stmt;
 	if (td.throwArg.kind == NodeKind.Identifier) {
 		td.throwArg = processNode(td.throwArg, dctx, DrcMode.Consumed);
@@ -2120,7 +2120,7 @@ function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node 
 		const tmpDecl = makeVarDecl(excSym.name, td.throwArg, DeclKind.Const, sloc);
 		tmpDecl.nodeType = at;
 		tmpDecl.resolvedSym = excSym;
-		const rcCopy = sinkClassify(at, dctx.ctx);
+		const rcCopy = sinkClassify(at, dctx);
 		const increfFn = rcCopy.copyFn != "" ? rcCopy.copyFn : "msIncref";
 		const incref = makeExprStmt(
 			makeCall(makeIdent(increfFn, sloc), [makeIdentResolved(excSym, sloc)], sloc), sloc);
@@ -2135,7 +2135,7 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const retSym = freshTempSym(dctx.ctx, "ret", arg.nodeType);
 	const tmpDecl = makeVarDecl(retSym.name, arg, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = retSym;
-	const rc = sinkClassify(arg.nodeType, dctx.ctx);
+	const rc = sinkClassify(arg.nodeType, dctx);
 	const increfFn = rc.copyFn != "" ? rc.copyFn : "msIncref";
 	const incref = makeExprStmt(
 		makeCall(makeIdent(increfFn, loc), [makeIdentResolved(retSym, loc)], loc), loc);
@@ -2175,7 +2175,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		//         return _globalArray (module-level variable), etc.
 		// Gate on ORIGINAL kind to avoid re-copying a passCopyToSink-produced temp.
 		if (origKind == NodeKind.ArrayAccess || origKind == NodeKind.MemberExpr) {
-			const retRc = classifyType(d.argument.nodeType, dctx.ctx);
+			const retRc = classifyRc(d.argument.nodeType, dctx);
 			if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
@@ -2190,7 +2190,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 			const vi = findVarInfoInFunction(dctx, origName);
 			if (vi == null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
-				const retRc = classifyType(d.argument.nodeType, dctx.ctx);
+				const retRc = classifyRc(d.argument.nodeType, dctx);
 				if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 					d.argument = passCopyToSink(d.argument, dctx);
 				}
@@ -2285,7 +2285,7 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 		const catchType = stmt.nodeType;
 		let handled = false;
 		if (d.catchName != "" && catchType != null && !isUnresolvedType(catchType) && catchType.kind != TypeKind.Error) {
-			const rcInfo = classifyType(catchType, dctx.ctx);
+			const rcInfo = classifyRc(catchType, dctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);
 				registerVar(dctx, d.catchName, rcInfo, false, noSym);
@@ -2495,7 +2495,7 @@ test "string type needs cleanup with String rcKind" {
 	const dctx = testDrcContext("const x: string = \"\";");
 	const strType = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
 	if (strType != null && strType.symbolType != null) {
-		const rc = classifyType(strType.symbolType, dctx.ctx);
+		const rc = classifyRc(strType.symbolType, dctx);
 		assert rc.needsCleanup;
 		assert rc.rcKind == RcKind.String;
 	}
@@ -2505,7 +2505,7 @@ test "number type needs no cleanup" {
 	const dctx = testDrcContext("const n: number = 0;");
 	const numSym = lookupSymbol(dctx.ctx.checkerCtx.table, "n");
 	if (numSym != null && numSym.symbolType != null) {
-		const rc = classifyType(numSym.symbolType, dctx.ctx);
+		const rc = classifyRc(numSym.symbolType, dctx);
 		assert !rc.needsCleanup;
 	}
 }
@@ -2744,7 +2744,7 @@ test "classifyArrayElementRc returns RC info for string array" {
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "arr");
 	// arr is Ref<Array<string>>: typeReturn = Array<string>, its typeReturn = string element
 	if (sym != null && sym.symbolType != null && sym.symbolType.typeReturn != null && sym.symbolType.typeReturn.typeReturn != null) {
-		const rc = classifyType(sym.symbolType.typeReturn.typeReturn, dctx.ctx);
+		const rc = classifyRc(sym.symbolType.typeReturn.typeReturn, dctx);
 		assert rc.needsCleanup;
 		assert rc.rcKind == RcKind.String;
 	}
@@ -2768,7 +2768,7 @@ test "sinkFn field populated for string type" {
 	const dctx = testDrcContext("const x: string = \"\";");
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
 	if (sym != null && sym.symbolType != null) {
-		const rc = classifyType(sym.symbolType, dctx.ctx);
+		const rc = classifyRc(sym.symbolType, dctx);
 		assert rc.sinkFn != "";
 	}
 }

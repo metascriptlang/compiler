@@ -8,12 +8,13 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
-import { RcInfo, RcKind, noRcInfo } from "./classify";
+import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol, Type } from "../ast/node";
+import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
+import { createArray, stringType } from "../checker/types";
 
 // Null symbol constant — used when DRC-generated temps have no checker symbol.
 export const noSym: Symbol | null = null;
@@ -76,6 +77,7 @@ export interface DrcContext {
 	                                // decision under it is errFailedMove (reference parity)
 	capturedNodes: Node[];
 	capturedSyms: Symbol[];
+	rcMemo: HashMap<Type, RcInfo>;
 	skipAwaitableCapture: boolean;  // set ONLY while walking a non-RC binding/cond initializer:
 	                                // ensureDestruction must not capture a future there (the
 	                                // await/spawn lowering's stepper owns it — PARALOCK). The
@@ -105,7 +107,17 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		parkedInitDepth: 0,
 		capturedNodes: [],
 		capturedSyms: [],
+		rcMemo: new HashMap<Type, RcInfo>(),
 	};
+}
+
+export function classifyRc(t: Type | null, dctx: DrcContext): RcInfo {
+	if (t == null) return noRcInfo();
+	const hit = dctx.rcMemo.get(t);
+	if (hit != null) return hit;
+	const info = classifyType(t, dctx.ctx);
+	dctx.rcMemo.set(t, info);
+	return info;
 }
 
 function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
@@ -545,4 +557,18 @@ test "add and flush cycle" {
 	flushPending(dctx, target);
 	assert !hasPending(dctx);
 	assert target.length == 1;
+}
+
+test "classifyRc answers each type once with classifyType's info" {
+	const dctx = testDrcCtx();
+	const t = createArray(stringType());
+	const first = classifyRc(t, dctx);
+	assert first.destroyFn == classifyType(t, dctx.ctx).destroyFn;
+	assert dctx.rcMemo.size == 1;
+	const again = classifyRc(t, dctx);
+	assert again.destroyFn == first.destroyFn;
+	assert again.rcKind == first.rcKind;
+	assert dctx.rcMemo.size == 1;
+	assert classifyRc(null, dctx).rcKind == RcKind.None;
+	assert dctx.rcMemo.size == 1;
 }
