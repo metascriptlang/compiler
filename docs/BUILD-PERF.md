@@ -368,6 +368,14 @@ Each phase lands independently:
 2. `msc test src/index.ms` — test suite 2768 pass / 8 fail (baseline unchanged)
 3. Cold native self-build with `--time`: measure Phase A delta
 
+How to time anything on this shared machine:
+
+- Report the **minimum** round per cell, never a sum or a mean. Run an untimed warmup first. A summed benchmark at load 4-54 once reported `direct` 0.74x of `tree`, and the min-of-rounds rerun of the same sweep gave 1.38-1.45x, with the opposite sign (2026-08-11).
+- Interleave the cells within a round and reverse their order on alternate rounds. A fixed order measures the later cells warmer.
+- Record `uptime` with the result. Ratios between interleaved cells survive load, absolute numbers do not, so say which one a conclusion rests on.
+- If runs of one binary disagree on the sign of a difference, the measurement is broken. Fix it before averaging anything.
+- `msc run` and a plain `msc build` compile at `-O0`. Time C output built with `--danger`.
+
 ## Non-goals
 
 - Shipping `msc` compiled with `--gc=none` — breaks `msc lsp` (long-running, would leak)
