@@ -698,65 +698,90 @@ export { Token } from "./lexer/token";
 export * from "./utils";
 ```
 
-### Converter Declarations (IMPLEMENTED 2026-07-31 — main `9ce47eb`; V1 limits: target matched by simple nominal name, build.ms global-import tier awaits build.ms globalImports)
+### Converter Declarations
 
-Third routine kind besides `function` and `macro`. Decided 2026-07-30.
+Compile-time source since 2026-07-31 (main `9ce47eb`); runtime source since 2026-09-20 (`wt/inbox-directive`).
+
+Third routine kind besides `function` and `macro`: a routine the COMPILER calls where a value of its
+source type meets its target type. It is looked up by the PAIR of types, never by its name.
 
 ```typescript
-// function  — runs at runtime,      invoked explicitly by code
+// function  — invoked explicitly by code
 // macro     — runs at compile time, invoked explicitly by code (AST -> AST)
-// converter — runs at compile time, invoked BY THE COMPILER at a type boundary
-export converter element(node: Node): VNode { /* macro-engine body */ }
+// converter — invoked BY THE COMPILER at a type boundary
+export converter element(node: Node): VNode { /* macro-engine body: source is Node */ }
+export converter jsonToInt32(v: JsonValue): int32 { return v.asInt32(); }   // runtime body
 ```
 
-Rules (each closes a known converter footgun):
+The source type picks the body's domain: `Node` makes the body a macro that runs at compile time and
+expands in place (JSX, `docs/LANG-JSX.md`); any other source makes it an ordinary function that runs at
+run time, and the compiler inserts a call to it. Both are callable by name like any routine.
 
-1. **Source restriction**: exactly one parameter, and its type MUST be compile-time-only
-   (`Node`). Runtime-source converters (`converter toBool(x: int): bool`) are deliberately
-   NOT supported: that is the footgun quadrant (changes meaning of live code).
-2. **Explicit target**: the return annotation states the POST-EXPANSION type. The expansion
-   result is re-checked normally against the position — the compiler never trusts the promise.
-3. **Scope law**: a converter applies only where its symbol is in scope
-   (module import, or project-wide via build.ms global import). Nearer scope shadows.
-4. **Ambiguity is an error**: two in-scope converters with the same source->target pair =
-   compile error at import time. The compiler never chooses.
-5. **No chaining**: one application max; if the produced type still mismatches, normal error.
-6. **Never inside overload scoring**: applies only at positions whose expected type is already
-   settled (return, resolved call arg, annotated decl). An overloaded call where the choice
-   would depend on conversion = error demanding an explicit call. (Applying converters
-   inside overload scoring would make macro expansion reentrant; we refuse.)
-7. **Explicit call stays legal**: a converter is callable by name like a macro.
+Rules for a runtime-source converter (each is pinned in `src/test/c/converter.ms`; the quoted text is
+the diagnostic):
 
-Safety invariant (the reason this cannot become `if 5:`): the source type cannot exist at
-runtime, so every site a converter can fire at is a compile ERROR today. A converter can
-only turn errors into code — it can never change the meaning of code that already compiles.
+1. **Shape**: module level, exactly one parameter, no default value, not generic, an explicit return
+   type — "converter 'f' is only allowed at module level", "must take exactly one parameter",
+   "parameter cannot have a default value", "cannot be generic", "requires an explicit return type".
+2. **Ownership**: declared in the module that declares its source type or its target type —
+   `converter numToBool(n: float64): boolean` is "converter 'numToBool' must be declared in the module
+   that declares 'float64' or 'boolean'", so no import can change how two builtins, or another
+   module's type, convert. A `Ref` alias, `T | null` and `Maybe` are looked through to the named type.
+3. **Scope**: in scope like any symbol — declared here, imported by name, re-exported through a hub, or
+   from the prelude (the JSON converters). A converter that is not in scope never applies.
+4. **Lookup by type identity**: the source must be exactly the value's type (an alias is looked through,
+   a subtype is not); two types named `Meters` in two modules do not share a converter. Two in-scope
+   converters for one pair are an error at the use: "'a' and 'b' both convert 'Box' to 'int32' — the
+   compiler never chooses; call one explicitly".
+5. **Where it applies**: a typed slot (declaration, assignment, field, return), an argument of a call
+   with one signature, `as U` when `as` has no conversion of its own (numeric ↔ numeric and distinct ↔
+   its base stay casts), and an operand whose other side has a static type the operand does not have
+   (arithmetic, comparison, equality, the right side of `op=`, `+` with a string). Not at: a condition,
+   a receiver (`b.length` is still "no member"), an assignment or `++` target, a formal with open
+   generic parameters, or overload scoring (an overloaded call needs a candidate that takes the value).
+   For `+` with a string a type that declares `valueOf` reads `valueOf` first, as JavaScript does.
+6. **One step**: the converter's return type must be the target, or the target is `T | null` of it;
+   `float64 → Seconds` and `Seconds → Minutes` do not make `float64 → Minutes`.
+7. **No self-application**: inside its own body the converter does not apply ("'boxToText' does not
+   apply inside its own body — write the conversion explicitly"), and neither does it in any routine its
+   body reaches through resolved calls ("'boxToInt' is applied implicitly in 'half', which 'boxToInt'
+   reaches through its calls — the conversion would recurse"). The reference compiler builds that
+   program and it dies at run time; measured here before the rule: C built and exited silently, JS
+   overflowed the stack.
 
-Design note: languages whose `converter` body is a runtime procedure apply it as a runtime call;
-ours runs in the macro engine at compile time, because our source domain (AST) only exists at
-compile time — mirror constraints, not a preference.
+Measured on every corpus lane (C, ORC, danger, JS, ESM, identical output):
 
-Design note 2 (2026-09-13, revisited against the reference). The reference matches a converter's
-DESTINATION against the formal with the ordinary type relation, accepting equal-or-generic and not
-subtype, and tries it at every fit site — so do we: the JSXElement/JSXFragment
-arms run wherever the expression appears and take the position's expected type, which is why a
-declaration, an argument, a field, a return and a nullable slot all lower alike. The one axis where
-we are deliberately narrower is rule 1: the reference allows a RUNTIME source type, so
-`converter toBool(x: int): bool` is legal there and `if 5:` starts compiling project-wide the moment
-someone imports it. That erodes a whole class of type errors everywhere, invisibly. We keep the AST
-source restriction instead, and we lose less than it looks:
+| program | shows | stdout |
+|---|---|---|
+| `784-runtimeConverter` | slot, argument, return, `as U`, nullable slot, generic formal and condition keep the value | `slot 41\|arg 42\|ret 43\|as box#44\|maybe 1.5\|generic 45\|cond yes` |
+| `785-runtimeConverterOperand` | operands, `+=`, comparison, equality, concat; a converter to `boolean` does not touch a condition | `add 45\|radd 46\|mul 88\|acc 44\|gt true\|eq true\|text n=box#44\|cond yes` |
+| `786-jsonConverter` | parsed JSON through the prelude converters | `slot Ann 41 true 1.5\|arg 41\|as 41\|op 42 hi Ann true 3` |
+| `787-cborConverter` | CBOR converters imported by name | `slot Ann 41\|arg 41\|as 41\|op 42 hi Ann true` |
 
-- The newtype ergonomics a runtime converter is usually reached for are covered by `distinct` +
-  one-way `BrandWiden` + the `valueOf` protocol, and by the `as<TargetType>` protocol (below), which IS
-  runtime-source conversion — opt-in per type, named by convention, owned by whoever declares the type.
-- Our converter body is a MACRO, so it can expand one node into an arbitrary tree (`<div/>` becomes a
-  whole `createComponent`/`el`/`dynText` program). A reference converter is a runtime proc and cannot
-  do this at all; an explicit macro call at every site is its only equivalent. On that axis we are the
-  more powerful of the two.
+Before these converters `j.age + 1` on a parsed JSON value was "operator '+' cannot be applied",
+`"hi " + j.name` printed `hi <object>` on C, and `j.age > 40` compiled without reading the number.
 
-If the source restriction is ever lifted, the shape to lift it into is the orphan rule, not the
-reference's: allow a runtime source only when the TARGET is a nominal type owned by the converter's
-own module. `converter toSeconds(x: number): Seconds` becomes legal, `converter toBool(x: number): boolean`
-stays illegal, and no import can weaken the type rules of a type it does not own.
+Not verified: a converter whose source or target is a generic instance; `build.ms` `globalImports` as
+the scope of a runtime converter; the cost of rule 7 on a program with many converters (on
+`src/index.ms`, which declares none, an interleaved A/B was below the noise of a loaded machine).
+
+Known gap: `T | null` of a value type is cached by type name, so a converter to `a.ms`'s `Seconds` does
+not reach a `Seconds | null` slot once `b.ms`'s own `Seconds | null` was built first
+(`~/metascript/.inbox/compiler/2026-09-20-maybe-cache-keyed-by-type-name-mixes-modules.md`).
+
+Design note (2026-09-20). The reference compiler has the same routine kind and the same insertion
+points; three places are deliberately narrower here. It lets any module declare any pair (`if 5:`
+starts compiling project-wide once `converter toBool(x: int): bool` is imported) — rule 2 closes that.
+It takes the first of two converters for one pair silently — rule 4 refuses. It applies converters
+inside overload scoring and to both operands (`j + j` gives `0`) — rule 5 applies them only where the
+target is already settled and to the operand whose other side is typed. It replaces the old
+`as<TargetType>` protocol, which found `asU` by the TARGET'S NAME, so any method called `asString`
+became an implicit conversion (`asString(this arr: uint8[])` in std made `const s: string = bytes`
+compile and run) — a converter is found by its pair of types, and naming a method `asInt32` now means
+nothing to the compiler (`const s: string = bytes` now reaches the `string`-slot gap of
+`~/metascript/.inbox/compiler/2026-09-19-union-into-string-slot-accepted.md`: the checker says nothing and
+clang rejects the C): `const n: int32 = w` with only `asInt32(this w: W)` declared is "Type 'W' is not
+assignable to type 'int32' — … (convert explicitly or declare a converter to 'int32')".
 
 First user: JSX boundary lowering — see `docs/LANG-JSX.md` "Boundary Lowering via Converter".
 
@@ -2544,13 +2569,14 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `toString(this T): string` | implicit string context | type concat with string |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
-| `as<TargetType>(this T): U` | `expr` → `expr.asU()` | T not assignable to U at use site |
+| `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
 
-**Order**: a position that needs one form tries the protocol for that form before `valueOf` — `asU` for a
-slot of type `U` and for `as U`, `toItems` for `for..of` — and reads through `valueOf` only when the type
-declares none for it, or declares one for another target (a type with `asInt64` meeting an `int32` slot
-reads `valueOf`). `+` with a string reads `valueOf` first, as JavaScript does. The choice is made while
+**Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
+to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
+reads through `valueOf` only when the type has none for it, or has one for another target (corpus
+`782-protocolSiteBeforeValueOf`: a `Box` with a converter to `string` meeting an `int32` slot reads
+`valueOf`, `fallback 100`). `+` with a string reads `valueOf` first, as JavaScript does (`concat v=100`). The choice is made while
 checking, by the static type; the chosen call runs at run time.
 
 **Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.
@@ -2572,7 +2598,7 @@ const alias = count;               // the accessor itself: nothing failed
 ```
 
 It fires only where the bare read is already an error, at that error: a typed slot (declaration,
-assignment, return, non-overloaded or extension-method argument, `as U`; after `asU`); an operand that the operator
+assignment, return, non-overloaded or extension-method argument, `as U`; after a converter); an operand that the operator
 check refuses (arithmetic, `===`/`!==`, relational, compound assignment) or a string concatenation, beside
 `toString`; a function tested for truthiness (`if`/`while`/`for`/ternary, `!`, the left of `&&`/`||`);
 unary `-`; an index or an indexed function; a spread; a `switch` whose case cannot equal it; `for..of`
@@ -2581,7 +2607,7 @@ error for a function value on its own — "a function is always truthy", "unary 
 operand", "an array index must be a number" — so a type without `valueOf` gets that error. It never fires
 at a callee, an assignment or `++` target, a formal that still has generic parameters, a slot that
 already takes `T`, a position that accepts every type (JSX children and attributes, `console.log`,
-`String(x)`, `typeof`), or inside overload resolution: like `as<T>`, an overloaded call needs a candidate
+`String(x)`, `typeof`), or inside overload resolution: like a converter, an overloaded call needs a candidate
 that takes `T` itself, otherwise write `x()`.
 One step only: the result of a `valueOf` is not read again. The receiver matches by type name, so another
 distinct of the same shape does not borrow it, and the extension must be visible like any other (imported
@@ -2609,54 +2635,34 @@ Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User`
 
 **Read-only**: synthesis fires only on the read path. `obj.foo = x` does NOT route through `getDynamicField` — the compiler's `leftPartOfAsgn` guard ensures writes still error strictly.
 
-##### `as<TargetType>` — opt-in primitive coercion
+##### Runtime converters
 
-Naming convention: `as` + PascalCase(target type name). The compiler tries `expr.asU()` synthesis when `expr`'s type is not directly assignable to `U` at any of: variable initializer, assignment RHS, function argument, return value.
+The implicit conversion of a value into another type at a slot, an argument, `as U` or an operand is a
+`converter`, declared beside the type — rules and measurements in
+[Converter Declarations](#converter-declarations).
+The old `as<TargetType>` protocol (a method named `as` + target name) is gone; such methods are ordinary
+methods now.
 
-```ms
-interface Wrap { v: int32; }
-
-export function asNumber(this w: Wrap): number { return w.v as number; }
-export function asString(this w: Wrap): string { return "<" + (w.v as number).toString() + ">"; }
-
-const w: Wrap = { v: 42 };
-const n: number = w;        // synthesized: w.asNumber() → 42
-const s: string = w;        // synthesized: w.asString() → "<42>"
-```
-
-| Target type | Method name |
-|---|---|
-| `string` | `asString` |
-| `number` | `asNumber` |
-| `boolean` | `asBoolean` |
-| `int8/16/32/64` | `asInt8/16/32/64` |
-| `uint8/16/32/64` | `asUint8/16/32/64` |
-| `float32/64` | `asFloat32/64` |
-| User type `Color` | `asColor` |
-
-**Exact return type match**: when a type defines both `asInt32` and `asInt64`, target `int32` picks `asInt32` (compares `typeReturn.kind`, not just compatibility). No silent narrowing.
-
-**Not a coercion site: conditions.** `if (expr)`, `while (expr)` and the ternary condition are NOT among the four sites above, so `asBoolean` does not give a type JS-style truthiness. Measured 2026-09-13: `if (n)` with `n: number` passes the checker and dies in clang (`member reference base type 'double' is not a structure or union`), while `if (s)` with `s: string` "works" only because a C string is a pointer and `if (ptr)` is legal C — the JS lane does something else again (`const b: boolean = n` with `n = 0` prints `false` on C and `0` on JS). Those are the general declaration gate leaking C semantics, not a truthiness feature. Adding the condition position as a fifth coercion site, with `asBoolean` declared in std for `number`/`string`/arrays, is the shape that would give opt-in JS truthiness identically on both backends; it is not implemented.
-
-**Single-step only**: if T has `asU` and U has `asV`, target `V` does NOT chain T → U → V. Synthesis tries `T.asV` directly; if absent, falls through to error. This avoids unbounded coercion chains.
+A condition is not a converter site: corpus `785-runtimeConverterOperand` declares
+`converter boxToFlag(b: Box): boolean { return false; }` and `box ? "yes" : "no"` still prints `yes`.
 
 ##### Cross-protocol composition
 
-Both protocols can co-exist on the same type. Dynamic access result then flows into coercion:
+`getDynamicField` and a converter can co-exist on the same type. Dynamic access result then flows into the converter:
 
 ```ms
 interface Doc { tag: string; }
 
 export function getDynamicField(this d: Doc, key: string): Doc { return { tag: d.tag + "." + key }; }
-export function asString(this d: Doc): string { return "[" + d.tag + "]"; }
+export converter docToText(d: Doc): string { return "[" + d.tag + "]"; }
 
 const root: Doc = { tag: "root" };
 const s: string = root.user.name;
 // → root.getDynamicField("user").getDynamicField("name") → Doc { tag: "root.user.name" }
-// → that Doc.asString() → "[root.user.name]"
+// → docToText(that Doc) → "[root.user.name]"
 ```
 
-This is how `JsonValue` works post-Phase-3 migration: protocols replace the compiler-internal magic that used to hardcode JSON behavior in the checker.
+This is how `JsonValue` works: `getDynamicField` for members and the converters in `std/serialize/json/types.ms` for slots and operands (corpus `786-jsonConverter`).
 
 ##### Cross-module generic protocols (mixin)
 
