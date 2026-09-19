@@ -695,8 +695,13 @@ function sameConverterEnd(a: Type, b: Type): boolean {
 	if ((x.kind == TypeKind.Ref || x.kind == TypeKind.Ptr) && x.typeReturn != null && y.typeReturn != null) {
 		return sameConverterEnd(x.typeReturn, y.typeReturn);
 	}
-	if (x.sym != null || y.sym != null) return x.sym == y.sym;
+	if (x.sym != null || y.sym != null) return sameDeclaration(x.sym, y.sym);
 	return sameType(x, y);
+}
+
+function sameDeclaration(a: Symbol | null, b: Symbol | null): boolean {
+	if (a == null || b == null) return false;
+	return a == b || (a.modulePath != "" && a.modulePath == b.modulePath && a.name == b.name);
 }
 
 function converterReaches(produced: Type, target: Type): boolean {
