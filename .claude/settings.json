@@ -19,6 +19,16 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'exec \"$(git -C \"$CLAUDE_PROJECT_DIR\" worktree list --porcelain | sed -n \"1s/^worktree //p\")/tools/wt.sh\" hook-session'"
+          }
+        ]
+      }
     ]
   }
 }
