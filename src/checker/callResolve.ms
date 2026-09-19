@@ -1262,6 +1262,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.nodeType = nullableRet;
 		return nullableRet;
 	}
+	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures",
+			node.location.line, node.location.column);
+		node.nodeType = inferredType();
+		return node.nodeType;
+	}
 
 	// Check argument types + infer generic return
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
@@ -2487,6 +2493,26 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
 // Each extension's fnType includes the receiver as param[0]; strip it before scoring.
+function isValueCallee(callee: Node): boolean {
+	if (callee.kind != NodeKind.Identifier && callee.kind != NodeKind.MemberExpr) return true;
+	const sym = callee.resolvedSym;
+	if (sym == null) return callee.kind == NodeKind.MemberExpr;
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter
+		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
+}
+
+function isNeverCallable(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
+			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
+			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray => true,
+		_ => false,
+	};
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
