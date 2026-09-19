@@ -34,6 +34,21 @@ re-checks, so the result type flows back.
 - `resolvePass` — parse the string type annotations into `Type` objects, enrich symbols.
 - `checkPass` / `checkExprPass` — type inference + validation + control-flow checks.
 
+Two drivers run the three passes, and neither calls the other: `checkModuleGraph`
+(`src/checker/orchestrator.ms`) checks every module on the `msc build` / `run` / `test` path, and
+`checkProgramCore` (`src/checker/checkPass.ms`) is the single-program path. A new per-module pass
+goes into both and must be idempotent, and it is proven by `msc run`, not only by unit tests.
+`checkProgramWithRegistry` then checks each module a second time with a fresh ctx, so
+`lookupModuleCtx(ctx.modulePath)` there returns the ctx from the first check. Compare
+`ctx.modulePath` before that lookup when the module may be the one being checked.
+
+Do not add locals or branches inside the `NodeKind.BinaryExpr` arm of `checkExprPass.ms`. The
+checker's flow analysis on that arm grows exponentially and hung the self-host build for 35
+minutes at 100% CPU without ever reaching clang (observed 2026-08-30, not re-measured). Put new
+operator logic in a helper in `fit.ms` (like `checkBitwiseOperands`), called once next to the
+existing `effLeft`/`effRight` reads. A build at 100% CPU with flat RSS and no clang child is
+hung: `sample <pid>` it.
+
 Cross-module symbol resolution via `ExportRegistry`. Flat `Type` interface (all fields
 present, unused empty) to avoid self-referencing-struct codegen bugs.
 
@@ -166,5 +181,9 @@ re-compilation only recomputes what changed. Used by the LSP and watch builds.
 Each module dir has an `index.ms` hub re-exporting its public API. Circular imports between
 sub-parsers are broken via **callback injection** (`callbacks.ms` holds function pointers;
 `core.ms` registers real implementations at load) — sub-parsers import only from
-`callbacks.ms`. Target source is parsed by our own parser as raw strings, so parse bugs
+`callbacks.ms`. The checker breaks its cycles the same way (`checker/checkerCallbacks.ms`), so a
+new import edge that reorders module init can read a callback before it is registered: an
+import of `checker/checkExprPass` from a pass under `src/transform/` built clean and then
+SIGSEGV'd every C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
+Target source is parsed by our own parser as raw strings, so parse bugs
 are always in `src/parser`.
