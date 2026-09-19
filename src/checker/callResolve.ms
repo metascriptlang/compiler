@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { ArrayAccessData, ArrayLiteralData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -1854,6 +1854,28 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
 }
 
+function literalParamsAwaitFormal(arg: Node): boolean {
+	if (arg == null) return false;
+	let params: string[] = [];
+	let paramTypes: string[] = [];
+	if (arg.kind == NodeKind.ArrowFunction) {
+		const ad = arg.data as ArrowFunctionData;
+		params = ad.arrowParams;
+		paramTypes = ad.arrowParamTypes;
+	} else if (arg.kind == NodeKind.FunctionExpr) {
+		const fd = arg.data as FunctionExprData;
+		params = fd.funcExprParams;
+		paramTypes = fd.funcExprParamTypes;
+	} else {
+		return false;
+	}
+	if (paramTypes.length < params.length) return true;
+	for (const pt of paramTypes) {
+		if (pt == "") return true;
+	}
+	return false;
+}
+
 function strictlyWidens(from: Type, to: Type): boolean {
 	return isAssignable(from, to) && !isAssignable(to, from);
 }
@@ -2099,9 +2121,16 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			formalT = restElem;
 		}
 		if (formalT == null || hasGenericParams(formalT) || isUnresolvedType(formalT)) continue;
-		if (isAssignable(argT, formalT)) continue;
+		let checkedT: Type = argT;
+		if (!isAssignable(checkedT, formalT) && literalParamsAwaitFormal(cd.arguments[ai])) {
+			clearCheckerState(cd.arguments[ai]);
+			callCheckExpr(ctx, cd.arguments[ai], formalT);
+			const retyped = cd.arguments[ai].nodeType;
+			if (retyped != null) { checkedT = retyped; argTypes[ai] = retyped; }
+		}
+		if (isAssignable(checkedT, formalT)) continue;
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
-			+ ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(argT, formalT),
+			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(checkedT, formalT),
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
