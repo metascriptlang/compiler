@@ -333,14 +333,7 @@ Order, measured with tsc: decorator expressions evaluate top-to-bottom, once. Ap
 
 `addInitializer` emits statements where TS would run the callback **for instance members**: instance method → start of the constructor before any field init; field → right after that field's own init. Guard `decoratorInitializerOrder` pins that trace exactly: `P-ctor,m-init,init-a,init-b,fb-extra,init-c,fc-extra,init-d,K-body`.
 
-**Static placement diverges deliberately.** Static work was deferred when the instance order landed, so every static extra runs *after all static field initializers*, in application order, rather than at its TS position. Measured 2026-09-13 on a class with static fields `a,b,c`, an `addInitializer` on decorated static field `b`, one on a static method and one on the class:
-
-```
-STATIC PHASE: sfield-a,sfield-b,sfield-c,SM-init,SF-extra,CLASS-init,
-CTOR PHASE:   ifield,
-```
-
-tsc runs `SM-init` *before* `sfield-a` and `SF-extra` immediately after `sfield-b`. Only the class extra — after all static fields — matches TS. No guard pins the static order yet; `decoratorReplace` pins only that a static initializer lands at module init at all.
+Static work follows the same TS positions: a static method's extra runs before the first static field, a static field's extra right after that field's own initializer, the class extra last. Guard `decoratorInitializerOrder` pins the trace `sm-init,s-init-a,sa-extra,s-init-b,sb-extra,s-init-c,class-init,`; it printed `GUARD-OK` on C and on JS on 2026-09-19. The full static model is under [Static members](#static-members--static---order-and-this).
 
 Deliberate divergences: decorator expressions must be compile-time evaluable (`@(isDev ? a : b)` is an error); no runtime `Symbol.metadata`; decorators return AST, not values, so a TypeScript decorator *library* does not drop in. Only decorator *use sites* are source-compatible.
 
@@ -357,7 +350,77 @@ Decorator ≠ macro ≠ directive. Macros are bare calls and may emit new top-le
 - **A `@comptime` block reports its own checker errors (2026-09-14).** A key that exists on no `NodeData` variant is rejected inside a `@comptime` block (`@comptime block: 'bogusKey' does not exist in type 'Node'`); it was silent before, and is pinned by the proven-red guard `comptimeBogusField`. Checking a macro's *nested* literals to the same depth landed 2026-09-15 (below); checking its *return* literal is still not landed.
 - **Nested literals are checked; the first attempt was reverted for the wrong reason (2026-09-15).** A key that exists on no `NodeData` variant is now rejected at every depth, not only in the outermost literal — `Macro 'blk' body: 'bogusKid' does not exist in type 'Node'` fires for a key two levels down and for one inside an array element. Pinned by the proven-red guard `macroNestedBogusField`. The check shipped 2026-09-14, was reverted the same day after it rejected `caseGuard: null` in a real macro (a downstream UI library's style macros), and returned once the cause was measured — the cause was **not** the check. `MatchCaseData` declared `caseGuard: Node` while a guardless match arm carries no guard, so the record type rejected a value the wire legitimately produces: `addNodeField` always emits the key, and a null child marshals through `nodeToASTLiteral` to `mkNull`. The declaration now reads `caseGuard: Node | null`; nothing else changed, and the two downstream lines compile unmodified. **An earlier version of this bullet claimed the fix had to make `null` acceptable for a `Node`-declared field in engine-check mode, over "98 plain `: Node` fields against 9 nullable". Both halves were wrong** — the table really holds **155 plain `: Node` slots (77 distinct names) against 9 nullable (6 distinct)**, and no checker change was needed at all. Measured cost of the declaration change: `OK no type errors in 336 module(s)`, zero errors, with the method calibrated first by flipping a field that genuinely is never null (`left` → 110 errors). Bare `null` written into a wire Node slot, scanned across every downstream `.ms` tree: two sites, the ones above. Carrying the macro's declared *return* type into the body wrapper is a separate change and is **not landed** — it rejected the compiler's own `error()` sentinel and every macro whose declared return type is not `Node`.
 - **Gate for the nested check.** Build 308 modules, self-check `OK no type errors in 336 module(s)`, suite `179 files / 3693 tests`, guard lane all green, and a downstream UI library's browser lane `Tests 75 passed (75)` with the library unmodified. Seven macro-related `fixedbugs` files pass individually; `fixedbugs/index.ms` stops earlier on a pre-existing `new Box() requires explicit type arguments`, identical on the parent commit. **NOT verified:** the full corpus lane, other downstream projects, and whether the other 53 fields the compiler null-checks are genuinely nullable — of those, only four flip at zero cost (`caseGuard`, `typExprIndexKey`, `typExprIndexValue`, `typExprReturn`) and only `caseGuard` has a producer that assigns a nullable value (`parser/expressions/match.ms:102`).
-- **Still open.** `@(expr)` — re-measured 2026-09-13, still `Parse: Unexpected token: )`. User decorators on functions, enums and constants. `getType` on an enum and on a tuple alias answers with the name only — measured `enum=Identifier tuple=Identifier fn=TypeFunction`, so a function does render as a `TypeFunction`. A null node into `typeKind` / `symKind` / `sameType` is an error rather than a "none" kind, because the macro engine boxes a value-or-null result (`TypeKind | null` comes back as an object). Static `addInitializer` placement, above. And `@nonisolated` outside its one meaningful position is accepted with no effect and no diagnostic: on a plain class field and on an actor *method* the program compiles and runs silently (measured 2026-09-13) — the intrinsic is only consumed on an actor field.
+- **Still open.** `@(expr)` — re-measured 2026-09-13, still `Parse: Unexpected token: )`. User decorators on functions, enums and constants. `getType` on an enum and on a tuple alias answers with the name only — measured `enum=Identifier tuple=Identifier fn=TypeFunction`, so a function does render as a `TypeFunction`. A null node into `typeKind` / `symKind` / `sameType` is an error rather than a "none" kind, because the macro engine boxes a value-or-null result (`TypeKind | null` comes back as an object). And `@nonisolated` outside its one meaningful position is accepted with no effect and no diagnostic: on a plain class field and on an actor *method* the program compiles and runs silently (measured 2026-09-13) — the intrinsic is only consumed on an actor field.
+
+## Static members — `static { }`, order and `this`
+
+Measured 2026-09-19 with `msc` built from `98886eb2`, on C and JS; the TypeScript column is tsc 5.9.2 run the same day.
+
+**Order.** A class's static run-part is its static field initializers and `static { }` blocks, in class-body order, as in TS (ES2022). Decorator extras sit at their TS positions (above). A block may assign the class's own `static readonly` fields; code outside the class may not (`cannot assign to 'k' because it is a read-only property`). Guard `staticBlock` pins `a,block1,c,block2,` and a block that sets a readonly to `7`.
+
+```ms
+class K {
+	static a: int32 = mark("a");
+	static b: int32 = 0;
+	static { mark("block1"); K.b = K.a + 1; }
+	static c: int32 = mark("c");
+	static { mark("block2"); }
+	static readonly frozen: int32 = 0;
+	static { K.frozen = 7; }
+}
+```
+
+**Use before initialization** is a check error, the TS2729 rule. tsc: `error TS2729: Property 's' is used before its initialization.`; `msc`, both backends: `property 's' is used before its initialization`. Guard `staticBlockUseBeforeInit`.
+
+**`this`** in a static initializer, a `static { }` block and a static method names the class, so `this.a` means `K.a`. It also works inside a closure in a static method, in `this.bump()`, in `new this()` and in a class declared in a function body (guard `staticThis`). One divergence from TS: a static method is emitted as a free function on both backends, so `this` is always the declaring class, never the subclass it was called through.
+
+```ms
+class K {
+	static a: int32 = 1;
+	static b: int32 = this.a + 10;
+	static { this.a = this.a + 1; }
+	static bump(): int32 { this.a = this.a + 1; return this.a; }
+}
+class Sub extends K {}
+const r = Sub.bump();
+console.log(`${K.b} ${r} ${K.a} ${Sub.a}`);
+    msc, C and JS:        11 3 3 3
+    tsc + node (same TS): 11 3 2 3      Sub.bump() wrote an own 'a' on Sub
+```
+
+Not working yet: `this` in a *generic* static method (`Undefined variable 'this'`; `K.a` works), static getters, and static methods on actors on C — see `KNOWN-ISSUES.md` L39–L41.
+
+**A class declared in a function body.** Its statics initialize differently per backend:
+
+```ms
+let runs: int32 = 0;
+function tick(): int32 { runs = runs + 1; return runs; }
+function make(): int32 {
+	class L { static a: int32 = tick(); }
+	return L.a;
+}
+console.log(`before=${runs}`);
+const x = make();
+const y = make();
+console.log(`x=${x} y=${y} runs=${runs}`);
+    C:  before=1  x=1 y=1 runs=1     once, at module init
+    JS: before=0  x=1 y=2 runs=2     each time the class is evaluated
+```
+
+Because C runs them before any call, a static initializer of such a class cannot read the enclosing function's locals or parameters: `a static initializer cannot read the enclosing local 'k' — a class declared in a function body initializes its statics once, before any call runs` (and `… the parameter 'n'`), on both backends. Guards `staticInitReadsEnclosingLocal`, `staticLocalClass`. Methods of such a class reading an enclosing local are not rejected and do not compile on C (`KNOWN-ISSUES.md` L36).
+
+**Actor statics.** An actor's static is shared by every instance on every thread, so it must be `static readonly` and hold plain data, `string`, `Arc<T>` or `Locked<T>` (PARALOCK I22). Both are check errors on both backends:
+
+```
+actor A { static n: int32 = 0; … }
+    an actor's static 'n' is shared by every instance across threads, so it must be 'static readonly'
+    — keep mutable state in an instance field, or share it through 'static readonly n = new Locked<T>(…)'
+actor A { static readonly xs: int32[] = [1, 2]; … }
+    'int32[]' can still be mutated through the readonly static 'xs', and its refcount is not atomic
+    — an actor's static must be plain data, Arc<T> or Locked<T>
+```
+
+Guards `actorStaticRules`, `actorStaticReadonly` (C and JS) and `actorStaticLocked` (C only: `Locked<T>` does not exist on JS, `KNOWN-ISSUES.md` L44). `Arc<T>` statics were not measured.
 
 ## Tier 3: Directives — Backend-Specific Control
 
