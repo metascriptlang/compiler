@@ -732,3 +732,28 @@ Neon suite does not see it because each test declares its signals inside the tes
 
 Not measured: a destructured `let`, patterns with a default or a rest element, a struct or array
 element type, capture depth beyond one closure, and whether `--release` changes the C shape.
+
+## L47. The narrowing of a `const` does not survive into a closure (LIVE, measured 2026-09-19)
+
+```ms
+function run(h: ((n: number) => void) | null, s: string | null): void {
+	const g = h;
+	if (g !== null) { g(1); const k = (): void => { g(2); }; k(); }
+	const t = s;
+	if (t !== null) { const len = (): number => t.length; console.log(len()); }
+}
+
+both backends: callee is possibly null (function | null) — unwrap with '!' or a null check first
+              Property 'length' does not exist on type 'Maybe_p1'. Available: value, present
+```
+
+The same `if` body without the closure compiles and runs (`g(1)` alone prints `n=1` on C and JS),
+so the narrowing holds until a function expression reads the binding. The flow walk stops at the
+closure's flow container instead of continuing into the enclosing flow, and a `const` can never be
+reassigned, so the narrowing it carries is still valid there.
+
+Measured on the installed `v0.2.55`, native and `--target=js`, standalone (no imports). Costs Neon
+a conditional nullable handler: the wrapper that unwraps the text of `onChangeText` is a closure
+over the narrowed temp, so `direct` rejects a nullable handler outright and two fixtures pin that
+rejection. Not measured: a narrowed parameter, a `let` that is never reassigned, narrowing by
+`typeof` or by a discriminant rather than `!== null`, and a closure nested two levels deep.
