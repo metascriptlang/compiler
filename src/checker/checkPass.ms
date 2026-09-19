@@ -1707,12 +1707,12 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			d.argument.location.line, d.argument.location.column);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
-	// or synthesize `as<TargetType>()` coercion via the protocol.
+	// or a call to the runtime converter for the return type.
 	if (returnExpected != null && !errSentinel && !engineReturnMarshalsToNode(retType, returnExpected)) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
-	// Re-read the post-fitNode type so coercion-protocol substitutions
-	// (e.g. `expr` → `expr.asNumber()`) are reflected in downstream checks.
+	// Re-read the post-fitNode type so converter substitutions
+	// (e.g. `expr` → `toNumber(expr)`) are reflected in downstream checks.
 	const finalRetType = d.argument != null ? d.argument.nodeType : retType;
 	if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
 		if (ctx.inferredReturn.kind == TypeKind.Inferred) {

@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, trySynthesizeAsCoercion, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1385,10 +1385,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 								node.location.line, node.location.column);
 						}
 					} else {
-						// Try `as<TargetType>` protocol coercion before erroring.
-						const converted = tryApplyConverter(ctx, d.arguments[pi], argTypes[pi], paramType);
-						const coerced = converted != null ? converted : trySynthesizeAsCoercion(ctx, d.arguments[pi], argTypes[pi], paramType);
-						if (coerced != null as unknown as Node) {
+						const coerced = tryApplyConverter(ctx, d.arguments[pi], argTypes[pi], paramType);
+						if (coerced != null) {
 							d.arguments[pi] = coerced;
 							if (coerced.nodeType != null) { argTypes[pi] = coerced.nodeType; }
 						} else {
