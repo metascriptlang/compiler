@@ -68,6 +68,7 @@ docs/*
 !docs/PIPELINE.md
 !docs/PROJECT-STRUCTURE.md
 !docs/RAISER.md
+!docs/TESTING.md
 !docs/TRANSFORM.md
 !docs/WINDOWS-TRAPS.md
 
