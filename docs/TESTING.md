@@ -91,6 +91,17 @@ Rules:
 - Avoid pinning every byte of output (brittle); pin the load-bearing tokens.
 - These are NOT a substitute for runtime behavior tests — pair with a
   `lang/*.ms` test that runs the same code.
+- `compileToC` does not resolve `std/` beyond the prelude; a source that imports
+  `std/meta` needs `compileToCWithStd`.
+- `compileToJS` checks and transforms ONE module, without monomorphization or
+  macro expansion, so transforms see different shapes than a real build
+  (`arr[i]` arrives without the `HiddenDeref` a real JS build wraps around
+  `arr`; measured 2026-08-20, not re-measured). A JS-emission claim needs a real `msc build --target=js` run and a
+  corpus program.
+- A macro with no call site is not checked at all: a body containing
+  `const x: int32 = 1.5` passes `msc check` until a call is added (measured
+  2026-09-19). Every macro probe gets a call, and one known-red plus one
+  known-green case on the same binary before its verdict is trusted.
 
 ### Phase-handoff tests (`handoff/*.ms`)
 
@@ -201,6 +212,23 @@ Convention, applied by `corpus/run.ms` and `guard/run.sh` alike:
   stop the harness from starting), while `MSC` names the *subject under test*.
   Running `./msc run <runner>` alone inverts this: the harness gets the new
   compiler while every corpus program is still built by the old one.
+- The lookup climbs at most four directories from the binary, then falls back
+  to the cwd (`resolveRuntimeDir`, `src/utils/path.ms`). A binary copied to a
+  directory with no `std/` above it, run from a cwd without one, fails with
+  `Undefined variable 'console'` rather than naming the missing tree (KNOWN-ISSUES
+  L50); run tests from the tree root.
+- Probing a `runtime/` or `std/` edit with the installed `msc`: build a private
+  home that symlinks every entry of `~/.metascript` except the tree you replace.
+  A home missing `zig`/`vendor` fails with `'stdint.h' file not found`. A header
+  edit re-keys the object cache: after appending `#error` to
+  `runtime/core/string.h`, a warm rebuild failed on it (measured 2026-09-19,
+  v0.2.55), so no `rm -rf out` is needed after a runtime edit.
+- A type error in a file you did not touch that names a `std/` type, or an
+  undeclared runtime symbol at link, means the binary reads a different tree
+  than you edited: `diff -rq std ~/.metascript/std` first. An unresolved builtin
+  reported inside `std/**` means the builder is older than the commit that
+  introduced it (`git log -S'<Name>' -- src/checker`); rebuild `./msc` with the
+  installed `msc`.
 
 Other rules that make these numbers real:
 
@@ -318,6 +346,13 @@ Traps, all paid for on 2026-09-05:
   option. |A| is self-calibrating, no guessing up front.
 - SAN on hosts without libasan (scoop MinGW: `cannot find -lasan`) is
   environment-blocked — record it, don't chase phantom code bugs.
+- Heap corruption inside the compiler itself: build it under ASan with the
+  DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
+  --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
+  --output=/tmp/msc-asan`, then compile a real program with it. zig cc on
+  macOS cannot link the ASan runtime, and slab recycling hides use-after-free
+  (`runtime/drc.h`). Fixing one layer often exposes the next; re-run until clean.
+  Recipe from 2026-06-11, not re-measured.
 
 More traps, measured 2026-09-06 on the pattern-default AST-slot change
 (186 programs, 245 emitted C files per pass):
