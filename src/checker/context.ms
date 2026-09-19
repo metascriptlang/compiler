@@ -923,7 +923,7 @@ export function isGenericFn(flags: string): boolean {
 // module's call site can't monomorphize and falls back to the erased __unknown
 // method (void* params). Nim has no method category: every generic routine body is
 // globally reachable via the ModuleGraph (seminst.nim getBody), so instantiation
-// fires at any site regardless of module. See NIM-REF.md §1 "Generic method
+// fires at any site regardless of module. See NIM-REF CK-50 "Generic method
 // cross-module monomorphization". The old `methodIsStatic && isGenericFn(flags)`
 // test dropped instance methods of generic classes (genericity comes from the
 // class T, not the method's own flags).

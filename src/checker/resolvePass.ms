@@ -792,7 +792,7 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
-		// the build (the missing-NameSet-import incident, docs/NIM-REF.md §4).
+		// the build (the missing-NameSet-import incident).
 		addError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 		return errorType();
 	}

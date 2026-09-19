@@ -1504,7 +1504,7 @@ function elemArrayCName(elem: Type): string {
 	return "void*";
 }
 
-// Single source for an array's C type name (NIM-REF: structural arrays/tuples carry no
+// Single source for an array's C type name (structural arrays/tuples carry no
 // stored identity, so this is the one place the name is derived). genArrayType (codegen)
 // and destructorLifting (transform) both route through here — no parallel naming.
 export function arrayCTypeName(t: Type): string {

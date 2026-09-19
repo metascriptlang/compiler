@@ -3051,7 +3051,7 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 			: "msRefArrayDestroy",
 		TypeKind.Function => "msClosureArrayDestroy",
 		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
-		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF §2), selected once
+		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF AN-24), selected once
 		// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
 		// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
 		// with the msRefArray fallback for void*-collapsed payloads.

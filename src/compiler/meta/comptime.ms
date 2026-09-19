@@ -68,7 +68,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	}
 
 	// Engine path (checkerCtx present): seeds + on-demand compile via the
-	// shared comptime image (NIM-REF §1 CT-eval). Standalone fallback
+	// shared comptime image (NIM-REF CT-3). Standalone fallback
 	// (no ctx, e.g. evaluateComptimeBlocks): top-level statements, body
 	// must be self-contained.
 	let ctx: RaiserContext | null;

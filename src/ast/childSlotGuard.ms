@@ -6,7 +6,7 @@
 //   (no `=` initializer) each `result.add(newNodeP(nkEmpty, p))` — and sem then
 //   tests the KIND, never nil (`semstmts.nim:970` `if def.kind == nkEmpty`).
 //   That is why Nim's traversals dereference `n[i]` unconditionally.
-// NIM-REF: §0 anti-flip heuristic — AST shape is the loosely-tracked structural
+// NIM-REF §0 anti-flip heuristic — AST shape is the loosely-tracked structural
 //   zone, so MS's nullable child slot is DIVERGE-INTENTIONAL. The divergence
 //   transfers an obligation: with absence encoded as `null` instead of a
 //   sentinel node, `forEachChild` must normalize it away. Otherwise every one of

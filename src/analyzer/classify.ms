@@ -151,7 +151,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	// tyPointer→defaultOp): entries arrive with NO rc share (classify says inert at every
 	// entry site), so hooks must be inert too — counted hooks decref refs the array never
 	// received (net −1 per death → UAF, the neon reconcile slab poison). Mirrors the Actor
-	// exemption above. `unknown|null` collapses to bare void* (NIM-REF unknown row).
+	// exemption above. `unknown|null` collapses to bare void* (NIM-REF CK-46).
 	{
 		const bareElem = elem.kind == TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
 		if (bareElem != null && isUnknownType(bareElem)) {
