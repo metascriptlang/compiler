@@ -754,6 +754,7 @@ export function tryApplyConverter(ctx: CheckerContext, expr: Node, srcType: Type
 	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
 	const call = createNodeAt(NodeKind.CallExpr,
 		{ callee: callee, arguments: [expr], isDirectCall: true, resolvedOverloadIdx: -1 }, expr.location);
+	call.flags = call.flags.incl(NodeFlag.ProtocolCall);
 	callCheckExpr(ctx, call, null);
 	if (call.nodeType == null || call.nodeType.kind == TypeKind.Error || isUnresolvedType(call.nodeType)) return null;
 	return call;

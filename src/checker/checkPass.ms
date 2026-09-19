@@ -40,6 +40,7 @@ import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludeP
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
+import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
 import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
 
@@ -2113,6 +2114,7 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const _c3 = performance.now();
 	checkProgramBody(ctx, program);
+	reportConverterCycles(ctx);
 	const _c4 = performance.now();
 	if (ctx.modulePath != "") reportUnusedSymbols(ctx, program);
 	const _c5 = performance.now();
