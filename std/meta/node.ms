@@ -567,6 +567,7 @@ export class Node {
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
+	paramSyms: Symbol[] | null;
 	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 	flowNode: FlowNode | null; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
 	// Compiler-side round-trip slot mirrored here for wire parity: the compiler's
@@ -717,6 +718,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.typeExpr = null;
 	n.typeExprs = null;
 	n.paramLocations = null;
+	n.paramSyms = null;
 	n.typeArg = "";
 	n.flowNode = null;
 	n.nodeTypeAst = null;
@@ -854,6 +856,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.typeExpr = null;
 	n.typeExprs = null;
 	n.paramLocations = null;
+	n.paramSyms = null;
 	n.typeArg = "";
 	n.flowNode = null;
 	n.nodeTypeAst = null;

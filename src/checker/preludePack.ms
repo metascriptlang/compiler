@@ -685,6 +685,9 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 			const n = nodePending.shift();
 			enqType(n.nodeType);
 			enqSym(n.resolvedSym, false);
+			if (n.paramSyms != null) {
+				for (const ps of n.paramSyms) enqSym(ps, false);
+			}
 			enqNode(n.typeExpr);
 			if (n.typeExprs != null) {
 				for (const te of n.typeExprs) enqNode(te);
@@ -726,7 +729,13 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		const loc = n.location;
 		const tes = n.typeExprs != null ? idxs(n.typeExprs) : "-";
 		const pls = locsCsv(n.paramLocations);
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint32}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${emitNodePayloadViaSink(n)}`);
+		let pss = "-";
+		if (n.paramSyms != null) {
+			const psi: int32[] = [];
+			for (const ps of n.paramSyms) psi.push(idxSym(ps));
+			pss = psi.length == 0 ? "" : intsCsv(psi);
+		}
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint32}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -1131,6 +1140,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const nodeTeRef: int32[] = [];
 	const nodeTesRaw: string[] = [];
 	const nodePlsRaw: string[] = [];
+	const nodePssRaw: string[] = [];
 	const nodePayload: string[][] = [];
 	const extRows: string[][] = [];
 	const macroRows: string[][] = [];
@@ -1174,8 +1184,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			nodeTeRef.push(f[10].parseInt() as int32);
 			nodeTesRaw.push(f[11]);
 			nodePlsRaw.push(f[12]);
+			nodePssRaw.push(f[15]);
 			const payloadFields: string[] = [];
-			let pi = 15;
+			let pi = 16;
 			while (pi < f.length) {
 				payloadFields.push(f[pi]);
 				pi = pi + 1;
@@ -1273,6 +1284,14 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		n.typeExpr = nd(nodeTeRef[i], nodes) as Node;
 		n.typeExprs = nodeTesRaw[i] == "-" ? null as unknown as Node[] : parseNodeArr(nodeTesRaw[i], nodes);
 		n.paramLocations = nodePlsRaw[i] == "-" ? null as unknown as SourceLocation[] : parseLocs(nodePlsRaw[i]);
+		if (nodePssRaw[i] != "-") {
+			const pss: Symbol[] = [];
+			for (const k of parseIntsCsv(nodePssRaw[i])) {
+				if (k < 0 || k >= syms.length) return null;
+				pss.push(syms[k]);
+			}
+			n.paramSyms = pss;
+		}
 		n.data = buildNodeData(n.kind, nodePayload[i], nodes, types);
 	}
 	if (packDebug) console.log(`[pack:r] N linked ms=${performance.now() - _r0}`);
