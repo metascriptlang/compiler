@@ -916,3 +916,40 @@ Among the messages: 5 `implicit number → int32 narrowing`, 8 `field 'value'/'e
 variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discriminated union.
 A single file still runs on its own with `msc test <file>`. Run that way, `msc test src/test/c/protocols.ms` is red on two tests the gate has never seen: `E2E C: JsonValue dynamic write via setDynamicField` (`protocols.ms:480`) and `E2E C: JsonValue dynamic access via protocol after migration` (`protocols.ms:499`), both failing `assert c.ok` (3119 passed, 2 failed across 146 files, installed `v0.2.55`). Not measured: which of these are stale
 test code and which are checker regressions.
+
+## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (LIVE, measured 2026-09-19)
+
+```ms
+// hostTypes.ms
+export interface Host { tag: string; }
+export type HostNode = unknown;
+export type NeonNode = (host: Host, parent: HostNode, before: HostNode | null) => void;
+
+// comp.ms
+import { Host, HostNode, NeonNode } from "./hostTypes";
+export function createComponent<P>(Comp: (props: P) => NeonNode, props: P): NeonNode {
+	return (host: Host, parent: HostNode, before: HostNode | null): void => {
+		Comp(props)(host, parent, before);
+	};
+}
+
+msc run a file importing comp.ms → warning: 'Host' is imported but never used
+                                   warning: 'HostNode' is imported but never used
+```
+
+`NeonNode`, named in the outer signature, is never reported; only the two that appear solely in the
+returned arrow's parameter list are. Dropping `<P>` from the same function silences both warnings,
+so the generic body is the axis, not the arrow.
+
+| variant | warns |
+|---|---|
+| generic function, arrow annotated with the imported types | `Host`, `HostNode` |
+| the same with `HostNode` an interface instead of `= unknown` | `Host`, `HostNode` |
+| the same generic taking a plain `p: P` instead of a function-typed parameter | `Host`, `HostNode` |
+| the same shape with no type parameter | silent |
+| reached through `build.ms` `globalImports` instead of a plain import | identical either way |
+
+Measured on the installed `v0.2.55`. The warning is wrong, not merely noisy: dropping either import
+fails the build. Neon carries it on every compile, from `src/render/component.ms`. Not measured: a
+generic class method, a type used only in the arrow's return annotation, a constrained type
+parameter, and whether the LSP reports the same diagnostic.
