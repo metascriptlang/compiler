@@ -229,6 +229,15 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		}
 		return;
 	}
+	if (t.kind == TypeKind.Function) {
+		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		if (t.typeChildren != null) {
+			for (const param of t.typeChildren) {
+				injectConcreteTypeSyms(param, ctx, callerCtx, injected);
+			}
+		}
+		return;
+	}
 	if (t.kind == TypeKind.GenericInstance && t.typeChildren != null) {
 		for (const child of t.typeChildren) {
 			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
