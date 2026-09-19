@@ -6,13 +6,14 @@
 // once std/core/buffer/index.jms lands.
 
 import { writeTar, TarEntry, DEFAULT_FILE_MODE } from "std/archive/tar";
+import { Buffer } from "std/core/buffer";
 
 function check(name: string, ok: boolean): boolean {
 	if (!ok) { console.log("FAIL " + name); }
 	return ok;
 }
 
-function parseOctalAt(s: string, offset: number, maxDigits: number): number {
+function parseOctalAt(s: Buffer, offset: number, maxDigits: number): number {
 	let v = 0;
 	let i = 0;
 	while (i < maxDigits) {
@@ -24,7 +25,7 @@ function parseOctalAt(s: string, offset: number, maxDigits: number): number {
 	return v;
 }
 
-function headerChecksum(s: string, base: number): number {
+function headerChecksum(s: Buffer, base: number): number {
 	let sum = 0;
 	let i = 0;
 	while (i < 148) { sum += s.byteAt(base + i); i += 1; }
