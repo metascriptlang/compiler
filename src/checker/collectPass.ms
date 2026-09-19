@@ -1059,6 +1059,39 @@ function propagateImportedExtensions(
 	}
 }
 
+function sharedPreludeSym(ctx: CheckerContext, alias: string, importName: string, exportInfo: ExportedSymInfo): Symbol | null {
+	if (alias != importName || exportInfo.definingModule == "") return null;
+	const sym = lookupSymbol(ctx.table, importName);
+	if (sym == null || sym.modulePath != exportInfo.definingModule) return null;
+	return hasFlag(sym, SymbolFlag.Exported) ? sym : null;
+}
+
+function exportPreludeModule(ctx: CheckerContext, specifier: string): void {
+	if (ctx.preludeCtx == null) return;
+	const file = "/" + specifier;
+	const dir = file + "/";
+	for (const sym of ctx.preludeCtx.table.current.symbols.values()) {
+		if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+		let owned = false;
+		const path = stripModuleExtension(sym.modulePath);
+		if (path.endsWith(file) || path.indexOf(dir, 0) >= 0) owned = true;
+		let oi = 0;
+		while (!owned && oi < sym.overloads.length) {
+			const ovPath = stripModuleExtension(sym.overloads[oi].modulePath);
+			if (ovPath.endsWith(file) || ovPath.indexOf(dir, 0) >= 0) owned = true;
+			oi = oi + 1;
+		}
+		if (owned) exportSym(ctx, sym);
+	}
+}
+
+function stripModuleExtension(path: string): string {
+	for (const suffix of ["/index.ms", "/index.cms", ".ms", ".cms"]) {
+		if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
+	}
+	return path;
+}
+
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
 
@@ -1108,7 +1141,10 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 		if (sourcePath != "") {
 			const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
-			if (exportInfo != null) {
+			const preludeSym = exportInfo != null ? sharedPreludeSym(ctx, localAlias, importName, exportInfo) : null;
+			if (preludeSym != null) {
+				defineSymbol(ctx.table, preludeSym);
+			} else if (exportInfo != null) {
 				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
 				// Phase E: cross-module macros — register imported macro body
@@ -1272,6 +1308,12 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
 							if (lookupLocal(ctx.table, expInfo.name) != null) continue;
+							const preludeStarSym = sharedPreludeSym(ctx, expInfo.name, expInfo.name, expInfo);
+							if (preludeStarSym != null) {
+								defineSymbol(ctx.table, preludeStarSym);
+								exportSym(ctx, preludeStarSym);
+								continue;
+							}
 							importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node);
 							const sym = lookupLocal(ctx.table, expInfo.name);
 							if (sym != null) {
@@ -1306,7 +1348,10 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					const importName = imp.importNames[i];
 					if (sourcePath != "") {
 						const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
-						if (exportInfo != null) {
+						const preludeReSym = exportInfo != null ? sharedPreludeSym(ctx, alias, importName, exportInfo) : null;
+						if (preludeReSym != null) {
+							defineSymbol(ctx.table, preludeReSym);
+						} else if (exportInfo != null) {
 							const reNameLoc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
 							propagateImportedOverloads(ctx, lookupLocal(ctx.table, alias), exportInfo, sourcePath, importName, alias, true);
@@ -1356,6 +1401,9 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 			// helper `autoPropagateModuleExtensions`).
 			const reExportSourcePath = resolveImportSourcePath(ctx, imp.importSource);
 			autoPropagateModuleExtensions(ctx, reExportSourcePath, true);
+		} else if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
+			exportPreludeModule(ctx, imp.importSource);
+			return;
 		}
 
 		// Mark all as exported (whether freshly imported or pre-existing)
