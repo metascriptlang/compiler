@@ -179,10 +179,10 @@ int       float     double                       (reserved, not yet usable as ty
 ### Comparison
 | Operator | Token | Description |
 |----------|-------|-------------|
-| `==` | EQ_EQ | Loose equality (compile-time macro) |
-| `===` | EQ_EQ_EQ | Strict equality |
-| `!=` | BANG_EQ | Loose inequality |
-| `!==` | BANG_EQ_EQ | Strict inequality |
+| `==` | EQ_EQ | Equality — same as `===` (no `undefined`, so no loose form); the JS backend emits `===` |
+| `===` | EQ_EQ_EQ | Equality |
+| `!=` | BANG_EQ | Inequality — same as `!==`; the JS backend emits `!==` |
+| `!==` | BANG_EQ_EQ | Inequality |
 | `<` | LT | Less than |
 | `<=` | LT_EQ | Less or equal |
 | `>` | GT | Greater than |
