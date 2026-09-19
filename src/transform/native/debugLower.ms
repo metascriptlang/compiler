@@ -9,7 +9,7 @@ import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType,
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
-import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
+import { makeIdent, makeIdentResolved, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
@@ -194,12 +194,13 @@ function ensureDumpFn(outerType: Type, structType: Type, ctx: TransformContext, 
 
 	const stmts: Node[] = [];
 	const isRef = outerType.kind == TypeKind.Ref;
+	const valueSym = makeSymbol("x", SymbolKind.Parameter, outerType, false);
 	if (isRef) {
-		const cmp = makeBinary(makeIdent("x", loc), "===", makeNull(loc), loc);
+		const cmp = makeBinary(makeIdentResolved(valueSym, loc), "===", makeNull(loc), loc);
 		const nullRet = makeReturn(makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc), loc);
 		stmts.push(makeIf(cmp, makeBlock([nullRet], loc), null, loc));
 	}
-	stmts.push(makeReturn(buildJsonObjectFor(makeIdent("x", loc), structType, loc, ctx), loc));
+	stmts.push(makeReturn(buildJsonObjectFor(makeIdentResolved(valueSym, loc), structType, loc, ctx), loc));
 
 	const fnNode = makeFnDecl(name, ["x"], [structType.typeName], makeBlock(stmts, loc), "", "JsonValue", loc);
 	if (fnNode.nodeType != null && fnNode.nodeType.typeChildren != null

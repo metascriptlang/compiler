@@ -31,6 +31,7 @@ import {
 	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 
 // ===== FlowNode Constructors =====
@@ -755,6 +756,32 @@ function bindExpression(state: BinderState, node: Node): void {
 			// Stamp the invocation's program point — when the checker expands
 			// this macro, bindExpandedSubtree re-binds the deserialized result
 			// from this flow so emitted code narrows like source at this site.
+			node.flowNode = state.currentFlow;
+		},
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			for (const attr of d.jsxAttrs) { bindExpression(state, attr); }
+			for (const child of d.jsxChildren) { bindExpression(state, child); }
+			node.flowNode = state.currentFlow;
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			for (const child of d.jsxFragChildren) { bindExpression(state, child); }
+			node.flowNode = state.currentFlow;
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			if (d.jsxExpr != null) bindExpression(state, d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			if (d.jsxAttrValue != null) bindExpression(state, d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			if (d.jsxSpreadArg != null) bindExpression(state, d.jsxSpreadArg);
+		},
+		NodeKind.QuoteExpr => {
 			node.flowNode = state.currentFlow;
 		},
 		// Leaf literals — nothing to bind

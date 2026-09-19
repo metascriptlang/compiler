@@ -304,9 +304,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 		},
 		"solana" => {
 			addLine(b, "uint64_t entrypoint(const uint8_t* input) {");
-			addLine(b, "  (void)input;");
+			addLine(b, "  msSolanaEnter(input);");
 			addLine(b, "  MsMain();");
-			addLine(b, "  return 0;");
+			addLine(b, "  return msSolanaResult();");
 			addLine(b, "}");
 		},
 		"wasm" => {

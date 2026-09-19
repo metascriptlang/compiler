@@ -248,7 +248,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		monoed_programs.push(monoed);
 		monoed_paths.push(modPath);
 	}
-	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false);
+	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
 	// Full pipeline per module (same as compile.ms:358-411)
 	let combined = "";
@@ -379,7 +379,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		monoed_programs.push(expandMacros(monoed, ctx));
 		monoed_paths.push(modPath);
 	}
-	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false);
+	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
 	let combined = "";
 	const moduleOutputs: CModuleOutput[] = [];

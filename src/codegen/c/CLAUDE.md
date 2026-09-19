@@ -1,114 +1,27 @@
 # Phase 5: C Code Generation
 
-Emits C source from the post-analyzer AST. Standard optimized architecture (section-based, modular).
+Emits C source from the post-analyzer AST. Pipeline: `parse → check → transform → analyze → builtinLower → codegen`.
 
-**Pipeline**: `parse → check → transform → analyze → builtinLower → codegen`
+**Codegen stays thin** — the rule, its evidence and the checklist are in the root [`CLAUDE.md`](../../../CLAUDE.md), "Codegen Must Be Thin/Dumb". What belongs here: syntax mapping, section ordering, name mangling, C type mapping.
 
----
+## Rules
 
-## 1. Architectural Mandate: Codegen Must Be Thin
+- **A C file is assembled from sections, never written in order** — `CSection` (`context.ms`): `Headers`, `ForwardDecls`, `Types`, `SeqTypes`, `ProcHeaders`, `StringPool`, `GlobalVars`, `Procs`, `DatInit`, `ModuleInit`; write with `addLine(sec(g, section), ...)` so forward declarations and ordering hold. `DatInit` runs before `ModuleInit`.
+- **`CLoc` carries where a value lives** — `kind` (`CLocKind`: `None` = a free slot the callee fills, `Temp`, `LocalVar`, `GlobalVar`, `Param`, `Field`, `Expr`, `Proc`), `storage`, the C `snippet`, `isIndirect` (the backend introduced a pointer), `locType`.
+- **`CProc` carries the per-function state** — the block stack, the temp counter, break/loop depth, the `finally` and error-target stacks, indirect params and locals that auto-deref, and the per-name conflict counters that give every local a unique C name.
+- **Hoist what has side effects or is reused** — `getTemp(p, cType)` gives a local temp.
+- **Every user symbol goes through the manglers in `names.ms`** — no raw source name reaches C, so C keywords cannot collide.
+- **Large value types return through an out-parameter, and it is the FIRST parameter** — structs, tuples and results (`isNrvoReturnType`, `types.ms`); interfaces and classes are references and return as pointers. Direct calls and closure calls agree: `genClHalfCastNrvo` / `genClFullCastNrvo` cast to a `void` return with `Type*` prepended.
 
-The #1 goal of the C backend is to be **dumb**. If logic can live in a pre-codegen transform (`src/transform/`), it MUST live there. Codegen should focus exclusively on syntax mapping (AST → C tokens) and low-level emission details (section ordering, name mangling, C type mapping).
+## Builtins
 
-### The Rule
+| Form | Meaning | Lowered by |
+|------|---------|------------|
+| `@builtin("Name")` | compiler-intercepted call | `builtinLower` (`src/transform/native/`) |
+| Extension method | `value.method(args)` on an `extern function ... (this ...)` | `extensionMethodLower` (`src/transform/lowering/`) |
 
-Whenever working on something that ends at C codegen, **first check if the equivalent logic lives in an earlier phase** (transform, semantic analysis, etc.) rather than codegen. **If it can be handled before codegen, it should be.**
+**The checker sees normal signatures** — `extern function ... from` stores `nativeName` on the AST and the collector wires it to the Symbol; only `builtinLower` reads `@builtin`, so codegen sees a plain call to a known runtime function.
 
-### Why This Matters
+## Not verified here
 
-1. **Testability**: Transforms produce ASTs which are easy to inspect and unit test. Codegen produces strings which are brittle to test.
-2. **Reuse**: Transforms like `matchLower` or `lambdaLifting` benefit all backends (JS, Raiser, etc.). Codegen logic is locked to C.
-3. **Complexity Control**: `cgen.ms` is already complex. Offloading to transforms keeps it manageable.
-
-### Checklist Before Adding Codegen Logic
-
-1. Does a standard transform already handle this or could it? If yes, put it in our Transform phase.
-2. Is this a type resolution issue? If yes, it belongs in the Checker or type resolution pass.
-3. Is this a desugaring/lowering? If yes, it belongs in `src/transform/`.
-
----
-
-## 2. Core Concepts
-
-### Section-Based Output
-
-A C file is emitted in sections (`CSection` enum) to handle forward declarations and topological ordering:
-- `Headers` (#include)
-- `TypeForw` (typedef struct Foo Foo;)
-- `TypeDefs` (struct Foo { ... };)
-- `ProcForw` (void bar(void);)
-- `Data` (static string constants)
-- `Procs` (void bar() { ... })
-- `Init` (module initialization)
-
-- Each module registers its initialization code into the appropriate dispatcher.
-
-### CLoc (expression result carrier)
-
-Every expression emission returns a `CLoc` which tracks:
-- `kind`: Literal, LValue, Expr, etc.
-- `storage`: Local, Member, Global
-- `snippet`: The C code fragment
-- `isIndirect`: Whether it's a pointer introduced by the backend
-
-`locNone` = free slot — callee fills it. If caller has a dest, callee assigns to it.
-
-### CProc (per-function state)
-
-Tracks function-local state:
-- `blocks`: Scope stack for labels and temporary management
-- `locals`: Declared local variables (hoisted to top of function)
-- `labels`: Counter for unique jump targets (try/catch)
-
----
-
-## 3. Implementation Patterns
-
-### NRVO (Named Return Value Optimization)
-
-Large value-types (structs, tuples, results) are returned via an implicit out-parameter `Result*` rather than on the stack. Interfaces and classes are reference types (Ref<Struct>) — returned as pointers, no NRVO needed.
-- `getTypeDesc` determines if a type needs NRVO
-- `genCallExpr` injects the destination address as the first argument
-- **Convention**: Result pointer is the FIRST parameter (some references put it LAST). Internally consistent — both direct calls and closure calls use first-param position.
-- `genClosureCall` handles NRVO via `genClHalfCastNrvo`/`genClFullCastNrvo` — changes return type to `void` and prepends `Type*` first param in the cast
-
----
-
-## 4. Design Guidelines
-
-1. **Avoid `peekResult`**: Pass a `CLoc` destination into `genExprToLoc` instead.
-2. **Hoisting**: If an expression has side effects or is reused, use `getTemp(p)` to hoist it to a local.
-3. **Mangle Everything**: Use `mangle(name)` for all user-defined symbols to avoid C keyword conflicts.
-4. **Section Safety**: Always use `addLine(sec(g, section), ...)` to ensure code ends up in the right place.
-
----
-
-## Builtin Strategy
-
-### 3-Tier System
-
-| Tier | Syntax | Maps To | Implementation |
-|------|--------|---------|----------------|
-| `@builtin("Name")` | Compiler-intercepted inline codegen | Internal Magic | `builtinLower` transform |
-| `@runtime` | External library implementation | `runtime/core/*.h` | Standard library links |
-| Extension Methods | `Type.method(args)` | Unified Function Call Syntax | `extensionMethodLower` |
-
-**Checker sees normal signatures.** `extern function ... from` stores `nativeName` on the AST, wired to Symbol by collector. Only `builtinLower` (post-analyzer, C-backend transform) reads `@builtin`.
-
-### Why builtinLower is Better
-
-We move builtin handling to a pre-codegen transform:
-- **Separation**: transform handles builtin normalization, codegen handles C emission
-- **Testable**: AST-to-AST rewrite, tested independently
-- **Dumb Codegen**: Codegen sees a normal call to a known runtime function
-
----
-
-## Comparison Summary
-
-| Aspect | Industry Standard | Ours |
-|--------|-------------------|---------------------|
-| Architecture | Often God objects | Modular, section-based |
-| Frontend | Single or multi-pass | 3-pass (Collect/Resolve/Check) |
-| Backend | Thick codegen | Thin/Dumb codegen |
-| Memory | GC or manual | DRC (Deterministic RC) |
+The `CLoc` / `CProc` lines are read from the type definitions in `context.ms`, not from a traced emission.

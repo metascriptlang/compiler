@@ -2145,6 +2145,21 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			}
 		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
+			if (pd.propIsStatic) {
+				let staticType = inferredType();
+				if (pd.propType != "") {
+					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					resolveTypeExpr(member.typeExpr, ctx);
+				}
+				member.nodeType = staticType;
+				for (const sf of sym.staticFields) {
+					if (sf.name == d.actorName + "." + pd.propName) {
+						sf.symbolType = staticType;
+						sf.state = SymbolState.Shaped;
+					}
+				}
+				continue;
+			}
 			memberNames.push(pd.propName);
 			if (pd.propType != "") {
 				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);

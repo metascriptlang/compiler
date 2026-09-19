@@ -34,6 +34,21 @@ re-checks, so the result type flows back.
 - `resolvePass` — parse the string type annotations into `Type` objects, enrich symbols.
 - `checkPass` / `checkExprPass` — type inference + validation + control-flow checks.
 
+Two drivers run the three passes, and neither calls the other: `checkModuleGraph`
+(`src/checker/orchestrator.ms`) checks every module on the `msc build` / `run` / `test` path, and
+`checkProgramCore` (`src/checker/checkPass.ms`) is the single-program path. A new per-module pass
+goes into both and must be idempotent, and it is proven by `msc run`, not only by unit tests.
+`checkProgramWithRegistry` then checks each module a second time with a fresh ctx, so
+`lookupModuleCtx(ctx.modulePath)` there returns the ctx from the first check. Compare
+`ctx.modulePath` before that lookup when the module may be the one being checked.
+
+Do not add locals or branches inside the `NodeKind.BinaryExpr` arm of `checkExprPass.ms`. The
+checker's flow analysis on that arm grows exponentially and hung the self-host build for 35
+minutes at 100% CPU without ever reaching clang (observed 2026-08-30, not re-measured). Put new
+operator logic in a helper in `fit.ms` (like `checkBitwiseOperands`), called once next to the
+existing `effLeft`/`effRight` reads. A build at 100% CPU with flat RSS and no clang child is
+hung: `sample <pid>` it.
+
 Cross-module symbol resolution via `ExportRegistry`. Flat `Type` interface (all fields
 present, unused empty) to avoid self-referencing-struct codegen bugs.
 
@@ -77,7 +92,7 @@ Deterministic Reference Counting: walks the post-transform AST, inserts
 `=destroy/=copy/=sink/=wasMoved` calls at the right points. Direct AST rewrite + scope-based
 cleanup + conservative last-read (Mohnen graph-free CFG). Three stages: hook lifting
 (`destructorLifting`) → injection (`inject.ms` + `classify` + `scope` + `lastRead`) →
-optimization (`optimize.ms`, redundant-op elimination). See the analyzer's own CLAUDE.md
+optimization (`optimize.ms`, redundant-op elimination). See [`ANALYZER.md`](ANALYZER.md)
 for the RC insertion-point table and the moveOrCopy decision tree. DRC convention:
 `msAlloc` returns rc=0 = sole owner; `msDecRefIsLast` true at rc==0 (rc counts the owners beyond the first).
 
@@ -102,18 +117,20 @@ annotate/emit. Net: by Phase 5 the AST is a small, C-shaped subset.
 
 ---
 
-## RAISER VM — compile-time execution & metaprogramming (`src/codegen/raiser`, `runtime/raiser`)
+## RAISER VM — compile-time execution & metaprogramming (`src/codegen/raiser`, `src/raiser`)
 
-RAISER executes MetaScript at **compile time** (`@comptime`, macro bodies, const folding).
-It consumes the **post-transform AST** — so it never has to understand `match`/`defer`/`for`
-natively; Phase 3 already lowered them.
+RAISER executes MetaScript at **compile time** (`@comptime`, macro bodies, const folding),
+and whole programs under `msc run --target=raiser`. It consumes the **post-transform AST**
+(`transformForRaiser`) and skips Phase 4 and Phase 5.
 
 **Core architecture:**
-- **Register-based** instruction set (256 slots) — ~30% less dispatch overhead than stack VMs.
-- **Computed-goto** dispatch (`vm_dispatch.h` / `dispatch.c`).
-- **Handle-based arena** memory (`ObjectHeap`/`ArrayHeap`, monotonic growth — short-lived
-  comptime tasks).
+- **Register-based** instruction set; the register file starts at 256 slots and grows.
+- **`if` / `else if` dispatch** in `src/raiser/vm.ms`, one arm per opcode; there is no C dispatch.
+- **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
+  refcount + cycle collector under `gcMode = "orc"`.
 - **Flat tagged `RaiserValue`** (Nil/Bool/Int/Float/String/Array/Object), kind-dispatched.
+
+Design, measured status and what is not built: [`RAISER.md`](RAISER.md).
 
 Flow: `Source → Parse → Check → Transform → Raiser codegen (primitives→bytecode) → Raiser VM
 (execute, fold results back into the AST)`.
@@ -127,7 +144,7 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
 **Two layers:**
 - **Layer 1** — pure-MS wrappers in `std/*` (`readFile`, `exec`, `env`), compiled to bytecode,
   run inside the VM.
-- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers ~40
+- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers 105
   `RaiserHostFn` wrappers under the extern's native name
   (`registerHostFn("msFsReadFile", …)`).
 
@@ -144,9 +161,10 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
   calls the MS bridge (which itself calls the host compiler's std — the same
   `shared.ms`/std sources the C backend compiles), and boxes the result.
 
-Known gaps, tracked in `src/raiser/CLAUDE.md` §std Access: the table is
-hand-maintained (an extern added to `.rms` without a bridge fails at runtime
-with "Unknown host function"), and nothing yet enforces closure. The
+Known gaps, tracked in [`RAISER.md`](RAISER.md) §std access: the table is
+hand-maintained; an extern added to `.rms` without a bridge compiles with a
+`no host bridge` warning at the call site and fails at runtime with
+"Unknown host function". The
 originally-sketched alternative — a build-time-generated C table of
 `{name, fnPtr, sigTag}` letting the VM call statically linked natives
 directly — is the `CallExtern` direction on the roadmap (Phase 5), not the
@@ -166,5 +184,9 @@ re-compilation only recomputes what changed. Used by the LSP and watch builds.
 Each module dir has an `index.ms` hub re-exporting its public API. Circular imports between
 sub-parsers are broken via **callback injection** (`callbacks.ms` holds function pointers;
 `core.ms` registers real implementations at load) — sub-parsers import only from
-`callbacks.ms`. Target source is parsed by our own parser as raw strings, so parse bugs
+`callbacks.ms`. The checker breaks its cycles the same way (`checker/checkerCallbacks.ms`), so a
+new import edge that reorders module init can read a callback before it is registered: an
+import of `checker/checkExprPass` from a pass under `src/transform/` built clean and then
+SIGSEGV'd every C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
+Target source is parsed by our own parser as raw strings, so parse bugs
 are always in `src/parser`.

@@ -37,10 +37,11 @@ attributing a regression.
 
 `msc test src/index.ms` test-execution time: **419.6s → 17-19s (~23×)**,
 3342/3342 unchanged. Wall clock for the whole command is ~40s, because
-compiling the test binary (~21s warm) is now the larger half. Full cost
-model, entry-by-entry, lives in `src/test/CLAUDE.md` §5.1 — including the
-consequence that the full battery is now CHEAPER than most single-module
-entries, which inverts the old "run the smallest loop" advice.
+compiling the test binary (~21s warm) is now the larger half. The entry-by-entry
+cost table that followed from this (full battery cheaper than a single-module
+entry) was dropped on 2026-09-19: `msc test src/test/fixedbugs/bug048.ms` took
+12 s wall at load 18 that day, and the full suite was not timed beside it, so the
+comparison is open. Cache and load traps: [`TESTING.md`](TESTING.md).
 
 Root cause was not codegen or clang: `checkProgram()` — the convenience
 wrapper every inline test uses — called `buildPreludeContext()` on
@@ -366,6 +367,14 @@ Each phase lands independently:
 1. `msc check src/index.ms` — type-check green
 2. `msc test src/index.ms` — test suite 2768 pass / 8 fail (baseline unchanged)
 3. Cold native self-build with `--time`: measure Phase A delta
+
+How to time anything on this shared machine:
+
+- Report the **minimum** round per cell, never a sum or a mean. Run an untimed warmup first. A summed benchmark at load 4-54 once reported `direct` 0.74x of `tree`, and the min-of-rounds rerun of the same sweep gave 1.38-1.45x, with the opposite sign (2026-08-11).
+- Interleave the cells within a round and reverse their order on alternate rounds. A fixed order measures the later cells warmer.
+- Record `uptime` with the result. Ratios between interleaved cells survive load, absolute numbers do not, so say which one a conclusion rests on.
+- If runs of one binary disagree on the sign of a difference, the measurement is broken. Fix it before averaging anything.
+- `msc run` and a plain `msc build` compile at `-O0`. Time C output built with `--danger`.
 
 ## Non-goals
 

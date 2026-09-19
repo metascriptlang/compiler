@@ -7,10 +7,14 @@ usage: tools/wt.sh <command> [args]
 
   new <name> [rev]      create branch wt/<name> at rev (default main) in
                         $MSC_WT_ROOT/wt-<name>, provision vendor, paper and a
-                        builder ./msc; prints the worktree path as the last line
+                        builder ./msc, seed the card $MSC_WT_ROOT/<name>.md;
+                        prints the worktree path as the last line
+  card [name|path]      print the card of a worktree (default: the current one):
+                        its path, then Goal, Done when and State
   ls [--stale]          one line per worktree: branch, dirty files, unlanded
-                        commits, live processes, out/ size; --stale hides the
-                        ones a process still works in
+                        commits, live processes, out/ size, the card's goal or
+                        NO CARD, then every card that has no wt/<name> branch;
+                        --stale hides the ones a process still works in
   rm <name|path> [--force]
                         remove a worktree; refuses while it holds dirty files,
                         unlanded commits or live processes, and names them;
@@ -19,9 +23,13 @@ usage: tools/wt.sh <command> [args]
                         rebase onto main, gate (tools/gate.sh picks the lanes
                         from the diff, then each --also command), then move
                         main forward and sync the main checkout path by path;
+                        a main that moved during the gate only by paths no lane
+                        tests is rebased onto without a second gate;
                         --no-gate lands on evidence gathered outside the gate
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
+  hook-session          SessionStart hook body (prints the current worktree's card
+                        and the compiler inbox tally by State)
 
 env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
 USAGE
@@ -36,6 +44,60 @@ ROOT=${MSC_WT_ROOT:-$HOME/metascript/.wt}
 BASE=main
 
 wt_dir() { printf '%s/%s\n' "$ROOT" "$(printf 'wt/%s' "$1" | tr '/' '-')"; }
+
+card_path() { printf '%s/%s.md\n' "$ROOT" "$(printf '%s' "$1" | tr '/' '-')"; }
+
+card_name_of() {
+  local br
+  br=$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null) || return 1
+  case "$br" in
+    wt/*) printf '%s\n' "${br#wt/}" ;;
+    *) return 1 ;;
+  esac
+}
+
+card_goal() {
+  awk '/^## /{on=($0=="## Goal"); next} on && NF{print; exit}' "$1" 2>/dev/null
+}
+
+seed_card() {
+  local c
+  c=$(card_path "$1")
+  [ -e "$c" ] && return 0
+  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\n\n## Goal\n\n## Done when\n\n## State\n' \
+    "$1" "$MAIN" "$(wt_dir "$1")" "$1" >"$c" || return 1
+  say "card: $c"
+}
+
+card_is_foreign() {
+  local repo
+  repo=$(grep -m1 '^Repo:' "$1" 2>/dev/null) || return 1
+  case "$repo" in
+    *"$(basename "$MAIN")"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+orphan_cards() {
+  local c name
+  for c in "$ROOT"/*.md; do
+    [ -e "$c" ] || continue
+    card_is_foreign "$c" && continue
+    name=$(basename "$c" .md)
+    git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$name" || printf '%s\n' "$c"
+  done
+}
+
+inbox_tally() {
+  local dir=${MSC_INBOX:-$(dirname "$ROOT")/.inbox/compiler} n
+  n=$(find "$dir" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] || return 0
+  printf '%s card(s) in %s:' "$n" "$dir"
+  grep -h -m1 '^State:' "$dir"/*.md 2>/dev/null \
+    | awk -v n="$n" '{s=$2; sub(/[.,]$/, "", s); t[s]++; k++} END {for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d without a State line ·", n - k}' \
+    | sed 's/ ·$//'
+  printf '\n'
+}
 
 worktrees() { git -C "$MAIN" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | tail -n +2; }
 
@@ -117,6 +179,7 @@ cmd_new() {
   if [ -e "$w" ]; then
     is_worktree "$(cd "$w" && pwd -P)" || die "new: $w exists and is not a worktree of $MAIN"
     say "reusing $w"
+    seed_card "$name" || die "step card: cannot write $(card_path "$name")"
     printf '%s\n' "$w"
     return 0
   fi
@@ -134,11 +197,41 @@ cmd_new() {
   dirty=$(git -C "$w" status --porcelain)
   [ -z "$dirty" ] || die "step status: fresh worktree is not clean:
 $dirty"
+  seed_card "$name" || die "step card: cannot write $(card_path "$name")"
   printf '%s\n' "$w"
 }
 
+cmd_card() {
+  local target=${1:-} w name c
+  if [ -n "$target" ] && [ ! -d "$target" ] && [ -e "$(card_path "$target")" ]; then
+    name=$target
+  else
+    if [ -n "$target" ]; then w=$(resolve_target "$target"); else w=$(git rev-parse --show-toplevel); fi
+    name=$(card_name_of "$w") || die "card: $w is not on a wt/<name> branch"
+  fi
+  c=$(card_path "$name")
+  [ -e "$c" ] || die "card: no card at $c"
+  printf '%s\n' "$c"
+  cat "$c"
+}
+
+hook_session() {
+  local w name c
+  w=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --show-toplevel 2>/dev/null) || return 0
+  if name=$(card_name_of "$w"); then
+    c=$(card_path "$name")
+    if [ -e "$c" ]; then
+      printf 'Card of this worktree, %s:\n' "$c"
+      cat "$c"
+    else
+      printf 'This worktree is on wt/%s and has no card at %s; write its Goal and "Done when" before the first commit.\n' "$name" "$c"
+    fi
+  fi
+  inbox_tally
+}
+
 ls_row() {
-  local i=$1 w=$2 table br dirty ahead pids out
+  local i=$1 w=$2 table br dirty ahead pids out name goal=""
   table=$(cat "$WT_CWD_TABLE")
   pids=$(procs_in "$w" "$table" | wc -l | tr -d ' ')
   [ "${WT_STALE:-0}" -eq 1 ] && [ "$pids" -gt 0 ] && return
@@ -151,7 +244,8 @@ ls_row() {
   ahead=$(unlanded "$w" | wc -l | tr -d ' ')
   out=-
   [ -d "$w/out" ] && out=$(kib_human "$(du -sk "$w/out" 2>/dev/null | awk '{print $1}')")
-  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w"
+  name=$(card_name_of "$w") && goal=$(card_goal "$(card_path "$name")" | cut -c1-72)
+  printf '%s\t%-7s %-5s %-5s %-6s %-40s %s  · %s\n' "$i" "$dirty" "$ahead" "$pids" "$out" "$br" "$w" "${goal:-NO CARD}"
 }
 
 cmd_ls() {
@@ -165,6 +259,7 @@ cmd_ls() {
     | WT_CWD_TABLE=$table WT_STALE=$WT_STALE xargs -0 -P 8 -n 1 bash "$0" __ls_row \
     | sort -n | cut -f2-
   rm -f "$table"
+  orphan_cards | sed 's/^/card without a wt\/<name> branch: /'
 }
 
 wt_status() {
@@ -235,6 +330,10 @@ cmd_rm() {
     wt/*) git -C "$MAIN" branch -D "$br" >/dev/null ;;
   esac
   say "removed $w"
+  case "$br" in
+    wt/*) [ -e "$(card_path "${br#wt/}")" ] && say "card: $(card_path "${br#wt/}") stays; delete it once its \"Done when\" holds" ;;
+  esac
+  return 0
 }
 
 main_blob() {
@@ -302,7 +401,7 @@ sync_main_path() {
 }
 
 cmd_land() {
-  local target="" also=() w old new paths clash p failed=0 cmd gate=1
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -332,11 +431,24 @@ cmd_land() {
     say "gate: $cmd"
     (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
   done
-  paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
-  clash=$(main_held "$old" "$paths")
-  [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
+  while :; do
+    moved=$(git -C "$MAIN" rev-parse "$BASE")
+    if [ "$moved" != "$old" ]; then
+      (cd "$w" && tools/gate.sh --inert "$old" "$moved") || die "land: $BASE moved during the gate to $(git -C "$MAIN" rev-parse --short "$moved") with paths a lane tests; run land again"
+      say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved") by paths no lane tests; rebasing onto it without a second gate"
+      if ! git -C "$w" rebase "$moved" >&2; then
+        git -C "$w" rebase --abort >/dev/null 2>&1
+        die "land: rebase onto $BASE conflicts; rebase by hand in $w"
+      fi
+      old=$moved
+      new=$(git -C "$w" rev-parse HEAD)
+    fi
+    paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
+    clash=$(main_held "$old" "$paths")
+    [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
-  git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" || die "land: $BASE moved during the gate; run land again"
+    git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" 2>/dev/null && break
+  done
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     sync_main_path "$p" "$old" "$new" || failed=1
@@ -351,12 +463,14 @@ hook_field() {
 
 case "${1:-}" in
   new) shift; cmd_new "$@" ;;
+  card) shift; cmd_card "$@" ;;
   ls) shift; cmd_ls "$@" ;;
   __ls_row) ls_row "${2%%$'\t'*}" "${2#*$'\t'}" ;;
   rm) shift; cmd_rm "$@" ;;
   land) shift; cmd_land "$@" ;;
   hook-create) name=$(hook_field name); cmd_new "$name" ;;
   hook-remove) path=$(hook_field worktree_path); cmd_rm "$path" ;;
+  hook-session) hook_session ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 2 ;;
 esac

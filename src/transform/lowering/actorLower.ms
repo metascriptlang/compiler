@@ -538,6 +538,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
+				implNode.paramSyms = m.paramSyms;
 				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType != null ? m.nodeType : noneType(), false);
 				implSym.nativeName = implNativeName;
 				implSym.state = SymbolState.Checked;
@@ -570,6 +571,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
+				implNode.paramSyms = m.paramSyms;
 				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType != null ? m.nodeType : noneType(), false);
 				implSym.nativeName = implNativeName;
 				implSym.state = SymbolState.Checked;
@@ -669,6 +671,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			fnNode.resolvedSym = ctorSym;
 			fnNode.typeExprs = m.typeExprs;
 			fnNode.paramLocations = m.paramLocations;
+			fnNode.paramSyms = m.paramSyms;
 			result.push(fnNode);
 		}
 	}
@@ -1316,6 +1319,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			implNode.nodeType = implType;
 			implNode.typeExprs = m.typeExprs;
 			implNode.paramLocations = m.paramLocations;
+			implNode.paramSyms = m.paramSyms;
 			const implSym = makeSymbol(implNativeName, SymbolKind.Function,
 				implType != null ? implType : noneType(), false);
 			implSym.nativeName = implNativeName;

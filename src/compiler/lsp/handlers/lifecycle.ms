@@ -299,6 +299,12 @@ test "clean source has no diagnostics" {
 	assert lspGetField(diags, "uri") == "file:///test.ms";
 }
 
+test "actor static without readonly is reported" {
+	const db = testDb("file:///test.ms", "actor A {\n\tstatic n: int32 = 0;\n\tping(): int32 { return 1; }\n}\n");
+	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
+	assert diags.indexOf("must be 'static readonly'") >= 0;
+}
+
 test "initialize" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("initialize", "1", "{}", db, testCache());

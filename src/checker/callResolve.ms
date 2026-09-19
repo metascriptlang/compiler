@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { ArrayAccessData, ArrayLiteralData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -908,7 +908,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (ctx.extensionRegistry != null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
-			if (objType != null) {
+			const isNamespaceQualified = me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module;
+			if (objType != null && !isNamespaceQualified) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
@@ -1260,6 +1261,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const nullableRet = calleeType.typeReturn.typeReturn != null ? calleeType.typeReturn.typeReturn : inferredType();
 		node.nodeType = nullableRet;
 		return nullableRet;
+	}
+	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures",
+			node.location.line, node.location.column);
+		node.nodeType = inferredType();
+		return node.nodeType;
 	}
 
 	// Check argument types + infer generic return
@@ -1847,6 +1854,28 @@ function bindingConflictSkipArg(arg: Node): boolean {
 	return t.kind == TypeKind.Error || isUnresolvedType(t) || isUnknownType(t);
 }
 
+function literalParamsAwaitFormal(arg: Node): boolean {
+	if (arg == null) return false;
+	let params: string[] = [];
+	let paramTypes: string[] = [];
+	if (arg.kind == NodeKind.ArrowFunction) {
+		const ad = arg.data as ArrowFunctionData;
+		params = ad.arrowParams;
+		paramTypes = ad.arrowParamTypes;
+	} else if (arg.kind == NodeKind.FunctionExpr) {
+		const fd = arg.data as FunctionExprData;
+		params = fd.funcExprParams;
+		paramTypes = fd.funcExprParamTypes;
+	} else {
+		return false;
+	}
+	if (paramTypes.length < params.length) return true;
+	for (const pt of paramTypes) {
+		if (pt == "") return true;
+	}
+	return false;
+}
+
 function strictlyWidens(from: Type, to: Type): boolean {
 	return isAssignable(from, to) && !isAssignable(to, from);
 }
@@ -2073,8 +2102,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const restFormal = lastFormal != null && lastFormal.kind == TypeKind.Varargs ? lastFormal : null;
 	for (let ai = 0; ai < cd.arguments.length; ai += 1) {
 		const argT = ai < argTypes.length ? argTypes[ai] : null;
-		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error) continue;
-		if (bindingConflictSkipArg(cd.arguments[ai])) continue;
+		if (argT == null || isUnresolvedType(argT) || argT.kind == TypeKind.Error || isUnknownType(argT)) continue;
 		let reported = false;
 		for (const c of conflicted) { if (c == ai) reported = true; }
 		if (reported) continue;
@@ -2093,9 +2121,16 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			formalT = restElem;
 		}
 		if (formalT == null || hasGenericParams(formalT) || isUnresolvedType(formalT)) continue;
-		if (isAssignable(argT, formalT)) continue;
+		let checkedT: Type = argT;
+		if (!isAssignable(checkedT, formalT) && literalParamsAwaitFormal(cd.arguments[ai])) {
+			clearCheckerState(cd.arguments[ai]);
+			callCheckExpr(ctx, cd.arguments[ai], formalT);
+			const retyped = cd.arguments[ai].nodeType;
+			if (retyped != null) { checkedT = retyped; argTypes[ai] = retyped; }
+		}
+		if (isAssignable(checkedT, formalT)) continue;
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
-			+ ": got " + typeDisplayName(argT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(argT, formalT),
+			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(checkedT, formalT),
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
@@ -2486,6 +2521,26 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
 // Each extension's fnType includes the receiver as param[0]; strip it before scoring.
+function isValueCallee(callee: Node): boolean {
+	if (callee.kind != NodeKind.Identifier && callee.kind != NodeKind.MemberExpr) return true;
+	const sym = callee.resolvedSym;
+	if (sym == null) return callee.kind == NodeKind.MemberExpr;
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter
+		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
+}
+
+function isNeverCallable(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
+			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
+			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray => true,
+		_ => false,
+	};
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`

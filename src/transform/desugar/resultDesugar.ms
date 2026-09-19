@@ -27,7 +27,7 @@ import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } fro
 import {
 	makeIdentResolved, makeVarDecl, makeBlock,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
-	makeExprStmt, makeTryCatch, makeAssign, makeDefaultValue, makeTypedObjectLiteral,
+	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -186,7 +186,7 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 			const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
 			const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
 			const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
-			hoisted.push(makeTryCatch(tryBlock, "$e", catchBlock, makeBlock([], loc), loc));
+			hoisted.push(makeTryCatch(tryBlock, makeCatchSym("$e"), catchBlock, makeBlock([], loc), loc));
 			const ref = makeIdentResolved(sym, loc);
 			ref.nodeType = node.nodeType != null ? node.nodeType : resType;
 			return ref;

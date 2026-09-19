@@ -105,6 +105,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.typeExpr = src.typeExpr;
 		dst.typeExprs = src.typeExprs;
 		dst.paramLocations = src.paramLocations;
+		dst.paramSyms = src.paramSyms;
 		dst.comments = src.comments;
 		return dst;
 	}

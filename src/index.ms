@@ -74,7 +74,7 @@ export function main(): number {
 					extras.push(normalize(join(projectRoot, gi)));
 				}
 			}
-			setExtraGlobalImports(extras);
+			setExtraGlobalImports(extras, buildMsPath);
 		}
 	}
 

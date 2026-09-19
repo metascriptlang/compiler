@@ -675,7 +675,22 @@ function coercionMethodName(t: Type): string {
 // Caller (e.g. fitNode, checkCallExpr arg coercion) substitutes the returned Node
 // for `expr` at its slot. Result type matches targetType exactly.
 export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
-	if (ctx.extensionRegistry == null) return null as unknown as Node;
+	const methodName = asCoercionMethod(ctx, srcType, targetType);
+	if (methodName == "") return null as unknown as Node;
+	const loc = expr.location;
+	const memberNode = createNodeAt(NodeKind.MemberExpr,
+		{ object: expr, property: methodName, isOptional: false }, loc);
+	const synthCall = createNodeAt(NodeKind.CallExpr,
+		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	callCheckExpr(ctx, synthCall, null);
+	if (synthCall.nodeType == null) return null as unknown as Node;
+	if (synthCall.nodeType.kind == TypeKind.Error) return null as unknown as Node;
+	if (isUnresolvedType(synthCall.nodeType)) return null as unknown as Node;
+	return synthCall;
+}
+
+function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type): string {
+	if (ctx.extensionRegistry == null) return "";
 	// Nullable-ref target (`X | null`): coerce to the non-null member — the
 	// synthesized X then flows into X|null via the normal member rule. Interface
 	// members sit behind an unnamed Ref wrapper — peel it for the method name.
@@ -687,38 +702,23 @@ export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType
 		if (nn != null && !isUnresolvedType(nn)) targetType = nn;
 	}
 	const methodName = coercionMethodName(targetType);
-	if (methodName == "") return null as unknown as Node;
+	if (methodName == "") return "";
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, methodName);
-	if (exts.length == 0) return null as unknown as Node;
-	// Receiver and declared return may sit behind unnamed Ref wrappers
-	// (interface values) — peel for matching, same as the target peel above.
-	let srcForMatch = srcType;
-	if ((srcForMatch.kind == TypeKind.Ref || srcForMatch.kind == TypeKind.Ptr) && srcForMatch.typeReturn != null) {
-		srcForMatch = srcForMatch.typeReturn;
-	}
-	const ext = findFirstMatchingExt(exts, srcForMatch);
-	if (ext == null) return null as unknown as Node;
+	if (exts.length == 0) return "";
+	const ext = findFirstMatchingExt(exts, srcType);
+	if (ext == null) return "";
 	// Verify return type matches target exactly (asInt32 vs asInt64 disambiguation).
 	const extFnT = getExtFnType(ext);
 	let extRet = extFnT.typeReturn;
 	if (extRet != null && (extRet.kind == TypeKind.Ref || extRet.kind == TypeKind.Ptr) && extRet.typeReturn != null) {
 		extRet = extRet.typeReturn;
 	}
-	if (extRet == null) return null as unknown as Node;
-	if (extRet.kind != targetType.kind) return null as unknown as Node;
+	if (extRet == null) return "";
+	if (extRet.kind != targetType.kind) return "";
 	if (targetType.typeName != "" && extRet.typeName != targetType.typeName) {
-		return null as unknown as Node;
+		return "";
 	}
-	const loc = expr.location;
-	const memberNode = createNodeAt(NodeKind.MemberExpr,
-		{ object: expr, property: methodName, isOptional: false }, loc);
-	const synthCall = createNodeAt(NodeKind.CallExpr,
-		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
-	callCheckExpr(ctx, synthCall, null);
-	if (synthCall.nodeType == null) return null as unknown as Node;
-	if (synthCall.nodeType.kind == TypeKind.Error) return null as unknown as Node;
-	if (isUnresolvedType(synthCall.nodeType)) return null as unknown as Node;
-	return synthCall;
+	return methodName;
 }
 
 export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
@@ -759,9 +759,29 @@ export function operandReadsValue(ctx: CheckerContext, op: string, leftType: Typ
 	return relationalOperandsFail(ctx, op, leftType, rightType) || binaryOperandsFail(ctx, op, leftType, rightType);
 }
 
-export function valueOfInPlace(ctx: CheckerContext, node: Node): boolean {
+export enum ReadNeed { Value, Items, Text, Slot }
+
+function declaresOwnProtocol(ctx: CheckerContext, t: Type, name: string): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	let src = withoutReadonlyView(t);
+	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
+	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, name), src);
+	return ext != null && ext.receiverTypeName != "" && ext.receiverTypeName == typeNameOf(src);
+}
+
+function needServedByOwnProtocol(ctx: CheckerContext, t: Type, need: ReadNeed, formal: Type | null): boolean {
+	return match (need) {
+		ReadNeed.Items => declaresOwnProtocol(ctx, t, "toItems"),
+		ReadNeed.Text => declaresOwnProtocol(ctx, t, "toString"),
+		ReadNeed.Slot => formal != null && asCoercionMethod(ctx, t, formal) != "",
+		_ => false,
+	};
+}
+
+export function valueOfInPlace(ctx: CheckerContext, node: Node, need: ReadNeed = ReadNeed.Value, formal: Type | null = null): boolean {
 	if (node == null as unknown as Node || node.flags.has(NodeFlag.ProtocolCall)) return false;
 	if (!hasValueOfProtocol(ctx, node.nodeType)) return false;
+	if (needServedByOwnProtocol(ctx, node.nodeType!, need, formal)) return false;
 	const inner = createNodeAt(node.kind, node.data, node.location);
 	inner.nodeType = node.nodeType;
 	inner.resolvedSym = node.resolvedSym;
@@ -1035,7 +1055,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			+ "' — a void call produces no value", expr.location.line, expr.location.column);
 		return expr;
 	}
-	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr)) {
+	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr, ReadNeed.Slot, formal)) {
 		return fitNode(ctx, expr, formal, expr.nodeType);
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);

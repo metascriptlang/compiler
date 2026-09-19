@@ -6,8 +6,8 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
+import { CheckerContext, isExportedBy, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -34,7 +34,8 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
 import { gensymSplicePrefix } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { checkActorStaticField } from "./sendable";
 import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -394,7 +395,7 @@ function applyNestedDecorators(ctx: CheckerContext, node: Node): Node[] {
 function hoistNestedInits(ctx: CheckerContext, inits: Node[]): void {
 	for (const s of inits) {
 		checkStmt(ctx, s);
-		ctx.pendingHoisted.push(s);
+		ctx.pendingTrailing.push(s);
 	}
 }
 
@@ -818,9 +819,7 @@ function findFrameValueRead(node: Node): Symbol {
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym == null) return none;
-		if (sym.symbolKind == SymbolKind.Parameter) return sym;
-		if ((sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global)) return sym;
-		return none;
+		return isFrameValue(sym) ? sym : none;
 	}
 	const kids: Node[] = [];
 	forEachChild(node, (child: Node): void => { kids.push(child); });
@@ -909,7 +908,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
 
-	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
+	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind == TypeKind.Function
@@ -1068,6 +1067,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	ctx.currentActorName = d.actorName;
 	for (const member of d.actorBody) {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
+		checkActorStaticField(ctx, member);
 	}
 	ctx.currentActorName = prevActorName;
 	closeScope(ctx.table);
@@ -1087,7 +1087,14 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 		NodeKind.PropertyDecl => {
 			const pd = node.data as PropertyDeclData;
 			if (pd.propInitializer != null) {
+				const savedBoundary = ctx.staticInitBoundary;
+				if (pd.propIsStatic) {
+					ctx.staticInitBoundary = ctx.table.current;
+					openStaticReceiverScope(ctx, classType.sym);
+				}
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (pd.propIsStatic) closeScope(ctx.table);
+				ctx.staticInitBoundary = savedBoundary;
 			}
 		},
 		NodeKind.MethodDecl => {
@@ -1101,7 +1108,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// Skip body check for extern (no body) and generic methods (body re-checked
 			// per instantiation, like top-level generic fns at checkFunctionDecl:358).
 			if (d.methodFlags != "extern" && !isGenericFn(d.methodFlags)) {
-				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
+				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
@@ -1140,11 +1149,16 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			if (node.paramLocations != null) {
 				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
 			}
-			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
+			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
 	};
+}
+
+function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): void {
+	openScope(ctx.table, ScopeKind.Block);
+	if (owner != null) ctx.table.current.symbols.set(getIdentId(ctx.table.identCache, "this"), owner!);
 }
 
 function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {
@@ -1172,26 +1186,27 @@ function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[]
 }
 
 function checkStaticBlockMember(ctx: CheckerContext, node: Node, owner: Symbol | null): void {
-	if (owner != null && owner!.symbolKind == SymbolKind.Actor) {
-		addError(ctx, `static blocks are not supported in actors`, node.location.line, node.location.column);
-		return;
-	}
 	const savedClass = ctx.staticBlockClass;
 	const savedPending = ctx.staticBlockPending;
 	const savedFunction = ctx.currentFunction;
 	const savedInLoop = ctx.inLoop;
 	const savedInSwitch = ctx.inSwitch;
+	const savedBoundary = ctx.staticInitBoundary;
 	ctx.staticBlockClass = owner;
+	ctx.staticInitBoundary = ctx.table.current;
 	ctx.staticBlockPending = staticFieldsInitializedAfter(owner, node);
 	ctx.currentFunction = null;
 	ctx.inLoop = false;
 	ctx.inSwitch = false;
+	openStaticReceiverScope(ctx, owner);
 	checkBlock(ctx, node);
+	closeScope(ctx.table);
 	ctx.staticBlockClass = savedClass;
 	ctx.staticBlockPending = savedPending;
 	ctx.currentFunction = savedFunction;
 	ctx.inLoop = savedInLoop;
 	ctx.inSwitch = savedInSwitch;
+	ctx.staticInitBoundary = savedBoundary;
 }
 
 function checkExportDecl(ctx: CheckerContext, node: Node): void {
@@ -1356,7 +1371,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
-	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable)) {
+	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable, ReadNeed.Items)) {
 		elemType = iterableElemType(d.forOfIterable.nodeType);
 	}
 	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
@@ -1538,23 +1553,31 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 // be read. Ownership is fixed when the entry is queued, not when it is taken.
 function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32): int32 {
 	const n = ctx.pendingHoisted.length - from;
-	if (n <= 0) return 0;
+	const trailing = ctx.pendingTrailing.length;
+	if (n <= 0 && trailing == 0) return 0;
 	const rebuilt: Node[] = [];
 	let inserted = false;
 	let i = 0;
 	while (i < stmts.length) {
 		if (i == at) {
 			for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
+			rebuilt.push(stmts[i]);
+			for (const t of ctx.pendingTrailing) rebuilt.push(t);
 			inserted = true;
+		} else {
+			rebuilt.push(stmts[i]);
 		}
-		rebuilt.push(stmts[i]);
 		i = i + 1;
 	}
-	if (!inserted) { for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]); }
+	if (!inserted) {
+		for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
+		for (const t of ctx.pendingTrailing) rebuilt.push(t);
+	}
 	ctx.pendingHoisted.length = from;
+	ctx.pendingTrailing.length = 0;
 	stmts.length = 0;
 	for (const s of rebuilt) stmts.push(s);
-	return n;
+	return n + trailing;
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -1734,6 +1757,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 			const catchType = (errSym != null && errSym.symbolType != null) ? errSym.symbolType : inferredType();
 			node.nodeType = catchType;
 			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, catchType, false);
+			node.resolvedSym = catchSym;
 			defineSymbol(ctx.table, catchSym);
 			// Catch param is always initialized (exception runtime provides it)
 			markInitialized(ctx.initTracker, d.catchName);
@@ -1925,7 +1949,8 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] {
+	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
@@ -1960,6 +1985,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
 			paramSym.location = paramLocs[i];
 		}
+		paramSyms.push(paramSym);
 		defineSymbol(ctx.table, paramSym);
 		// Ref parity: params are implicitly initialized
 		markInitialized(ctx.initTracker, param);
@@ -1994,6 +2020,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	if (_slowTrace && _fb1 - _fb0 > 500) {
 		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym != null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
 	}
+	return paramSyms;
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {
@@ -2040,6 +2067,7 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 			merged.push(s);
 		}
 		stmts.programStmts = merged;
+		ctx.liftedLocalTypeDecls = ctx.pendingLocalTypeDecls;
 		ctx.pendingLocalTypeDecls = [];
 	}
 }
@@ -2692,7 +2720,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols.values()) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
+			if (isExportedBy(subCtx, sym)) {
 				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved, subCtx));
 			}
 		}
@@ -2707,7 +2735,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// Also register sub-module extensions into parent context
 		if (subCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
 			for (const ext of subCtx.extensionRegistry.methods) {
-				if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+				if (ext.sym != null && isExportedBy(subCtx, ext.sym)) {
 					registerExtension(ctx.extensionRegistry, ext);
 				}
 			}
@@ -2819,7 +2847,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 
 export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext): void {
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+		if (!isExportedBy(ctx, sym)) continue;
 		addSymbolToScope(preludeCtx.table.current, sym);
 		if (sym.symbolKind != SymbolKind.Macro) continue;
 		const body = ctx.macroBodyRegistry.get(sym.name);
@@ -2843,7 +2871,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 	let ei = 0;
 	while (ei < exts.length) {
 		const ext = exts[ei];
-		if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+		if (ext.sym != null && isExportedBy(ctx, ext.sym)) {
 			registerExtension(preludeCtx.extensionRegistry, ext);
 		}
 		ei = ei + 1;
@@ -2975,7 +3003,7 @@ export function checkProgramWithRegistryCancellable(
 
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
-registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void => { checkFunctionBody(ctx, sym, params, body, paramLocs); });
+registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 
 // ===== Tests =====
 
@@ -4809,4 +4837,54 @@ test "directive arg: undefined Identifier silently skipped (no crash)" {
 	// inject a bogus flag.
 	const ctx = checkSource("@passC(unresolvedConst);\n");
 	assert ctx.compilerFlags.indexOf("unresolvedConst") < 0;
+}
+
+function checkedStmts(input: string): Node[] {
+	const pr = parseSource(input);
+	if (!pr.ok) return [];
+	checkProgram(pr.value);
+	return (pr.value.data as ProgramData).programStmts;
+}
+
+function firstIdentNamed(node: Node | null, name: string): Node | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == name) return node;
+	let found: Node | null = null;
+	forEachChild(node, (child: Node): void => { if (found == null) found = firstIdentNamed(child, name); });
+	return found;
+}
+
+test "a function declaration carries its parameter symbols and its body resolves to them" {
+	const fn = checkedStmts("function f(a: int32, b: string): int32 { return a + b.length; }")[0];
+	assert fn.paramSyms != null && fn.paramSyms.length == 2;
+	const d = fn.data as FunctionDeclData;
+	assert firstIdentNamed(d.fnBody, "a")!.resolvedSym == fn.paramSyms[0];
+	assert firstIdentNamed(d.fnBody, "b")!.resolvedSym == fn.paramSyms[1];
+}
+
+test "an arrow carries its parameter symbols" {
+	const decl = checkedStmts("const g = (x: int32): int32 => x + 1;")[0];
+	const arrow = (decl.data as VariableDeclData).initializer;
+	assert arrow.paramSyms != null && arrow.paramSyms.length == 1;
+	assert firstIdentNamed((arrow.data as ArrowFunctionData).arrowBody, "x")!.resolvedSym == arrow.paramSyms[0];
+}
+
+test "a method and a constructor carry their parameter symbols with the receiver first" {
+	const cls = checkedStmts("class C { v: int32; constructor(v: int32) { this.v = v; } get(k: int32): int32 { return this.v + k; } }")[0];
+	let seen = 0;
+	for (const m of (cls.data as ClassDeclData).classBody) {
+		if (m.kind == NodeKind.ConstructorDecl) {
+			assert m.paramSyms != null && m.paramSyms.length == 2;
+			assert m.paramSyms[0].name == "this";
+			assert firstIdentNamed((m.data as ConstructorDeclData).ctorBody, "v")!.resolvedSym == m.paramSyms[1];
+			seen += 1;
+		}
+		if (m.kind == NodeKind.MethodDecl) {
+			assert m.paramSyms != null && m.paramSyms.length == 2;
+			assert m.paramSyms[0].name == "this";
+			assert firstIdentNamed((m.data as MethodDeclData).methodBody, "k")!.resolvedSym == m.paramSyms[1];
+			seen += 1;
+		}
+	}
+	assert seen == 2;
 }

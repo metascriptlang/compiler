@@ -1,0 +1,655 @@
+@include("runtime/solana/solana.h");
+
+extern function msSolAccountCount(): uint64;
+extern function msSolAccountAt(index: uint64): uint64;
+extern function msSolInstructionData(): uint64;
+extern function msSolInstructionDataLength(): uint64;
+extern function msSolProgramId(): uint64;
+extern function msSolAlloc(size: uint64): uint64;
+extern function msSolSetResult(code: uint64): void;
+extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolLoadU16(address: uint64): uint16;
+extern function msSolLoadU32(address: uint64): uint32;
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolStoreU8(address: uint64, value: uint8): void;
+extern function msSolStoreU16(address: uint64, value: uint16): void;
+extern function msSolStoreU32(address: uint64, value: uint32): void;
+extern function msSolStoreU64(address: uint64, value: uint64): void;
+extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
+extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
+extern function msSolLogPubkey(address: uint64): void;
+extern function msSolLogComputeUnits(): void;
+extern function msSolRemainingComputeUnits(): uint64;
+extern function msSolStringAddress(text: string): uint64;
+extern function msSolStringLength(text: string): uint64;
+extern function msSolCreateProgramAddress(seeds: uint64, seedCount: uint64, programId: uint64, out: uint64): uint64;
+extern function msSolTryFindProgramAddress(seeds: uint64, seedCount: uint64, programId: uint64, out: uint64, bump: uint64): uint64;
+extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
+extern function msSolGetClock(out: uint64): uint64;
+extern function msSolGetRent(out: uint64): uint64;
+
+export struct Pubkey {
+	word0: uint64;
+	word1: uint64;
+	word2: uint64;
+	word3: uint64;
+}
+
+export struct Bytes {
+	address: uint64;
+	length: uint64;
+}
+
+export struct Account {
+	address: uint64;
+}
+
+export struct ProgramError {
+	code: uint64;
+}
+
+export struct ProgramAddress {
+	key: Pubkey;
+	bump: uint8;
+}
+
+export struct Seeds {
+	address: uint64;
+	capacity: uint64;
+}
+
+export struct Instruction {
+	address: uint64;
+	accountCapacity: uint64;
+	dataCapacity: uint64;
+}
+
+export struct Clock {
+	slot: uint64;
+	epochStartTimestamp: int64;
+	epoch: uint64;
+	leaderScheduleEpoch: uint64;
+	unixTimestamp: int64;
+}
+
+function builtinError(index: uint64): ProgramError {
+	const error: ProgramError = { code: index << 32 };
+	return error;
+}
+
+export function custom(this typeof ProgramError, code: uint32): ProgramError {
+	const error: ProgramError = { code: code as uint64 };
+	return error;
+}
+
+export function invalidArgument(this typeof ProgramError): ProgramError { return builtinError(2); }
+export function invalidInstructionData(this typeof ProgramError): ProgramError { return builtinError(3); }
+export function invalidAccountData(this typeof ProgramError): ProgramError { return builtinError(4); }
+export function accountDataTooSmall(this typeof ProgramError): ProgramError { return builtinError(5); }
+export function insufficientFunds(this typeof ProgramError): ProgramError { return builtinError(6); }
+export function incorrectProgramId(this typeof ProgramError): ProgramError { return builtinError(7); }
+export function missingRequiredSignature(this typeof ProgramError): ProgramError { return builtinError(8); }
+export function accountAlreadyInitialized(this typeof ProgramError): ProgramError { return builtinError(9); }
+export function uninitializedAccount(this typeof ProgramError): ProgramError { return builtinError(10); }
+export function notEnoughAccountKeys(this typeof ProgramError): ProgramError { return builtinError(11); }
+export function maxSeedLengthExceeded(this typeof ProgramError): ProgramError { return builtinError(13); }
+export function invalidSeeds(this typeof ProgramError): ProgramError { return builtinError(14); }
+export function illegalOwner(this typeof ProgramError): ProgramError { return builtinError(18); }
+export function invalidRealloc(this typeof ProgramError): ProgramError { return builtinError(20); }
+export function invalidAccountOwner(this typeof ProgramError): ProgramError { return builtinError(23); }
+export function arithmeticOverflow(this typeof ProgramError): ProgramError { return builtinError(24); }
+export function immutable(this typeof ProgramError): ProgramError { return builtinError(25); }
+export function incorrectAuthority(this typeof ProgramError): ProgramError { return builtinError(26); }
+
+export function failWith(error: ProgramError): void {
+	msSolSetResult(error.code);
+}
+
+function loadPubkey(address: uint64): Pubkey {
+	const key: Pubkey = {
+		word0: msSolLoadU64(address),
+		word1: msSolLoadU64(address + 8),
+		word2: msSolLoadU64(address + 16),
+		word3: msSolLoadU64(address + 24),
+	};
+	return key;
+}
+
+function storePubkey(key: Pubkey, address: uint64): void {
+	msSolStoreU64(address, key.word0);
+	msSolStoreU64(address + 8, key.word1);
+	msSolStoreU64(address + 16, key.word2);
+	msSolStoreU64(address + 24, key.word3);
+}
+
+function storedPubkey(key: Pubkey): uint64 {
+	const address = msSolAlloc(32);
+	storePubkey(key, address);
+	return address;
+}
+
+export function zero(this typeof Pubkey): Pubkey {
+	const key: Pubkey = { word0: 0, word1: 0, word2: 0, word3: 0 };
+	return key;
+}
+
+export function systemProgram(this typeof Pubkey): Pubkey {
+	return Pubkey.zero();
+}
+
+export function clockSysvar(this typeof Pubkey): Pubkey {
+	const word0: uint64 = 0xc974c71817d5a706;
+	const word1: uint64 = 0xb65e1d6998635628;
+	const word2: uint64 = 0x5c6d4b9ba3b85e8b;
+	const word3: uint64 = 0x215b5573;
+	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	return key;
+}
+
+export function slotHashesSysvar(this typeof Pubkey): Pubkey {
+	const word0: uint64 = 0xaf0a2f1917d5a706;
+	const word1: uint64 = 0x7acc77fbe365f2c6;
+	const word2: uint64 = 0x133bbed029c582da;
+	const word3: uint64 = 0x2055002d6e;
+	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	return key;
+}
+
+export function equals(this key: Pubkey, other: Pubkey): boolean {
+	return key.word0 == other.word0 && key.word1 == other.word1 && key.word2 == other.word2 && key.word3 == other.word3;
+}
+
+export function isZero(this key: Pubkey): boolean {
+	return key.word0 == 0 && key.word1 == 0 && key.word2 == 0 && key.word3 == 0;
+}
+
+export function programId(): Pubkey {
+	return loadPubkey(msSolProgramId());
+}
+
+export function instructionData(): Bytes {
+	const data: Bytes = { address: msSolInstructionData(), length: msSolInstructionDataLength() };
+	return data;
+}
+
+export function accountCount(): int32 {
+	return msSolAccountCount() as int32;
+}
+
+export function account(index: int32): Result<Account, ProgramError> {
+	if (index < 0) { return Result.err(ProgramError.notEnoughAccountKeys()); }
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.notEnoughAccountKeys()); }
+	const found: Account = { address: address };
+	return Result.ok(found);
+}
+
+export function signerAccount(index: int32): Result<Account, ProgramError> {
+	const found = try account(index);
+	if (!found.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
+	return Result.ok(found);
+}
+
+export function writableAccount(index: int32): Result<Account, ProgramError> {
+	const found = try account(index);
+	if (!found.isWritable()) { return Result.err(ProgramError.invalidArgument()); }
+	return Result.ok(found);
+}
+
+export function key(this account: Account): Pubkey {
+	return loadPubkey(account.address + 8);
+}
+
+export function owner(this account: Account): Pubkey {
+	return loadPubkey(account.address + 40);
+}
+
+export function lamports(this account: Account): uint64 {
+	return msSolLoadU64(account.address + 72);
+}
+
+export function setLamports(this account: Account, lamports: uint64): void {
+	msSolStoreU64(account.address + 72, lamports);
+}
+
+export function dataLength(this account: Account): uint64 {
+	return msSolLoadU64(account.address + 80);
+}
+
+export function data(this account: Account): Bytes {
+	const bytes: Bytes = { address: account.address + 88, length: account.dataLength() };
+	return bytes;
+}
+
+export function isSigner(this account: Account): boolean {
+	return msSolLoadU8(account.address + 1) != 0;
+}
+
+export function isWritable(this account: Account): boolean {
+	return msSolLoadU8(account.address + 2) != 0;
+}
+
+export function isExecutable(this account: Account): boolean {
+	return msSolLoadU8(account.address + 3) != 0;
+}
+
+export function isOwnedBy(this account: Account, candidate: Pubkey): boolean {
+	return account.owner().equals(candidate);
+}
+
+export function assign(this account: Account, newOwner: Pubkey): void {
+	storePubkey(newOwner, account.address + 40);
+}
+
+export function resize(this account: Account, newLength: uint64): Result<uint64, ProgramError> {
+	const currentLength = account.dataLength();
+	const growth: int64 = (newLength as int64) - (currentLength as int64);
+	const previousDelta: int64 = (msSolLoadU32(account.address + 4) as int32) as int64;
+	const nextDelta: int64 = previousDelta + growth;
+	if (nextDelta > 10240) { return Result.err(ProgramError.invalidRealloc()); }
+	if (newLength > currentLength) {
+		msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
+	}
+	msSolStoreU32(account.address + 4, (nextDelta as int32) as uint32);
+	msSolStoreU64(account.address + 80, newLength);
+	return Result.ok(newLength);
+}
+
+function checkedAddress(bytes: Bytes, offset: uint64, width: uint64): Result<uint64, ProgramError> {
+	if (offset > bytes.length || width > bytes.length - offset) {
+		return Result.err(ProgramError.accountDataTooSmall());
+	}
+	return Result.ok(bytes.address + offset);
+}
+
+export function readU8(this bytes: Bytes, offset: uint64): Result<uint8, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 1);
+	return Result.ok(msSolLoadU8(address));
+}
+
+export function readU16(this bytes: Bytes, offset: uint64): Result<uint16, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 2);
+	return Result.ok(msSolLoadU16(address));
+}
+
+export function readU32(this bytes: Bytes, offset: uint64): Result<uint32, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 4);
+	return Result.ok(msSolLoadU32(address));
+}
+
+export function readU64(this bytes: Bytes, offset: uint64): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 8);
+	return Result.ok(msSolLoadU64(address));
+}
+
+export function readPubkey(this bytes: Bytes, offset: uint64): Result<Pubkey, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 32);
+	return Result.ok(loadPubkey(address));
+}
+
+export function writeU8(this bytes: Bytes, offset: uint64, value: uint8): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 1);
+	msSolStoreU8(address, value);
+	return Result.ok(offset + 1);
+}
+
+export function writeU16(this bytes: Bytes, offset: uint64, value: uint16): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 2);
+	msSolStoreU16(address, value);
+	return Result.ok(offset + 2);
+}
+
+export function writeU32(this bytes: Bytes, offset: uint64, value: uint32): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 4);
+	msSolStoreU32(address, value);
+	return Result.ok(offset + 4);
+}
+
+export function writeU64(this bytes: Bytes, offset: uint64, value: uint64): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 8);
+	msSolStoreU64(address, value);
+	return Result.ok(offset + 8);
+}
+
+export function writePubkey(this bytes: Bytes, offset: uint64, value: Pubkey): Result<uint64, ProgramError> {
+	const address = try checkedAddress(bytes, offset, 32);
+	storePubkey(value, address);
+	return Result.ok(offset + 32);
+}
+
+export function range(this bytes: Bytes, offset: uint64, length: uint64): Result<Bytes, ProgramError> {
+	const address = try checkedAddress(bytes, offset, length);
+	const view: Bytes = { address: address, length: length };
+	return Result.ok(view);
+}
+
+export function copyFrom(this bytes: Bytes, source: Bytes): Result<uint64, ProgramError> {
+	if (source.length > bytes.length) { return Result.err(ProgramError.accountDataTooSmall()); }
+	if (source.length > 0) { msSolCopy(bytes.address, source.address, source.length); }
+	return Result.ok(source.length);
+}
+
+export function fillWith(this bytes: Bytes, value: uint8): void {
+	if (bytes.length > 0) { msSolFill(bytes.address, value, bytes.length); }
+}
+
+export function none(this typeof Seeds): Seeds {
+	const seeds: Seeds = { address: 0, capacity: 0 };
+	return seeds;
+}
+
+export function empty(this typeof Seeds, capacity: uint64): Seeds {
+	const seeds: Seeds = { address: msSolAlloc(8 + capacity * 16), capacity: capacity };
+	return seeds;
+}
+
+export function seedCount(this seeds: Seeds): uint64 {
+	if (seeds.address == 0) { return 0; }
+	return msSolLoadU64(seeds.address);
+}
+
+export function seedAt(this seeds: Seeds, index: uint64): Bytes {
+	const entry = seeds.address + 8 + index * 16;
+	const view: Bytes = { address: msSolLoadU64(entry), length: msSolLoadU64(entry + 8) };
+	return view;
+}
+
+function addSlice(seeds: Seeds, address: uint64, length: uint64): Seeds {
+	const current = msSolLoadU64(seeds.address);
+	if (current >= seeds.capacity || length > 32) {
+		msSolStoreU64(seeds.address, seeds.capacity + 1);
+		return seeds;
+	}
+	const entry = seeds.address + 8 + current * 16;
+	msSolStoreU64(entry, address);
+	msSolStoreU64(entry + 8, length);
+	msSolStoreU64(seeds.address, current + 1);
+	return seeds;
+}
+
+export function addText(this seeds: Seeds, text: string): Seeds {
+	return addSlice(seeds, msSolStringAddress(text), msSolStringLength(text));
+}
+
+export function addBytes(this seeds: Seeds, bytes: Bytes): Seeds {
+	return addSlice(seeds, bytes.address, bytes.length);
+}
+
+export function addAccountKey(this seeds: Seeds, account: Account): Seeds {
+	return addSlice(seeds, account.address + 8, 32);
+}
+
+export function addPubkey(this seeds: Seeds, key: Pubkey): Seeds {
+	return addSlice(seeds, storedPubkey(key), 32);
+}
+
+export function addU8(this seeds: Seeds, value: uint8): Seeds {
+	const address = msSolAlloc(1);
+	msSolStoreU8(address, value);
+	return addSlice(seeds, address, 1);
+}
+
+export function addU64(this seeds: Seeds, value: uint64): Seeds {
+	const address = msSolAlloc(8);
+	msSolStoreU64(address, value);
+	return addSlice(seeds, address, 8);
+}
+
+export function withBump(this seeds: Seeds, bump: uint8): Seeds {
+	const current = seeds.seedCount();
+	const copy = Seeds.empty(current + 1);
+	if (current > seeds.capacity) {
+		msSolStoreU64(copy.address, copy.capacity + 1);
+		return copy;
+	}
+	if (current > 0) {
+		msSolCopy(copy.address + 8, seeds.address + 8, current * 16);
+		msSolStoreU64(copy.address, current);
+	}
+	return copy.addU8(bump);
+}
+
+export function findProgramAddress(this seeds: Seeds, program: Pubkey): Result<ProgramAddress, ProgramError> {
+	const count = seeds.seedCount();
+	if (count > seeds.capacity || count > 16) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	const out = msSolAlloc(33);
+	const status = msSolTryFindProgramAddress(seeds.address + 8, count, storedPubkey(program), out, out + 32);
+	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	const found: ProgramAddress = { key: loadPubkey(out), bump: msSolLoadU8(out + 32) };
+	return Result.ok(found);
+}
+
+export function createProgramAddress(this seeds: Seeds, program: Pubkey): Result<Pubkey, ProgramError> {
+	const count = seeds.seedCount();
+	if (count > seeds.capacity || count > 16) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	const out = msSolAlloc(32);
+	const status = msSolCreateProgramAddress(seeds.address + 8, count, storedPubkey(program), out);
+	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	return Result.ok(loadPubkey(out));
+}
+
+function metasAddress(instruction: Instruction): uint64 {
+	return instruction.address + 48;
+}
+
+function infosAddress(instruction: Instruction): uint64 {
+	return instruction.address + 48 + 16 * instruction.accountCapacity;
+}
+
+function payloadAddress(instruction: Instruction): uint64 {
+	return instruction.address + 48 + 72 * instruction.accountCapacity;
+}
+
+function flagByte(value: boolean): uint8 {
+	if (value) { return 1; }
+	return 0;
+}
+
+export function forProgram(this typeof Instruction, program: Pubkey, accountCapacity: uint64, dataCapacity: uint64): Instruction {
+	const address = msSolAlloc(48 + 72 * accountCapacity + dataCapacity + 32);
+	const instruction: Instruction = { address: address, accountCapacity: accountCapacity, dataCapacity: dataCapacity };
+	const programAddress = payloadAddress(instruction) + dataCapacity;
+	storePubkey(program, programAddress);
+	msSolStoreU64(address, programAddress);
+	msSolStoreU64(address + 8, metasAddress(instruction));
+	msSolStoreU64(address + 24, payloadAddress(instruction));
+	return instruction;
+}
+
+export function addAccount(this instruction: Instruction, account: Account, writable: boolean, signer: boolean): Instruction {
+	const count = msSolLoadU64(instruction.address + 16);
+	if (count >= instruction.accountCapacity) {
+		msSolStoreU64(instruction.address + 40, 1);
+		return instruction;
+	}
+	const meta = metasAddress(instruction) + count * 16;
+	msSolStoreU64(meta, account.address + 8);
+	msSolStoreU8(meta + 8, flagByte(writable));
+	msSolStoreU8(meta + 9, flagByte(signer));
+	const info = infosAddress(instruction) + count * 56;
+	msSolStoreU64(info, account.address + 8);
+	msSolStoreU64(info + 8, account.address + 72);
+	msSolStoreU64(info + 16, account.dataLength());
+	msSolStoreU64(info + 24, account.address + 88);
+	msSolStoreU64(info + 32, account.address + 40);
+	msSolStoreU8(info + 48, msSolLoadU8(account.address + 1));
+	msSolStoreU8(info + 49, msSolLoadU8(account.address + 2));
+	msSolStoreU8(info + 50, msSolLoadU8(account.address + 3));
+	msSolStoreU64(instruction.address + 16, count + 1);
+	return instruction;
+}
+
+export function addWritableSigner(this instruction: Instruction, account: Account): Instruction {
+	return instruction.addAccount(account, true, true);
+}
+
+export function addWritable(this instruction: Instruction, account: Account): Instruction {
+	return instruction.addAccount(account, true, false);
+}
+
+export function addReadonlySigner(this instruction: Instruction, account: Account): Instruction {
+	return instruction.addAccount(account, false, true);
+}
+
+export function addReadonly(this instruction: Instruction, account: Account): Instruction {
+	return instruction.addAccount(account, false, false);
+}
+
+function reserve(instruction: Instruction, width: uint64): uint64 {
+	const length = msSolLoadU64(instruction.address + 32);
+	if (width > instruction.dataCapacity - length) {
+		msSolStoreU64(instruction.address + 40, 1);
+		return 0;
+	}
+	msSolStoreU64(instruction.address + 32, length + width);
+	return payloadAddress(instruction) + length;
+}
+
+export function appendU8(this instruction: Instruction, value: uint8): Instruction {
+	const address = reserve(instruction, 1);
+	if (address != 0) { msSolStoreU8(address, value); }
+	return instruction;
+}
+
+export function appendU32(this instruction: Instruction, value: uint32): Instruction {
+	const address = reserve(instruction, 4);
+	if (address != 0) { msSolStoreU32(address, value); }
+	return instruction;
+}
+
+export function appendU64(this instruction: Instruction, value: uint64): Instruction {
+	const address = reserve(instruction, 8);
+	if (address != 0) { msSolStoreU64(address, value); }
+	return instruction;
+}
+
+export function appendPubkey(this instruction: Instruction, value: Pubkey): Instruction {
+	const address = reserve(instruction, 32);
+	if (address != 0) { storePubkey(value, address); }
+	return instruction;
+}
+
+export function appendBytes(this instruction: Instruction, value: Bytes): Instruction {
+	const address = reserve(instruction, value.length);
+	if (address != 0 && value.length > 0) { msSolCopy(address, value.address, value.length); }
+	return instruction;
+}
+
+export function appendText(this instruction: Instruction, value: string): Instruction {
+	const length = msSolStringLength(value);
+	const address = reserve(instruction, length);
+	if (address != 0 && length > 0) { msSolCopy(address, msSolStringAddress(value), length); }
+	return instruction;
+}
+
+export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
+	if (msSolLoadU64(instruction.address + 40) != 0) { return Result.err(ProgramError.invalidArgument()); }
+	let signers: uint64 = 0;
+	let signerCount: uint64 = 0;
+	if (signer.address != 0) {
+		const count = signer.seedCount();
+		if (count > signer.capacity) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+		signers = msSolAlloc(16);
+		msSolStoreU64(signers, signer.address + 8);
+		msSolStoreU64(signers + 8, count);
+		signerCount = 1;
+	}
+	const status = msSolInvokeSigned(instruction.address, infosAddress(instruction), msSolLoadU64(instruction.address + 16), signers, signerCount);
+	if (status != 0) {
+		const failure: ProgramError = { code: status };
+		return Result.err(failure);
+	}
+	return Result.ok(status);
+}
+
+export function invoke(this instruction: Instruction): Result<uint64, ProgramError> {
+	return instruction.invokeSigned(Seeds.none());
+}
+
+export function createAccount(payer: Account, target: Account, lamports: uint64, space: uint64, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 52);
+	instruction.addWritableSigner(payer);
+	instruction.addWritableSigner(target);
+	instruction.appendU32(0);
+	instruction.appendU64(lamports);
+	instruction.appendU64(space);
+	instruction.appendPubkey(newOwner);
+	return instruction.invokeSigned(signer);
+}
+
+export function assignTo(target: Account, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 36);
+	instruction.addWritableSigner(target);
+	instruction.appendU32(1);
+	instruction.appendPubkey(newOwner);
+	return instruction.invokeSigned(signer);
+}
+
+export function transfer(source: Account, destination: Account, lamports: uint64, signer: Seeds): Result<uint64, ProgramError> {
+	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 12);
+	instruction.addWritableSigner(source);
+	instruction.addWritable(destination);
+	instruction.appendU32(2);
+	instruction.appendU64(lamports);
+	return instruction.invokeSigned(signer);
+}
+
+export function allocate(target: Account, space: uint64, signer: Seeds): Result<uint64, ProgramError> {
+	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 12);
+	instruction.addWritableSigner(target);
+	instruction.appendU32(8);
+	instruction.appendU64(space);
+	return instruction.invokeSigned(signer);
+}
+
+export function minimumBalance(dataLength: uint64): uint64 {
+	const out = msSolAlloc(24);
+	const _status = msSolGetRent(out);
+	const lamportsPerByte = msSolLoadU64(out);
+	const thresholdBits = msSolLoadU64(out + 8);
+	const twoBits: uint64 = 0x4000000000000000;
+	const bytes = dataLength + 128;
+	if (thresholdBits == twoBits) { return 2 * bytes * lamportsPerByte; }
+	return bytes * lamportsPerByte;
+}
+
+export function createProgramAccount(payer: Account, target: Account, space: uint64, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+	const required = minimumBalance(space);
+	const current = target.lamports();
+	if (current == 0) { return createAccount(payer, target, required, space, newOwner, signer); }
+	if (required > current) {
+		const _funded = try transfer(payer, target, required - current, Seeds.none());
+	}
+	const _allocated = try allocate(target, space, signer);
+	return assignTo(target, newOwner, signer);
+}
+
+export function clock(): Clock {
+	const out = msSolAlloc(40);
+	const _status = msSolGetClock(out);
+	const value: Clock = {
+		slot: msSolLoadU64(out),
+		epochStartTimestamp: msSolLoadU64(out + 8) as int64,
+		epoch: msSolLoadU64(out + 16),
+		leaderScheduleEpoch: msSolLoadU64(out + 24),
+		unixTimestamp: msSolLoadU64(out + 32) as int64,
+	};
+	return value;
+}
+
+export function logU64(value: uint64): void {
+	msSolLog64(0, 0, 0, 0, value);
+}
+
+export function logPubkey(key: Pubkey): void {
+	msSolLogPubkey(storedPubkey(key));
+}
+
+export function logComputeUnits(): void {
+	msSolLogComputeUnits();
+}
+
+export function remainingComputeUnits(): uint64 {
+	return msSolRemainingComputeUnits();
+}

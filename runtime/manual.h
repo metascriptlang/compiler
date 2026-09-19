@@ -50,6 +50,54 @@ static inline msRefHeader* msHeader(void* p) {
 
 #ifdef MSOS_BARE
 
+#ifdef MSOS_SOLANA
+
+#define MS_SOLANA_HEAP_START 0x300000000ULL
+#ifndef MS_SOLANA_HEAP_SIZE
+#define MS_SOLANA_HEAP_SIZE (32 * 1024)
+#endif
+
+typedef struct {
+    uint64_t input;
+    uint64_t result;
+    uint64_t arenaPosition;
+    uint64_t accountCount;
+    uint64_t accountTable;
+    uint64_t instructionData;
+    uint64_t instructionDataLength;
+    uint64_t programId;
+} msSolanaContext;
+
+static inline msSolanaContext* msSolanaCurrentContext(void) {
+    return (msSolanaContext*)MS_SOLANA_HEAP_START;
+}
+
+static inline void msSolanaEnter(const uint8_t* input) {
+    msSolanaContext* context = msSolanaCurrentContext();
+    context->input = (uint64_t)input;
+    context->arenaPosition = sizeof(msSolanaContext);
+}
+
+static inline uint64_t msSolanaResult(void) {
+    return msSolanaCurrentContext()->result;
+}
+
+__attribute__((weak, noreturn)) void abort(void) {
+    ((void (*)(void))0xb6fc1a11ULL)();
+    __builtin_unreachable();
+}
+
+static inline void* msArenaAlloc(size_t size) {
+    size = (size + 7) & ~(size_t)7;
+    msSolanaContext* context = msSolanaCurrentContext();
+    if (context->arenaPosition + size > MS_SOLANA_HEAP_SIZE) return (void*)0;
+    void* p = (void*)(MS_SOLANA_HEAP_START + context->arenaPosition);
+    context->arenaPosition += size;
+    return p;
+}
+
+#else
+
 /* --- Freestanding: static arena, no malloc --- */
 
 #ifndef MS_ARENA_SIZE
@@ -68,6 +116,8 @@ static inline void* msArenaAlloc(size_t size) {
     return p;
 }
 
+#endif /* MSOS_SOLANA */
+
 static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) {
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
@@ -77,7 +127,11 @@ static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) 
     return p;
 }
 
+#ifdef MSOS_SOLANA
+static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaPosition = sizeof(msSolanaContext); }
+#else
 static inline void msArenaReset(void) { _ms_arena_pos = 0; }
+#endif
 
 static inline void* msAlloc(size_t size) {
     void* block = msArenaAlloc(sizeof(msRefHeader) + size);
@@ -144,6 +198,8 @@ static inline void  msDestroyAndDispose(void* p)  { (void)p; }
 /* Solana/BPF: truly freestanding — no libc headers available.
    Use -isystem runtime/freestanding to provide stub headers.
    Provide minimal libc functions inline. */
+#include <math.h>
+#include <time.h>
 static inline void* memcpy(void* dst, const void* src, size_t n) {
     char* d = (char*)dst;
     const char* s = (const char*)src;

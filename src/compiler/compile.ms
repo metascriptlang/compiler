@@ -389,6 +389,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	}
 
 	reportGraphErrors(graph);
+	if (graph.errors.length > 0) exit(1);
 	exitOnModuleErrors(graph, "error");
 
 	if (verbose) verboseLog("cross-module type check");
@@ -1619,7 +1620,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -1824,6 +1825,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
+	const skippableRoot = opts.targetOs == "solana" ? resolveRuntimeDir() : "";
 	let cji = 0;
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
@@ -1836,7 +1838,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			exit(1);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			if (opts.targetOs != "solana") {
+			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
+				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
+			} else {
 				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
 			}
@@ -2071,7 +2075,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {

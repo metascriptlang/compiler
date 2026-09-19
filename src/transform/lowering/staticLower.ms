@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, createNodeAt, ClassDeclData, PropertyDeclData, BlockStmtData,
+	Node, NodeKind, createNodeAt, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
 	ExportDeclData, DecoratedDeclData, ExprStmtData, Symbol,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -76,9 +76,13 @@ function expandClassStmt(stmt: Node, ctx: TransformContext): Node[] {
 	}
 	if (target == null) return [stmt];
 	const out: Node[] = [stmt];
-	if (target.kind != NodeKind.ClassDecl) return out;
-	const cd = target.data as ClassDeclData;
-	lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out);
+	if (target.kind == NodeKind.ClassDecl) {
+		const cd = target.data as ClassDeclData;
+		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out);
+	} else if (target.kind == NodeKind.ActorDecl) {
+		const ad = target.data as ActorDeclData;
+		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out);
+	}
 	return out;
 }
 

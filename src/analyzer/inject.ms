@@ -1571,7 +1571,7 @@ function isEnvParam(name: string): boolean {
 	return name.slice(0, 6) == "__envP";
 }
 
-function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcContext, loc: SourceLocation, body: Node): void {
+function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node): void {
 	if (dctx.ctx.checkerCtx == null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pName = paramNames[pi];
@@ -1582,7 +1582,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 				// Params are borrows registered as cursors (Nim default — no sink
 				// params, ea38c2a): the caller owns the value; stores inside the
 				// callee copy at the assignment point.
-				registerVar(dctx, pName, pRcInfo, true, noSym);
+				registerVar(dctx, pName, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 			}
 		}
 	}
@@ -1601,7 +1601,7 @@ function isGeneratorBody(body: Node): boolean {
 
 // Process a function body with sink param registration.
 // Looks up the function's type to get resolved param types.
-function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
+function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
 	if (body == null) return body;
 	if (body.kind != NodeKind.BlockStmt) return body;
 	const bd = body.data as BlockStmtData;
@@ -1629,9 +1629,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	// Reference parity: ALWAYS use the function's type (owner.typ), never scope lookupSymbol.
 	// lookupSymbol(paramName) can find wrong-scope variables with the same name.
 	if (ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function) {
-		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, dctx, loc, body);
+		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, paramSyms, dctx, loc, body);
 	} else if (funcNodeType != null && funcNodeType.kind == TypeKind.Function) {
-		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, dctx, loc, body);
+		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, paramSyms, dctx, loc, body);
 	} else if (paramNames.length > 0) {
 		// No type info for params — transform bug. Log so we catch it early.
 		// NEVER fall back to lookupSymbol(paramName) — it finds wrong-scope variables.
@@ -2140,28 +2140,28 @@ function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
 	// — its members are untyped — so skip it; only real instances get DRC.
 	if (d.fnFlags.indexOf("gen:") >= 0) return stmt;
-	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc, stmt.nodeType!);
+	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, stmt.paramSyms, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
 function processArrow(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ArrowFunctionData;
 	if (d.arrowBody == null) return stmt;
-	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, dctx, loc, stmt.nodeType!);
+	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, stmt.paramSyms, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
 function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionExprData;
 	if (d.funcExprBody == null) return stmt;
-	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc, stmt.nodeType!);
+	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, stmt.paramSyms, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
 function processTestDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as TestDeclData;
 	if (d.testBody == null) return stmt;
-	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], dctx, loc, stmt.nodeType!);
+	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], null, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
@@ -2216,7 +2216,7 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 			const rcInfo = classifyRc(catchType, dctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);
-				registerVar(dctx, d.catchName, rcInfo, false, noSym);
+				registerVar(dctx, d.catchName, rcInfo, false, stmt.resolvedSym);
 				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
 				const scope = popScope(dctx);
 				const cleanup = generateCleanup(scope, emptyNameSet(), loc);
@@ -2267,8 +2267,15 @@ function processExport(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 function processMethodMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const md = member.data as MethodDeclData;
 	if (md.methodBody != null) {
-		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, dctx, loc, member.nodeType!);
+		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, member.paramSyms, dctx, loc, member.nodeType!);
 	}
+}
+
+function ctorSymsWithoutReceiver(paramSyms: Symbol[] | null): Symbol[] | null {
+	if (paramSyms == null || paramSyms.length == 0) return paramSyms;
+	const out: Symbol[] = [];
+	for (let i = 1; i < paramSyms.length; i += 1) out.push(paramSyms[i]);
+	return out;
 }
 
 function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
@@ -2277,11 +2284,12 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 		// Same pattern as processMethodMember: use function type for param RC classification.
 		// Constructor's function type is on member.nodeType (set in resolvePass).
 		const ctorType = member.nodeType;
+		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
 		if (ctorType != null && ctorType.kind == TypeKind.Function) {
 			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc, member.nodeType!);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
 		} else {
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc, member.nodeType!);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
 		}
 	}
 }

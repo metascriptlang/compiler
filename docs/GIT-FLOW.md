@@ -18,7 +18,7 @@ How work moves from `main` to a published release, and how a release gets fixed.
 - A fix for a release is cut from that release branch and merges back into it, never straight into `main`. It reaches `main` when the release merges back.
 - The version tag is created on the release branch, never on `main`.
 - A published tag never moves. A problem found after publishing ships as the next version.
-- Never switch branches in the main working tree while it holds uncommitted work: `git checkout` and `git switch` rewrite files under it. Release and fix branches each get their own worktree.
+- Release and fix branches each get their own worktree.
 
 ## 1. Cut the release branch
 
@@ -66,6 +66,17 @@ MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
 src/test/guard/run.sh
 ```
 
+Then check the self-host fixpoint on emitted C. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:
+
+```bash
+./msc build src/index.ms --gc=drc --danger --cc=clang --output=/tmp/fx/gen1
+cp out/release/.cache/*.c /tmp/fx/A/
+/tmp/fx/gen1 build src/index.ms --gc=drc --danger --cc=clang --output=/tmp/fx/gen2
+cp out/release/.cache/*.c /tmp/fx/B/
+```
+
+Cache file names end in a fingerprint (`<module>_x_ms.<hex>_<hex>.c`) that changes with the building compiler. `diff -rq A B` therefore reports every file. Pair the files by the name before the fingerprint and compare their contents. On 2026-09-19, 322 of 322 modules were identical while `gen1` and `gen2` differed as binaries. A side with 0 files means the wrong cache directory was copied: `--danger` and `--release` write `out/release/.cache`, a plain build writes `out/debug/.cache`.
+
 Never run `tools/sync-local-binary.sh` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` with `--delete`.
 
 ## 3. Fix a release
@@ -104,7 +115,7 @@ git push origin v$V
 ./tools/release.sh --upload
 ```
 
-The script builds every target from the worktree it runs in, with the `msc` on `PATH`, and publishes a pre-release. It needs `msc`, `zig`, `zip`, `gh`, and GNU tar on macOS. Test the published archives, then promote:
+The script builds every target from the worktree it runs in, with the `msc` on `PATH`, and publishes a pre-release. It needs `msc`, `zig`, `zip`, `gh`, and GNU tar on macOS. When the release carries a compiler fix the installed `msc` lacks, put the fixed binary first on `PATH` (`mkdir relbin && cp msc relbin/msc && PATH=$PWD/relbin:$PATH ./tools/release.sh --upload`). Test the published archives, then promote:
 
 ```bash
 gh release edit v$V --latest=true --prerelease=false

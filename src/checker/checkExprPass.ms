@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, isReadonlyView, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
@@ -27,7 +27,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, slotTakesValue, unwrapAsUnknown, valueOfInPlace, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
+import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, trySynthesizeAsCoercion, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -460,8 +460,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsed(sym);
+			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
+			if (ctx.staticInitBoundary != null && isFrameValue(sym) && isCapturedAcross(ctx.table, d.name, sym, ctx.staticInitBoundary)) {
+				const what = sym.symbolKind == SymbolKind.Parameter ? "parameter" : "enclosing local";
+				addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
 			// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
@@ -1770,8 +1776,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			}
 			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
-				&& !slotTakesValue(srcType, targetType) && valueOfInPlace(ctx, d.asExpr)) {
-				srcType = d.asExpr.nodeType;
+				&& !slotTakesValue(srcType, targetType)) {
+				const asCall = trySynthesizeAsCoercion(ctx, d.asExpr, srcType, targetType);
+				if (asCall != null as unknown as Node) {
+					node.data = { asExpr: asCall, asType: d.asType };
+					d = node.data as TypeAssertionData;
+					srcType = asCall.nodeType;
+				} else if (valueOfInPlace(ctx, d.asExpr, ReadNeed.Slot, targetType)) {
+					srcType = d.asExpr.nodeType;
+				}
 			}
 			// Nil typing: collapse `null as T` into typed NullLiteral.
 			if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
@@ -2207,6 +2220,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		ctx.pendingSpawnThunk = false;
 		ctx.readonlyBoundary = ctx.table.current;
 	}
+	const paramSyms: Symbol[] = [];
 	let pi = 0;
 	for (const p of params) {
 		let pType = inferredType();
@@ -2220,6 +2234,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			paramSym.location = paramLocs[pi];
 		}
+		paramSyms.push(paramSym);
 		defineSymbol(ctx.table, paramSym);
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			sgRecordSym(ctx, paramLocs[pi].line, paramLocs[pi].column,
@@ -2228,6 +2243,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		}
 		pi += 1;
 	}
+	fnNode.paramSyms = paramSyms;
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 	} else {
@@ -2537,7 +2553,7 @@ function registerSynthesizedFunction(
 	addSymbolToScope(rootScope, instSym);
 	fnNode.resolvedSym = instSym;
 	fnNode.nodeType = fnType;
-	callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
+	fnNode.paramSyms = callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
 	addPendingInstance(fnNode);
 	return instSym;
 }

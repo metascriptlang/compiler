@@ -33,9 +33,8 @@ msc-*
 *.zip
 
 # self-host compiler binaries (msc-* above only covers the suffixed variants)
-/msc
-/msc2
-/msc.lock
+/msc*
+/z_*
 
 # object files + foreign toolchain caches
 *.o
@@ -59,6 +58,7 @@ docs/*
 !docs/LANG-RUNTIME.md
 !docs/LANG-STRUCT.md
 !docs/LANG-TEST.md
+!docs/ANALYZER.md
 !docs/BARE.md
 !docs/BUILD-PERF.md
 !docs/FEATURES.md
@@ -68,18 +68,11 @@ docs/*
 !docs/PIPELINE.md
 !docs/PROJECT-STRUCTURE.md
 !docs/RAISER.md
+!docs/TESTING.md
+!docs/TRANSAM.md
 !docs/TRANSFORM.md
 !docs/WINDOWS-TRAPS.md
 
 # local compiler build candidates + their debug PDBs (root only)
-/msc.exe
-/msc.pdb
-/mscB*
-/mscN*
-/mscW*
-/mscL*
-/mscG*
-/mscH*
-/mscP*
 /*.pdb
 /paper

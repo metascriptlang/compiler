@@ -222,6 +222,11 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+export function isFrameValue(sym: Symbol): boolean {
+	if (sym.symbolKind == SymbolKind.Parameter) return true;
+	return (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global);
+}
+
 export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, boundary: Cursor<Scope>): boolean {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;

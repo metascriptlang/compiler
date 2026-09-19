@@ -100,11 +100,12 @@ Gates (snapshot `8506c8ff` + L1/L4/L2): probes 15/15 expected outcomes (subset/o
 
 ---
 
-## L7. `std/compress` does not build — `cparse` gaps on the vendored miniz header
+## L7. `std/compress` (deflate/inflate) does not build — `cparse` gaps on the vendored miniz header
 
 **Problem:** Importing `std/compress` fails while parsing the vendored C header.
 **Repro (re-measured 2026-09-04):** `import { deflate } from "std/compress";` → first error is now `C header vendor/miniz/miniz.h:117:1: 'miniz_export.h' file not found`, followed by the original `miniz.h:179:1: 'time.h' file not found` (the `miniz_export.h` miss is new since the 2026-09-02 audit — the vendored tree was modified in-place).
-**Severity:** loud — the module has never been buildable.
+**Re-measured 2026-09-19 (`v0.2.55`):** `import { deflate, inflate } from "std/compress"` fails with the same three header errors (`miniz_export.h`, `time.h`, `miniz_common.h` not found). `std/compress/zip` is not affected: `openZip("/nonexistent.zip")` builds and runs, printing `false` for `r.ok`.
+**Severity:** loud — deflate/inflate have never been buildable.
 **Workaround:** none. `cparse` needs the missing includes resolved and, past that point, `__inline__` support.
 
 ---
@@ -163,6 +164,8 @@ Gates (snapshot `8506c8ff` + L1/L4/L2): probes 15/15 expected outcomes (subset/o
 ---
 
 ## L13. `std/http` does not type-check at HEAD `0f007c5a` — namespace-qualified extension calls
+
+**Status: RESOLVED — fixed 2026-09-19.** `checkCallExpr` ran extension-method dispatch on every `a.f(…)` callee, and a namespace object passed the receiver filter, so the local `this` function replaced the namespace member `checkMemberExpr` had already resolved. A namespace-qualified callee now skips extension dispatch, as the reference's dot handler resolves a module-qualified name before any method-call syntax. Measured on the candidate built from the fix: `msc check` of `import { createServer } from "std/http/server";` → 0 errors (installed `2e8cf49a`: 18); the two-module repro prints `1` on C (installed: `Too many arguments to 'setHeader': expected at most 2, got 3`). Pinned by `fixedbugs/bug191NamespaceCallBeforeExtension.ms` (direct and through a re-export shim, both red before the fix) and corpus `781-httpServerHeaders` (C lanes; `std/http/server` is `.cms`, no JS lane). On JS the checker error is gone but the program dies at run time on a separate defect, L49.
 
 **Problem:** any program importing `std/http` fails with 18 errors, all of one shape: `Too many arguments to 'hasHeader': expected at most 1, got 2` at `std/http/server.cms:140` (and `getHeader`/`removeHeader`/`setHeader` at 141, 230–237, 373…). The call is `hdrs.hasHeader(res.headers, "content-type")` where `hdrs` is `import * as hdrs from "./headers"`; the resolver binds `server.cms`'s own extension `hasHeader(this res: ServerResponse, name)` instead of the namespace member and then rejects the arity.
 **Repro (measured 2026-09-10):** HEAD-clean worktree at `0f007c5a`, `msc build` of a two-line program `import { createServer } from "std/http";` → rc=1, 18 errors. Identical set on the peer-built `./msc`.
@@ -440,6 +443,17 @@ decorators, macros or metadata. Consequence for tests: a guard needing this shap
 `// GUARD-JS` (see `src/test/guard/decoratorMetadataInheritOrder.ms`). Not investigated further —
 no fix attempted, and it is unknown whether hoisting class declarations is safe for the emitter.
 
+Re-measured 2026-09-19 on a build of `98886eb2`, with statics on both classes:
+
+```
+function seven(): int32 { return 7; }
+class Child extends Base { static c: int32 = seven() + 1; }
+class Base { static b: int32 = seven(); }
+console.log(`${Child.c} ${Base.b}`);
+    C:  8 7
+    JS: ReferenceError: Cannot access 'Base__…' before initialization
+```
+
 ## L29. A class cannot extend a class imported from another module (LIVE, measured 2026-09-13)
 
 ```
@@ -475,7 +489,17 @@ messages to dispatch. Every guard and corpus program gives its actors methods, w
 covers this shape. The failure reproduces on the published compiler as well, so it is not a
 regression from recent checker work. Root cause not investigated.
 
-## L31. A `static` field on an actor reads back as `<object>` (LIVE, measured 2026-09-13)
+## ~~L31. A `static` field on an actor reads back as `<object>`~~ (RESOLVED, measured 2026-09-19)
+
+An actor static must now be `static readonly` (a plain `static` is a check error naming the fix,
+`51832817`). The readonly form reads back on both backends, on a build of `98886eb2`:
+
+```ms
+actor Srv { static readonly tag: string = "t-init"; n: int32 = 1; ping(): int32 { return 1; } }
+console.log(Srv.tag);            // C: t-init   JS: t-init
+```
+
+The historical entry follows.
 
 ```ms
 actor Srv { static tag: string = "t-init"; n: int32 = 1; }
@@ -515,6 +539,7 @@ console.log(new Box<int32>(1).count);        tip 3dfadbb9, --gc=drc: 0   (expect
 ```
 
 Same shape without the type parameter prints 21. No import, no macro, no decorator involved.
+Re-measured 2026-09-19 on a build of `98886eb2`: C prints `0`, JS prints `21`.
 
 ## L34. A generic class with a `T[]` field crashes on first use (LIVE, measured 2026-09-16)
 
@@ -527,6 +552,8 @@ const g = new Bag<int32>(); g.add(1);
 
 The `[]` initializer never reaches the instance: the field is NULL when `add` runs. Likely the
 same missing-initializer path as L33, seen through a pointer instead of a value.
+Re-measured 2026-09-19 on a build of `98886eb2`: C panics as above, JS prints `1` for
+`g.items.length`.
 
 ## L35. `await` inside a string concatenation reaches C codegen unlowered (LIVE, measured 2026-09-16)
 
@@ -540,4 +567,389 @@ await main();
 
 `const s = await f(); console.log("a" + s + "b");` compiles and runs. The await lowering handles
 the statement position but not an operand inside the concat-array fill the string `+` chain
-emits. Not measured on the JS backend.
+emits. Re-measured 2026-09-19 on a build of `98886eb2`: the template form
+`` console.log(`a${await f()}b`) `` fails identically on C; both forms print `axb` on JS.
+
+## L36. A method of a function-body class cannot read the enclosing function's locals on C (LIVE, measured 2026-09-19)
+
+```
+function local(n: int32): int32 {
+	const k: int32 = n * 2;
+	class L { get(): int32 { return k; } static sget(): int32 { return k; } }
+	return new L().get() + L.sget();
+}
+console.log(`${local(1)}`);
+    build of 98886eb2, C:  clang "use of undeclared identifier 'k'" (both methods)
+                       JS: 4
+```
+
+Instance and static methods fail alike. The checker accepts the read; C lifts the methods to
+module-level functions that have no access to `k`. A static *initializer* reading an enclosing
+local is a check error (`1c7b6c7b`); methods have no such rule and no capture.
+
+## L37. A module-level `let` written from an actor method is not rejected (LIVE, measured 2026-09-19)
+
+```
+let hits: int32 = 0;
+actor Counter { bump(): void { hits = hits + 1; } read(): int32 { return hits; } }
+// main: c.bump(); c.bump(); console.log(await c.read());
+    build of 98886eb2, C: 2   JS: 2
+```
+
+The program runs, but the global is shared by every actor thread with no lock. `SymbolFlag.GcSafe`
+is declared in `std/meta/node.ms` but nothing under `src/` or `std/` sets or reads it, so no rule
+tracks which functions touch mutable globals. Only the actor-method write was measured; `spawn` bodies were not.
+
+## L38. A static written through a subclass name diverges between backends (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 1; }
+class Sub extends K {}
+Sub.a = 5;
+console.log(`${K.a} ${Sub.a}`);
+    build of 98886eb2, C: 5 5   JS: 1 5
+```
+
+C resolves `Sub.a` to `K`'s global; JS creates an own property on `Sub`. Silent: both type-check
+and run. `this` in a static method is the declaring class on both backends (a static method is
+emitted as a free function on both), so `Sub.bump()` writing `this.a` gives the C answer on both;
+TypeScript would bind `this` to `Sub`. Pinned by `src/test/guard/staticThis.ms`.
+
+## L39. A static method on an actor does not compile on C (LIVE, measured 2026-09-19)
+
+```
+actor A {
+	static readonly limit: int32 = 4;
+	static twice(): int32 { return A.limit * 2; }
+}
+console.log(`${A.twice()}`);
+    build of 98886eb2, C:  clang "use of undeclared identifier 'this'" in the body,
+                           and "passing 'msFuture_int32 *' … to parameter of incompatible type 'double'"
+                       JS: 8
+```
+
+The static method is lowered like a message handler: its body reads the receiver and its call
+returns a future. The same failure with `this.limit` in place of `A.limit`.
+
+## L40. A static getter is not found (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 6; static get doubled(): int32 { return K.a * 2; } }
+console.log(`${K.doubled}`);
+    build of 98886eb2, C and JS: Property 'doubled' does not exist on type 'K'
+```
+
+Fails at check on both backends. Static setters were not measured.
+
+## L41. `this` in a generic static method is undefined (LIVE, measured 2026-09-19)
+
+```
+class K { static a: int32 = 1; static pick<T>(x: T): T { this.a = this.a + 1; return x; } }
+    build of 98886eb2, C and JS: Undefined variable 'this'
+```
+
+`this` in a non-generic static method, a `static { }` block and a static initializer names the
+class (`daa8a3c5`). A generic method body is checked again per instantiation, and that check
+does not know which class owns the method. Writing `K.a` instead works on both backends (`x 2`).
+
+## L42. A static field of a generic class does not link on C (LIVE, measured 2026-09-19)
+
+```
+class G<T> { static a: int32 = 4; v: T; constructor(v: T) { this.v = v; } }
+console.log(`${G.a}`);
+    build of 98886eb2, C:  link failed, undefined symbol: _G__a
+                       JS: 4
+```
+
+## L43. A static field of an imported class is rejected (LIVE, measured 2026-09-19)
+
+```
+// implib.ms
+export class P { static a: int32 = 9; static twice(): int32 { return P.a * 2; } }
+// use.ms
+import { P } from "./implib";
+console.log(`${P.a}`);        build of 98886eb2, C and JS: Property 'a' does not exist on type 'P'
+console.log(`${P.twice()}`);  build of 98886eb2, C and JS: 18
+```
+
+The static method crosses the module boundary; the static field does not.
+
+## L44. `Locked<T>` does not exist on the JS backend (LIVE, measured 2026-09-19)
+
+```
+actor A { static readonly box: Locked<int32> = new Locked<int32>(3); ping(): int32 { return 1; } }
+    build of 98886eb2, C:  runs
+                       JS: ReferenceError: Locked is not defined
+```
+
+`src/test/guard/actorStaticLocked.ms` is a C-only guard for this reason. `Arc<T>` on JS was not
+measured.
+
+## L45. Two corpus programs fail inside a macro body (LIVE, measured 2026-09-19)
+
+```
+704-macroExprHoist   Macro 'memo' body: Type 'NodeFlag' is not assignable to type 'BitSet<NodeFlag>'
+762-bitSetMacro      Macro 'inMacro' body: Type 'int32' is not assignable to type 'Node' …
+```
+
+Both fail to build on a build of `98886eb2` and on the installed `v0.2.55`; they are listed in
+`src/test/known-red.json` on every lane. Root cause not investigated.
+
+A class declared in the body of a generic function (`function wrap<T>(x: T) { class L { static a
+= 5; } return L.a; }`) was measured on the same build and prints `5` on C and JS; other shapes of
+that case were not measured.
+
+## L46. A module-level destructuring binding read inside a closure is empty on C (LIVE, measured 2026-09-19)
+
+```ms
+const pair: [string, string] = ["p", "q"];
+const [a, b] = pair;
+function run(f: () => void): void { f(); }
+function main(): void { run(() => { console.log("a=" + a + " b=" + b); }); }
+main();
+
+C:  a= b=          JS: a=p b=q
+```
+
+The emitted C declares the bindings as module statics and assigns them in `__Init000`
+(`static msString a; … a = dollarborrow_1_;`), but the closure captures them as if they were
+locals of the enclosing function: the env struct carries `msString a; msString b;` fields, the
+lifted body reads `env->a`, and the caller only allocates the env — it never writes those fields,
+so the closure reads zeroed memory.
+
+| shape (module level unless stated) | C | JS |
+|---|---|---|
+| `const [a, b] = pair` of `string`, read in a closure | `a= b=` | `a=p b=q` |
+| the same of `int32` | `a=0 b=0` | `a=7 b=9` |
+| the binding is an accessor (`const [x, setX] = createSignal("v")`), read in a closure | SIGSEGV, `EXC_BAD_ACCESS address=0x0`, no frames | correct |
+| the same accessor read in a `test` block instead of a program | assertion fails, value empty | — |
+| `const { p, q } = rec` (object pattern) with or without a closure | clang: `initializer element is not a compile-time constant` | `p=p q=q` |
+| the same tuple read directly, no closure | correct | correct |
+| `const s = createSignal("v")` with `s[0]()` — no destructuring | correct | correct |
+| the whole shape inside a function instead of module level | correct | correct |
+
+Measured on a build of `660f3002` + two uncommitted fixes and on the installed `v0.2.55`, so it
+predates both. Found from Neon, where `const [count, setCount] = createSignal(0)` at module level
+is the ordinary idiom: every such program dies at the first closure that reads the accessor. The
+Neon suite does not see it because each test declares its signals inside the test block.
+
+Not measured: a destructured `let`, patterns with a default or a rest element, a struct or array
+element type, capture depth beyond one closure, and whether `--release` changes the C shape.
+
+## L47. The narrowing of a `const` does not survive into a closure (LIVE, measured 2026-09-19)
+
+```ms
+function run(h: ((n: number) => void) | null, s: string | null): void {
+	const g = h;
+	if (g !== null) { g(1); const k = (): void => { g(2); }; k(); }
+	const t = s;
+	if (t !== null) { const len = (): number => t.length; console.log(len()); }
+}
+
+both backends: callee is possibly null (function | null) — unwrap with '!' or a null check first
+              Property 'length' does not exist on type 'Maybe_p1'. Available: value, present
+```
+
+The same `if` body without the closure compiles and runs (`g(1)` alone prints `n=1` on C and JS),
+so the narrowing holds until a function expression reads the binding. The flow walk stops at the
+closure's flow container instead of continuing into the enclosing flow, and a `const` can never be
+reassigned, so the narrowing it carries is still valid there.
+
+Measured on the installed `v0.2.55`, native and `--target=js`, standalone (no imports). Costs Neon
+a conditional nullable handler: the wrapper that unwraps the text of `onChangeText` is a closure
+over the narrowed temp, so `direct` rejects a nullable handler outright and two fixtures pin that
+rejection. Not measured: a narrowed parameter, a `let` that is never reassigned, narrowing by
+`typeof` or by a discriminant rather than `!== null`, and a closure nested two levels deep.
+
+## L48. A function type alias is named `function` in a type error (LIVE, measured 2026-09-19)
+
+```ms
+type Node2 = (n: int32) => void;
+interface Props { child: Node2; }
+const kids: Node2[] = [];
+take({ child: kids });
+
+both backends: Type 'function[]' is not assignable to type 'function' for field 'child'
+```
+
+Neither side of the mismatch keeps the alias it was written with, so the message cannot say which
+function type was expected; an array of them prints as `function[]`. Measured on the installed
+`v0.2.55`, native and `--target=js`, standalone. Not measured: whether a named interface or a
+generic instance keeps its name in the same message, and whether the alias survives in the LSP
+hover for the same node.
+
+## L49. A namespace import read inside a function is undefined on JS (LIVE, measured 2026-09-19)
+
+```ms
+// headers.ms
+export interface Headers { names: string[]; values: string[]; }
+export function setHeader(h: Headers, name: string, value: string): void { h.names.push(name); h.values.push(value); }
+
+// main.ms
+import * as hdrs from "./headers";
+import { Headers } from "./headers";
+function put(h: Headers): void { hdrs.setHeader(h, "a", "b"); }
+const h: Headers = { names: [], values: [] };
+put(h);
+console.log(h.names.length);
+
+msc run main.ms --target=js → ReferenceError: hdrs is not defined
+```
+
+The bundle calls `hdrs.setHeader(...)` inside the emitted function and never binds `hdrs`.
+Measured on the installed `2e8cf49a`, `--target=js`, for a plain function and for a `this`
+function; C prints `1` for both. Not measured: a namespace read at top level (the probe hit an
+unrelated anonymous-literal type error there), `--target=esm`, and whether a re-export shim changes it.
+
+## L50. A declaration or assignment of the wrong primitive type is not checked (LIVE, measured 2026-09-19)
+
+```ms
+const a: string = 5;
+let b: string = "x";
+b = 5;
+console.log(a + b);
+
+msc check: OK no type errors
+C:  error: initializing 'msString' with an expression of incompatible type 'int'
+JS: prints 10
+```
+
+`const n: int32 = s` with `s: string` passes the same way. The return position is checked
+(`function f(): string { return 5; }` → `Return type mismatch in 'f': expected string, got int32`),
+and so is float → int narrowing in a declaration (`const i: int32 = f` with `f: float64` errors),
+so the hole is the plain kind mismatch at a declaration or assignment. Until it is fixed, probe
+whether a type resolves by returning a wrong value from a function annotated with it, never with
+`const a: T = wrong`. Measured on the installed `v0.2.55`, standalone. Not measured: field
+initializers, array elements, and object-literal properties.
+
+## L51. A compiler that cannot find `std/` reports an undefined `console` (LIVE, measured 2026-09-19)
+
+```
+cp ~/.metascript/bin/msc /tmp/x/a/b/msc
+cd /tmp/x && ./a/b/msc run h.ms          # h.ms: console.log("hi");
+    error: Undefined variable 'console'
+```
+
+The compiler looks for `std/core/system/index.ms` up to four directories above the binary and then
+in the cwd (`resolveRuntimeDir`, `src/utils/path.ms`). When both miss it returns an empty root and
+the build goes on without the prelude, so the first symptom is a missing global. Running the same
+copy from a cwd that has `std/` works. Measured with `v0.2.55`.
+
+## L52. Arguments of a method call are not type-checked (LIVE, measured 2026-09-19)
+
+```ms
+class Box { at(i: int32): int32 { return i + 1; } }
+const b = new Box();
+console.log(b.at("s"));
+
+msc check: OK no type errors
+C:  error: passing 'const msString' to parameter of incompatible type 'int32_t'
+JS: prints s1
+```
+
+The same call as a free function errors at check (`Argument type mismatch in 'at' arg 0: got string,
+expected int32`). Methods register as extensions, and the extension-call branch of `callResolve.ms`
+checks only arity before returning, so the shared argument loop never sees them. Measured on the
+installed `v0.2.55`. Not measured: static methods and imported extension functions called with
+method syntax.
+
+## L53. `==` between two structs throws on the JS backend (LIVE, measured 2026-09-19)
+
+```ms
+struct Pt { x: int32; y: int32; }
+const a: Pt = { x: 1, y: 2 };
+const b: Pt = { x: 1, y: 3 };
+console.log(a != b);
+
+C:  true
+JS: ReferenceError: PtEq is not defined
+```
+
+The build succeeds on both backends. The call to the derived `PtEq` is emitted for JS, but its body
+comes from `destructorLifting`, which runs only for C. Measured on the installed `v0.2.55`.
+
+## L54. Calling the comptime host table without the package path fails to link (LIVE, measured 2026-09-19)
+
+```ms
+import { ensureHostTableLoaded } from "<recompiler>/src/compiler/meta/hostTable";
+ensureHostTableLoaded();
+
+error: undefined symbol: _msZipReaderClose     (11 _msZip* symbols)
+```
+
+`hostTable.ms` includes `runtime/compress/zip.h` and declares 11 `msZip*` externs but compiles none
+of their C sources. The `@compile` lines live in `std/compress/zip.cms`, and the shipped compiler
+links only because `src/index.ms` also reaches the package downloader, which imports zip. Any
+program that embeds the comptime, macro or Raiser-eval path without that import fails at link.
+Measured with the installed `v0.2.55`.
+
+## L55. `405-lockedSharedCounter` and `410-awaitStructSpawnStored` sometimes hang (LIVE, recorded in `src/test/known-red.json`)
+
+The gate's known-red set carries `405-lockedSharedCounter` under `danger` and `san`, and
+`410-awaitStructSpawnStored` under `danger` and `orc`. They hang intermittently, so the cause is not
+SAN. One captured hang (2026-08-28) had every thread parked in `__ulock_wait` with nobody inside a
+critical section, and main in `msAwaitSlotWait → msPoolHelpOne` running a helped task blocked in
+`withLock → msTicketLockAcquire → msFutexWait`. `withLock` has since been replaced by `Locked<T>`
+(`c9353472`, 2026-09-03), and both programs are still in the known-red set recorded at `52ae61ea`
+(2026-09-19), so that capture no longer names the current code. The hang itself was not
+reproduced on 2026-09-19. To chase it, loop the cell until it hangs, then sample every thread of
+the program binary, not the `sh -c` wrapper.
+
+## L56. `closureCallMarker` builds a `Token` one field short (LIVE, measured 2026-09-19)
+
+`src/transform/native/closureCallMarker.ms` has 6 sites that build `{ kind, value, line, column } as
+unknown as Token`, while `Token` (`std/meta/token.ms`) also has `rawValue`. The cast reinterprets
+the smaller literal, so the emitted C reads `rawValue` past the end of the stack object. It prints
+nothing wrong today by accident. `syntheticToken()` builds a complete token and is the replacement.
+`as unknown as <T>` is safe only while both layouts are equal; the same cast in the checker's
+`sizeof` fold silently broke when the literal type gained fields.
+
+## L57. `src/test/index.ms` does not type-check and runs in no gate lane (LIVE, measured 2026-09-19)
+
+`src/index.ms` does not import the test tree, so `tools/gate.sh` never runs `lang/`, `fixedbugs/`,
+`handoff/` or `c/*.ms` through their aggregate. `./msc check src/test/index.ms` stops at 20 type
+errors in 10 files: `lang/result.ms` 6, `fixedbugs/bug129_classMethodOverload.ms` 3 (`'new Box()'
+requires explicit type arguments`), `lang/trycatch.ms`, `lang/closuresAdv.ms` and
+`handoff/unionNarrow.ms` 2 each, and one each in `lang/advanced.ms`, `handoff/ccgIntroducedPtr.ms`,
+`fmt/roundtrip.ms`, `fixedbugs/bug089TsLiteralDiscUnionJson.ms`, `fixedbugs/bug087UnionAliasTypeArg.ms`.
+Among the messages: 5 `implicit number → int32 narrowing`, 8 `field 'value'/'error' exists only on some
+variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discriminated union.
+A single file still runs on its own with `msc test <file>`. Run that way, `msc test src/test/c/protocols.ms` is red on two tests the gate has never seen: `E2E C: JsonValue dynamic write via setDynamicField` (`protocols.ms:480`) and `E2E C: JsonValue dynamic access via protocol after migration` (`protocols.ms:499`), both failing `assert c.ok` (3119 passed, 2 failed across 146 files, installed `v0.2.55`). Not measured: which of these are stale
+test code and which are checker regressions.
+
+## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (LIVE, measured 2026-09-19)
+
+```ms
+// hostTypes.ms
+export interface Host { tag: string; }
+export type HostNode = unknown;
+export type NeonNode = (host: Host, parent: HostNode, before: HostNode | null) => void;
+
+// comp.ms
+import { Host, HostNode, NeonNode } from "./hostTypes";
+export function createComponent<P>(Comp: (props: P) => NeonNode, props: P): NeonNode {
+	return (host: Host, parent: HostNode, before: HostNode | null): void => {
+		Comp(props)(host, parent, before);
+	};
+}
+
+msc run a file importing comp.ms → warning: 'Host' is imported but never used
+                                   warning: 'HostNode' is imported but never used
+```
+
+`NeonNode`, named in the outer signature, is never reported; only the two that appear solely in the
+returned arrow's parameter list are. Dropping `<P>` from the same function silences both warnings,
+so the generic body is the axis, not the arrow.
+
+| variant | warns |
+|---|---|
+| generic function, arrow annotated with the imported types | `Host`, `HostNode` |
+| the same with `HostNode` an interface instead of `= unknown` | `Host`, `HostNode` |
+| the same generic taking a plain `p: P` instead of a function-typed parameter | `Host`, `HostNode` |
+| the same shape with no type parameter | silent |
+| reached through `build.ms` `globalImports` instead of a plain import | identical either way |
+
+Measured on the installed `v0.2.55`. The warning is wrong, not merely noisy: dropping either import
+fails the build. Neon carries it on every compile, from `src/render/component.ms`. Not measured: a
+generic class method, a type used only in the arrow's return annotation, a constrained type
+parameter, and whether the LSP reports the same diagnostic.

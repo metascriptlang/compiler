@@ -15,14 +15,20 @@ export function defaultGlobalImports(): string[] {
 
 let _extraGlobalImports: string[] = [];
 let _extraGlobalImportModules: Map<string, boolean> = new Map<string, boolean>();
+let _extraGlobalImportsBuildFile: string = "";
 
-export function setExtraGlobalImports(paths: string[]): void {
+export function setExtraGlobalImports(paths: string[], buildFile: string = ""): void {
 	_extraGlobalImports = paths;
 	_extraGlobalImportModules = new Map<string, boolean>();
+	_extraGlobalImportsBuildFile = buildFile;
 }
 
 export function extraGlobalImports(): string[] {
 	return _extraGlobalImports;
+}
+
+export function extraGlobalImportsBuildFile(): string {
+	return _extraGlobalImportsBuildFile;
 }
 
 export function isGlobalImport(path: string): boolean {

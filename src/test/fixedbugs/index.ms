@@ -202,3 +202,8 @@ import "./bug187TryExprStatement";
 import "./bug188HoistSurvivesArrowRecheck";
 import "./bug189HoistedPrefixGensym";
 import "./bug190LocalRedeclaration";
+import "./bug191NamespaceCallBeforeExtension";
+import "./bug192CallNonFunctionValue";
+import "./bug193ConverterExpansionNarrows";
+import "./bug194GenericCallChecksArrowArg";
+import "./bug195ModuleExportSet";

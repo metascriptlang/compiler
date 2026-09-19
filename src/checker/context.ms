@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { TargetInfo, hostTargetInfo, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, lookupSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
@@ -348,23 +348,43 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 
 // Collect all exported symbols: scope symbols + class method extensions.
 // Single source of truth — used by orchestrator (multi-module) and TransAm (LSP).
+export function exportSym(ctx: CheckerContext, sym: Symbol): void {
+	setFlag(sym, SymbolFlag.Exported);
+	if (ctx.interfSet.has(sym)) return;
+	ctx.interfSet.add(sym);
+	ctx.interf.push(sym);
+}
+
+export function isExportedBy(ctx: CheckerContext, sym: Symbol): boolean {
+	return ctx.interfSet.has(sym);
+}
+
 export function collectExports(ctx: CheckerContext, modulePath: string): ExportedSymInfo[] {
 	const exports: ExportedSymInfo[] = [];
-	const exportedNames = new HashSet<string>();
+	const emitted = new HashSet<string>();
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (hasFlag(sym, SymbolFlag.Exported)) {
+		if (isExportedBy(ctx, sym)) {
 			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
-			exportedNames.add(sym.name);
+			emitted.add(sym.name);
 		}
 	}
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const extSym = ext.sym;
-			if (extSym != null && hasFlag(extSym, SymbolFlag.Exported) && !exportedNames.has(extSym.name)) {
+			if (extSym != null && isExportedBy(ctx, extSym) && !emitted.has(extSym.name)) {
 				exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx));
-				exportedNames.add(extSym.name);
+				emitted.add(extSym.name);
 			}
 		}
+	}
+	let ii = 0;
+	while (ii < ctx.interf.length) {
+		const sym = ctx.interf[ii];
+		if (!emitted.has(sym.name) && sym.overloadIdx == 0) {
+			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx));
+			emitted.add(sym.name);
+		}
+		ii = ii + 1;
 	}
 	return exports;
 }
@@ -1176,6 +1196,7 @@ export class CheckerContext {
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
+	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
@@ -1217,13 +1238,17 @@ export class CheckerContext {
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
+	pendingTrailing: Node[];
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	localTypeNames: HashMap<string, boolean>; // names claimed by local (non-module-scope) type decls, module-wide — C keys struct emission and its include guard by bare name, so same-named locals in sibling scopes would silently merge into one definition
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
+	liftedLocalTypeDecls: Node[];
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
+	interf: Symbol[];
+	interfSet: HashSet<Symbol>;
 }
 
 // ===== Constructors =====
@@ -1241,6 +1266,7 @@ export function createContext(): CheckerContext {
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
+		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		inLoop: false,
 		inSwitch: false,
@@ -1282,13 +1308,17 @@ export function createContext(): CheckerContext {
 		generatedInstances: [],
 		pendingEnumToStrings: [],
 		pendingHoisted: [],
+		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
 		localTypeNames: new HashMap<string, boolean>(),
 		pendingLocalTypeDecls: [],
+		liftedLocalTypeDecls: [],
 		condEvalDepth: 0,
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
+		interf: [],
+		interfSet: new HashSet<Symbol>(),
 	};
 }
 

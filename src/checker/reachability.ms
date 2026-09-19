@@ -9,7 +9,8 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
-import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule } from "../codegen/c/context";
+import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule, aliveSetHas, aliveSetHasModule } from "../codegen/c/context";
+import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapRefNullUnion } from "./types";
@@ -423,9 +424,57 @@ function topDeclName(decl: Node): string {
 	return (decl.data as ExternDeclData).externName;
 }
 
+const ANY_EXPORT = "*";
+
+function reachesAliveThroughReexports(graph: ModuleGraph, modulePath: string, name: string, memo: HashMap<string, boolean>): boolean {
+	const anyName = name == ANY_EXPORT;
+	if (anyName ? aliveSetHasModule(_aliveSet, modulePath) : aliveSetHas(_aliveSet, modulePath, name)) return true;
+	const key = modulePath + ":" + name;
+	const known = memo.get(key);
+	if (known != null) return known;
+	memo.set(key, false);
+	const mod = findModule(graph, modulePath);
+	if (mod == null) return false;
+	let reached = false;
+	for (const imp of mod.imports) {
+		for (let i = 0; i < imp.names.length; i += 1) {
+			const isStar = imp.names[i] == ANY_EXPORT;
+			const isNamespaceImport = isStar && imp.aliases[i] != ANY_EXPORT;
+			if (isNamespaceImport) continue;
+			let sourceName = "";
+			if (isStar) {
+				sourceName = name;
+			} else if (anyName || imp.aliases[i] == name) {
+				sourceName = imp.names[i];
+			}
+			if (sourceName == "") continue;
+			if (reachesAliveThroughReexports(graph, imp.sourcePath, sourceName, memo)) reached = true;
+		}
+	}
+	if (reached) {
+		memo.set(key, true);
+		aliveSetAddModule(_aliveSet, modulePath);
+	}
+	return reached;
+}
+
+function markReexportConduitsAlive(graph: ModuleGraph): void {
+	const memo = new HashMap<string, boolean>();
+	for (const mod of graph.modules) {
+		if (!aliveSetHasModule(_aliveSet, mod.path)) continue;
+		for (const imp of mod.imports) {
+			for (let i = 0; i < imp.names.length; i += 1) {
+				const isStarExport = imp.names[i] == ANY_EXPORT && imp.aliases[i] == ANY_EXPORT;
+				if (isStarExport) continue;
+				reachesAliveThroughReexports(graph, imp.sourcePath, imp.names[i], memo);
+			}
+		}
+	}
+}
+
 // ===== Public API =====
 
-export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean): AliveSet {
+export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean, graph: ModuleGraph): AliveSet {
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	nameIndexBuild(programs, paths);
@@ -531,6 +580,8 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			}
 		}
 	}
+
+	markReexportConduitsAlive(graph);
 
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
@@ -666,7 +717,7 @@ test "endsWith helper" {
 }
 
 test "empty programs produce empty alive set" {
-	const aliveSet = computeAliveSet([], [], "/entry.ms", false);
+	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
 	assert aliveSet.entries.length == 0;
 }
 
@@ -685,6 +736,72 @@ test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	if (allocation == null) return;
 	const body = createStruct("Holder", ["label"], [stringType()], true);
 	allocation.nodeType = createUnion([createRef(body), nullType()]);
-	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false);
+	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
 	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
+}
+
+function conduitGraph(edges: string[][]): ModuleGraph {
+	const graph = createModuleGraph();
+	for (const e of edges) {
+		let mod = findModule(graph, e[0]);
+		if (mod == null) {
+			mod = createModule(e[0]);
+			addModule(graph, mod);
+		}
+		if (e.length == 4) mod.imports.push(createImportEntry([e[1]], [e[2]], e[3], e[3]));
+	}
+	return graph;
+}
+
+function conduitAlive(graph: ModuleGraph, conduit: string): boolean {
+	_aliveSet = createAliveSet();
+	aliveSetAdd(_aliveSet, "/main.ms", "main");
+	aliveSetAdd(_aliveSet, "/impl.ms", "add");
+	markReexportConduitsAlive(graph);
+	const alive = aliveSetHasModule(_aliveSet, conduit);
+	_aliveSet = createAliveSet();
+	return alive;
+}
+
+test "named re-export on the path to an alive symbol keeps its module alive" {
+	const graph = conduitGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/hub.ms");
+}
+
+test "aliased re-export resolves the source name" {
+	const graph = conduitGraph([["/main.ms", "plus", "plus", "/hub.ms"], ["/hub.ms", "add", "plus", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/hub.ms");
+}
+
+test "star re-export on the path to an alive symbol keeps its module alive" {
+	const graph = conduitGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/hub.ms");
+}
+
+test "every module of a re-export chain stays alive" {
+	const graph = conduitGraph([["/main.ms", "add", "add", "/outer.ms"], ["/outer.ms", "add", "add", "/inner.ms"], ["/inner.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/outer.ms");
+	assert conduitAlive(graph, "/inner.ms");
+}
+
+test "two hubs sharing one inner hub both stay alive" {
+	const graph = conduitGraph([["/main.ms", "add", "add", "/hubA.ms"], ["/main.ms", "add", "add2", "/hubB.ms"],
+		["/hubA.ms", "add", "add", "/inner.ms"], ["/hubB.ms", "add", "add", "/inner.ms"], ["/inner.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/hubA.ms");
+	assert conduitAlive(graph, "/hubB.ms");
+}
+
+test "namespace import of a re-export module keeps it alive" {
+	const graph = conduitGraph([["/main.ms", "*", "lib", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert conduitAlive(graph, "/hub.ms");
+}
+
+test "module imported for a dead name stays dead" {
+	const graph = conduitGraph([["/main.ms", "unused", "unused", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert !conduitAlive(graph, "/hub.ms");
+}
+
+test "re-export cycle terminates" {
+	const graph = conduitGraph([["/main.ms", "ghost", "ghost", "/a.ms"], ["/a.ms", "*", "*", "/b.ms"], ["/b.ms", "*", "*", "/a.ms"]]);
+	assert !conduitAlive(graph, "/a.ms");
 }

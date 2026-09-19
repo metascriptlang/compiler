@@ -339,10 +339,12 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	fnDecl.typeExpr = pkIdent("te");
 	fnDecl.typeExprs = [pkIdent("te1"), pkIdent("te2")];
 	fnDecl.paramLocations = [pkLoc(2), pkLoc(3)];
+	if (rootSym != null) fnDecl.paramSyms = [rootSym, rootSym];
 	fnDecl.nodeType = nodeTypeSample;
 	const linked = pkIdent("linked");
 	linked.resolvedSym = rootSym;
 	const methodDecl = createNodeAt(NodeKind.MethodDecl, { methodName: "m", methodParams: ["p"], methodParamTypes: ["int32"], methodBody: block, methodIsStatic: true, methodFlags: "mf", methodVisibility: "priv", methodReturnType: "void", methodDefaults: [n1], nativeName: "mn", nameLocation: pkLoc(4) } as NodeData, makeLoc(14, 2));
+	methodDecl.paramSyms = [];
 	const jsxText = createNodeAt(NodeKind.JSXText, { jsxText: "hello" } as NodeData, makeLoc(15, 2));
 	const jsxAttr = createNodeAt(NodeKind.JSXAttribute, { jsxAttrName: "id", jsxAttrValue: a } as NodeData, makeLoc(16, 2));
 	const out: Node[] = [];
@@ -465,6 +467,10 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 		if (n.paramLocations != null) {
 			s = s + "pls=";
 			for (const p of n.paramLocations) s = s + pkDumpLoc(p) + ";";
+		}
+		if (n.paramSyms != null) {
+			s = s + "pss=";
+			for (const ps of n.paramSyms) s = s + ps.name + ";";
 		}
 		if (n.nodeType != null) s = s + `nt=${n.nodeType.kind as int32}:${n.nodeType.typeName}`;
 		if (n.resolvedSym != null) s = s + `sym=${n.resolvedSym.name}/${n.resolvedSym.symFlags as uint32}`;

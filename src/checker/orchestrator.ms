@@ -11,7 +11,7 @@ import {
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
 import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
@@ -55,6 +55,7 @@ function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, co
 		if (isExtra) noteExtraGlobalImportModule(moduleIdentity(candidate, config, provider));
 		return;
 	}
+	if (isExtra) graph.errors.push(`globalImports entry '${entry}' in ${extraGlobalImportsBuildFile()} resolves to no module`);
 }
 
 export function loadStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
@@ -332,6 +333,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 import { hasExportName } from "../module/graph";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
+import { setExtraGlobalImports } from "./prelude";
 test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
@@ -580,4 +582,28 @@ test "non-circular modules still resolve fully" {
 	assert modB2 != null;
 	assert modA2.errors.length == 0;
 	assert modB2.errors.length == 0;
+}
+
+test "extra globalImports entry resolving to no module is a graph error naming the entry and its build.ms" {
+	const entries: MapEntry[] = [];
+	const provider = createMapProvider(entries);
+	const graph = createModuleGraph();
+	setExtraGlobalImports(["/proj/nope/missing"], "/proj/build.ms");
+	loadExtraGlobalImportModules(graph, provider, createDefaultConfig(backendOfExtension(".cms"), ""));
+	setExtraGlobalImports([]);
+	assert graph.errors.length == 1;
+	assert graph.errors[0].includes("/proj/nope/missing");
+	assert graph.errors[0].includes("/proj/build.ms");
+}
+
+test "extra globalImports entry resolving to a module is not a graph error" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/proj/src/converters.ms", entrySource: "export const marker = 1;" });
+	const provider = createMapProvider(entries);
+	const graph = createModuleGraph();
+	setExtraGlobalImports(["/proj/src/converters"], "/proj/build.ms");
+	loadExtraGlobalImportModules(graph, provider, createDefaultConfig(backendOfExtension(".cms"), ""));
+	setExtraGlobalImports([]);
+	assert graph.errors.length == 0;
+	assert findModule(graph, "/proj/src/converters.ms") != null;
 }

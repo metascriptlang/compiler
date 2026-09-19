@@ -179,10 +179,10 @@ int       float     double                       (reserved, not yet usable as ty
 ### Comparison
 | Operator | Token | Description |
 |----------|-------|-------------|
-| `==` | EQ_EQ | Loose equality (compile-time macro) |
-| `===` | EQ_EQ_EQ | Strict equality |
-| `!=` | BANG_EQ | Loose inequality |
-| `!==` | BANG_EQ_EQ | Strict inequality |
+| `==` | EQ_EQ | Equality — same as `===` (no `undefined`, so no loose form); the JS backend emits `===` |
+| `===` | EQ_EQ_EQ | Equality |
+| `!=` | BANG_EQ | Inequality — same as `!==`; the JS backend emits `!==` |
+| `!==` | BANG_EQ_EQ | Inequality |
 | `<` | LT | Less than |
 | `<=` | LT_EQ | Less or equal |
 | `>` | GT | Greater than |
@@ -1976,9 +1976,45 @@ extern function ok<T>(val: T): Result<T, any>;
 | Decorator | Applies To | Purpose | Status |
 |-----------|-----------|---------|--------|
 | `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
+| `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
+| `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
+
+##### Which of the three a declaration wants
+
+The three marks above answer three different questions about one call. A routine
+can need any combination; they do not substitute for one another.
+
+| Question about the call | Mark | Consequence |
+|---|---|---|
+| Does the call **disappear**, replaced by emitted code? | `@builtin("Name")` | `builtinLower` rewrites the AST by tag; no function call survives |
+| Is the call **synthesized** by a lowering rather than written by hand? | `@compilerFunc` | the name a lowering emits resolves to this symbol, so later phases read a declared signature instead of guessing from the name |
+| Can the routine **raise**? | `@throws` | DRC keeps the scope's cleanup on the error path (`callCanThrow`, `analyzer/inject.ms`) |
+
+`msAssertFail` carries both `@compilerFunc` (the `assert` lowering emits the call)
+and `@throws` (it sets the error flag). `nonisolated` carries neither — it is
+`@builtin`-tagged because that is currently the only way to declare a decorator
+that has a symbol; see the note below.
+
+```typescript
+// std/core/system/index.ms
+@compilerFunc @throws
+extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
+```
+
+A `@compilerFunc` declaration lives in the prelude so every module a synthesized
+call lands in can reach it, and it needs no `export` — the table travels with the
+prelude scope, not through the export registry. The C name still comes from the
+`from "..."` clause, not from the mark.
+
+**Two known rough edges, so nobody copies them as patterns.** `@builtin` currently
+carries one declaration that is not an intrinsic at all (`nonisolated`, an actor
+field property), because declaring a decorator with a symbol has no mark of its
+own. And the `@include`/`@passC` family of directives is matched as plain strings
+in the checker, so unlike `@builtin`/`@compilerFunc`/`@throws` they have no
+declaration to jump to.
 
 #### Directives (standalone, module-level)
 
@@ -2507,8 +2543,15 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
 | `toString(this T): string` | implicit string context | type concat with string |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
+| `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `as<TargetType>(this T): U` | `expr` → `expr.asU()` | T not assignable to U at use site |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+
+**Order**: a position that needs one form tries the protocol for that form before `valueOf` — `asU` for a
+slot of type `U` and for `as U`, `toItems` for `for..of` — and reads through `valueOf` only when the type
+declares none for it, or declares one for another target (a type with `asInt64` meeting an `int32` slot
+reads `valueOf`). `+` with a string reads `valueOf` first, as JavaScript does. The choice is made while
+checking, by the static type; the chosen call runs at run time.
 
 **Mechanism**: in checker, after normal resolution fails, synthesize a `MemberExpr + CallExpr` matching the convention name, type-check it, rewrite the AST in-place if it succeeds. If the extension doesn't exist on `T`, fall through to the existing error path. **Zero overhead for non-opt-in types** — one O(1) extension registry lookup → fast skip.
 
@@ -2529,11 +2572,11 @@ const alias = count;               // the accessor itself: nothing failed
 ```
 
 It fires only where the bare read is already an error, at that error: a typed slot (declaration,
-assignment, return, non-overloaded or extension-method argument, `as U`); an operand that the operator
+assignment, return, non-overloaded or extension-method argument, `as U`; after `asU`); an operand that the operator
 check refuses (arithmetic, `===`/`!==`, relational, compound assignment) or a string concatenation, beside
 `toString`; a function tested for truthiness (`if`/`while`/`for`/ternary, `!`, the left of `&&`/`||`);
 unary `-`; an index or an indexed function; a spread; a `switch` whose case cannot equal it; `for..of`
-(before `toItems`); a receiver that lacks the member (before `toString`). Each of those positions is an
+(after `toItems`); a receiver that lacks the member (before `toString`). Each of those positions is an
 error for a function value on its own — "a function is always truthy", "unary '-' needs a numeric
 operand", "an array index must be a number" — so a type without `valueOf` gets that error. It never fires
 at a callee, an assignment or `++` target, a formal that still has generic parameters, a slot that
@@ -3040,6 +3083,24 @@ function parse(input: string, out result: AST): boolean {
     return true;
 }
 ```
+
+### Sink Parameters (extern declarations only)
+```typescript
+extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+```
+`sink name: T` says the routine takes ownership of the argument: the caller passes it
+consumed and does not destroy it afterwards. It is a contextual modifier like `out` /
+`ref` — a parameter may still be *named* `sink` (`f(sink: int32)` compiles). Overload
+scoring, literal fitting and generic binding look through it, so `a.push(0)` on a
+`uint8[]` picks the same overload as without the modifier.
+
+Measured 2026-09-18 (`src/test/handoff/sinkParam.ms`, 4/4): literal into a sink
+overload compiles and calls `msUint8ArrayPush`; a generic `sink value: T` binds `T`;
+`sink` as a parameter name compiles; and **a `sink` parameter on a function WITH a
+body is a compile error** — `'sink' parameter on 'eat': only an extern declaration can
+take ownership of an argument`. The callee-owns half (destroy at scope exit unless
+moved on) is not implemented, so accepting it there would leak every argument.
+NOT verified: `sink` on class methods and constructors, and the JS backend.
 
 ## Memory Management
 

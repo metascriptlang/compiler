@@ -28,7 +28,7 @@
 // 26. dce                   — dead code elimination (2-tier: statement + symbol level)
 // 27. destructorLifting     — generate per-type _destroy/_copy function bodies
 
-import { Node } from "../ast/node";
+import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
 import { bindCompilerFuncs } from "./util";
@@ -199,5 +199,21 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// definition whose only reference is a call the lowerings just created.
 	if (jsBackend) { result = lowerEnumToString(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
+	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
 	return result;
+}
+
+function dropLocalTypeLift(program: Node, checkerCtx: CheckerContext): Node {
+	if (checkerCtx == null || checkerCtx.liftedLocalTypeDecls.length == 0 || program.kind != NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+	const kept: Node[] = [];
+	for (const s of pd.programStmts) {
+		let lifted = false;
+		for (const d of checkerCtx.liftedLocalTypeDecls) {
+			if (d == s) lifted = true;
+		}
+		if (!lifted) kept.push(s);
+	}
+	pd.programStmts = kept;
+	return program;
 }
