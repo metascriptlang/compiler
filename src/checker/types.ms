@@ -1362,6 +1362,9 @@ function moduleQualifiedName(inner: Type): string {
 function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
 	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
+	if (inner.kind == TypeKind.Set) {
+		return inner.typeReturn != null ? "set_" + maybeCacheKey(inner.typeReturn) : "set_any";
+	}
 	if (inner.typeName != "") return moduleQualifiedName(inner);
 	if (isAllStringLiteralUnion(inner)) {
 		let key = "slu";
