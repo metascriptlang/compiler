@@ -124,7 +124,7 @@ function applyPipeline(transforms: NumFn[], initial: number): number {
 }
 
 function reduceSum(arr: number[]): number {
-	let acc = 0;
+	let acc: number = 0;
 	let i = 0;
 	while (i < arr.length) {
 		acc = acc + arr[i];
@@ -134,7 +134,7 @@ function reduceSum(arr: number[]): number {
 }
 
 function reduceProduct(arr: number[]): number {
-	let acc = 1;
+	let acc: number = 1;
 	let i = 0;
 	while (i < arr.length) {
 		acc = acc * arr[i];

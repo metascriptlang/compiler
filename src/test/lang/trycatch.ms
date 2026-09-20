@@ -6,7 +6,7 @@ function mayThrow(x: number): number {
 }
 
 test "basic try/catch — no throw" {
-	let r = 0;
+	let r: number = 0;
 	try {
 		r = mayThrow(5);
 	} catch (e) {
@@ -16,7 +16,7 @@ test "basic try/catch — no throw" {
 }
 
 test "basic try/catch — throws" {
-	let r = 0;
+	let r: number = 0;
 	try {
 		r = mayThrow(-1);
 	} catch (e) {
