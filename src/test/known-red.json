@@ -63,12 +63,9 @@
     "src/test/c/httpServer.ms > E2E C: blocking HTTP server with body access compiles": {"since":"3ed7bc2c","note":""},
     "src/test/c/httpServer.ms > E2E C: concurrent HTTP server compiles": {"since":"3ed7bc2c","note":""},
     "src/test/c/httpServer.ms > E2E C: minimal HTTP server compiles": {"since":"3ed7bc2c","note":""},
-    "src/test/c/json.ms > E2E C: untyped JSON parse with JsonValue accessors compiles": {"since":"3ed7bc2c","note":""},
     "src/test/c/jsx.ms > E2E C: nested unconsumed JSX is rejected without leaking children to codegen": {"since":"3ed7bc2c","note":""},
     "src/test/c/jsx.ms > E2E C: unconsumed JSX element is rejected by the checker": {"since":"3ed7bc2c","note":""},
     "src/test/c/jsx.ms > E2E C: unconsumed JSX fragment is rejected by the checker": {"since":"3ed7bc2c","note":""},
-    "src/test/c/protocols.ms > E2E C: JsonValue dynamic access via protocol after migration": {"since":"3ed7bc2c","note":""},
-    "src/test/c/protocols.ms > E2E C: JsonValue dynamic write via setDynamicField": {"since":"3ed7bc2c","note":""},
     "src/test/c/result.ms > E2E C: Result field access .ok .value .error": {"since":"3ed7bc2c","note":""},
     "src/test/c/toycodec.ms > E2E A4 smoke: toyEncode macro fires and returns a string": {"since":"3ed7bc2c","note":""},
     "src/test/c/variables.ms > E2E C: enum member access": {"since":"3ed7bc2c","note":""}
