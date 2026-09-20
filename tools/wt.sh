@@ -98,6 +98,19 @@ inbox_tally() {
     | sed 's/ ·$//'
   printf '\n'
   inbox_kinds "$dir" "$n"
+  inbox_pins "$dir" "$n"
+}
+
+inbox_pins() {
+  local dir=$1 n=$2 pinned unpinned f
+  pinned=$(grep -l -E '^Pinned by:[ \t]*[^ \t]' "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  unpinned=$(grep -l -E '^State:[ \t]*landed' "$dir"/*.md 2>/dev/null | while IFS= read -r f; do
+    grep -qE '^Pinned by:[ \t]*[^ \t]' "$f" || basename "$f"
+  done)
+  printf 'pins: %d of %d card(s) name one' "$pinned" "$n"
+  [ -z "$unpinned" ] || printf ' · fixed but unpinned, do not delete: %s' \
+    "$(printf '%s\n' "$unpinned" | paste -sd, - | sed 's/,/, /g')"
+  printf '\n'
 }
 
 inbox_kinds() {
