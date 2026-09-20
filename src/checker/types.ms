@@ -1354,10 +1354,15 @@ function identSafeKey(s: string): string {
 	return out + s.length.toString();
 }
 
+function moduleQualifiedName(inner: Type): string {
+	const owner = inner.sym != null ? inner.sym.modulePath : "";
+	return owner == "" ? inner.typeName : inner.typeName + "_" + identSafeKey(owner);
+}
+
 function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
 	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
-	if (inner.typeName != "") return inner.typeName;
+	if (inner.typeName != "") return moduleQualifiedName(inner);
 	if (isAllStringLiteralUnion(inner)) {
 		let key = "slu";
 		for (const c of inner.typeChildren) {
