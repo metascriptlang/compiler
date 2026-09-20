@@ -37,7 +37,11 @@ corpus and san run on the programs whose emitted C or JS the change alters
 (control = the compiler at the merge base, kept in out/gate/ctl); they run whole
 under --lanes and --release, and when a changed path cannot show in emitted code.
 
-exit: 0 no new red · 1 new red · 2 usage · 75 machine busy past GATE_WAIT_MAX
+A known red that has turned green fails too: the set is then claiming a failure
+that no longer happens, so drop the entry in the commit that fixed it. Unlike a
+new red it does not stop the later lanes — one run should show every stale entry.
+
+exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 USAGE
 }
@@ -241,6 +245,24 @@ known_of() {
   jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | sort -u
 }
 
+totals_of() {
+  local lane=$1 log=$2
+  [ -f "$log" ] || return 0
+  case "$lane" in
+    corpus|san)
+      sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
+        /^[0-9]+ pass · [0-9]+ fail/ { p = $1; f = $4 }
+        END { if (p != "") printf "%d/%d", p, p + f }' ;;
+    suite|suite-orc|tests)
+      sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
+        /^ *Tests +[0-9]/ {
+          for (i = 2; i <= NF; i++) if ($i == "passed") p += $(i - 1)
+          if (match($0, /\([0-9]+\)$/)) t += substr($0, RSTART + 1, RLENGTH - 2)
+        }
+        END { if (t) printf "%d/%d", p, t }' ;;
+  esac
+}
+
 list_programs() {
   local e n
   for e in "$TOP"/src/test/corpus/programs/*; do
@@ -366,8 +388,17 @@ for lane in $lanes; do
   [ "$n_fixed" -eq 0 ] || line="$line · $n_fixed known-now-green ($(head -3 "$OUT/$lane.fixed" | paste -sd, - | sed 's/,/, /g'))"
   xp=$(sed -n 's/^.* \([0-9][0-9]*\) xpass$/\1/p' "$log" | tail -1)
   [ -z "$xp" ] || [ "$xp" = 0 ] || line="$line · $xp xpass"
+  totals=$(totals_of "$lane" "$log")
+  [ -z "$totals" ] || line="$line · $totals case"
   say "$line"
   ran="$ran $lane"
+  if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
+    verdict=RED
+    while IFS= read -r name; do
+      say "  known-now-green: $name"
+    done <"$OUT/$lane.fixed"
+    say "  the set now lies: drop those from src/test/known-red.json in the commit that fixed them"
+  fi
   if [ "$n_new" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED; stopped=$lane
     while IFS= read -r name; do
