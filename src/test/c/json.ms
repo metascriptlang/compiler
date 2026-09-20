@@ -55,7 +55,7 @@ function main(): void {
 	}
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
