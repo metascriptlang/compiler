@@ -7,7 +7,7 @@
 //   `(() => number)` so a following `[]` binds to the whole function, giving
 //   `(() => number)[]` = Array<fn>. Without parens the string is `() => number[]`,
 //   which re-parses as `() => (number[])` — a FUNCTION returning number[].
-// NIM-REF: §1 "Monomorph annotation roundtrip: parenthesize compound type literals"
+// NIM-REF CK-60
 //   — DIVERGE-UNINTENTIONAL -> SAME. Nim substitutes on PType nodes (no string
 //   precedence hazard); MS's string roundtrip must parenthesize compound types,
 //   mirroring the precedent already set for anonymous unions.

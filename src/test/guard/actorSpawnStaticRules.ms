@@ -7,7 +7,7 @@
 //   Pony box precedents. Enforcement: walkActorSpawnRules (checkExprPass,
 //   hooked from checkSpawnCaptures) + detectSequentialAwaitSpawn (checkPass
 //   loop checkers).
-// NIM-REF: PARALOCK §7.3 Amendment I4/I5.
+// PARALOCK §7.3 Amendment I4/I5.
 //
 // WHAT IT CATCHES: a checker refactor silently dropping the rules — exactly
 //   how Phase 6 sat unenforced pre-2026-07-22 (`spawn(() => this.f = 1)`

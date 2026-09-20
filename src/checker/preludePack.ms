@@ -665,6 +665,9 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 	for (const mb of ctx.macroBodyRegistry.values()) {
 		enqNode(mb);
 	}
+	for (const members of ctx.preludeInterf.values()) {
+		for (const m of members) enqSym(m, false);
+	}
 	while (symPending.length > 0 || typePending.length > 0 || nodePending.length > 0) {
 		if (symPending.length > 0) {
 			const s = symPending.shift();
@@ -780,6 +783,14 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		const declared = ctx.compilerFuncs.get(name);
 		if (declared == null) continue;
 		lines.push(`P\t${escapeP(name)}\t${idxSym(declared)}`);
+	}
+
+	for (const spec of ctx.preludeInterf.keys()) {
+		const members = ctx.preludeInterf.get(spec);
+		if (members == null) continue;
+		const idx: int32[] = [];
+		for (const m of members) idx.push(idxSym(m));
+		lines.push(`U\t${escapeP(spec)}\t${intsCsv(idx)}`);
 	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
@@ -1146,6 +1157,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const macroRows: string[][] = [];
 	const convRows: string[][] = [];
 	const compilerFuncRows: string[][] = [];
+	const interfRows: string[][] = [];
 	let includeDirectives = "";
 	let compilerFlags = "";
 	let compileDirectives = "";
@@ -1229,6 +1241,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			convRows.push(f);
 		} else if (f[0] == "P") {
 			compilerFuncRows.push(f);
+		} else if (f[0] == "U") {
+			interfRows.push(f);
 		} else if (f[0] == "D") {
 			includeDirectives = unescapeP(f[1]);
 		} else if (f[0] == "F") {
@@ -1335,6 +1349,13 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	for (const f of compilerFuncRows) {
 		const si = f[2].parseInt() as int32;
 		if (si >= 0 && si < syms.length) ctx.compilerFuncs.set(unescapeP(f[1]), syms[si]);
+	}
+	for (const f of interfRows) {
+		const members: Symbol[] = [];
+		for (const si of parseIntsCsv(f[2])) {
+			if (si >= 0 && si < syms.length) members.push(syms[si]);
+		}
+		ctx.preludeInterf.set(unescapeP(f[1]), members);
 	}
 
 	ctx.includeDirectives = includeDirectives;

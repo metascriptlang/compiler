@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -1068,20 +1068,63 @@ function sharedPreludeSym(ctx: CheckerContext, alias: string, importName: string
 
 function exportPreludeModule(ctx: CheckerContext, specifier: string): void {
 	if (ctx.preludeCtx == null) return;
-	const file = "/" + specifier;
-	const dir = file + "/";
-	for (const sym of ctx.preludeCtx.table.current.symbols.values()) {
-		if (!hasFlag(sym, SymbolFlag.Exported)) continue;
-		let owned = false;
-		const path = stripModuleExtension(sym.modulePath);
-		if (path.endsWith(file) || path.indexOf(dir, 0) >= 0) owned = true;
-		let oi = 0;
-		while (!owned && oi < sym.overloads.length) {
-			const ovPath = stripModuleExtension(sym.overloads[oi].modulePath);
-			if (ovPath.endsWith(file) || ovPath.indexOf(dir, 0) >= 0) owned = true;
-			oi = oi + 1;
+	const table = ctx.preludeCtx.preludeInterf.get(specifier);
+	if (table == null) return;
+	for (const member of table) {
+		const sym = lookupLocal(ctx.preludeCtx.table, member.name);
+		if (sym != null) exportSym(ctx, sym);
+	}
+}
+
+function preludeExportOf(ctx: CheckerContext, specifier: string, name: string): Symbol | null {
+	if (ctx.preludeCtx == null) return lookupSymbol(ctx.table, name);
+	const table = ctx.preludeCtx.preludeInterf.get(specifier);
+	if (table == null) return null;
+	for (const member of table) {
+		if (member.name == name) return lookupLocal(ctx.preludeCtx.table, name);
+	}
+	return null;
+}
+
+function importAliasedPreludeSym(ctx: CheckerContext, alias: string, name: string, sym: Symbol, nameLoc: SourceLocation, defNode: Node, markExported: boolean): Symbol {
+	const pre = ctx.preludeCtx;
+	const info = buildExportInfo(sym, pre.extensionRegistry, sym.modulePath, pre);
+	const primary = importSymFromRegistry(ctx, alias, name, info, sym.modulePath, nameLoc, defNode);
+	propagateImportedOverloads(ctx, primary, info, sym.modulePath, name, alias, markExported);
+	propagateImportedExtensions(ctx, alias, info, sym.modulePath, primary);
+	if (info.kind == SymbolKind.Macro && info.macroBody != null && info.macroParams != null) {
+		ctx.macroBodyRegistry.set(alias, info.macroBody);
+		ctx.macroParamsRegistry.set(alias, info.macroParams);
+		if (info.macroParamTypes != null) ctx.macroParamTypesRegistry.set(alias, info.macroParamTypes);
+		ctx.macroDeclModuleRegistry.set(alias, info.definingModule);
+	}
+	return primary;
+}
+
+function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Node, reexport: boolean): void {
+	for (let i = 0; i < imp.importNames.length; i += 1) {
+		const name = imp.importNames[i];
+		const alias = imp.importAliases[i];
+		const loc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : node.location;
+		const local = lookupLocal(ctx.table, alias);
+		if (local != null) {
+			if (reexport) exportSym(ctx, local);
+			continue;
 		}
-		if (owned) exportSym(ctx, sym);
+		const sym = preludeExportOf(ctx, imp.importSource, name);
+		if (sym == null) {
+			if (ctx.preludeCtx != null) {
+				addError(ctx, "Module '" + imp.importSource + "' has no export '" + name + "'", loc.line, loc.column);
+			}
+			continue;
+		}
+		if (alias == name) {
+			defineSymbol(ctx.table, sym);
+			if (reexport) exportSym(ctx, sym);
+			continue;
+		}
+		const aliased = importAliasedPreludeSym(ctx, alias, name, sym, loc, node, reexport);
+		if (reexport) exportSym(ctx, aliased);
 	}
 }
 
@@ -1104,14 +1147,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	// But explicit imports promote them to Module scope (e.g., making extension methods
 	// available as standalone functions in completion).
 	if (isGlobalImport(d.importSource)) {
-		for (let gi = 0; gi < d.importNames.length; gi += 1) {
-			const name = d.importAliases[gi];
-			if (lookupLocal(ctx.table, name) != null) continue;
-			const sym = lookupSymbol(ctx.table, d.importNames[gi]);
-			if (sym != null) {
-				defineSymbol(ctx.table, sym);
-			}
-		}
+		collectPreludeNames(ctx, d, node, false);
 		return;
 	}
 
@@ -1403,6 +1439,9 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 			autoPropagateModuleExtensions(ctx, reExportSourcePath, true);
 		} else if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
 			exportPreludeModule(ctx, imp.importSource);
+			return;
+		} else {
+			collectPreludeNames(ctx, imp, d.exportedDecl, true);
 			return;
 		}
 

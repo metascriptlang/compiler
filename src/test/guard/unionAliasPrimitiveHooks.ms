@@ -9,7 +9,7 @@
 //   which codegen nevertheless emits as `struct SN { _tag; union { int32 v0;
 //   msString v1; } }`. Nothing reached `ensureHooks` for it either: the scan
 //   walk had arms for Struct/Ref/GenericInstance/Array/Tuple but not Union.
-// NIM-REF: §1 "Named primitive-union hooks" — DIVERGE-INCOMPLETE -> SAME
+// NIM-REF AN-23 — DIVERGE-INCOMPLETE -> SAME
 //   (Nim lifts hooks per case-object branch; a scalar branch is a branch).
 //
 // WHAT IT CATCHES: RED = link failure `undefined symbol: _SNDestroy` (proven on

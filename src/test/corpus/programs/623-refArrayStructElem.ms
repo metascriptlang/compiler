@@ -5,7 +5,7 @@
 // Reference-array T[] of managed value-elements (struct, generic-instance struct, named
 // value-union) with owned heap fields must run each element's destructor on cleanup, not a
 // free-only buffer wipe. The boxed cell's destroyFn = the array TYPE's single per-type
-// <Name>ArrayDestroy walker (NIM-REF §2), selected once via arrayElementNeedsCleanup — not
+// <Name>ArrayDestroy walker (NIM-REF AN-24), selected once via arrayElementNeedsCleanup — not
 // a per-element-kind match at the box site. Regression for the ~617MB-per-kind leaks the
 // prior number[]/string[]/interface-element tests missed (struct, generic, union).
 

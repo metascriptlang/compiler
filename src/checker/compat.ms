@@ -424,7 +424,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Must check BEFORE Ref→T auto-deref to prevent Ref being unwrapped then compared against Ptr.
 	// Arc<T> is excluded — it is not pointer-interchangeable (atomic rc must stay typed).
 	// Intentional divergence from Nim's strict ref/ptr split — MS Ptr<T> is the cursor
-	// pattern (NIM-REF.md row 63).
+	// pattern (NIM-REF AN-9).
 	if ((source.kind == TypeKind.Ref && target.kind == TypeKind.Ptr)
 		|| (source.kind == TypeKind.Ptr && target.kind == TypeKind.Ref)) {
 		if (!isAtomicRef(source) && !isAtomicRef(target)
@@ -491,7 +491,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// Source is union: all members must be assignable to target.
 	// NB: `T | null → T` is rejected here (Null not assignable to non-null T) —
-	// intentional TS-style divergence (NIM-REF.md §"Nullable-ref struct field
+	// intentional TS-style divergence (NIM-REF AN-25, "Nullable-ref struct field
 	// hooks"), swallowed by the fitNode isReinterpretUnsafe scope (row 72).
 	if (source.kind == TypeKind.Union) {
 		for (const member of source.typeChildren) {
@@ -908,7 +908,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			TypeKind.Function => {
 				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
 				// the return type, combined with minRel — the weakest component wins.
-				// callConv is deliberately not folded in (NIM-REF row 77: MS has one
+				// callConv is deliberately not folded in (NIM-REF CK-52: MS has one
 				// closure repr, so it carries no discriminating information).
 				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;

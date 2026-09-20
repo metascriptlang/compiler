@@ -5,7 +5,7 @@
 // lambdalifting.nim:516) and env fields are looked up by `s.itemId`
 // (`addField` → `lookupInRecord`, lowerings.nim:241) — its comment states that
 // two distinct same-named captures legitimately get distinct fields. NIM-REF
-// row 115 ("Lambda lifting: ancestor captures") carries the standing rule that
+// TR-11 carries the standing rule that
 // every reader of a binding must resolve to that binding's one env; the
 // 2026-09-05 addendum listed same-named shadows in nested blocks as the
 // declared residual. This guard pins that residual closed.

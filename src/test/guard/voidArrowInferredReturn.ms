@@ -6,7 +6,7 @@
 //   MS enforces it structurally since the kind-split arc, where `Inferred` is
 //   the sole pending sentinel and `getTypeDesc` answers any sentinel kind with
 //   Nim's else-branch internal error (`gateFlaglessUnknown`).
-// NIM-REF: §1 row 58 (kind split — sentinel kinds must never reach emission)
+// NIM-REF CK-46 (kind split — sentinel kinds must never reach emission)
 //   and row 596 (lambda return type). Row 596 records that Nim does NOT infer a
 //   lambda's return type from its body — no annotation means void — so the
 //   body-inference site in `checkAnonymousFunction` is MS-native; its authority

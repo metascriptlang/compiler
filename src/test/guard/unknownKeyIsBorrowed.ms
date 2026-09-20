@@ -5,7 +5,7 @@
 //   address whose lifetime belongs to whoever created it. Nim splits exactly
 //   here: `options.nim:90-99` SomePointer (ptr/pointer/ref/proc/cstring) uses
 //   nil-as-sentinel with no wrapper, while value types get one.
-// NIM-REF: row 57 "`unknown` top type — repr + conversions" — `unknown` = `void*`
+// NIM-REF CK-46, AN-11 — `unknown` = `void*`
 //   (getTypeDesc:713), classified `noRcInfo` beside Ptr because "pointer is
 //   RC-inert, may hold foreign handles". Verdict there: DIVERGE-INTENTIONAL.
 //

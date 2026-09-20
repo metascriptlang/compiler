@@ -3,7 +3,7 @@
 // INVARIANT (Nim =copy for seq): assigning a value-array always allocates a
 //   fresh payload — mutating the copy never shows through the source, and
 //   scope exit destroys each side's own payload exactly once.
-// NIM-REF: seq =copy hook; classify.ms hook names must exist in
+// NIM-REF AN-18: seq =copy hook; classify.ms hook names must exist in
 //   runtime/core/system.h (classifyArray names msArrayUint8Copy et al).
 //
 // WHAT IT CATCHES: (a) the uint8 copy hook missing from the runtime —

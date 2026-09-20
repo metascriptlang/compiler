@@ -7,7 +7,7 @@
 //   EITHER direction must be a checker error: the Ref auto-deref arm
 //   (compat.ms, built for self-referential field promotion) must not peel
 //   Ref(Array) into a bare-Array slot, and fitNode's memory-safety class
-//   (isReinterpretUnsafe, NIM-REF row 80) must reject the container-kind
+//   (isReinterpretUnsafe, NIM-REF CK-51) must reject the container-kind
 //   mismatch at every fit site.
 //
 // WHAT IT CATCHES: re-widening the auto-deref arm or dropping the

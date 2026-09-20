@@ -10,7 +10,7 @@
 //             ELEMENT isAssignable — covariant — while Nim keeps seq elements
 //             invariant (sigmatch.nim:1502-1516) and MS's own isAssignable
 //             already rejects uint8[]→number[] at the container level
-//             (compat.ms sameElementRepr, NIM-REF row 74). The receiver site
+//             (compat.ms sameElementRepr, NIM-REF CK-51). The receiver site
 //             bypassed the central relation.
 //
 // Fix:        isReceiverMatch consults isReinterpretUnsafe on the unwrapped

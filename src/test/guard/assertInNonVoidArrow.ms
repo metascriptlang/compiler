@@ -8,7 +8,7 @@
 //   Nim's assert works identically inside a lambda returning any type, and the
 //   unwind reaches the test framework ("this exception is only supposed to be
 //   caught by unit testing frameworks" — assert's own doc comment).
-// NIM-REF: §1 "Assert failure exits via raise, framework is the catch site" —
+// NIM-REF TR-15 —
 //   DIVERGE-UNINTENTIONAL -> SAME. `genAssertStmt` emitted
 //   `msTestCheckFail(...); return;`, which (a) is ILL-FORMED C in a non-void
 //   function and (b) even where it compiles only returns from the innermost

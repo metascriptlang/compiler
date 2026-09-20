@@ -8,7 +8,7 @@
 //   case object, so the reference offers no whole-union comparison to port: the
 //   only sound reading is the TS one — NARROW the union to the member type the
 //   other operand already has, then compare with that member's own `==`.
-// NIM-REF: rows 96/100 — `T | null` is DIVERGE-INTENTIONAL (TS-compat). The
+// NIM-REF CK-64, AN-25 — `T | null` is DIVERGE-INTENTIONAL (TS-compat). The
 //   Maybe carrier is a C REPRESENTATION: js de-materializes it, so the carrier
 //   Eq lowering must not fire there (there is no carrier and no generated body).
 //

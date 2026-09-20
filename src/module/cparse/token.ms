@@ -40,7 +40,7 @@ export interface CToken {
 	// Links are non-owning (Cursor): every token is owned by its pipeline arena
 	// (TokenizeResult.arena / PreprocessResult.arena), so dropping a stream is a
 	// flat array destroy — an owning `next` would recurse destroy per node and
-	// overflow the stack on long streams. See docs/NIM-REF.md §4-§5.
+	// overflow the stack on long streams. See NIM-REF AN-10, AN-9.
 	next: Cursor<CToken>;    // next token; null at end
 	// Numeric payload (valid when kind === Num)
 	intVal: int64;

@@ -12,7 +12,7 @@
 //   Not parity, and not claimed here: the reference resolves imports lazily
 //   from inside sem (importPipelineModule, pipelines.nim:499 — "this is called
 //   by the semantic checking phase"), while we load an eager module graph first
-//   — NIM-REF §1 "Import resolution", DIVERGE-INTENTIONAL. This guard pins the
+//   — NIM-REF CK-19, DIVERGE-INTENTIONAL. This guard pins the
 //   one-driver rule, not the eager/lazy shape.
 // VERDICT: was DIVERGE-UNINTENTIONAL -> SAME. `cmdCheck` called `checkProgram`
 //   on a lone parse result with no ModuleGraph, so collectImport took the

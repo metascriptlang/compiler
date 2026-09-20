@@ -6,7 +6,7 @@
 //   tfInstClearedFlags` (:489). Instantiation NEVER rebuilds a type through a
 //   ctor that recomputes its flags from scratch, so `Option[T]` -> `Option[int]`
 //   keeps its kind + identity flags.
-// NIM-REF: §1 "Maybe identity survival across type substitution" — verdict was
+// NIM-REF CK-56 — verdict was
 //   DIVERGE-UNINTENTIONAL -> SAME (the Union case already re-canonicalized via
 //   createMaybeType; the Struct case in substituteStruct was the lone outlier).
 //

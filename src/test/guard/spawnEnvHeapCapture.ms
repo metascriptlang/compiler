@@ -3,7 +3,7 @@
 // INVARIANT (Nim): a type's destroy hook runs exactly once, only on the
 //   last-ref decref. Nim invokes `=destroy` solely via nimDecRefIsLast-gated
 //   rawDispose; the ARC dispose protocol never finalizes a live object.
-// NIM-REF: "DRC scope cleanup" row + the completion-queue deferred-release
+// NIM-REF AN-12 + the completion-queue deferred-release
 //   notes. PARALOCK E140: a spawn closure env is DRC-counted — "dec on
 //   completion" must be a real decref (free only if last), never an
 //   unconditional destroy.

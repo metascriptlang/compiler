@@ -6,7 +6,7 @@
 //   whatever the branch order. It is a second, independently reachable copy of
 //   that loop: a `T | null` result routes here instead, so fixing only
 //   joinBranchTypes leaves the bug alive behind a nullable return type.
-// NIM-REF: "Branch-type join — pointer-kind pair" row.
+// NIM-REF CK-74.
 //
 // WHAT IT CATCHES: the null-union path keeping the first branch. RED on the
 //   pre-fix binary is louder than the non-null twin — the ledger aborts with

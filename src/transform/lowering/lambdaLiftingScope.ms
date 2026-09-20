@@ -45,7 +45,7 @@ export function popLoopBoundary(ss: ScopeStack): void {
 
 // A name bound at or past the innermost loop mark is re-bound on every
 // iteration, so its storage is the per-iteration env rather than the function's
-// shared env (NIM-REF row 115 addendum: the pair env's fields are complete and
+// shared env (NIM-REF TR-11: the pair env's fields are complete and
 // chain walks terminate there). Names bound before the mark keep one home for
 // the whole call and stay in the shared env.
 export function isLoopLocalVar(ss: ScopeStack, name: string): boolean {

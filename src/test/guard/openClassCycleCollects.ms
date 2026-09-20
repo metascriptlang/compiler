@@ -15,7 +15,7 @@
 //   even WITHOUT the OpenClass fix. If DirectCycle ever goes red while CChild is
 //   red too, ORC itself broke — not the oracle. If only CChild is red, the
 //   non-final oracle went blind. Keeping the control inline makes the two
-//   failures distinguishable (NIM-REF row 70 landmine).
+//   failures distinguishable (NIM-REF AN-20).
 //
 // DRC is NOT asserted: ARC/DRC does not collect cycles by design (same as Nim
 //   ARC) — the CChild cycle leaks under drc forever and that is correct.

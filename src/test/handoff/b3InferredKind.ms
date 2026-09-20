@@ -1,4 +1,4 @@
-// Phase 3 Batch 3 guard for TypeKind.Inferred — NIM-REF.md row 58 (kind split);
+// Phase 3 Batch 3 guard for TypeKind.Inferred — NIM-REF CK-46 (kind split);
 // canonical kind semantics: the sentinel-kind map at unknownType (checker/types.ms).
 //
 // Inferred answers "inference in progress / signature intentionally open"

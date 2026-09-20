@@ -144,7 +144,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// carry it by reference (Nim freshGenSyms leaves non-gensym syms untouched):
 	// Check mode for comptime/macro re-check, Mono mode for generic instantiation
 	// (else a cloned `E.M` in a generic body re-resolves by name and fails).
-	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
+	// See NIM-REF CK-22 "Enum member repr & generic-instantiation survival".
 	if (src.resolvedSym != null && src.resolvedSym.symbolKind == SymbolKind.EnumMember) {
 		dst.resolvedSym = src.resolvedSym;
 		dst.nodeType = src.nodeType;

@@ -381,7 +381,7 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
-	// See NIM-REF.md §1 "Enum member repr & generic-instantiation survival".
+	// See NIM-REF CK-22 "Enum member repr & generic-instantiation survival".
 	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym) && bindsInto(node, redeclared);
 	if (rebinds) node.flags = node.flags.excl(NodeFlag.BoundSym);
 	const keepBound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;

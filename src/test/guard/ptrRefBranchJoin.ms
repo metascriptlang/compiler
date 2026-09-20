@@ -5,11 +5,11 @@
 //   Ref regardless of branch order (see ptrFirstRefJoinOwnership.ms for why the
 //   order matters). Nim's commonType (sem.nim:200-207) instead leaves a
 //   mismatched {tyRef, tyPtr} pair as a type the later fit rejects; MS accepts
-//   the pair under the Ptr<T> cursor coercion (NIM-REF §4). fitJoinedBranch
+//   the pair under the Ptr<T> cursor coercion (NIM-REF AN-10). fitJoinedBranch
 //   coerces the other branch via the intentional Ref<->Ptr cursor coercion
-//   (NIM-REF §4). A ternary/array-literal join over a Ptr<T> linked-list field
+//   (NIM-REF AN-10). A ternary/array-literal join over a Ptr<T> linked-list field
 //   must NOT mint a tagged union.
-// NIM-REF: "Branch-type join — pointer-kind pair" row (2026-08-14).
+// NIM-REF CK-74.
 //
 // WHAT IT CATCHES: the join regressing to union {Ref<T>, Ptr<T>} — RED = C
 //   build failure (msUnion_* returned as Tok* / pushed into Tok[], the

@@ -13,7 +13,7 @@
 //   destroys never ran) and lifecycle bugs were invisible to `msc test`.
 //
 // RED MEANS: a body-carrying construct lost its analyzer arm again (the
-//   no-op-default class, NIM-REF row 88) — test-lane DRC regressed. The
+//   no-op-default class, NIM-REF AN-3) — test-lane DRC regressed. The
 //   [test] cell below reads the ledger of a real `msc test` binary run.
 //
 // GUARD-TEST-BALANCE GuardSinkCell

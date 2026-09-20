@@ -6,7 +6,7 @@
 //   `cmpScopes` (lookups.nim:263), which scores a symbol of the current module
 //   above one reaching in from another module. So a local declaration wins a tie
 //   against an imported/prelude one of the same signature.
-// NIM-REF: the mechanism is absent from docs/NIM-REF.md (verified: zero hits for
+// NIM-REF: the mechanism is absent from paper/NIM-REF.md (verified: zero hits for
 //   `calleeScope`, `cmpScopes`, `cmpCandidates`, `resolveOperatorCall`), so no
 //   intentional divergence covers it.
 //   `cmpCandidates` (compat.ms) already carried step 9 on `calleeScope`, and

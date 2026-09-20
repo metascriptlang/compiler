@@ -6,7 +6,7 @@
 //   the other half of the contract — "This exception is only supposed to be
 //   caught by unit testing frameworks" (lib/std/assertions.nim). The framework
 //   catches; nothing else may swallow it, and nothing may ignore it.
-// NIM-REF: §1 "Assert failure exits via raise; the framework is the catch site"
+// NIM-REF TR-15
 //   — DIVERGE-UNINTENTIONAL -> SAME. `ms_test_main` (runtime/core/test.h) called
 //   `e->fn()` and read only `__ms_test_failed`, never `msErr`, so ANY uncaught
 //   exception escaping a test body was silently reported ✓ PASS. Restored by

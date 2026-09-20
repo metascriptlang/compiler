@@ -165,7 +165,7 @@ done
 
 # DCE emit-clean guard: a hello-world build must carry no websocket/crypto
 # symbols in its emitted C — dead-module pruning + edge-based hook aliveness
-# (NIM-REF "Module/symbol DCE" tier 2). Proven-red on any pre-tier-2 compiler:
+# (NIM-REF CG-1). Proven-red on any pre-tier-2 compiler:
 # name-based hook exemptions keep those modules alive in every program.
 emitname="helloEmitClean"
 printf 'console.log("hi");\n' > "$TMP/hello_emit.ms"

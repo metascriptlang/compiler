@@ -15,7 +15,7 @@
 //             Null RHS slipped through every assignment.
 // Fix:        pre-peel Null->Cursor arm in isAssignableInner + Null-RHS
 //             enforcement in the "=" arm of checkExprPass, scoped to Null so
-//             the terminal fitNode scope (NIM-REF row 80) stays closed.
+//             the terminal fitNode scope (NIM-REF CK-51) stays closed.
 //             Ref/Ptr stay TS-strict (`T | null` opt-in) — pinned below.
 
 import { hasError, strictErrorCount } from "../handoff/helpers";

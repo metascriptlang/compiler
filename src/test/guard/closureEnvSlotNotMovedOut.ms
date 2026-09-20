@@ -12,7 +12,7 @@
 //     `env[].x` is a COPY, not a destructive move.
 //   - the env VARIABLE itself is an ordinary owned local: its last read (the
 //     closure pair that takes it) may sink it.
-//   NIM-REF: "closure env access is deref-shaped" — SAME.
+//   NIM-REF TR-20 — SAME.
 //
 // WHAT IT CATCHES:
 //   - the outer-scope rewrite emitting `env.x` without the hidden deref once the

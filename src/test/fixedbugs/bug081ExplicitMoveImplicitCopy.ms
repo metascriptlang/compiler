@@ -8,7 +8,7 @@
 // and SymbolFlag.SinkTemp short-circuits the query to "safe".
 //
 // The diagnostic could not surface at all until analyze-phase errors started
-// failing the build (the reason NIM-REF records errFailedMove as "abandoned").
+// failing the build (the reason errFailedMove was abandoned, NIM-REF AN-13).
 
 import { compileToC } from "../helpers";
 

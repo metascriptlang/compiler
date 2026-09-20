@@ -1,6 +1,6 @@
 // @maxrss: 40
 // @stdout: leak-callarg-object acc=
-// note: FIXED by the analyzer (inject.ms processObjectLiteral self-capture in Normal mode = Nim p()+ensureDestruction, injectdestructors.nim:889). A fresh interface object literal passed inline as a non-sink call argument, stored by the callee, leaked (value stuck at rc=1: callee increfs a fresh rc=0 value, caller never owned/destroyed it). processObjectLiteral processed the literal's FIELDS but never ensureDestruction'd the literal ITSELF; now it does in Normal mode (Consumed/SinkArg positions — binding RHS, sink param, ref field, return — skip it, so no double-free). The Phase-3 callHoist hoist could NOT fix this (never reached call args; crashed escape-heavy code) — this needed the Phase-4 analyzer. Was 431MB @ 2M, now flat ~2MB drc+orc. Paired with leak-callarg-escape (the multi-alias escape discriminator). See docs/NIM-REF.md §3.
+// note: FIXED by the analyzer (inject.ms processObjectLiteral self-capture in Normal mode = Nim p()+ensureDestruction, injectdestructors.nim:889). A fresh interface object literal passed inline as a non-sink call argument, stored by the callee, leaked (value stuck at rc=1: callee increfs a fresh rc=0 value, caller never owned/destroyed it). processObjectLiteral processed the literal's FIELDS but never ensureDestruction'd the literal ITSELF; now it does in Normal mode (Consumed/SinkArg positions — binding RHS, sink param, ref field, return — skip it, so no double-free). The Phase-3 callHoist hoist could NOT fix this (never reached call args; crashed escape-heavy code) — this needed the Phase-4 analyzer. Was 431MB @ 2M, now flat ~2MB drc+orc. Paired with leak-callarg-escape (the multi-alias escape discriminator). See NIM-REF AN-4.
 
 // FIXED by the analyzer (inject.ms processObjectLiteral self-capture in Normal mode): a fresh
 // object literal passed INLINE as a call argument, where the callee stores it into a field,
@@ -15,7 +15,7 @@
 // and crashed escape-heavy code). The fix is Phase-4 ownership: processObjectLiteral now mirrors
 // Nim's p()+ensureDestruction (injectdestructors.nim:889) — a fresh owned literal in Normal mode
 // is captured to a temp destroyed at scope exit. Consumed/SinkArg positions (binding RHS, sink
-// param, ref-constructor field, return) skip it, so no double-free. See docs/NIM-REF.md §3.
+// param, ref-constructor field, return) skip it, so no double-free. See NIM-REF AN-4.
 //
 // Permanent regression guard: was 387MB @ 2M iters, now flat ~2MB.
 

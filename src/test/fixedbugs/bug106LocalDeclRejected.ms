@@ -20,7 +20,7 @@
 //             kinds when the current scope is not Module/Global — Nim
 //             loud-fallthrough parity. Stage 2 (separate arc): true local
 //             support = register in current scope + per-block lifted mangling
-//             (NIM-REF "Test-block local declarations" residual mechanism,
+//             (NIM-REF CK-7 residual mechanism,
 //             scope-qualified mangle keys).
 
 import { compileToC, compileToCWithStd } from "../helpers";

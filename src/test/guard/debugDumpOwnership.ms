@@ -5,7 +5,7 @@
 //   `f` (the formal) in `sigmatch.nim:2179`, never from a type the inserting
 //   pass invented. Ownership and representation follow from that type, so a
 //   planted argument is passed and destroyed exactly like a written one.
-// NIM-REF: §1 "Phase at which an implicit stringify call is inserted" — same
+// NIM-REF CK-73 — same
 //   family: a lowering that synthesizes a call must speak the callee's types.
 //
 // WHAT IT CATCHES: `console.log(structInstance)` lowers to

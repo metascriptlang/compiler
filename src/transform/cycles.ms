@@ -6,7 +6,7 @@
 //
 // Identity for the back-edge check and the recursion guard is the resolved
 // type NAME (typeName | anonTypeName | mangleMonoName) — the MS-native ItemId
-// under per-module type copies (NIM-REF import-resolution divergence).
+// under per-module type copies (NIM-REF CK-19).
 //
 // Intermediate results depend on the walk origin and MUST NOT be memoized;
 // only entry-level answers go to the caller-owned caches (reference: Nim uses

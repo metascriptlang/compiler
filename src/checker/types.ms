@@ -674,7 +674,7 @@ function stampInlineDuVariants(seen: Type[]): void {
 // checks mint structurally-equal COPIES that never pass through createUnion. The
 // analyzer resolves identity for those by STRUCTURAL HASH over this registry
 // (classify.ms) — the MS-native analog of Nim's single-world ItemId, given the
-// intentional per-module type worlds (NIM-REF Import-resolution row).
+// intentional per-module type worlds (NIM-REF CK-19).
 // NameSet-shaped on purpose: module-scope state must be a struct mutated through
 // free functions taking it as a param — a method call directly on a module-level
 // array emits broken C (`->push` on msRefArray, moduleless-sym family).
@@ -1862,7 +1862,7 @@ export function nullType(): Type { return getSysType(TypeKind.Null); }
 // TypeKind.Pending is the unconstructible legacy kind (ctor deleted 2026-08-06):
 // all these meanings once shared it behind TypeFlag.UserUnknown, and readers
 // disagreeing about its pointer-ness produced memory corruption four times
-// (NIM-REF.md row 58). A new meaning gets a NEW kind — never a flag, never a
+// (NIM-REF CK-46). A new meaning gets a NEW kind — never a flag, never a
 // shared singleton.
 // Unknown sits past the 0..Error getSysType preallocation on purpose
 // (bootstrap-stable ordinals) — this accessor returns a fresh type per call.

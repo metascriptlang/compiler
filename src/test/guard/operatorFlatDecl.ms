@@ -8,7 +8,7 @@
 //   second "operators live in a separate registry" dispatch: `^` is a plain
 //   `func` in math.nim:1212, and `{.magic.}` only changes EMISSION after the
 //   symbol has already been resolved (ccgexprs.nim:3551).
-// NIM-REF: no row on operator dispatch -> undocumented -> DIVERGE-UNINTENTIONAL.
+// NIM-REF: no entry on operator dispatch -> undocumented -> DIVERGE-UNINTENTIONAL.
 //   `operatorLower.ms`'s own header claimed the Nim model ("resolves `a == b`
 //   into ``==``(a, b) as a normal call") while the code asked ONLY the extension
 //   registry, which `collectPass.ms` populates solely for receiver-form (`this`)

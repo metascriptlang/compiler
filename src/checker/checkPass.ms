@@ -2569,7 +2569,10 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			// Dep-first: sub-modules compile first so their exports are in
 			// ExportRegistry when this module's re-exports run.
 			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath, backendExt);
+			ctx.interf = [];
+			ctx.interfSet = new HashSet<Symbol>();
 			runThreePasses(ctx, pr.value);
+			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			stampHeaderPaths(ctx);

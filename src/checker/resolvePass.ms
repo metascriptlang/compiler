@@ -792,7 +792,7 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
-		// the build (the missing-NameSet-import incident, docs/NIM-REF.md §4).
+		// the build (the missing-NameSet-import incident).
 		addError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 		return errorType();
 	}
@@ -1413,7 +1413,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
-	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner (docs/NIM-REF.md §5)", line, col);
+	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {

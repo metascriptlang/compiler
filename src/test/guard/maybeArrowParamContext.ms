@@ -3,7 +3,7 @@
 // INVARIANT: an arrow with untyped params passed to a parameter of type
 //   `fn | null` takes the inner function's param types — identical to a bare
 //   `fn` formal. (checkAnonymousFunction: contextual param/return typing)
-// NIM-REF: §1 "Contextual param typing peels Maybe" — DIVERGE-INCOMPLETE -> SAME.
+// NIM-REF CK-58 — DIVERGE-INCOMPLETE -> SAME.
 //   Both the contextual-param gate and the contextual-return-fallback gate only
 //   accepted TypeKind.Function. A `fn|null` formal is a Maybe struct (IsMaybe),
 //   not Function, so untyped params fell to unknown -> void*. Fix peels the Maybe

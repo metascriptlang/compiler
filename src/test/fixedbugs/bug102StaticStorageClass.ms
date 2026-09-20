@@ -15,7 +15,7 @@
 //             the current proc unless it is a deep-const non-GC value — which
 //             is why `once` (system.nim:2859) composes a guard flag ON TOP.
 // Design:     `SymbolFlag.Global` already IS `sfGlobal` (six consumers wired,
-//             see docs/NIM-REF.md last section) — stamp it, do not add a
+//             see NIM-REF TR-10) — stamp it, do not add a
 //             second flag. `static const` implies run-once (MS has a runtime
 //             `const`, Nim does not, so Nim needs `{.global.}` + `once` by
 //             hand); `static let`/`static var` keep Nim's per-call init.
