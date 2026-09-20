@@ -174,6 +174,7 @@ function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
 	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
 	const ak = a.kind == TypeKind.StringLiteral ? TypeKind.String
@@ -201,7 +202,12 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
+	const openA = openNullableUnionPayload(a, b);
+	if (openA != null) return fieldReprMismatch(openA, b.typeReturn);
+	const openB = openNullableUnionPayload(b, a);
+	if (openB != null) return fieldReprMismatch(a.typeReturn, openB);
 	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
 		if (a.typeChildren.length != b.typeChildren.length) return true;
 		let i = 0;
@@ -229,6 +235,13 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	_isaTime = _isaTime + (performance.now() - _isa0);
 	_assignDepth = _assignDepth - 1;
 	return result;
+}
+
+function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
+	if (union.kind != TypeKind.Union || !isMaybeType(carrier)) return null;
+	const payload = nonNullMemberOfNullable(union);
+	if (payload == null || !hasGenericParams(payload)) return null;
+	return payload;
 }
 
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
@@ -277,6 +290,11 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// the same slot from the same function, so the relation can never accept a
 	// widening the emitter has no tag for.
 	if (maybePayloadWidenSlot(source, target) >= 0) return true;
+
+	const openNullableSource = openNullableUnionPayload(source, target);
+	if (openNullableSource != null) return isAssignable(openNullableSource, target.typeReturn);
+	const openNullableTarget = openNullableUnionPayload(target, source);
+	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
 
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
