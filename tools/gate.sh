@@ -41,6 +41,10 @@ A known red that has turned green fails too: the set is then claiming a failure
 that no longer happens, so drop the entry in the commit that fixed it. Unlike a
 new red it does not stop the later lanes — one run should show every stale entry.
 
+Every entry needs a non-empty "note" saying why it is still red or naming the
+card that owns it; an empty one stops the run before any lane. --record writes
+new entries with an empty note, so the run that records is the run that fills them.
+
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 USAGE
@@ -349,6 +353,15 @@ need_cand() {
 }
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+
+if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
+  unnoted=$(jq -r 'to_entries[] | .key as $l | .value | to_entries[]
+                   | select((.value.note // "") == "") | "  no reason: \($l) · \(.key)"' "$KNOWN")
+  if [ -n "$unnoted" ]; then
+    printf '%s\n' "$unnoted" >&2
+    die "known red(s) without a note: each one names why it is still red, or the card that owns it"
+  fi
+fi
 
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
