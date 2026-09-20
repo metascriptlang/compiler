@@ -12,7 +12,7 @@ import {
 	FlowNode, FlowFlag, FlowList,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
-	StringLiteralData, NumberLiteralData, HiddenStdConvData,
+	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 } from "../ast/node";
 import {
@@ -1379,6 +1379,10 @@ export function narrowTypeByDiscriminantProperty(
 	t: Type | null, propName: string, valueExpr: Node, assumeTrue: boolean
 ): Type | null {
 	if (t == null || t.kind != TypeKind.Union) return t;
+	if (valueExpr != null && valueExpr.kind == NodeKind.BooleanLiteral) {
+		const wanted = (valueExpr.data as BooleanLiteralData).boolValue;
+		return narrowTypeByBooleanDiscriminant(t, propName, wanted == assumeTrue);
+	}
 	const info = detectUnionDiscriminant(t, propName);
 	if (info.discField == "") return t;
 	const litValue = extractLiteralString(valueExpr);
