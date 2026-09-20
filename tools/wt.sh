@@ -29,7 +29,7 @@ usage: tools/wt.sh <command> [args]
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
   hook-session          SessionStart hook body (prints the current worktree's card
-                        and the compiler inbox tally by State)
+                        and the compiler inbox tally by State, then by Kind)
 
 env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
 USAGE
@@ -64,7 +64,7 @@ seed_card() {
   local c
   c=$(card_path "$1")
   [ -e "$c" ] && return 0
-  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\n\n## Goal\n\n## Done when\n\n## State\n' \
+  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\nLayer:\nKind:\nMechanism:\n\n## Goal\n\n## Done when\n\n## State\n' \
     "$1" "$MAIN" "$(wt_dir "$1")" "$1" >"$c" || return 1
   say "card: $c"
 }
@@ -96,6 +96,20 @@ inbox_tally() {
   grep -h -m1 '^State:' "$dir"/*.md 2>/dev/null \
     | awk -v n="$n" '{s=$2; sub(/[.,]$/, "", s); t[s]++; k++} END {for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d without a State line ·", n - k}' \
     | sed 's/ ·$//'
+  printf '\n'
+  inbox_kinds "$dir" "$n"
+}
+
+inbox_kinds() {
+  local dir=$1 n=$2 kinds new
+  kinds=$(grep -h -m1 '^Kind:' "$dir"/*.md 2>/dev/null \
+    | awk -v n="$n" '{sub(/^Kind:[ \t]*/, ""); sub(/[ \t]+$/, ""); if (!NF) next; t[$0]++; k++}
+                     END {if (!k) exit; for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d unclassified ·", n - k}' \
+    | sed 's/ ·$//')
+  [ -n "$kinds" ] || return 0
+  new=$(grep -lE '^Mechanism:.*NEW MECHANISM' "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  printf 'by kind:%s' "$kinds"
+  [ "$new" -gt 0 ] && printf ' · %d NEW MECHANISM' "$new"
   printf '\n'
 }
 
