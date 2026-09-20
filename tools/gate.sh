@@ -233,7 +233,7 @@ lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
-    tests) printf '%s test src/test/js/index.ms; %s test src/test/c/index.ms; %s test src/test/fixedbugs/index.ms; %s test src/test/handoff/index.ms; %s test src/test/fmt/index.ms; %s test src/test/checker3pass/index.ms' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
+    tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
