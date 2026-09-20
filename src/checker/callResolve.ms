@@ -3800,6 +3800,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (declaredDu != null && isDiscriminatedUnion(declaredDu)
 					&& getDiscriminantName(declaredDu) == d.property
 					&& declaredDu.typeExtra != null) {
+				d.object.nodeType = d.object.resolvedSym.symbolType;
 				return declaredDu.typeExtra;
 			}
 		}
