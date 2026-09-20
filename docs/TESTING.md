@@ -91,8 +91,14 @@ Rules:
 - Avoid pinning every byte of output (brittle); pin the load-bearing tokens.
 - These are NOT a substitute for runtime behavior tests — pair with a
   `lang/*.ms` test that runs the same code.
-- `compileToC` does not resolve `std/` beyond the prelude; a source that imports
-  `std/meta` needs `compileToCWithStd`.
+- `compileToC` puts only the test source in the module graph — the prelude gives it
+  the NAMES of `std/`, never the declarations. A source that reaches a std
+  declaration needs `compileToCWithStd`, and an `import` is not what decides it: a
+  prelude call whose type mentions a std type is enough. Measured 2026-09-20 —
+  `const r = parseJson("…"); const v = r.value;` (no import at all) fails under
+  `compileToC` as `check: Property 'value' does not exist on type 'object | object'`,
+  or reaches codegen as `internal: unresolved type (kind=48)` when the checker lets
+  it through; the same source is green under `compileToCWithStd` and under `msc run`.
 - `compileToJS` checks and transforms ONE module, without monomorphization or
   macro expansion, so transforms see different shapes than a real build
   (`arr[i]` arrives without the `HiddenDeref` a real JS build wraps around
