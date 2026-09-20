@@ -188,4 +188,4 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 IMPORTANT: never mention specific reference projects in all documents or comment inside our source code — this covers the line-by-line mapping to a reference compiler, which lives outside the repo; naming a design inspiration in `docs/` is fine
 
-@~/.claude/recompiler.local.md
+@paper/local.md
