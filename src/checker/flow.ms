@@ -1178,11 +1178,12 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator != "=") return null;
-		if (d.left == null || !isMatchingReference(d.left, refNode)) {
-			return null;
+		if (d.left == null) return null;
+		if (!isMatchingReference(d.left, refNode)) {
+			return assignsUncheckedName(d.left, refNode) ? declared : null;
 		}
 		const rhs = skipHiddenConv(d.right);
-		if (rhs == null || rhs.nodeType == null) return null;
+		if (rhs == null || rhs.nodeType == null) return declared;
 		return constrainToDeclared(rhs.nodeType, declared);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
@@ -1198,6 +1199,12 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		return constrainToDeclared(init.nodeType, declared);
 	}
 	return null;
+}
+
+function assignsUncheckedName(left: Node, refNode: Node): boolean {
+	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
+	if (left.resolvedSym != null) return false;
+	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
 }
 
 // Constrain an assigned value's type to remain within the variable's declared
