@@ -50,8 +50,8 @@ export interface ExportedSymInfo {
 	// Phase 5: preserve sym flags across module boundaries so overload signature
 	// bits (OverloadSig) survive export/import — required for findOverloadImpl
 	// to distinguish body-less sigs from the wide impl.
-	primaryFlags: int32;
-	overloadFlags: int32[];
+	primaryFlags: uint32;
+	overloadFlags: uint32[];
 	disamb: int32;        // primary's per-(module, name) ordinal — the C name's _u suffix
 	overloadDisambs: int32[]; // per-overload ordinals; carried, never recomputed from position
 	// Phase E: cross-module macros — carry body AST + param names through
@@ -194,7 +194,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	const ovBiKinds: string[] = [];
 	const ovDefParamsFlat: Node[] = [];
 	const ovDefParamsCounts: int32[] = [];
-	const ovFlags: int32[] = [];
+	const ovFlags: uint32[] = [];
 	const ovDisambs: int32[] = [];
 
 	const ovDeclNodes: Node[] = [];
@@ -205,7 +205,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovRtNames.push(sym.overloads[ovi].nativeName);
 		ovExportNames.push(sym.overloads[ovi].exportName);
 		ovBiKinds.push(sym.overloads[ovi].builtinKind);
-		ovFlags.push(sym.overloads[ovi].symFlags as uint32 as int32);
+		ovFlags.push(sym.overloads[ovi].symFlags as uint32);
 		ovDisambs.push(sym.overloads[ovi].disamb);
 		// Cross-module mono — carry overload's declNode if it's a generic
 		// FunctionDecl / static generic MethodDecl (same rule as primary).
@@ -328,7 +328,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		definingModule: sym.modulePath != "" ? sym.modulePath : modulePath,
 		originalName: sym.originalName,
 		headerPath: sym.headerPath,
-		primaryFlags: sym.symFlags as uint32 as int32,
+		primaryFlags: sym.symFlags as uint32,
 		overloadFlags: ovFlags,
 		disamb: sym.disamb,
 		overloadDisambs: ovDisambs,
@@ -944,6 +944,18 @@ export function isExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "ext:") != "";
 }
 
+function declaredName(sym: Symbol): string {
+	return sym.originalName != "" ? sym.originalName : sym.name;
+}
+
+export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
+	for (const known of ctx.runtimeConverters) {
+		if (known == sym) return;
+		if (known.modulePath == sym.modulePath && declaredName(known) == declaredName(sym) && known.disamb == sym.disamb) return;
+	}
+	ctx.runtimeConverters.push(sym);
+}
+
 // True iff `flags` carries the `gen:T,U,...` segment. Single source of
 // truth for "is this a generic decl?" — used by checker (mono dispatch),
 // codegen (skip generic body emission), and extension resolution.
@@ -1212,6 +1224,7 @@ export class CheckerContext {
 	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
 	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
 	converterTargetTypes: HashMap<string, Type>;    // converter: converter name → target type resolved in the DECLARING module
+	runtimeConverters: Symbol[];
 	converterTargetKeys: string[];                  // registration-ordered target keys (Nim c.converters seq analog)
 	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
 	macroParamTypesRegistry: HashMap<string, string[]>;
@@ -1283,6 +1296,7 @@ export function createContext(): CheckerContext {
 		converterTargetOrigin: new HashMap<string, int32>(),
 		converterTargetByName: new HashMap<string, string>(),
 		converterTargetTypes: new HashMap<string, Type>(),
+		runtimeConverters: [],
 		converterTargetKeys: [],
 		macroParamsRegistry: new HashMap<string, string[]>(),
 		macroParamTypesRegistry: new HashMap<string, string[]>(),

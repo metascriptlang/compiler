@@ -2,14 +2,15 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
+import { ensureShaped } from "./resolvePass";
 
 // ===== Operator Inference =====
 
@@ -634,105 +635,151 @@ export function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: T
 	lit.nodeType = target;
 }
 
-// ===== Coercion Protocol — `as<TargetType>` convention =====
-// Compiler synthesizes `expr` → `expr.as<TargetType>()` when:
-//   - srcType not assignable to targetType, AND
-//   - srcType has an extension `as<TargetType>(this T): TargetType` registered.
-// Mirrors the toItems / getDynamicField synthesis pattern. Type opts in by
-// declaring the extension; non-opt-in types remain strict (fall through to error).
-//
-// Naming convention: `as` + PascalCase(targetTypeName).
-//   string  → asString          int8/16/32/64    → asInt8/asInt16/...
-//   number  → asNumber          uint8/16/32/64   → asUint8/...
-//   boolean => asBoolean         float32/64       → asFloat32/asFloat64
-//   User type Color  → asColor
+// ===== Runtime Converters =====
 
-function coercionMethodName(t: Type): string {
-	return match (t.kind) {
-		TypeKind.String  => "asString",
-		TypeKind.Number  => "asNumber",
-		TypeKind.Boolean => "asBoolean",
-		TypeKind.Int8    => "asInt8",
-		TypeKind.Int16   => "asInt16",
-		TypeKind.Int32   => "asInt32",
-		TypeKind.Int64   => "asInt64",
-		TypeKind.Uint8   => "asUint8",
-		TypeKind.Uint16  => "asUint16",
-		TypeKind.Uint32  => "asUint32",
-		TypeKind.Uint64  => "asUint64",
-		TypeKind.Float32 => "asFloat32",
-		TypeKind.Float64 => "asFloat64",
-		_ => t.typeName != ""
-			? "as" + t.typeName.slice(0, 1).toUpperCase() + t.typeName.slice(1, t.typeName.length)
-			: "",
-	};
+function refusedInsideOwnBody(ctx: CheckerContext, routine: Symbol | null, site: Node | null): boolean {
+	if (routine == null || routine != ctx.currentFunction) return false;
+	if (site != null) {
+		addError(ctx, "'" + routine.name + "' does not apply inside its own body — write the conversion explicitly", site.location.line, site.location.column);
+	}
+	return true;
 }
 
-// Try to synthesize `expr.as<TargetType>()` coercion. Returns the synthesized
-// CallExpr on success, or `null as unknown as Node` if no matching extension exists
-// or the synthesized call doesn't type-check.
-//
-// Caller (e.g. fitNode, checkCallExpr arg coercion) substitutes the returned Node
-// for `expr` at its slot. Result type matches targetType exactly.
-export function trySynthesizeAsCoercion(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node {
-	const methodName = asCoercionMethod(ctx, srcType, targetType);
-	if (methodName == "") return null as unknown as Node;
-	const loc = expr.location;
-	const memberNode = createNodeAt(NodeKind.MemberExpr,
-		{ object: expr, property: methodName, isOptional: false }, loc);
-	const synthCall = createNodeAt(NodeKind.CallExpr,
-		{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
-	callCheckExpr(ctx, synthCall, null);
-	if (synthCall.nodeType == null) return null as unknown as Node;
-	if (synthCall.nodeType.kind == TypeKind.Error) return null as unknown as Node;
-	if (isUnresolvedType(synthCall.nodeType)) return null as unknown as Node;
-	return synthCall;
+function converterEnd(t: Type): Type {
+	let cur = withoutReadonlyView(t);
+	let depth = 0;
+	while (cur.kind == TypeKind.Alias && cur.typeReturn != null && depth < PEEL_MAX_DEPTH) {
+		cur = cur.typeReturn;
+		depth = depth + 1;
+	}
+	return cur;
 }
 
-function asCoercionMethod(ctx: CheckerContext, srcType: Type, targetType: Type): string {
-	if (ctx.extensionRegistry == null) return "";
-	// Nullable-ref target (`X | null`): coerce to the non-null member — the
-	// synthesized X then flows into X|null via the normal member rule. Interface
-	// members sit behind an unnamed Ref wrapper — peel it for the method name.
-	if (targetType.kind == TypeKind.Union) {
-		let nn = nonNullMemberOfNullable(targetType);
-		if (nn != null && (nn.kind == TypeKind.Ref || nn.kind == TypeKind.Ptr) && nn.typeReturn != null) {
-			nn = nn.typeReturn;
+function sameConverterEnd(a: Type, b: Type): boolean {
+	const x = converterEnd(a);
+	const y = converterEnd(b);
+	if (x == y) return true;
+	if (x.kind != y.kind) return false;
+	if ((x.kind == TypeKind.Ref || x.kind == TypeKind.Ptr) && x.typeReturn != null && y.typeReturn != null) {
+		return sameConverterEnd(x.typeReturn, y.typeReturn);
+	}
+	if (x.sym != null || y.sym != null) return sameDeclaration(x.sym, y.sym);
+	return sameType(x, y);
+}
+
+function sameDeclaration(a: Symbol | null, b: Symbol | null): boolean {
+	if (a == null || b == null) return false;
+	return a == b || (a.modulePath != "" && a.modulePath == b.modulePath && a.name == b.name);
+}
+
+function converterReaches(produced: Type, target: Type): boolean {
+	if (sameConverterEnd(produced, target)) return true;
+	if (isMaybeType(target) && target.typeReturn != null) return sameConverterEnd(produced, target.typeReturn);
+	const nonNull = nonNullMemberOfNullable(target);
+	return nonNull != null && sameConverterEnd(produced, nonNull);
+}
+
+function runtimeConverterFor(ctx: CheckerContext, srcType: Type, targetType: Type, site: Node | null): Symbol | null {
+	const matches: Symbol[] = [];
+	for (const conv of ctx.runtimeConverters) {
+		ensureShaped(conv, ctx);
+		const fnType = conv.symbolType;
+		if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 1 || fnType.typeReturn == null) continue;
+		if (sameConverterEnd(fnType.typeChildren[0], srcType) && converterReaches(fnType.typeReturn, targetType)) matches.push(conv);
+	}
+	if (matches.length == 0) return null;
+	if (matches.length > 1) {
+		if (site != null) {
+			addError(ctx, "'" + matches[0].name + "' and '" + matches[1].name + "' both convert '" + typeDisplayName(srcType) + "' to '" + typeDisplayName(targetType)
+				+ "' — the compiler never chooses; call one explicitly", site.location.line, site.location.column);
 		}
-		if (nn != null && !isUnresolvedType(nn)) targetType = nn;
+		return null;
 	}
-	const methodName = coercionMethodName(targetType);
-	if (methodName == "") return "";
-	const exts = findAllExtensionsByName(ctx.extensionRegistry, methodName);
-	if (exts.length == 0) return "";
-	const ext = findFirstMatchingExt(exts, srcType);
-	if (ext == null) return "";
-	// Verify return type matches target exactly (asInt32 vs asInt64 disambiguation).
-	const extFnT = getExtFnType(ext);
-	let extRet = extFnT.typeReturn;
-	if (extRet != null && (extRet.kind == TypeKind.Ref || extRet.kind == TypeKind.Ptr) && extRet.typeReturn != null) {
-		extRet = extRet.typeReturn;
+	return matches[0];
+}
+
+export function convertsWithoutRoutine(srcType: Type, targetType: Type): boolean {
+	if (slotTakesValue(srcType, targetType)) return true;
+	const src = representation(srcType);
+	const target = representation(targetType);
+	if (isNumeric(src) && isNumeric(target)) return true;
+	return sameType(src, target);
+}
+
+function representation(t: Type): Type {
+	let cur = converterEnd(t);
+	let depth = 0;
+	while (depth < PEEL_MAX_DEPTH) {
+		const body = distinctBody(cur);
+		if (body == null) return cur;
+		cur = converterEnd(body);
+		depth = depth + 1;
 	}
-	if (extRet == null) return "";
-	if (extRet.kind != targetType.kind) return "";
-	if (targetType.typeName != "" && extRet.typeName != targetType.typeName) {
-		return "";
+	return cur;
+}
+
+export function tryApplyConverter(ctx: CheckerContext, expr: Node, srcType: Type, targetType: Type): Node | null {
+	if (ctx.runtimeConverters.length == 0 || hasGenericParams(targetType)) return null;
+	const conv = runtimeConverterFor(ctx, srcType, targetType, expr);
+	if (conv == null || refusedInsideOwnBody(ctx, conv, expr)) return null;
+	const callee = createNodeAt(NodeKind.Identifier, { name: conv.name }, expr.location);
+	callee.resolvedSym = conv;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
+	const call = createNodeAt(NodeKind.CallExpr,
+		{ callee: callee, arguments: [expr], isDirectCall: true, resolvedOverloadIdx: -1 }, expr.location);
+	call.flags = call.flags.incl(NodeFlag.ProtocolCall);
+	callCheckExpr(ctx, call, null);
+	if (call.nodeType == null || call.nodeType.kind == TypeKind.Error || isUnresolvedType(call.nodeType)) return null;
+	return call;
+}
+
+function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
+	for (const conv of ctx.runtimeConverters) {
+		ensureShaped(conv, ctx);
+		const fnType = conv.symbolType;
+		if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 1 || fnType.typeReturn == null) continue;
+		if (sameConverterEnd(fnType.typeChildren[0], src) && converterReaches(fnType.typeReturn, target)) return true;
 	}
-	return methodName;
+	return false;
+}
+
+function operandTarget(t: Type): Type {
+	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
+	return t;
+}
+
+export function operandConverter(ctx: CheckerContext, op: string, operand: Node, leftType: Type | null, rightType: Type | null, selfIsLeft: boolean): Node | null {
+	if (leftType == null || rightType == null || ctx.runtimeConverters.length == 0) return null;
+	const bop = compoundBase(op);
+	if (binaryOperandClass(bop) == "" && bop != "<" && bop != ">" && bop != "<=" && bop != ">=") return null;
+	const self = selfIsLeft ? leftType : rightType;
+	const other = selfIsLeft ? rightType : leftType;
+	if (isUnresolvedType(other) || isUnknownType(other) || hasGenericParams(other) || other.kind == TypeKind.Null) return null;
+	const target = operandTarget(other);
+	if (sameConverterEnd(self, target) || convertsBetween(ctx, target, self)) return null;
+	if (bop == "+" && isStringLike(target) && hasValueOfProtocol(ctx, self)) return null;
+	if (ctx.extensionRegistry != null && resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) != null) return null;
+	return tryApplyConverter(ctx, operand, self, target);
+}
+
+function valueOfProtocolOf(ctx: CheckerContext, t: Type | null): ExtensionMethod {
+	const none = null as unknown as ExtensionMethod;
+	if (t == null || ctx.extensionRegistry == null) return none;
+	let src = withoutReadonlyView(t);
+	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return none;
+	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
+	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return none;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
+	if (exts.length == 0) return none;
+	const ext = findFirstMatchingExt(exts, src);
+	if (ext == null) return none;
+	const srcName = typeNameOf(src);
+	return srcName != "" && srcName == ext.receiverTypeName ? ext : none;
 }
 
 export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
-	if (t == null || ctx.extensionRegistry == null) return false;
-	let src = withoutReadonlyView(t);
-	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return false;
-	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
-	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return false;
-	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
-	if (exts.length == 0) return false;
-	const ext = findFirstMatchingExt(exts, src);
-	if (ext == null) return false;
-	const srcName = typeNameOf(src);
-	return srcName != "" && srcName == ext.receiverTypeName;
+	return valueOfProtocolOf(ctx, t) != null;
 }
 
 export function slotTakesValue(exprType: Type, formal: Type): boolean {
@@ -773,15 +820,17 @@ function needServedByOwnProtocol(ctx: CheckerContext, t: Type, need: ReadNeed, f
 	return match (need) {
 		ReadNeed.Items => declaresOwnProtocol(ctx, t, "toItems"),
 		ReadNeed.Text => declaresOwnProtocol(ctx, t, "toString"),
-		ReadNeed.Slot => formal != null && asCoercionMethod(ctx, t, formal) != "",
+		ReadNeed.Slot => formal != null && runtimeConverterFor(ctx, t, formal, null) != null,
 		_ => false,
 	};
 }
 
 export function valueOfInPlace(ctx: CheckerContext, node: Node, need: ReadNeed = ReadNeed.Value, formal: Type | null = null): boolean {
 	if (node == null as unknown as Node || node.flags.has(NodeFlag.ProtocolCall)) return false;
-	if (!hasValueOfProtocol(ctx, node.nodeType)) return false;
+	const valueOfExt = valueOfProtocolOf(ctx, node.nodeType);
+	if (valueOfExt == null) return false;
 	if (needServedByOwnProtocol(ctx, node.nodeType!, need, formal)) return false;
+	if (refusedInsideOwnBody(ctx, valueOfExt.sym, node)) return false;
 	const inner = createNodeAt(node.kind, node.data, node.location);
 	inner.nodeType = node.nodeType;
 	inner.resolvedSym = node.resolvedSym;
@@ -1055,6 +1104,11 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			+ "' — a void call produces no value", expr.location.line, expr.location.column);
 		return expr;
 	}
+	const payloadSlot = isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType) ? formal.typeReturn : formal;
+	if (!hasGenericParams(formal) && !slotTakesValue(exprType, payloadSlot)) {
+		const converted = tryApplyConverter(ctx, expr, exprType, formal);
+		if (converted != null) return fitNode(ctx, converted, formal, converted.nodeType);
+	}
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr, ReadNeed.Slot, formal)) {
 		return fitNode(ctx, expr, formal, expr.nodeType);
 	}
@@ -1134,18 +1188,12 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
-	// Convention-based coercion protocol: try `expr.as<TargetType>()` synthesis.
-	// Opt-in for any type via extension methods named asString/asNumber/asBoolean/asInt32/etc.
-	const coercionCall = trySynthesizeAsCoercion(ctx, expr, exprType, formal);
-	if (coercionCall != null as unknown as Node) {
-		return coercionCall;
-	}
 	// Scope: the memory-safety class only — container element-repr and pointer vs
 	// scalar. General `!isAssignable` rejection is intentionally NOT applied — see
 	// NIM-REF CK-51 "Container element assignability + enforcement site" (terminal;
 	// two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isReinterpretUnsafe(exprType, formal)) {
-		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or provide an as" + (formal.typeName != "" ? formal.typeName.slice(0, 1).toUpperCase() + formal.typeName.slice(1, formal.typeName.length) : "X") + " extension)", expr.location.line, expr.location.column);
+		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
 	}
 	return expr;
 }

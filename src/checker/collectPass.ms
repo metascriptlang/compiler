@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, addRuntimeConverter } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -345,6 +345,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const isStaticMember = extTypeName != "" && isStaticExtensionFlag(d.fnFlags);
 	if (node.resolvedSym != null && node.resolvedSym.modulePath != "") {
 		if (!isStaticMember) defineSymbol(ctx.table, node.resolvedSym);
+		if (hasFlag(node.resolvedSym, SymbolFlag.Converter)) addRuntimeConverter(ctx, node.resolvedSym);
 		return;
 	}
 	// Define symbol first — needed so extension can link to it
@@ -353,6 +354,10 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Tier 1: overload signature (body-less) — typecheck-only, codegen skips emission
 	if (d.fnFlags.indexOf("overload", 0) >= 0) {
 		setFlag(sym, SymbolFlag.OverloadSig);
+	}
+	if (node.flags.has(NodeFlag.Converter)) {
+		setFlag(sym, SymbolFlag.Converter);
+		addRuntimeConverter(ctx, sym);
 	}
 	// Extern functions: mark as C import (export requires explicit `export` keyword)
 	if (d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
@@ -931,6 +936,10 @@ export function importSymFromRegistry(
 	// when scoring cross-module overload calls.
 	if ((exportInfo.primaryFlags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
 		setFlag(sym, SymbolFlag.OverloadSig);
+	}
+	if ((exportInfo.primaryFlags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.Converter)) {
+		setFlag(sym, SymbolFlag.Converter);
+		addRuntimeConverter(ctx, sym);
 	}
 	// Exported Variables are always module-level — locals can't be exported.
 	// Carry the Global flag so codegen's isModuleGlobalVar correctly routes cross-module

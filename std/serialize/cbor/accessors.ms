@@ -1,7 +1,6 @@
 // CBOR Accessors — extension methods on CborValue
 //
 // Convention-based protocol methods (compiler synthesizes implicit calls):
-//   value.asString() / asNumber() / asBoolean() / asInt32() / asInt64()
 //   value.getDynamicField("key")          — text-keyed map lookup (text → CborValue)
 // Direct call still works for explicit invocation.
 // Other accessors:
@@ -11,43 +10,10 @@
 // code that consumes UntypedTree<X> values via `v.foo.asString()` works
 // identically across JSON and CBOR.
 
-import { CborKind, CborValue } from "./types";
+import { CborKind, CborValue, asString, asNumber, asBoolean, asInt64 } from "./types";
 import { cborNull } from "./builder";
 
-// ===== Type accessors (coercion protocol — `as<TargetType>`) =====
-
-export function asString(this v: CborValue, def: string = ""): string {
-	if (v != null && v.kind == CborKind.Text) return v.textVal;
-	return def;
-}
-
-// CBOR's Int variant covers both major 0 (unsigned) and major 1 (negative)
-// — wire type "integer". Float is a distinct variant. asNumber accepts
-// both Int and Float; asInt* accepts only Int (numeric truncation of float
-// is lossy and the user almost never wants it implicitly).
-export function asNumber(this v: CborValue, def: number = 0): number {
-	if (v == null) return def;
-	return match (v.kind) {
-		CborKind.Int   => v.intVal as number,
-		CborKind.Float => v.floatVal,
-		_ => def,
-	};
-}
-
-export function asBoolean(this v: CborValue, def: boolean = false): boolean {
-	if (v != null && v.kind == CborKind.Bool) return v.boolVal;
-	return def;
-}
-
-export function asInt32(this v: CborValue, def: int32 = 0): int32 {
-	if (v != null && v.kind == CborKind.Int) return v.intVal as int32;
-	return def;
-}
-
-export function asInt64(this v: CborValue, def: int64 = 0 as int64): int64 {
-	if (v != null && v.kind == CborKind.Int) return v.intVal;
-	return def;
-}
+export { asString, asNumber, asBoolean, asInt32, asInt64 } from "./types";
 
 // ===== Collection accessors =====
 

@@ -1,4 +1,4 @@
-// Parity program — `v as U`, a typed slot and an argument read through `asU`
+// Parity program — `v as U`, a typed slot and an argument read through a converter
 // when the receiver is a named alias of `Ref<match-union>`, the shape of
 // `JsonValue`: a local alias, a parsed JSON value, and a member read through
 // `getDynamicField`.
@@ -15,8 +15,8 @@ type UData = match (kind: K) {
 };
 type U = Ref<UData>;
 
-function asString(this v: U): string { return "fromU"; }
-function asInt32(this v: U, def: int32 = 7): int32 { return def; }
+converter uToText(v: U): string { return "fromU"; }
+converter uToInt32(v: U): int32 { return 7; }
 
 function local(v: U): string {
 	const s = v as string;

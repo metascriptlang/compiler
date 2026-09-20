@@ -208,3 +208,4 @@ import "./bug193ConverterExpansionNarrows";
 import "./bug194GenericCallChecksArrowArg";
 import "./bug195ModuleExportSet";
 import "./bug196PreludeNamedImport";
+import "./bug197ProtocolAppliesInsideOwnBody";

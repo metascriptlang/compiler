@@ -2160,7 +2160,7 @@ function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 function processTestDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as TestDeclData;
 	if (d.testBody == null) return stmt;
-	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], null, dctx, loc, stmt.nodeType!);
+	d.testBody = processFuncBodyWithParams(d.testBody, noSym, "", [], [], dctx, loc, stmt.nodeType!);
 	return stmt;
 }
 
@@ -2503,7 +2503,7 @@ test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
 
 test "setNeedsTryIfRaises stops at a nested function declaration" {
 	const loc = testLoc();
-	const nested = makeFnDecl("inner", [], [], makeBlock([userCallStmt()], loc), "", "void", loc);
+	const nested = makeFnDecl("inner", [] as Symbol[], [], makeBlock([userCallStmt()], loc), "", "void", loc);
 	assert !scanSetsNeedsTry(nested);
 }
 

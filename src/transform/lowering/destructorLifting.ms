@@ -1003,11 +1003,11 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 					let helperFn: Node | null = null;
 					if (isTrace) {
 						// Trace: (self, callback) — self is union type, callback is void*
-						helperFn = makeFnDecl(helperName, [h1.name, h2.name], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1, h2], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
 					} else if (isUnary) {
-						helperFn = makeFnDecl(helperName, [h1.name], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
 					} else {
-						helperFn = makeFnDecl(helperName, [h1.name, h2.name], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+						helperFn = makeFnDecl(helperName, [h1, h2], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
 					}
 					setHookParamType(helperFn, 0, h1.symbolType);
 					if (!isUnary || isTrace) setHookParamType(helperFn, 1, h2.symbolType);
@@ -1256,11 +1256,11 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 
 	let fnNode: Node | null = null;
 	if (isTrace) {
-		fnNode = makeFnDecl(cName + suffix, [s1.name, s2.name], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1, s2], [typeName, "void*"], makeBlock(buf.items, loc), "", "void", loc);
 	} else if (isUnary) {
-		fnNode = makeFnDecl(cName + suffix, [s1.name], [typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1], [typeName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(cName + suffix, [s1.name, s2.name], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(cName + suffix, [s1, s2], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 	// Set hook param types explicitly (reference parity: symPrototype sets dest.typ/src.typ directly).
 	// For class types, use classType (Ref<Struct>) — already a pointer.
@@ -1345,7 +1345,7 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 		dupStmts.push(makeExprStmt(makeCall(hookRef(cName + "Copy", loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	}
-	const dupNode = makeFnDecl(cName + "Dup", [srcSym.name], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	const dupNode = makeFnDecl(cName + "Dup", [srcSym], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	const dupType = classType != null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
@@ -1574,11 +1574,13 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	//   return true;
 	// }
 	const buf: Node[] = [];
+	const aSym = makeSymbol("a", SymbolKind.Variable, objType, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, objType, false);
 	for (let i = 0; i < objType.typeNames.length; i += 1) {
 		const fieldName = objType.typeNames[i];
 		const fieldType = objType.typeChildren[i];
-		const aField = makeMember(makeIdent("a", loc), fieldName, loc);
-		const bField = makeMember(makeIdent("b", loc), fieldName, loc);
+		const aField = makeMember(makeTypedIdentResolved(aSym, null, loc), fieldName, loc);
+		const bField = makeMember(makeTypedIdentResolved(bSym, null, loc), fieldName, loc);
 
 		// Generate: if (!fieldEq) return false;
 		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
@@ -1586,7 +1588,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
-	const eqFn = makeFnDecl(typeName + "Eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
+	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, objType);
 	setHookParamType(eqFn, 1, objType);
 	markGeneratedOp(eqFn, typeName + "Eq");
@@ -1647,8 +1649,8 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 
 	const suffix = hookSuffix(hook);
 	const fnNode = isUnary
-		? makeFnDecl(tupleName + suffix, [s1.name], [tupleName], makeBlock(buf.items, loc), "", "void", loc)
-		: makeFnDecl(tupleName + suffix, [s1.name, s2.name], [tupleName, tupleName], makeBlock(buf.items, loc), "", "void", loc);
+		? makeFnDecl(tupleName + suffix, [s1], [tupleName], makeBlock(buf.items, loc), "", "void", loc)
+		: makeFnDecl(tupleName + suffix, [s1, s2], [tupleName, tupleName], makeBlock(buf.items, loc), "", "void", loc);
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
@@ -1728,16 +1730,18 @@ function tupleField(obj: Node, idx: number, loc: SourceLocation): Node {
 //        return true
 function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeIdent("a", loc), i, loc);
-		const bField = tupleField(makeIdent("b", loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
 		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
 		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
-	const teqFn = makeFnDecl(tupleName + "Eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const teqFn = makeFnDecl(tupleName + "Eq", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(teqFn, 0, t);
 	setHookParamType(teqFn, 1, t);
 	markGeneratedOp(teqFn, tupleName + "Eq");
@@ -1755,20 +1759,22 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 // We inline the cmp pattern: if (a < b) return true; if (a > b) return false;
 function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeIdent("a", loc), i, loc);
-		const bField = tupleField(makeIdent("b", loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
 		// if (a._i < b._i) return true;
 		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
 		// if (a._i > b._i) return false;
-		const aField2 = tupleField(makeIdent("a", loc), i, loc);
-		const bField2 = tupleField(makeIdent("b", loc), i, loc);
+		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
+		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
 		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
-	const tltFn = makeFnDecl(tupleName + "Lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const tltFn = makeFnDecl(tupleName + "Lt", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tltFn, 0, t);
 	setHookParamType(tltFn, 1, t);
 	markGeneratedOp(tltFn, tupleName + "Lt");
@@ -1784,18 +1790,20 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 //        return true    <-- only difference from <
 function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeIdent("a", loc), i, loc);
-		const bField = tupleField(makeIdent("b", loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
 		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
-		const aField2 = tupleField(makeIdent("a", loc), i, loc);
-		const bField2 = tupleField(makeIdent("b", loc), i, loc);
+		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
+		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
 		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
-	const tleFn = makeFnDecl(tupleName + "Le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const tleFn = makeFnDecl(tupleName + "Le", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tleFn, 0, t);
 	setHookParamType(tleFn, 1, t);
 	markGeneratedOp(tleFn, tupleName + "Le");
@@ -1849,9 +1857,9 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 
 	let fnNode: Node | null = null;
 	if (isUnary) {
-		fnNode = makeFnDecl(seqName + suffix, [s1.name], [seqName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(seqName + suffix, [s1], [seqName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(seqName + suffix, [s1.name, s2.name], [seqName, seqName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(seqName + suffix, [s1, s2], [seqName, seqName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 
 	// Set param types based on hook kind.

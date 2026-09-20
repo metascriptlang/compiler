@@ -1858,6 +1858,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 export function parseConverterDecl(state: ParserState): NodeResult {
 	const convToken = current(state);
+	const start = state.position;
 	advance(state); // consume 'converter'
 
 	const nameToken = current(state);
@@ -1869,11 +1870,9 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state, nameToken.value);
 	const params = extractParamNames(raw);
 	const paramTypes = extractParamTypes(raw);
-	if (params.length != 1) {
-		return Result.err(`converter '${nameToken.value}' must take exactly one parameter at line ${nameToken.line}`);
-	}
-	if (paramTypes[0] != "Node") {
-		return Result.err(`converter '${nameToken.value}' source must be a compile-time type (Node), got '${paramTypes[0]}' at line ${nameToken.line}`);
+	if (params.length != 1 || paramTypes[0] != "Node") {
+		state.position = start;
+		return parseRuntimeConverterDecl(state);
 	}
 
 	const macroDeclReturnType = captureOptionalType(state);
@@ -1894,6 +1893,26 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 	node.flags = node.flags.incl(NodeFlag.Converter);
 	node.typeExpr = returnTypeExpr;
 	return Result.ok(node);
+}
+
+function parseRuntimeConverterDecl(state: ParserState): NodeResult {
+	const decl = try parseFunctionDecl(state);
+	const fd = decl.data as FunctionDeclData;
+	const where = `at line ${fd.nameLocation.line}`;
+	if (fd.fnFlags.indexOf("gen:", 0) >= 0) {
+		return Result.err(`converter '${fd.fnName}' cannot be generic ${where}`);
+	}
+	if (fd.params.length != 1) {
+		return Result.err(`converter '${fd.fnName}' must take exactly one parameter ${where}`);
+	}
+	if (fd.fnDefaults.length > 0 && fd.fnDefaults[0] != null) {
+		return Result.err(`converter '${fd.fnName}' parameter cannot have a default value ${where}`);
+	}
+	if (fd.fnReturnType == "") {
+		return Result.err(`converter '${fd.fnName}' requires an explicit return type ${where}`);
+	}
+	decl.flags = decl.flags.incl(NodeFlag.Converter);
+	return Result.ok(decl);
 }
 
 // ===== Tests =====

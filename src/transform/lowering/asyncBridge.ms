@@ -589,6 +589,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 		funcExprReturnType: "void*",  // returns msFuture* (next future) or NULL (done)
 	}, syntheticToken(loc));
 	stepperFnExpr.nodeType = closureType;
+	stepperFnExpr.paramSyms = [];
 
 	// 9. Build outer function body
 	const outerStmts: Node[] = [];

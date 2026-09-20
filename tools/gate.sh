@@ -4,15 +4,17 @@ set -uo pipefail
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 RULES=(
   'tools|^tools/'
+  'build,suite,tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass)/'
+  'tests|^src/(checker|transform|codegen)/'
   'build,suite,guard|^src/test/guard/'
   'build,suite,corpus|^src/test/corpus/'
   'build,suite,corpus|^(src/(codegen|analyzer|transform)|runtime)/'
   'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build suite suite-orc corpus san guard"
-LADDER="build suite suite-orc corpus san guard"
-KNOWN_LANES="suite suite-orc corpus san guard"
+ORDER="tools build suite tests suite-orc corpus san guard"
+LADDER="build suite tests suite-orc corpus san guard"
+KNOWN_LANES="suite suite-orc tests corpus san guard"
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$'
 
 usage() {
@@ -24,7 +26,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build suite suite-orc corpus san guard
+  --lanes a,b    run exactly these lanes: tools build suite tests suite-orc corpus san guard
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -75,7 +77,7 @@ reds_of() {
   case "$lane" in
     build) [ "$rc" -eq 0 ] || echo "build" ;;
     tools) sed -n 's/^FAIL \(.*\): bash -n$/\1/p' "$log" ;;
-    suite|suite-orc)
+    suite|suite-orc|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
         /^ FAIL  / { f=$0; sub(/^ FAIL  /,"",f); if (index(f,top)==1) f=substr(f,length(top)+1); next }
         /^  × / { t=$0; sub(/^  × /,"",t); print f " > " t }
@@ -218,6 +220,7 @@ lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
+    tests) printf '%s test src/test/js/index.ms; %s test src/test/c/index.ms; %s test src/test/fixedbugs/index.ms; %s test src/test/handoff/index.ms; %s test src/test/fmt/index.ms; %s test src/test/checker3pass/index.ms' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
