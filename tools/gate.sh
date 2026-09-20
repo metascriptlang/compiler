@@ -45,6 +45,11 @@ Every entry needs a non-empty "note" saying why it is still red or naming the
 card that owns it; an empty one stops the run before any lane. --record writes
 new entries with an empty note, so the run that records is the run that fills them.
 
+The "flaky" section names programs that fail at random (a hang, a timeout), by
+program rather than by lane. Their reds are counted and printed but are never new,
+never known, and never known-now-green — a program that fails half the time cannot
+answer either question. Putting one there needs a run that shows both outcomes.
+
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 USAGE
@@ -249,6 +254,19 @@ known_of() {
   jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | sort -u
 }
 
+flaky_ids() {
+  [ -f "$KNOWN" ] || return 0
+  jq -r '.flaky // {} | keys[]' "$KNOWN" | sort -u
+}
+
+split_flaky() {
+  awk -v want="$1" '
+    NR == FNR { f[$0] = 1; next }
+    { id = $0; sub(/ \[[^]]*\]$/, "", id)
+      hit = (id in f) || ($0 in f)
+      if ((want == "keep") == (hit != 0)) print }' "$OUT/flaky.ids" -
+}
+
 totals_of() {
   local lane=$1 log=$2
   [ -f "$log" ] || return 0
@@ -363,6 +381,9 @@ if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
   fi
 fi
 
+mkdir -p "$OUT"
+flaky_ids >"$OUT/flaky.ids"
+
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
 case " $lanes " in *" build "*|*" suite "*|*" suite-orc "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
@@ -388,7 +409,9 @@ for lane in $lanes; do
   esac
   printf '\nRC=%d\nEND\n' "$rc" >>"$log"
   fi
-  reds_of "$lane" "$log" "$rc" >"$OUT/$lane.red"
+  reds_of "$lane" "$log" "$rc" >"$OUT/$lane.red.all"
+  split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
+  split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
   known_of "$lane" | scope_known >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
@@ -396,11 +419,13 @@ for lane in $lanes; do
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
   n_new=$(grep -c . "$OUT/$lane.new" | tr -d ' ')
   n_fixed=$(grep -c . "$OUT/$lane.fixed" | tr -d ' ')
+  n_flaky=$(grep -c . "$OUT/$lane.flaky" | tr -d ' ')
   [ -z "$only_csv" ] || reused="$reused on $(printf '%s' "$only_csv" | tr ',' '\n' | grep -c . | tr -d ' ') program(s)${lanes_csv:+, lanes $lanes_csv}"
   line="gate: $lane$reused $(fmt_secs $((SECONDS - t0))) · $n_red red · $((n_red - n_new)) known · $n_new new"
   [ "$n_fixed" -eq 0 ] || line="$line · $n_fixed known-now-green ($(head -3 "$OUT/$lane.fixed" | paste -sd, - | sed 's/,/, /g'))"
   xp=$(sed -n 's/^.* \([0-9][0-9]*\) xpass$/\1/p' "$log" | tail -1)
   [ -z "$xp" ] || [ "$xp" = 0 ] || line="$line · $xp xpass"
+  [ "$n_flaky" -eq 0 ] || line="$line · $n_flaky flaky ($(head -3 "$OUT/$lane.flaky" | paste -sd, - | sed 's/,/, /g'))"
   totals=$(totals_of "$lane" "$log")
   [ -z "$totals" ] || line="$line · $totals case"
   say "$line"

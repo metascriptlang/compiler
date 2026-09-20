@@ -1,6 +1,5 @@
 {
   "corpus": {
-    "405-lockedSharedCounter [danger]": {"since":"52ae61ea","note":"green on this lane 2026-09-21, but 405-lockedSharedCounter [drc] hung (TIMEOUT 300s) in the same run \u2014 the program is unstable, not fixed; same shape as 2026-09-19-corpus-419-danger-hangs-at-random.md"},
     "619-mapTupleValueLeak [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-tuple-value done acc=0'; measured 2026-09-21"},
     "628-mapMutationGuardOk [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-guard-ok sum=280 sum2=288 set=4 hmk=6 hs=4'; measured 2026-09-21"},
     "630-raiserCycleCollect [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'raiser-cycle freed=200000 keeperOk=1'; measured 2026-09-21"},
@@ -19,6 +18,10 @@
     "773-bitSetAlgebra [esm]": {"since":"52ae61ea","note":"runs but stdout misses '3,1,1,2,true,true,true,false|3,1,1,2,true,true\u2026'; measured 2026-09-21"},
     "775-bitSetIterate [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'A,C|A,C|W3,W39||X5,X70,X99||{A, C}|{}|{X5, X70\u2026'; measured 2026-09-21"}
   },
+  "flaky": {
+    "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
+    "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"}
+  },
   "guard": {},
   "san": {
     "253-duVariantWiden [san]": {"since":"52ae61ea","note":"DRC ledger leak: Tag alloc=25008 destroy=25004; measured 2026-09-21"},
@@ -26,7 +29,6 @@
     "258-narrowedUnionArg [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=75006 destroy=25002; measured 2026-09-21"},
     "259-narrowedUnionMemberRead [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=50003 destroy=25001; measured 2026-09-21"},
     "260-liftedFnUnionVariantHooks [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=75004 destroy=25001; measured 2026-09-21"},
-    "405-lockedSharedCounter [san]": {"since":"52ae61ea","note":"green on this lane 2026-09-21, but 405-lockedSharedCounter [drc] hung (TIMEOUT 300s) in the same run \u2014 the program is unstable, not fixed; same shape as 2026-09-19-corpus-419-danger-hangs-at-random.md"},
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"}
   },
