@@ -218,6 +218,28 @@ const s: Seconds | null = x;
 	assert e == "", e;
 }
 
+test "converter: a nullable slot keeps its own module's target when a second module shares the name" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/a.ms", entrySource: `
+export type Seconds = distinct float64;
+export converter toSeconds(n: float64): Seconds { return n as Seconds; }
+` },
+		{ entryPath: "src/b.ms", entrySource: `
+export type Seconds = distinct float64;
+export function noSeconds(): Seconds | null { return null; }
+` },
+		{ entryPath: "src/main.ms", entrySource: `
+import { noSeconds } from "./b";
+import { Seconds, toSeconds } from "./a";
+const nb = noSeconds();
+const x: float64 = 1.5;
+const s: Seconds | null = x;
+` },
+	];
+	const cCode = compileProjectToCWithStd(entries, "src/main.ms");
+	assert !cCode.contains("ERROR:"), cCode;
+}
+
 test "converter: runtime converter matches a type imported by a second path" {
 	const c = compileToCWithStd(`
 import { JsonValue } from "std/serialize/json";
