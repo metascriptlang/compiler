@@ -74,12 +74,12 @@ MetaScript follows standard reference patterns where the compiler is the primary
     - `isStdPath` used substring match (`/std/` anywhere in path). Fixed: prefix match against `db.stdPath` set via `dbSetStdPath()`. Empty stdPath = no files get High durability (safe default).
 *   **LSP wiring note**: `dbSetStdPath` is exported but not yet called from `server.ms`. When LSP gets `stdPath` config (via init params or env var), wire it to `dbSetStdPath(db, stdPath)` to enable stdlib durability optimization.
 
-### Phase 6: Live-Coding & HCR Intelligence (The Pillar D Alignment)
-*   **Goal**: Support the "Elite" tier features from `MULTI-MODULE.md`.
+### Phase 6: Live-Coding & HCR Intelligence (Pillar D)
+*   **Goal**: expose the contracts in `paper/MULTI-MODULE.md` Pillar D; the paper owns the architecture.
 *   **Tasks**:
-    - [ ] **@stable Contract Validation**: Real-time diagnostics if a user modifies a `@stable` class/interface in a way that violates Pillar D3 (e.g., field reordering).
-    - [ ] **HCR Visibility**: Inlay Hints marking variables "LIFTED" to Global State Structs (Pillar D1) and Hover showing if a call is "INDIRECTED" via the Module VTable (Pillar D2).
-    - [ ] **Safe-Point Diagnostics**: Warn if code inside a "Safe Point" (Pillar D4) performs operations that could block the HCR handover.
+    - [ ] **State-layout diagnostics**: compare the current `_GlobalState` manifest against the last accepted HCR build; any change requires restart under the strict Phase-4 contract.
+    - [ ] **HCR visibility**: mark lifted globals and calls indirected through a module vtable.
+    - [ ] **Safe-point diagnostics**: flag reload points that can leave reloadable frames, threads, timers, or raw callbacks live across publication.
 
 ### Phase 7: Advanced IDE Experience (Parity with `typescript-go`)
 *   **Goal**: Reach professional ergonomics and refactoring maturity.
@@ -106,7 +106,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 2. ~~**P0: G2+G3+G4+G5** — Stdlib durability, export freeze, stale edge cleanup, cancel in export reg.~~ DONE
 3. **P1: G1** — Output-hash early cutoff (the Salsa signature optimization).
 4. **P1: Wire `dbSetStdPath` in LSP** — Pass `stdPath` from init config to `dbSetStdPath(db, path)` to activate stdlib durability.
-5. **P1: Add @stable validation** to support the HCR development workflow.
+5. **P1: Add HCR state-layout manifest diagnostics** to surface the existing restart-required contract before build.
 6. **P2: Implement "Auto-Import" completions** to match the TypeScript developer experience.
 
 ---
