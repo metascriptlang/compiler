@@ -46,7 +46,7 @@ msc-*
 docs/*
 !docs/HCR.md
 !docs/LANG.md
-!docs/LANG-BUILD.md
+!docs/PACKAGE.md
 !docs/LANG-CONCURRENCE.md
 !docs/LANG-INTERLOP.md
 !docs/LANG-JSX.md
