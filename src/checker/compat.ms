@@ -771,9 +771,15 @@ let _sameTypeDepth = 0;
 
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
-	if (!isReadonlyView(source) || isReadonlyView(target)) return false;
-	if (source.kind == TypeKind.Union && target.kind != TypeKind.Union) return false;
-	return target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Struct || target.kind == TypeKind.Union;
+	let src: Type = source;
+	let dst: Type = target;
+	const srcInner = nonNullMemberOfNullable(source);
+	if (srcInner != null) src = srcInner;
+	const dstInner = nonNullMemberOfNullable(target);
+	if (dstInner != null) dst = dstInner;
+	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
+	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
+	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
 }
 
 export function sameType(a: Type | null, b: Type | null): boolean {
@@ -1793,4 +1799,15 @@ test "narrowing a readonly union to a variant is not dropping the view" {
 	assert !dropsReadonlyView(view, pair);
 	assert dropsReadonlyView(view, u);
 	assert dropsReadonlyView(createReadonlyView(leaf), leaf);
+}
+
+test "a view assigned into a nullable of itself keeps the view" {
+	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
+	const view = createReadonlyView(leaf);
+	const nullableView = createUnion([view, nullType()]);
+	const nullableLeaf = createUnion([leaf, nullType()]);
+	assert !dropsReadonlyView(view, nullableView);
+	assert !dropsReadonlyView(nullableView, nullableView);
+	assert dropsReadonlyView(view, nullableLeaf);
+	assert dropsReadonlyView(nullableView, leaf);
 }
