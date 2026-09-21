@@ -64,11 +64,11 @@ A moved variable still gets its `destroy` here; the optimizer removes it.
 
 ## Post-optimization — `optimizeDrc` (`optimize.ms`)
 
-Per block it keeps the set of variables that are definitely moved: `wasMoved(x)` adds `x`; a later `destroy(x)` on a member of the set is dropped, adjacent or not; an `if` with an `else` contributes the intersection of its branches (`collectIfMoved`, `symListIntersect`); sub-blocks are walked recursively. A call is a `wasMoved` or `destroy` when its callee symbol carries `SymbolFlag.WasMovedOp` or `DestroyOp` — stamped where the op symbol is minted: `markLifecycleOp` in `destructorLifting.ms` for generated hooks, `opRef` in `transform/util.ms` for runtime ops — and variables are matched by symbol identity. Measured 2026-09-21: the self-host build and 223 corpus programs emit byte-identical C to the name-matching optimizer it replaced (119 destroys removed, all on runtime ops).
+Per block it keeps the set of variables that are definitely moved: `wasMoved(x)` adds `x`; a later `destroy(x)` on a member of the set is dropped, adjacent or not; an `if` with an `else` contributes the intersection of its branches (`collectIfMoved`, `symListIntersect`); sub-blocks are walked recursively. A call is a `wasMoved` or `destroy` when its callee symbol carries `SymbolFlag.WasMovedOp` or `DestroyOp` — stamped at the minting boundary by `attachedOpSym` or `markLifecycleOp` — and variables are matched by symbol identity. Measured 2026-09-21: the self-host build and 223 corpus programs emit byte-identical C to the name-matching optimizer it replaced (119 destroys removed, all on runtime ops). Rechecked 2026-09-22 on tree `5158d70c07c173380e72a42f99f1d58003dff425`: 3789/3789 tests passed and generation 1/2 emitted the same 326 C modules byte-for-byte. Self-host JS was not verified: generation 1 stops before emission because `std/crypto` and `std/compress/zip` do not resolve on that target.
 
 ## Type classification
 
-`classify.ms` maps a `Type` to an `RcInfo` — the RC kind plus the names of its destroy, copy, wasMoved and sink hooks; `isFreshExpr` decides what counts as a fresh value. The hook names per type are read from that file, not from a table here.
+`RcInfo` in `classify.ms` and `Type.attachedOps` in `std/meta/node.ms` carry lifecycle identity as `Symbol`; `attachedOpSym` in `transform/util.ms` is the minting boundary. Names are read only at serialization and emission boundaries.
 
 ## Not verified here
 
