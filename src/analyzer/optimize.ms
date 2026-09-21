@@ -7,61 +7,55 @@
 // Walks all blocks recursively, scanning consecutive statements.
 
 import {
-	Node, NodeKind, ProgramData,
-	BlockStmtData, ExprStmtData, CallExprData, IdentifierData,
+	Node, NodeKind, ProgramData, Symbol, SourceLocation,
+	BlockStmtData, ExprStmtData, CallExprData,
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
 	ForOfStmtData, DoWhileStmtData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
-import { makeIdent, makeBlock, makeExprStmt, makeCall, runtimeRef } from "../transform/util";
+import { hasFlag, SymbolFlag } from "../checker/symbol";
+import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, opRef, runtimeRef } from "../transform/util";
 import { testLoc } from "./inject";
+import { testVarSym } from "./scope";
 
-// ===== Known wasMoved / destroy function names =====
-
-function isWasMovedFn(name: string): boolean {
-	return name == "msStringWasMoved"
-		|| name == "msArrayNumberWasMoved"
-		|| name == "msArrayStringWasMoved"
-		|| name == "msArrayRefWasMoved"
-		|| name == "msClosureWasMoved"
-		|| name == "msPtrWasMoved"
-		|| name.endsWith("WasMoved");
+function symListHas(list: Symbol[], sym: Symbol): boolean {
+	for (const s of list) {
+		if (s == sym) return true;
+	}
+	return false;
 }
 
-function isDestroyFn(name: string): boolean {
-	return name == "msStringDecref"
-		|| name == "msDecref"
-		|| name == "msDecrefCyclic"
-		|| name == "msArrayDestroy"
-		|| name == "msArrayStringDestroy"
-		|| name == "msArrayRefDestroy"
-		|| name == "msClosureDestroy"
-		|| name.endsWith("Destroy");
+function symListAdd(list: Symbol[], sym: Symbol): void {
+	if (!symListHas(list, sym)) list.push(sym);
 }
 
+function symListIntersect(a: Symbol[], b: Symbol[]): Symbol[] {
+	const result: Symbol[] = [];
+	for (const s of a) {
+		if (symListHas(b, s)) result.push(s);
+	}
+	return result;
+}
 
 // ===== Moved-var tracking for branch-aware optimization =====
-// Uses NameSet from transform/context (DRY: same interface as NameSet was).
 
 // Scan a block's top-level statements for wasMoved calls
-function collectBlockMoved(block: Node): NameSet {
-	const result: NameSet = createNameSet();
+function collectBlockMoved(block: Node): Symbol[] {
+	const result: Symbol[] = [];
 	if (block == null) return result;
 	if (block.kind != NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
 	for (const stmt of bd.statements) {
-		const wm = getWasMovedVar(stmt);
-		if (wm != "") {
-			nameSetAdd(result, wm);
+		const wm = opCallTarget(stmt, SymbolFlag.WasMovedOp);
+		if (wm != null) {
+			symListAdd(result, wm);
 		}
 		// Also collect from nested if/else branches
 		if (stmt.kind == NodeKind.IfStmt) {
-			const nested = collectIfMoved(stmt);
-			for (const v of nested.items) {
-				nameSetAdd(result, v);
+			for (const v of collectIfMoved(stmt)) {
+				symListAdd(result, v);
 			}
 		}
 	}
@@ -69,60 +63,34 @@ function collectBlockMoved(block: Node): NameSet {
 }
 
 // Collect moved vars from if/else — intersection of all branches
-function collectIfMoved(ifNode: Node): NameSet {
+function collectIfMoved(ifNode: Node): Symbol[] {
 	const d = ifNode.data as IfStmtData;
 	const consMoved = collectBlockMoved(d.consequent);
 
 	// No else — can't guarantee moved on all paths
-	if (d.alternate == null) return createNameSet();
+	if (d.alternate == null) return [];
 
 	// else-if chain: recurse
 	if (d.alternate.kind == NodeKind.IfStmt) {
-		const altMoved = collectIfMoved(d.alternate);
-		return nameSetIntersect(consMoved, altMoved);
+		return symListIntersect(consMoved, collectIfMoved(d.alternate));
 	}
 
 	// else block
-	const altMoved = collectBlockMoved(d.alternate);
-	return nameSetIntersect(consMoved, altMoved);
+	return symListIntersect(consMoved, collectBlockMoved(d.alternate));
 }
 
-// ===== Extract var name from wasMoved/destroy call =====
+// ===== The variable a wasMoved/destroy call acts on =====
 
-// Extract single argument name from a call expression statement
-function extractSingleCallArg(stmt: Node): string {
-	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return "";
+function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
+	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return null;
 	const ed = stmt.data as ExprStmtData;
-	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return "";
+	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return null;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.arguments.length != 1) return "";
+	if (cd.callee == null || cd.callee.resolvedSym == null || !hasFlag(cd.callee.resolvedSym, op)) return null;
+	if (cd.arguments.length != 1) return null;
 	// Access arguments[0] inline — avoid local Node variable (DRC use-after-free on return)
-	if (cd.arguments[0] == null || cd.arguments[0].kind != NodeKind.Identifier) return "";
-	return (cd.arguments[0].data as IdentifierData).name;
-}
-
-// Extract callee name from ExprStmt(CallExpr(...))
-function extractCalleeName(stmt: Node): string {
-	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return "";
-	const ed = stmt.data as ExprStmtData;
-	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return "";
-	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return "";
-	return (cd.callee.data as IdentifierData).name;
-}
-
-function getWasMovedVar(stmt: Node): string {
-	const callee = extractCalleeName(stmt);
-	if (callee == "") return "";
-	if (!isWasMovedFn(callee)) return "";
-	return extractSingleCallArg(stmt);
-}
-
-function getDestroyVar(stmt: Node): string {
-	const callee = extractCalleeName(stmt);
-	if (callee == "") return "";
-	if (!isDestroyFn(callee)) return "";
-	return extractSingleCallArg(stmt);
+	if (cd.arguments[0] == null || cd.arguments[0].kind != NodeKind.Identifier) return null;
+	return cd.arguments[0].resolvedSym;
 }
 
 // ===== Block Optimization =====
@@ -131,7 +99,7 @@ function getDestroyVar(stmt: Node): string {
 
 function optimizeBlock(stmts: Node[]): Node[] {
 	const result: Node[] = [];
-	const moved: NameSet = createNameSet();
+	const moved: Symbol[] = [];
 
 	let i = 0;
 	while (i < stmts.length) {
@@ -142,26 +110,25 @@ function optimizeBlock(stmts: Node[]): Node[] {
 		}
 
 		// Track wasMoved calls — add var to moved set
-		const wmVar = getWasMovedVar(stmt);
-		if (wmVar != "") {
-			nameSetAdd(moved, wmVar);
+		const wmVar = opCallTarget(stmt, SymbolFlag.WasMovedOp);
+		if (wmVar != null) {
+			symListAdd(moved, wmVar);
 			result.push(stmt);
 			i += 1;
 			continue;
 		}
 
 		// Eliminate destroy for definitely-moved vars
-		const dVar = getDestroyVar(stmt);
-		if (dVar != "" && nameSetContains(moved, dVar)) {
+		const dVar = opCallTarget(stmt, SymbolFlag.DestroyOp);
+		if (dVar != null && symListHas(moved, dVar)) {
 			i += 1;  // skip destroy — var was already zeroed by wasMoved
 			continue;
 		}
 
 		// Collect moved vars from exhaustive if/else branches
 		if (stmt.kind == NodeKind.IfStmt) {
-			const ifMoved = collectIfMoved(stmt);
-			for (const v of ifMoved.items) {
-				nameSetAdd(moved, v);
+			for (const v of collectIfMoved(stmt)) {
+				symListAdd(moved, v);
 			}
 		}
 
@@ -234,16 +201,16 @@ export function optimizeDrc(program: Node): Node {
 
 // ===== Tests =====
 
-function makeWmCall(varName: string): Node {
+function makeWmCall(v: Symbol): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(runtimeRef("msStringWasMoved", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(opRef("msStringWasMoved", SymbolFlag.WasMovedOp, loc), [makeIdentResolved(v, loc)], loc), loc);
 }
 
-function makeDestroyCallForTest(varName: string): Node {
+function makeDestroyCallForTest(v: Symbol): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(runtimeRef("msStringDecref", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(opRef("msStringDecref", SymbolFlag.DestroyOp, loc), [makeIdentResolved(v, loc)], loc), loc);
 }
 
 function makeOtherStmt(): Node {
@@ -251,118 +218,91 @@ function makeOtherStmt(): Node {
 	return makeExprStmt(makeIdent("something", loc), loc);
 }
 
+function makeIfElse(cons: Node[], alt: Node[] | null, loc: SourceLocation): Node {
+	return {
+		kind: NodeKind.IfStmt, location: loc,
+		data: {
+			condition: makeIdent("cond", loc), consequent: makeBlock(cons, loc),
+			alternate: alt != null ? makeBlock(alt, loc) : null as unknown as Node,
+		},
+	};
+}
+
 test "eliminates wasMoved+destroy pair" {
-	const wm = makeWmCall("x");
-	const destroy = makeDestroyCallForTest("x");
-	const stmts: Node[] = [wm, destroy];
-	const result = optimizeBlock(stmts);
-	// destroy eliminated, only wasMoved remains
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeDestroyCallForTest(x)]);
 	assert result.length == 1;
 }
 
 test "eliminates non-adjacent wasMoved+destroy" {
-	const wm = makeWmCall("x");
-	const other = makeOtherStmt();
-	const destroy = makeDestroyCallForTest("x");
-	const stmts: Node[] = [wm, other, destroy];
-	const result = optimizeBlock(stmts);
-	// Non-adjacent destroy eliminated — wasMoved + other remain
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeOtherStmt(), makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }
 
 test "preserves different vars" {
-	const wm = makeWmCall("x");
-	const destroy = makeDestroyCallForTest("y");
-	const stmts: Node[] = [wm, destroy];
-	const result = optimizeBlock(stmts);
-	// Different vars — both preserved
+	const result = optimizeBlock([makeWmCall(testVarSym("x")), makeDestroyCallForTest(testVarSym("y"))]);
+	assert result.length == 2;
+}
+
+test "keeps apart two variables spelled alike" {
+	const result = optimizeBlock([makeWmCall(testVarSym("x")), makeDestroyCallForTest(testVarSym("x"))]);
+	assert result.length == 2;
+}
+
+test "a call named like a wasMoved op that is not one pairs with nothing" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const lookalike = makeExprStmt(makeCall(runtimeRef("noteWasMoved", loc), [makeIdentResolved(x, loc)], loc), loc);
+	const result = optimizeBlock([lookalike, makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }
 
 test "eliminates multiple pairs" {
-	const wm1 = makeWmCall("a");
-	const d1 = makeDestroyCallForTest("a");
-	const wm2 = makeWmCall("b");
-	const d2 = makeDestroyCallForTest("b");
-	const stmts: Node[] = [wm1, d1, wm2, d2];
-	const result = optimizeBlock(stmts);
-	// Both destroy calls eliminated
+	const a = testVarSym("a");
+	const b = testVarSym("b");
+	const result = optimizeBlock([makeWmCall(a), makeDestroyCallForTest(a), makeWmCall(b), makeDestroyCallForTest(b)]);
 	assert result.length == 2;
 }
 
 test "preserves standalone wasMoved" {
-	const wm = makeWmCall("x");
-	const other = makeOtherStmt();
-	const stmts: Node[] = [wm, other];
-	const result = optimizeBlock(stmts);
+	const result = optimizeBlock([makeWmCall(testVarSym("x")), makeOtherStmt()]);
 	assert result.length == 2;
 }
 
 test "preserves standalone destroy" {
-	const destroy = makeDestroyCallForTest("x");
-	const other = makeOtherStmt();
-	const stmts: Node[] = [destroy, other];
-	const result = optimizeBlock(stmts);
+	const result = optimizeBlock([makeDestroyCallForTest(testVarSym("x")), makeOtherStmt()]);
 	assert result.length == 2;
 }
 
 test "extracts var from wasMoved call" {
-	const wm = makeWmCall("myVar");
-	const name = getWasMovedVar(wm);
-	assert name == "myVar";
+	const v = testVarSym("myVar");
+	assert opCallTarget(makeWmCall(v), SymbolFlag.WasMovedOp) == v;
 }
 
-test "returns empty for non-wasMoved" {
-	const other = makeOtherStmt();
-	const name = getWasMovedVar(other);
-	assert name == "";
+test "returns null for non-wasMoved" {
+	assert opCallTarget(makeOtherStmt(), SymbolFlag.WasMovedOp) == null;
 }
 
 test "if/else both move same var → eliminate destroy" {
 	const loc = testLoc();
-	// Build: if (cond) { wasMoved(x); } else { wasMoved(x); } destroy(x);
-	const wmCons = makeWmCall("x");
-	const consBlock = makeBlock([wmCons], loc);
-	const wmAlt = makeWmCall("x");
-	const altBlock = makeBlock([wmAlt], loc);
-	const ifNode: Node = {
-		kind: NodeKind.IfStmt, location: loc,
-		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
-	};
-	const destroy = makeDestroyCallForTest("x");
-	const stmts: Node[] = [ifNode, destroy];
-	const result = optimizeBlock(stmts);
-	// destroy(x) eliminated — x was moved on all paths
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeIfElse([makeWmCall(x)], [makeWmCall(x)], loc), makeDestroyCallForTest(x)]);
 	assert result.length == 1;
 }
 
 test "if without else → preserve destroy" {
 	const loc = testLoc();
-	const wmCons = makeWmCall("x");
-	const consBlock = makeBlock([wmCons], loc);
-	const ifNode: Node = {
-		kind: NodeKind.IfStmt, location: loc,
-		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: null as unknown as Node },
-	};
-	const destroy = makeDestroyCallForTest("x");
-	const stmts: Node[] = [ifNode, destroy];
-	const result = optimizeBlock(stmts);
-	// No else — can't guarantee moved, destroy preserved
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeIfElse([makeWmCall(x)], null, loc), makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }
 
 test "if/else move different vars → preserve both destroys" {
 	const loc = testLoc();
-	const consBlock = makeBlock([makeWmCall("x")], loc);
-	const altBlock = makeBlock([makeWmCall("y")], loc);
-	const ifNode: Node = {
-		kind: NodeKind.IfStmt, location: loc,
-		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
-	};
-	const destroyX = makeDestroyCallForTest("x");
-	const destroyY = makeDestroyCallForTest("y");
-	const stmts: Node[] = [ifNode, destroyX, destroyY];
-	const result = optimizeBlock(stmts);
-	// Neither is moved on ALL paths — both preserved
+	const x = testVarSym("x");
+	const y = testVarSym("y");
+	const ifNode = makeIfElse([makeWmCall(x)], [makeWmCall(y)], loc);
+	const result = optimizeBlock([ifNode, makeDestroyCallForTest(x), makeDestroyCallForTest(y)]);
 	assert result.length == 3;
 }
