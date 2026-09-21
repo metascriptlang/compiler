@@ -1759,6 +1759,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = st0 != null ? st0 : inferredType();
 				}
+				if (isReadonlyView(st0) && node.nodeType != null) node.nodeType = createReadonlyView(node.nodeType);
 				node.flags = node.flags.incl(NodeFlag.Sem);
 				return;
 			}
