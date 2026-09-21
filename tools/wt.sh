@@ -128,15 +128,23 @@ inbox_kinds() {
 
 worktrees() { git -C "$MAIN" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | tail -n +2; }
 
-is_worktree() { worktrees | grep -Fxq "$1"; }
+norm_dir() { if [ -d "$1" ]; then (cd "$1" && pwd -P); else printf '%s\n' "$1"; fi; }
+
+is_worktree() {
+  local w
+  while IFS= read -r w; do
+    [ "$(norm_dir "$w")" = "$1" ] && return 0
+  done < <(worktrees)
+  return 1
+}
 
 resolve_target() {
   local t=$1 d
   case "$t" in
-    /*) d=$t ;;
+    /* | ?:/* | ?:\\*) d=$t ;;
     *) d=$(wt_dir "$t") ;;
   esac
-  [ -d "$d" ] && d=$(cd "$d" && pwd -P)
+  d=$(norm_dir "$d")
   is_worktree "$d" || die "no worktree at $d"
   printf '%s\n' "$d"
 }
