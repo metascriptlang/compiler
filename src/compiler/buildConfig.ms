@@ -724,3 +724,21 @@ test "extractPackage files/ignore default empty" {
 	assert cfg.package.files.length == 0;
 	assert cfg.package.ignore.length == 0;
 }
+
+test "extractPackage bin map" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"ion\", version: \"1.0.0\", bin: { \"ion-generate\": \"tooling/generator/cli.ms\" } } }; export default config;");
+	assert cfg.package.bin.keys.length == 1;
+	assert cfg.package.bin.keys[0] == "ion-generate";
+	assert cfg.package.bin.values[0] == "tooling/generator/cli.ms";
+}
+
+test "extractPackage bin holds every declared command" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\", bin: { \"a\": \"a.ms\", \"b\": \"b.ms\" } } }; export default config;");
+	assert cfg.package.bin.keys.length == 2;
+	assert cfg.package.bin.keys[1] == "b";
+}
+
+test "extractPackage bin defaults empty" {
+	const cfg = testExtractFromSource("const config = { package: { name: \"x\", version: \"1.0.0\" } }; export default config;");
+	assert cfg.package.bin.keys.length == 0;
+}
