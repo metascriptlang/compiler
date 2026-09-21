@@ -118,8 +118,8 @@ export enum AttachedOp {
 //                    bottom-up by propagateToOwner when building parent types.
 //   typeValue      — kind-specific integer: SizedArray → element count; enum member
 //                    (Number child of an Enum) → ordinal value; Function → minArity + 1.
-//   attachedOps    — hook function names (index = AttachedOp enum: Destroy/Copy/Sink/...).
-//                    Populated by destructorLifting. Inline per-Type; see setAttachedOp /
+//   attachedOps    — lifecycle op Symbols (index = AttachedOp enum: Destroy/Copy/Sink/...;
+//                    null = absent). Populated by destructorLifting; see setAttachedOp /
 //                    getAttachedOp in src/checker/types.ms.
 //   sym            — back-pointer to the declaring Symbol (Class/Interface/Enum decls).
 export class Type {
@@ -132,7 +132,7 @@ export class Type {
 	typeFlags: BitSet<TypeFlag>;
 	typeValue: int32;
 	callConv: CallingConvention;
-	attachedOps: string[];
+	attachedOps: (Symbol | null)[];
 	sym: Symbol | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;

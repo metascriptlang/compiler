@@ -3,7 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp, Symbol } from "../ast/node";
 import { getGenericDecl } from "../parser/context";
 
 // =====================================================================
@@ -2207,24 +2207,24 @@ export function getMinArity(t: Type | null): number {
 
 // ===== Attached Ops Helpers (Implementation parity) =====
 
-export function getAttachedOp(t: Type | null, op: AttachedOp): string {
-	if (t == null) return "";
+export function getAttachedOp(t: Type | null, op: AttachedOp): Symbol | null {
+	if (t == null) return null;
 	const idx = op as number;
-	if (t.attachedOps.length <= idx) return "";
+	if (t.attachedOps.length <= idx) return null;
 	return t.attachedOps[idx];
 }
 
-export function setAttachedOp(t: Type | null, op: AttachedOp, name: string): void {
+export function setAttachedOp(t: Type | null, op: AttachedOp, sym: Symbol | null): void {
 	if (t == null) return;
 	// Grow array to fit index
 	while (t.attachedOps.length <= (op as number)) {
-		t.attachedOps.push("");
+		t.attachedOps.push(null);
 	}
-	t.attachedOps[op as number] = name;
+	t.attachedOps[op as number] = sym;
 }
 
 export function hasDestructor(t: Type | null): boolean {
-	return getAttachedOp(t, AttachedOp.AttachedDestructor) != "";
+	return getAttachedOp(t, AttachedOp.AttachedDestructor) != null;
 }
 
 // ===== Tuple Type Name (reference parity: deterministic name for structural types) =====
@@ -2609,7 +2609,7 @@ function copyTypeForSubst(t: Type): Type {
 		result.typeNames[ni] = t.typeNames[ni];
 	}
 	for (let oi = 0; oi < t.attachedOps.length; oi += 1) {
-		result.attachedOps.push("");
+		result.attachedOps.push(null);
 		result.attachedOps[oi] = t.attachedOps[oi];
 	}
 	return result;
