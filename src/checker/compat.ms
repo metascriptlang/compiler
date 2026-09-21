@@ -1,7 +1,8 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { makeSymbol } from "./symbol";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -1810,4 +1811,21 @@ test "a view assigned into a nullable of itself keeps the view" {
 	assert !dropsReadonlyView(nullableView, nullableView);
 	assert dropsReadonlyView(view, nullableLeaf);
 	assert dropsReadonlyView(nullableView, leaf);
+}
+
+
+test "readonly propagation stops at the shared type graph" {
+	const graph = createRef(createStruct("Type", [], [], false));
+	graph.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
+	const user = createRef(createStruct("Cart", [], [], false));
+	user.typeReturn.sym = makeSymbol("Cart", SymbolKind.Class, null, false);
+	const nullGraph = createUnion([graph, nullType()]);
+	const arrGraph = createArray(graph);
+	assert isSharedGraphType(graph);
+	assert isSharedGraphType(nullGraph);
+	assert isSharedGraphType(arrGraph);
+	assert !isSharedGraphType(user);
+	assert propagateReadonlyView(graph) == graph;
+	assert isReadonlyView(propagateReadonlyView(user));
+	assert isReadonlyView(createReadonlyView(graph));
 }
