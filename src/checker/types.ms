@@ -1521,6 +1521,20 @@ export function isSharedGraphType(t: Type | null): boolean {
 	return base.sym != null && (base.sym.name == "Type" || base.sym.name == "Symbol");
 }
 
+export function isNodeGraphType(t: Type | null): boolean {
+	if (t == null) return false;
+	let base = t;
+	if (base.kind == TypeKind.Union && base.typeChildren.length == 2) {
+		const a = base.typeChildren[0];
+		const b = base.typeChildren[1];
+		if (a != null && a.kind == TypeKind.Null && b != null) base = b;
+		else if (b != null && b.kind == TypeKind.Null && a != null) base = a;
+	}
+	if (base.kind == TypeKind.Array) return isNodeGraphType(base.typeReturn);
+	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
+	return base.sym != null && base.sym.name == "Node";
+}
+
 export function propagateReadonlyView(t: Type | null): Type {
 	if (t != null && isSharedGraphType(t)) return t;
 	return createReadonlyView(t);

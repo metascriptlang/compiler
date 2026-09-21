@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
+import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -90,8 +90,29 @@ function reportReadonlyWrite(ctx: CheckerContext, ro: Type, verb: string, line: 
 	addError(ctx, "cannot " + verb + " " + typeDisplayName(ro) + " — a read-only view: a spawn thunk borrows what it captures, and Readonly<T> never converts back to T (PARALOCK E24)", line, column);
 }
 
+function writeThroughGraphBackedge(target: Node): boolean {
+	let cur: Node | null = target;
+	while (cur != null) {
+		let base: Node | null = null;
+		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
+		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
+		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
+		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
+		else break;
+		if (base != null && base.nodeType != null && cur.nodeType != null
+				&& isSharedGraphType(base.nodeType) && isNodeGraphType(cur.nodeType)
+				&& cur != target) return true;
+		cur = base;
+	}
+	return false;
+}
+
 function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 	if (writeThroughArc(target)) { reportArcWrite(ctx, target); return; }
+	if (writeThroughGraphBackedge(target)) {
+		addError(ctx, "cannot write through a type/symbol back-edge into the AST — the graph is borrowed and its node exits are read-only (PARALOCK E24)", target.location.line, target.location.column);
+		return;
+	}
 	const ro = readonlyPrefixType(target);
 	if (ro == null) return;
 	reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
@@ -2578,3 +2599,22 @@ function createSyntheticToken(loc: SourceLocation): Token {
 
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
+
+
+test "a write target crossing a graph back-edge is rejected" {
+	const graphT = createRef(createStruct("Symbol", [], [], false));
+	graphT.typeReturn.sym = makeSymbol("Symbol", SymbolKind.Class, null, false);
+	const nodeT = createRef(createStruct("Node", [], [], false));
+	nodeT.typeReturn.sym = makeSymbol("Node", SymbolKind.Class, null, false);
+	assert isSharedGraphType(graphT);
+	assert isNodeGraphType(nodeT);
+	const tok = createToken(TokenKind.Ident, "", 1);
+	const sNode = createNode(NodeKind.Identifier, { name: "s" }, tok);
+	sNode.nodeType = graphT;
+	const edge = createNode(NodeKind.MemberExpr, { object: sNode, property: "declNode", isOptional: false }, tok);
+	edge.nodeType = nodeT;
+	const through = createNode(NodeKind.MemberExpr, { object: edge, property: "nodeType", isOptional: false }, tok);
+	through.nodeType = null as unknown as Type;
+	assert !writeThroughGraphBackedge(edge);
+	assert writeThroughGraphBackedge(through);
+}
