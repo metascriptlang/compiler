@@ -15,7 +15,7 @@ import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
-	hookRef, opRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
+	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
@@ -395,13 +395,14 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 		// Reference parity: passCopyToSink temps are NOT in s.final or s.wasMoved —
 		// the sink callee takes ownership, no cleanup at scope exit.
 		addPre(dctx, makeWasMovedCall(tmpName, rcInfo, loc, tmpSym));
-		if (rcInfo.copyFn != "") {
+		const copySym = rcInfo.copyFn;
+		if (copySym != null) {
 			const destArg = needsDestAddr(rcInfo)
 				? makeHiddenAddr(makeIdentResolved(tmpSym, loc), loc)
 				: makeIdentResolved(tmpSym, loc);
 			const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 			addPre(dctx, makeExprStmt(
-				makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
+				makeCall(makeTypedIdentResolved(copySym, null, loc), [destArg, srcArg], loc), loc));
 		}
 	} else {
 		// Simple refcounted (Ref, Closure): shallow copy + unary incref.
@@ -410,7 +411,7 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 		if (srcExpr.nodeType != null) tmpDecl.nodeType = srcExpr.nodeType;
 		tmpDecl.resolvedSym = tmpSym;
 		addPre(dctx, tmpDecl);
-		if (rcInfo.copyFn != "") {
+		if (rcInfo.copyFn != null) {
 			addPre(dctx, makeCopyAfterInit(tmpName, rcInfo, loc, "", tmpSym, noSym));
 		}
 	}
@@ -615,12 +616,12 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			} else if (consume) {
 				if (md.moveArg.kind == NodeKind.MemberExpr) {
 					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
-					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != "") {
+					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
 						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, fieldRc, node.location));
 					}
 				} else if (md.moveArg.kind == NodeKind.ArrayAccess) {
 					const elemRc = classifyArrayElementRc(md.moveArg, dctx);
-					if (elemRc.needsCleanup && elemRc.wasMovedFn != "") {
+					if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
 						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, elemRc, node.location));
 					}
 				}
@@ -669,7 +670,7 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// so the unconditional scope-exit destroy of $cond no-ops (Nim Rule-3; pre-stmts flush
 	// before the consuming statement, so the return position is covered too).
 	if (mode == DrcMode.SinkArg || mode == DrcMode.Consumed) {
-		if (rcInfo.needsCleanup && rcInfo.wasMovedFn != "") {
+		if (rcInfo.needsCleanup && rcInfo.wasMovedFn != null) {
 			const condRef = makeIdentResolved(tmpSym, loc);
 			condRef.nodeType = resultType;
 			return destructiveMoveVar(condRef, rcInfo, dctx);
@@ -724,7 +725,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Used for object literal fields, array literal elements (reference: ObjectLiteral sinkArg)
 	if (mode == DrcMode.SinkArg) {
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			if (rcInfo.wasMovedFn != "") {
+			if (rcInfo.wasMovedFn != null) {
 				return destructiveMoveVar(node, rcInfo, dctx);
 			}
 			return node;
@@ -735,7 +736,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Consumed mode: in-place move or copy (for call args, assignment RHS)
 	if (mode == DrcMode.Consumed) {
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			if (rcInfo.wasMovedFn != "") {
+			if (rcInfo.wasMovedFn != null) {
 				return destructiveMoveVar(node, rcInfo, dctx);
 			}
 			return node;
@@ -796,8 +797,9 @@ function makeRcCallStmt(callee: Node, varName: string, sym: Symbol | null, loc: 
 // Reference parity: all hooks take var T (pointer).
 // Runtime macros (empty typeName) still take by value — they're C macros, not generated hooks.
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
-	if (rcInfo.destroyFn == "") return makeExprStmt(makeNull(loc), loc);
-	const callee = opRef(rcInfo.destroyFn, SymbolFlag.DestroyOp, loc);
+	const destroySym = rcInfo.destroyFn;
+	if (destroySym == null) return makeExprStmt(makeNull(loc), loc);
+	const callee = makeTypedIdentResolved(destroySym, null, loc);
 	if (rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo)) {
 		return makeExprStmt(makeCall(callee, [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
@@ -805,8 +807,9 @@ function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, s
 }
 
 function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
-	if (rcInfo.wasMovedFn == "") return makeExprStmt(makeNull(loc), loc);
-	const callee = opRef(rcInfo.wasMovedFn, SymbolFlag.WasMovedOp, loc);
+	const wmSym = rcInfo.wasMovedFn;
+	if (wmSym == null) return makeExprStmt(makeNull(loc), loc);
+	const callee = makeTypedIdentResolved(wmSym, null, loc);
 	if (rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo)) {
 		return makeExprStmt(makeCall(callee, [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
@@ -815,7 +818,8 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, 
 
 // Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure.
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string, destSym: Symbol | null, srcSym: Symbol | null): Node {
-	if (rcInfo.copyFn == "") return makeExprStmt(makeNull(loc), loc);
+	const copySym = rcInfo.copyFn;
+	if (copySym == null) return makeExprStmt(makeNull(loc), loc);
 	// 2-arg copy: Named types and String (=copy(&dest, src))
 	if (isBinaryCopy(rcInfo)) {
 		const actualSrc = srcName != "" ? srcName : destName;
@@ -837,15 +841,16 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 		const srcArg = isCopySrcByValue(rcInfo)
 			? srcRef
 			: makeHiddenAddr(srcRef, loc);
-		return makeExprStmt(makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+		return makeExprStmt(makeCall(makeTypedIdentResolved(copySym, null, loc), [destArg, srcArg], loc), loc);
 	}
 	// Unary incref: msIncref(dest), msClosureCopy(dest), etc.
-	return makeRcCallStmt(hookRef(rcInfo.copyFn, loc), destName, destSym, loc);
+	return makeRcCallStmt(makeTypedIdentResolved(copySym, null, loc), destName, destSym, loc);
 }
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
-	if (rcInfo.sinkFn == "") return makeExprStmt(makeNull(loc), loc);
+	const sinkSym = rcInfo.sinkFn;
+	if (sinkSym == null) return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind == RcKind.Named) {
 		const destRef = makeVarRef(destName, sym, loc);
 		const destArg = needsDestAddr(rcInfo)
@@ -854,15 +859,16 @@ function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: Sour
 		// src: value for seqLike runtime macros, pointer for generated hooks and Named structs
 		const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 		return makeExprStmt(
-			makeCall(hookRef(rcInfo.sinkFn, loc), [destArg, srcArg], loc), loc);
+			makeCall(makeTypedIdentResolved(sinkSym, null, loc), [destArg, srcArg], loc), loc);
 	}
 	return makeExprStmt(
-		makeCall(hookRef(rcInfo.sinkFn, loc), [makeVarRef(destName, sym, loc), srcExpr], loc), loc);
+		makeCall(makeTypedIdentResolved(sinkSym, null, loc), [makeVarRef(destName, sym, loc), srcExpr], loc), loc);
 }
 
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
-	if (rcInfo.wasMovedFn == "") return makeExprStmt(makeNull(loc), loc);
-	const callee = opRef(rcInfo.wasMovedFn, SymbolFlag.WasMovedOp, loc);
+	const wmSym = rcInfo.wasMovedFn;
+	if (wmSym == null) return makeExprStmt(makeNull(loc), loc);
+	const callee = makeTypedIdentResolved(wmSym, null, loc);
 	const arg = rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo) ? makeHiddenAddr(argExpr, loc) : argExpr;
 	return makeExprStmt(makeCall(callee, [arg], loc), loc);
 }
@@ -917,7 +923,7 @@ function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 			clearPendingForVar(dctx, destName);
 			return emitSaveAssignDestroySimple(stmt, makeVarRef(destName, destSym, loc), rcInfo, "old", dctx, loc);
 		}
-		if (rcInfo.sinkFn != "") {
+		if (rcInfo.sinkFn != null) {
 			return makeSinkCall(destName, rhs, rcInfo, loc, destSym);
 		}
 		return makeBlock([makeDestroyCall(destName, rcInfo, loc, destSym), stmt], loc);
@@ -938,12 +944,12 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
 	reportFailedMove(rhs, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
-	if (isBinaryCopy(rcInfo) && rcInfo.copyFn != "") {
+	if (isBinaryCopy(rcInfo) && rcInfo.copyFn != null) {
 		const lhsExpr = resolveLhs(flags, dest, destName, destSym, loc);
 		const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
 		const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
 		const copyCall = makeExprStmt(
-			makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+			makeCall(makeTypedIdentResolved(rcInfo.copyFn, null, loc), [destArg, srcArg], loc), loc);
 		if ((flags & MOC_IS_DECL) != 0) {
 			if (destName != "") {
 				return makeBlock([stmt, makeWasMovedCall(destName, rcInfo, loc, destSym), copyCall], loc);
@@ -952,7 +958,7 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 		return copyCall;
 	}
 	// Ref/Closure: unary incref
-	if (rcInfo.copyFn != "") {
+	if (rcInfo.copyFn != null) {
 		if ((flags & MOC_IS_DECL) != 0) {
 			if (destName != "") {
 				return makeBlock([stmt, makeCopyAfterInit(destName, rcInfo, loc, "", destSym, noSym)], loc);
@@ -970,7 +976,7 @@ function genCopy(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 		saveTmp.nodeType = saveType;
 		saveTmp.resolvedSym = tmpSym;
 		const increfCall = makeExprStmt(
-			makeCall(hookRef(rcInfo.copyFn, loc), [increfTarget], loc), loc);
+			makeCall(makeTypedIdentResolved(rcInfo.copyFn, null, loc), [increfTarget], loc), loc);
 		return makeBlock([saveTmp, stmt, increfCall, makeDestroyCall(tmpName, rcInfo, loc, tmpSym)], loc);
 	}
 	return stmt;
@@ -1003,7 +1009,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			//   Ref/Closure:                    delegate to genSink — save → assign → destroy
 			//                                   (callee-side emitReturnWithIncref balances rc
 			//                                    for aliased passthrough; no caller incref)
-			if (isBinaryCopy(rcInfo) && (rcInfo.sinkFn != "" || rcInfo.copyFn != "")) {
+			if (isBinaryCopy(rcInfo) && (rcInfo.sinkFn != null || rcInfo.copyFn != null)) {
 				// Named/String fresh CallExpr → SINK semantic (Reference parity:
 				// Nim nkCallKinds → eqsink, not eqcopy). Hoist call result to temp
 				// (also needed because multi-statement-expanding intrinsics like
@@ -1019,8 +1025,9 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				const callTmpRef = makeIdentResolved(callTmpSym, loc);
 				callTmpRef.nodeType = rhs.nodeType;
 				const lhsExpr = resolveLhs(flags, dest, destName, destSym, loc);
-				const useSink = rcInfo.sinkFn != "";
-				const opFn = useSink ? rcInfo.sinkFn : rcInfo.copyFn;
+			const sinkSym = rcInfo.sinkFn;
+			const useSink = sinkSym != null;
+			const opSym = (useSink ? sinkSym : rcInfo.copyFn) as Symbol;
 				// Argument shapes differ for sink vs copy:
 				//   copyFn (msStringCopy):    (&dest, srcValue)       — both per needsDestAddr/isCopySrcByValue
 				//   sinkFn for String:        (destLvalue, srcValue)   — both by value
@@ -1042,11 +1049,11 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 					srcArg = isCopySrcByValue(rcInfo) ? callTmpRef : makeHiddenAddr(callTmpRef, loc);
 				}
 				const opCall = makeExprStmt(
-					makeCall(hookRef(opFn, loc), [destArg, srcArg], loc), loc);
+				makeCall(makeTypedIdentResolved(opSym, null, loc), [destArg, srcArg], loc), loc);
 				const hoisted: Node[] = [];
 				hoisted.push(callTmpDecl);
 				hoisted.push(opCall);
-				if (useSink && rcInfo.wasMovedFn != "") {
+			if (useSink && rcInfo.wasMovedFn != null) {
 					hoisted.push(makeWasMovedCall(callTmpSym.name, rcInfo, loc, callTmpSym));
 				}
 				return makeBlock(hoisted, loc);
@@ -1083,17 +1090,17 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				// Zero source BEFORE destroying old dest
 				if (md.moveArg.kind == NodeKind.MemberExpr) {
 					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
-					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != "") {
+					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
 						moveResult.push(makeWasMovedOnExpr(md.moveArg, fieldRc, loc));
 					}
 				} else if (md.moveArg.kind == NodeKind.ArrayAccess) {
 					const elemRc = classifyArrayElementRc(md.moveArg, dctx);
-					if (elemRc.needsCleanup && elemRc.wasMovedFn != "") {
+					if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
 						moveResult.push(makeWasMovedOnExpr(md.moveArg, elemRc, loc));
 					}
 				} else if (md.moveArg.kind == NodeKind.Identifier) {
 					const srcName = (md.moveArg.data as IdentifierData).name;
-					if (rcInfo.wasMovedFn != "") {
+					if (rcInfo.wasMovedFn != null) {
 						moveResult.push(makeWasMovedCall(srcName, rcInfo, loc, md.moveArg.resolvedSym));
 					}
 					recordMoveInContext(dctx, md.moveArg.resolvedSym);
@@ -1115,7 +1122,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 			if (rhsSym != null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
 				// Move: sink + wasMoved (Reference: genSink + genWasMoved)
 				const rhsD = rhs.data as IdentifierData;
-				if (rcInfo.wasMovedFn != "") {
+				if (rcInfo.wasMovedFn != null) {
 					addPending(dctx, makeWasMovedCall(rhsD.name, rcInfo, loc, rhsSym));
 				}
 				recordMove(dctx, rhsSym);
@@ -1127,7 +1134,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 		// Field/element access → analysable + last-read = move, else = copy
 		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.HiddenDeref => {
 			const srcOwns = rhs.nodeType != null && classifyRc(rhs.nodeType, dctx).needsCleanup;
-			if (srcOwns && rcInfo.wasMovedFn != "" && isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
+			if (srcOwns && rcInfo.wasMovedFn != null && isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
 				addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
 				return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 			}
@@ -1190,7 +1197,7 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
 	if (moveArg.kind == NodeKind.Identifier) {
 		const srcName = (moveArg.data as IdentifierData).name;
-		if (rcInfo.wasMovedFn != "") {
+		if (rcInfo.wasMovedFn != null) {
 			addPending(dctx, makeWasMovedCall(srcName, rcInfo, loc, moveArg.resolvedSym));
 		}
 		recordMoveInContext(dctx, moveArg.resolvedSym);
@@ -1198,14 +1205,14 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 	}
 	if (moveArg.kind == NodeKind.MemberExpr) {
 		const fieldRc = classifyMemberFieldRc(moveArg, dctx);
-		if (fieldRc.needsCleanup && fieldRc.wasMovedFn != "") {
+		if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
 			addPending(dctx, makeWasMovedOnExpr(moveArg, fieldRc, loc));
 		}
 		return true;
 	}
 	if (moveArg.kind == NodeKind.ArrayAccess) {
 		const elemRc = classifyArrayElementRc(moveArg, dctx);
-		if (elemRc.needsCleanup && elemRc.wasMovedFn != "") {
+		if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
 			addPending(dctx, makeWasMovedOnExpr(moveArg, elemRc, loc));
 		}
 		return true;
@@ -1228,7 +1235,7 @@ function generateCleanup(scope: DrcScope, loc: SourceLocation): Node[] {
 		i -= 1;
 		const vi = scope.varsToCleanup[i];
 		if (vi.isCursor) continue;
-		if (vi.rcInfo.destroyFn == "") continue;
+		if (vi.rcInfo.destroyFn == null) continue;
 		result.push(makeDestroyCall(vi.sym.name, vi.rcInfo, loc, vi.sym));
 	}
 	return result;
@@ -2020,7 +2027,7 @@ function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node 
 		tmpDecl.nodeType = at;
 		tmpDecl.resolvedSym = excSym;
 		const rcCopy = sinkClassify(at, dctx);
-		const increfRef = rcCopy.copyFn != "" ? hookRef(rcCopy.copyFn, sloc) : runtimeRef("msIncref", sloc);
+		const increfRef = rcCopy.copyFn != null ? makeTypedIdentResolved(rcCopy.copyFn, null, sloc) : runtimeRef("msIncref", sloc);
 		const incref = makeExprStmt(
 			makeCall(increfRef, [makeIdentResolved(excSym, sloc)], sloc), sloc);
 		td.throwArg = makeIdentResolved(excSym, sloc);
@@ -2035,7 +2042,7 @@ function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation):
 	const tmpDecl = makeVarDecl(retSym.name, arg, DeclKind.Const, loc);
 	tmpDecl.resolvedSym = retSym;
 	const rc = sinkClassify(arg.nodeType, dctx);
-	const increfRef = rc.copyFn != "" ? hookRef(rc.copyFn, loc) : runtimeRef("msIncref", loc);
+	const increfRef = rc.copyFn != null ? makeTypedIdentResolved(rc.copyFn, null, loc) : runtimeRef("msIncref", loc);
 	const incref = makeExprStmt(
 		makeCall(increfRef, [makeIdentResolved(retSym, loc)], loc), loc);
 	const retStmt = makeReturn(makeIdentResolved(retSym, loc), loc);
@@ -2693,7 +2700,7 @@ test "sinkFn field populated for string type" {
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
 	if (sym != null && sym.symbolType != null) {
 		const rc = classifyRc(sym.symbolType, dctx);
-		assert rc.sinkFn != "";
+		assert rc.sinkFn != null;
 	}
 }
 

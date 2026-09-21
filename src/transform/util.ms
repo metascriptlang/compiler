@@ -2,7 +2,7 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol, setFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
@@ -193,6 +193,17 @@ export function isRuntimeProcCall(node: Node, procName: string): boolean {
 
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
+}
+export function opProcSym(name: string): Symbol {
+	const hook = lookupHookSym(name);
+	return hook != null ? hook : runtimeProcSym(name);
+}
+
+export function attachedOpSym(name: string, op: AttachedOp): Symbol {
+	const sym = opProcSym(name);
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	return sym;
 }
 
 export function hookRef(hookName: string, loc: SourceLocation): Node {

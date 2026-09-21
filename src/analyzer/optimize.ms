@@ -7,7 +7,7 @@
 // Walks all blocks recursively, scanning consecutive statements.
 
 import {
-	Node, NodeKind, ProgramData, Symbol, SourceLocation,
+	Node, NodeKind, ProgramData, Symbol, SourceLocation, AttachedOp,
 	BlockStmtData, ExprStmtData, CallExprData,
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
@@ -16,7 +16,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, opRef, runtimeRef } from "../transform/util";
+import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
 import { testLoc } from "./inject";
 import { testVarSym } from "./scope";
 
@@ -204,13 +204,13 @@ export function optimizeDrc(program: Node): Node {
 function makeWmCall(v: Symbol): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(opRef("msStringWasMoved", SymbolFlag.WasMovedOp, loc), [makeIdentResolved(v, loc)], loc), loc);
+		makeCall(makeTypedIdentResolved(attachedOpSym("msStringWasMoved", AttachedOp.AttachedWasMoved), null, loc), [makeIdentResolved(v, loc)], loc), loc);
 }
 
 function makeDestroyCallForTest(v: Symbol): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(opRef("msStringDecref", SymbolFlag.DestroyOp, loc), [makeIdentResolved(v, loc)], loc), loc);
+		makeCall(makeTypedIdentResolved(attachedOpSym("msStringDecref", AttachedOp.AttachedDestructor), null, loc), [makeIdentResolved(v, loc)], loc), loc);
 }
 
 function makeOtherStmt(): Node {

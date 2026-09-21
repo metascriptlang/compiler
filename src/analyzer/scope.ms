@@ -8,12 +8,12 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol, SymbolKind, Type } from "../ast/node";
+import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol, SymbolKind, AttachedOp, Type } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
-import { makeExprStmt, makeNull } from "../transform/util";
+import { makeExprStmt, makeNull, attachedOpSym } from "../transform/util";
 import { createArray, stringType } from "../checker/types";
 
 // Null symbol constant — used when DRC-generated temps have no checker symbol.
@@ -408,8 +408,10 @@ function testDrcCtx(): DrcContext {
 export function testStringRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
-		destroyFn: "msStringDecref", copyFn: "msStringCopy",
-		wasMovedFn: "msStringWasMoved", sinkFn: "msStringSink",
+		destroyFn: attachedOpSym("msStringDecref", AttachedOp.AttachedDestructor),
+		copyFn: attachedOpSym("msStringCopy", AttachedOp.AttachedAsgn),
+		wasMovedFn: attachedOpSym("msStringWasMoved", AttachedOp.AttachedWasMoved),
+		sinkFn: attachedOpSym("msStringSink", AttachedOp.AttachedSink),
 	};
 }
 
@@ -420,8 +422,10 @@ export function testVarSym(name: string): Symbol {
 function testMinimalRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
-		destroyFn: "msStringDecref", copyFn: "",
-		wasMovedFn: "", sinkFn: "",
+		destroyFn: attachedOpSym("msStringDecref", AttachedOp.AttachedDestructor),
+		copyFn: null,
+		wasMovedFn: null,
+		sinkFn: null,
 	};
 }
 
