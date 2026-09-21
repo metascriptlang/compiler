@@ -30,7 +30,7 @@ import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
-import { lookupSymbol, makeSymbol } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -193,6 +193,13 @@ function hookSuffix(hook: string): string {
 // Reference sets sfGeneratedOp on the symbol in produceSym/symPrototype.
 function markGeneratedOp(fnNode: Node, name: string): void {
 	fnNode.resolvedSym = hookComplete(name, fnNode.nodeType);
+}
+
+function markLifecycleOp(fnNode: Node, name: string, hook: string): void {
+	const sym = hookComplete(name, fnNode.nodeType);
+	fnNode.resolvedSym = sym;
+	if (hook == "destroy") setFlag(sym, SymbolFlag.DestroyOp);
+	else if (hook == "wasMoved") setFlag(sym, SymbolFlag.WasMovedOp);
 }
 
 // Set hook function param/return types to concrete Types.
@@ -1011,7 +1018,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 					}
 					setHookParamType(helperFn, 0, h1.symbolType);
 					if (!isUnary || isTrace) setHookParamType(helperFn, 1, h2.symbolType);
-					markGeneratedOp(helperFn, helperName);
+					markLifecycleOp(helperFn, helperName, hook);
 					lctx.collector.push(helperFn);
 				}
 
@@ -1273,7 +1280,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	}
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
-	markGeneratedOp(fnNode, cName + suffix);
+	markLifecycleOp(fnNode, cName + suffix, hook);
 	lctx.collector.push(fnNode);
 }
 
@@ -1654,7 +1661,7 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
-	markGeneratedOp(fnNode, tupleName + suffix);
+	markLifecycleOp(fnNode, tupleName + suffix, hook);
 	lctx.collector.push(fnNode);
 }
 
@@ -1884,7 +1891,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 			}
 		}
 	}
-	markGeneratedOp(fnNode, seqName + suffix);
+	markLifecycleOp(fnNode, seqName + suffix, hook);
 	if (fnNode.resolvedSym != null && fnNode.resolvedSym.symbolType != null) {
 		const symType = fnNode.resolvedSym.symbolType;
 		if (symType.typeChildren != null) {
