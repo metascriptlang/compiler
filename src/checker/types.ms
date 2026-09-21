@@ -1448,7 +1448,7 @@ export function isLockedRef(t: Type | null): boolean {
 
 export function isReadonlyView(t: Type | null): boolean {
 	if (t == null) return false;
-	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct) return false;
+	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return false;
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
@@ -1498,7 +1498,7 @@ export function createReadonlyView(t: Type | null): Type {
 	if (isReadonlyView(t)) return t;
 	if (t.readonlyView != null) return t.readonlyView;
 	const viewable = t.kind == TypeKind.Array || (t.kind == TypeKind.Ref && !isAtomicRef(t))
-		|| (t.kind == TypeKind.Struct && structCarriesRef(t, 0));
+		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsReadonly);

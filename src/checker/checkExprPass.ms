@@ -1834,7 +1834,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& !isUnresolvedType(targetType) && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
-			node.nodeType = node.nodeType; return;
+			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = createReadonlyView(node.nodeType);
+			return;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
