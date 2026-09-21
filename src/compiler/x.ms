@@ -1,12 +1,14 @@
-import { exists, ensureDir } from "std/fs";
+import { exists, ensureDir, readFile, writeFile, chmod } from "std/fs";
 import { join } from "std/fs/path";
 import { execFile, env, exit } from "std/process";
 import { exeSuffix } from "./io";
 import { CliOptions } from "./options";
 import { depRoots, cmdBuildC } from "./compile";
 import { loadBuildConfig } from "./buildConfig";
-import { binEntryFor } from "./package/bin";
+import { binEntryFor, commandNameError } from "./package/bin";
 import { cacheRoot } from "./package/cache";
+import { shimFileName, shimContent, isShim, SHIM_MODE } from "./package/shim";
+import { cmdAdd } from "./package/add";
 import { findChar } from "../utils/string";
 import { error as errStyle, bold, cyan, dim } from "../utils/color";
 
@@ -78,6 +80,101 @@ export function declaredCommands(projectRoot: string): { commands: string[], pac
 		i = i + 1;
 	}
 	return { commands, packages, roots, entries, versions };
+}
+
+export function projectShimDir(projectRoot: string): string {
+	return join(projectRoot, join(".msc", "bin"));
+}
+
+export function globalShimDir(): string {
+	let home = env.get("HOME");
+	if (home == "") home = env.get("USERPROFILE");
+	if (home == "") return "";
+	return join(home, join(".metascript", "bin"));
+}
+
+export function syncShims(projectRoot: string, shimDir: string): boolean {
+	const declared = declaredCommands(projectRoot);
+	if (declared.commands.length == 0) return true;
+
+	let ok = true;
+	let i = 0;
+	while (i < declared.commands.length) {
+		const cmd = declared.commands[i];
+		const nameErr = commandNameError(cmd);
+		if (nameErr != "") {
+			console.log(`${errStyle("error")}: ${declared.packages[i]}: ${nameErr}`);
+			ok = false;
+		}
+		let j = 0;
+		while (j < i) {
+			if (declared.commands[j] == cmd) {
+				console.log(`${errStyle("error")}: ${bold(cmd)} is declared by both ${declared.packages[j]} and ${declared.packages[i]}`);
+				ok = false;
+			}
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	if (!ok) {
+		console.log("no command was installed");
+		return false;
+	}
+
+	ensureDir(shimDir);
+	let written = 0;
+	let s = 0;
+	while (s < declared.commands.length) {
+		const cmd = declared.commands[s];
+		const shimPath = join(shimDir, shimFileName(cmd));
+		if (exists(shimPath)) {
+			const current = try readFile(shimPath) catch "";
+			if (!isShim(current)) {
+				console.log(`${errStyle("error")}: ${shimPath} exists and was not written by msc — leaving it alone`);
+				return false;
+			}
+		}
+		const content = shimContent(declared.packages[s], cmd);
+		const w = writeFile(shimPath, content);
+		if (!w.ok) {
+			console.log(`${errStyle("error")}: cannot write ${shimPath}: ${w.error.message}`);
+			return false;
+		}
+		chmod(shimPath, SHIM_MODE);
+		written = written + 1;
+		s = s + 1;
+	}
+	console.log(`${written.toString()} command(s) installed in ${dim(shimDir)}`);
+	return true;
+}
+
+const GLOBAL_MANIFEST = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\tpackage: { name: \"metascript-global\", version: \"0.0.0\" },\n\tdeps: {\n\t},\n};\n\nexport default config;\n";
+
+export function cmdInstallGlobal(spec: string): boolean {
+	const root = globalManifestRoot();
+	if (root == "") {
+		console.log(`${errStyle("error")}: cannot locate ~/.metascript — set HOME`);
+		return false;
+	}
+	const shimDir = globalShimDir();
+	if (shimDir == "") {
+		console.log(`${errStyle("error")}: cannot locate ~/.metascript/bin — set HOME`);
+		return false;
+	}
+	ensureDir(root);
+	const manifest = join(root, "build.ms");
+	if (!exists(manifest)) {
+		const w = writeFile(manifest, GLOBAL_MANIFEST);
+		if (!w.ok) {
+			console.log(`${errStyle("error")}: cannot write ${manifest}: ${w.error.message}`);
+			return false;
+		}
+	}
+	if (spec != "") {
+		const addArgs: string[] = [spec];
+		if (!cmdAdd(root, addArgs)) return false;
+	}
+	return syncShims(root, shimDir);
 }
 
 function packageKey(pkg: string, version: string, root: string): string {
