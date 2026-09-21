@@ -1507,6 +1507,25 @@ export function typeCarriesRef(t: Type | null): boolean {
 	return !isPodFieldType(t, 0);
 }
 
+export function isSharedGraphType(t: Type | null): boolean {
+	if (t == null) return false;
+	let base = t;
+	if (base.kind == TypeKind.Union && base.typeChildren.length == 2) {
+		const a = base.typeChildren[0];
+		const b = base.typeChildren[1];
+		if (a != null && a.kind == TypeKind.Null && b != null) base = b;
+		else if (b != null && b.kind == TypeKind.Null && a != null) base = a;
+	}
+	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
+	if (base.kind == TypeKind.Array) return isSharedGraphType(base.typeReturn);
+	return base.sym != null && (base.sym.name == "Type" || base.sym.name == "Symbol");
+}
+
+export function propagateReadonlyView(t: Type | null): Type {
+	if (t != null && isSharedGraphType(t)) return t;
+	return createReadonlyView(t);
+}
+
 export function createReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (isReadonlyView(t)) return t;
@@ -2482,7 +2501,7 @@ function typeVisitHas(seen: Cursor<Type>[], t: Type): boolean {
 }
 
 class TypeVisitSet {
-	entries: Cursor<Type>[];
+	entries: Readonly<Type>[];
 	table: int32[];
 	constructor() {
 		this.entries = [];
@@ -2490,7 +2509,7 @@ class TypeVisitSet {
 	}
 }
 
-function typeVisitSlot(visited: TypeVisitSet, t: Cursor<Type>): int32 {
+function typeVisitSlot(visited: TypeVisitSet, t: Readonly<Type>): int32 {
 	const mask: int32 = visited.table.length - 1;
 	let h: int32 = ((t as unknown).hash() & (mask as int64)) as int32;
 	while (visited.table[h] != 0 && visited.entries[visited.table[h] - 1] != t) h = (h + 1) & mask;
@@ -2506,7 +2525,7 @@ function typeVisitGrow(visited: TypeVisitSet): void {
 	}
 }
 
-function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
+function typeVisitAdd(visited: TypeVisitSet, t: Readonly<Type>): boolean {
 	if (visited.table.length < (visited.entries.length + 1) * 2) typeVisitGrow(visited);
 	const h = typeVisitSlot(visited, t);
 	if (visited.table[h] != 0) return false;
