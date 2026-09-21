@@ -251,7 +251,7 @@ run_tools_lane() {
 
 known_of() {
   [ -f "$KNOWN" ] || return 0
-  jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | sort -u
+  jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | tr -d '\r' | sort -u
 }
 
 flaky_ids() {
