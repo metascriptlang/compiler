@@ -1372,10 +1372,13 @@ function maybeCacheKey(inner: Type): string {
 	}
 	if (inner.typeName != "" && hasNominalIdentity(inner)) return moduleQualifiedName(inner);
 	if (isAllStringLiteralUnion(inner)) {
-		let key = "slu";
+		const members: string[] = [];
 		for (const c of inner.typeChildren) {
-			if (c != null) key = key + "_" + identSafeKey(c.typeName);
+			if (c != null) members.push(identSafeKey(c.typeName));
 		}
+		members.sort();
+		let key = "slu";
+		for (const m of members) key = key + "_" + m;
 		return key;
 	}
 	if (inner.kind == TypeKind.Function) return "fn_" + identSafeKey(typeKey(inner));
