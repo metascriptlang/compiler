@@ -69,6 +69,9 @@ cd "$TOP" || die "cannot enter $TOP"
 KNOWN="$TOP/src/test/known-red.json"
 OUT="$TOP/out/gate"
 CAND="$OUT/msc"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) CAND="$CAND.exe" ;;
+esac
 EMIT="$OUT/emit"
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
