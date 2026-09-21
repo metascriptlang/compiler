@@ -48,7 +48,9 @@ export function expandArrayRet(
 					const sliceCallee = makeMember(base, "slice", loc);
 					const sliceCall = makeCall(sliceCallee, [makeNumber(i, loc), makeMember(base, "length", loc)], loc);
 					if (restType != null) sliceCall.nodeType = restType;
-					items.push(makeVarDecl(id.name, sliceCall, declKind, loc));
+					const sliceDecl = makeVarDecl(id.name, sliceCall, declKind, loc);
+					sliceDecl.resolvedSym = idNode.resolvedSym;
+					items.push(sliceDecl);
 				} else if (restType != null) {
 					// C backend: slice is a std method the checker resolves at check time;
 					// transform-built member calls bypass that, so mirror lowerArraySpread's
@@ -88,6 +90,7 @@ export function expandArrayRet(
 					restRef.nodeType = restType;
 					const restDecl = makeVarDecl(id.name, restRef, declKind, loc);
 					restDecl.nodeType = restType;
+					restDecl.resolvedSym = idNode.resolvedSym;
 					items.push(restDecl);
 				}
 			}
@@ -115,7 +118,9 @@ export function expandArrayRet(
 						init = guarded;
 					}
 				}
-				items.push(makeVarDecl(id.name, init, declKind, loc));
+				const elemDecl = makeVarDecl(id.name, init, declKind, loc);
+				elemDecl.resolvedSym = elem.resolvedSym;
+				items.push(elemDecl);
 			}
 		}
 	}
@@ -151,6 +156,7 @@ export function expandObjectRet(
 			}
 			const restDecl = makeVarDecl(restId.name, makeTypedObjectLiteral(restNames, restValues, restType, loc), declKind, loc);
 			restDecl.nodeType = restType;
+			restDecl.resolvedSym = inner.resolvedSym;
 			items.push(restDecl);
 			continue;
 		}
@@ -163,7 +169,9 @@ export function expandObjectRet(
 			if (fieldType != null) memberAccess.nodeType = fieldType;
 			let init = memberAccess;
 			if (p.propDefault != null) init = nullishLowered(memberAccess, p.propDefault, loc, fieldType);
-			items.push(makeVarDecl(id.name, init, declKind, loc));
+			const propDecl = makeVarDecl(id.name, init, declKind, loc);
+			propDecl.resolvedSym = p.propAlias.resolvedSym;
+			items.push(propDecl);
 		}
 	}
 	return items;
