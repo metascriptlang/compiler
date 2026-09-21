@@ -583,7 +583,7 @@ function emissionOverlapped(results: ModuleEmissionResult[]): boolean {
 	return false;
 }
 
-function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, workers: int32, isTestBuild: boolean, isHcr: boolean, emitter: ModuleEmitter = emitModuleJob): ModuleEmissionResult[] {
+function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, workers: int32, isTestBuild: boolean, hcrEntry: string, emitter: ModuleEmitter = emitModuleJob): ModuleEmissionResult[] {
 	const results: ModuleEmissionResult[] = [];
 	for (let i = 0; i < jobs.length; i += 1) results.push(new ModuleEmissionResult());
 	const order = emissionOrder(jobs);
@@ -594,7 +594,7 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	while (true) {
 		while (!failed && next < order.length && next - head < workers) {
 			const job = jobs[order[next]];
-			pending.push(spawn(() => emitter(job, aliveSet, facts, isTestBuild, isHcr)));
+			pending.push(spawn(() => emitter(job, aliveSet, facts, isTestBuild, hcrEntry != "" && job.modPath == hcrEntry)));
 			next += 1;
 		}
 		if (head == next) break;
@@ -656,7 +656,7 @@ test "bounded module emission preserves slots and joins before stopping" {
 	const aliveSet = createAliveSet();
 	const facts = new CEmissionFacts();
 	for (const workers of [1, 2, 4, 8]) {
-		const complete = emitModulesBounded(jobs, aliveSet, facts, workers, false, false, probeModuleEmission);
+		const complete = emitModulesBounded(jobs, aliveSet, facts, workers, false, "", probeModuleEmission);
 		assert complete.length == jobs.length;
 		for (let slot = 0; slot < complete.length; slot += 1) {
 			assert complete[slot].completed;
@@ -665,7 +665,7 @@ test "bounded module emission preserves slots and joins before stopping" {
 		}
 		if (workers > 1) assert emissionOverlapped(complete);
 		for (const emitter of [probeFailedModuleEmission, probeDiagnosticModuleEmission]) {
-			const failed = emitModulesBounded(jobs, aliveSet, facts, workers, false, false, emitter);
+			const failed = emitModulesBounded(jobs, aliveSet, facts, workers, false, "", emitter);
 			let completed = 0;
 			for (let slot = 0; slot < failed.length; slot += 1) {
 				if (!failed[slot].completed) continue;
@@ -1560,7 +1560,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const _tn0 = performance.now();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		tNative = tNative + (performance.now() - _tn0);
-		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrResult = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -1666,7 +1666,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr);
+	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
 	let codegenTime: float64 = performance.now() - emitStart;
 	if (opts.showTime) {
 		console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
@@ -2040,7 +2040,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -2089,7 +2089,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr);
+	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
 	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
 	let emissionFailed = false;
 	for (let eri = 0; eri < emissionResults.length; eri += 1) {
