@@ -425,22 +425,24 @@ function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcConte
 		i -= 1;
 		const r = dctx.stmtBorrowReads[i];
 		if (r.readName != srcName) continue;
-		const loc = r.readNode.location;
-		const readType = r.readNode.nodeType != null ? r.readNode.nodeType : fallbackType;
+		const preStmtIdx = r.preStmtIdx;
+		const readNode = r.readNode;
+		const loc = readNode.location;
+		const readType = readNode.nodeType != null ? readNode.nodeType : fallbackType;
 		const bSym = freshTempSym(dctx.ctx, "pborrow", readType);
-		const init = makeIdentResolved(r.readNode.resolvedSym!, loc);
+		const init = makeIdentResolved(readNode.resolvedSym!, loc);
 		init.nodeType = readType;
 		const decl = makeVarDecl(bSym.name, init, DeclKind.Const, loc);
 		decl.nodeType = readType;
 		decl.resolvedSym = bSym;
-		preStmts.splice(r.preStmtIdx, 0, decl);
+		preStmts.splice(preStmtIdx, 0, decl);
 		let j = i + 1;
 		while (j < dctx.stmtBorrowReads.length) {
 			dctx.stmtBorrowReads[j].preStmtIdx += 1;
 			j += 1;
 		}
-		r.readNode.resolvedSym = bSym;
-		(r.readNode.data as IdentifierData).name = bSym.name;
+		readNode.resolvedSym = bSym;
+		(readNode.data as IdentifierData).name = bSym.name;
 	}
 	const remaining: BorrowRead[] = [];
 	for (const r of dctx.stmtBorrowReads) {
@@ -742,10 +744,11 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	}
 
 	if (mode == DrcMode.Normal) {
+		const preStmtIdx = currentScope(dctx).preStmts.length;
 		const br: BorrowRead = {
 			readName: d.name,
 			readNode: node,
-			preStmtIdx: currentScope(dctx).preStmts.length,
+			preStmtIdx,
 		};
 		dctx.stmtBorrowReads.push(br);
 	}
