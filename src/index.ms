@@ -22,6 +22,7 @@ import { setExtraGlobalImports } from "./checker/prelude";
 // errors from OTHER files in the working tree are pre-existing, not caused by
 // this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
+import { cmdX } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { ensureVersionMarker } from "./compiler/cache";
 
@@ -186,6 +187,12 @@ export function main(): number {
 			if (opts.inputFile != "") orgArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
 			if (!cmdOrg(orgArgs)) process.exit(1);
+		},
+		"x" => {
+			const xArgs: string[] = [];
+			if (opts.inputFile != "") xArgs.push(opts.inputFile);
+			for (const ea of opts.extraArgs) { xArgs.push(ea); }
+			if (!cmdX(projectRoot, xArgs, opts)) process.exit(1);
 		},
 		"upgrade" => { process.exit(cmdUpgrade(opts)); },
 		_ => {

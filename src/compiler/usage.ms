@@ -31,6 +31,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("login") + "                Authenticate with the registry (GitHub)");
 	console.log("  " + cyan("logout") + "               Remove stored credentials");
 	console.log("  " + cyan("whoami") + "               Print current user " + dim("(--json for full user object)"));
+	console.log("  " + cyan("x") + " <command>          Run a command a dependency declares " + dim("(no args: list them)"));
 	console.log("");
 	console.log(yellow("VISIBILITY/DEBUGGING:"));
 	console.log("  " + cyan("dump-tokens") + " <file>    Show tokenization output");
