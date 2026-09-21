@@ -28,7 +28,7 @@ backend and DRC/ORC runtime.
 |---|---|
 | `--hcr` and module-global state lifting | Implemented |
 | Structural hash rejecting changed `_GlobalState` layout | Implemented |
-| Single-image POSIX `dlopen` host | Prototype implemented; old demo no longer exists, so re-pin before relying on it |
+| Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
 | Per-module shared libraries | Not implemented |
 | Cross-module vtable calls | Not implemented |
 | Transactional current/old/candidate loader | Not implemented |
