@@ -206,18 +206,6 @@ export function attachedOpSym(name: string, op: AttachedOp): Symbol {
 	return sym;
 }
 
-export function hookRef(hookName: string, loc: SourceLocation): Node {
-	const sym = lookupHookSym(hookName);
-	if (sym == null) return makeIdent(hookName, loc);
-	return makeTypedIdentResolved(sym, null, loc);
-}
-
-export function opRef(opName: string, op: SymbolFlag, loc: SourceLocation): Node {
-	const hook = lookupHookSym(opName);
-	const sym = hook != null ? hook : runtimeProcSym(opName);
-	setFlag(sym, op);
-	return makeTypedIdentResolved(sym, null, loc);
-}
 
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
