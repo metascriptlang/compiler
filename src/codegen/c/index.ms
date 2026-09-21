@@ -7,7 +7,8 @@
 //   DatInit000 (data/type init, runs first) + Init000 (user code, runs second)
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
-import { Node, NodeKind, ProgramData, SymbolKind, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, ObjectLiteralData } from "../../ast/node";
+import { getProperty } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
 import {
@@ -34,7 +35,7 @@ export class CModuleOutput {
 	errors: CheckerError[] = [];
 }
 
-function prepareCanonicalCallTypes(node: Node, ctx: CheckerContext): void {
+function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
 	const sym = node.resolvedSym;
 	if (sym != null && sym.symbolKind == SymbolKind.Function
 			&& sym.symbolType != null && sym.symbolType.kind != TypeKind.Function
@@ -43,12 +44,38 @@ function prepareCanonicalCallTypes(node: Node, ctx: CheckerContext): void {
 		const info = findExportedSymbol(ctx.exportRegistry, sym.modulePath, lookupName);
 		if (info != null && info.symType != null && info.symType.kind == TypeKind.Function) sym.symbolType = info.symType;
 	}
-	forEachChild(node, (child: Node): void => { prepareCanonicalCallTypes(child, ctx); });
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		if (d.initializer != null) {
+			if (d.initializer.nodeType == null && node.nodeType != null) {
+				d.initializer.nodeType = node.nodeType;
+			}
+			if (node.nodeType != null && node.nodeType.kind == TypeKind.Union
+				&& d.initializer.kind == NodeKind.ObjectLiteral) {
+				d.initializer.nodeType = node.nodeType;
+			}
+		}
+	} else if (node.kind == NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		if (node.nodeType != null && node.nodeType.typeChildren != null) {
+			let fi = 0;
+			while (fi < d.properties.length && fi < d.keys.length) {
+				if (d.properties[fi].nodeType == null) {
+					const fieldType = getProperty(node.nodeType, d.keys[fi]);
+					if (fieldType != null) {
+						d.properties[fi].nodeType = fieldType;
+				}
+			}
+				fi += 1;
+			}
+		}
+	}
+	forEachChild(node, (child: Node): void => { prepareEmissionTypes(child, ctx); });
 }
 
 export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, facts: CEmissionFacts): void {
 	if (program == null || program.kind != NodeKind.Program) return;
-	prepareCanonicalCallTypes(program, ctx);
+	prepareEmissionTypes(program, ctx);
 	const g = createCGen(ctx, modulePath);
 	g.aliveSet = aliveSet;
 	g.emissionFacts = facts;
