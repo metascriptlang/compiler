@@ -39,6 +39,9 @@ export interface PackageMeta {
 	homepage?: string;
 	keywords?: string[];
 	author?: string;
+	files?: string[];           // publish include globs (empty = all)
+	ignore?: string[];          // publish exclude globs (applied after files)
+	bin?: { [command: string]: string };  // command name → .ms entry, relative to the package root
 }
 
 export interface BuildConfig {
