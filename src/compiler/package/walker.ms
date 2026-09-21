@@ -50,6 +50,7 @@ const BUILTIN_EXCLUDE_PATTERNS: string[] = [
 	"**/*.log",
 	"**/.cache/**",
 	"**/build_tmp/**",
+	".msc/**",
 	"msc.lock",
 	".vscode/**",
 	".idea/**",
@@ -179,6 +180,8 @@ function makeFixture(root: string): boolean {
 	if (!r3.ok) return false;
 	const r4 = mkdir(join(root, ".git"));
 	if (!r4.ok) return false;
+	const r5 = mkdir(join(root, join(".msc", "bin")));
+	if (!r5.ok) return false;
 	// Files
 	const files: string[] = [
 		"build.ms",
@@ -189,6 +192,7 @@ function makeFixture(root: string): boolean {
 		"src/notes.txt",
 		"out/generated.c",
 		".git/HEAD",
+		".msc/bin/greet",
 	];
 	let i = 0;
 	while (i < files.length) {
@@ -204,7 +208,7 @@ function cleanupFixture(root: string): void {
 	const files: string[] = [
 		"build.ms", "README.md",
 		"src/main.ms", "src/helper.ms", "src/sub/deep.ms", "src/notes.txt",
-		"out/generated.c", ".git/HEAD",
+		"out/generated.c", ".git/HEAD", ".msc/bin/greet",
 	];
 	let i = 0;
 	while (i < files.length) { remove(join(root, files[i])); i = i + 1; }
@@ -212,6 +216,8 @@ function cleanupFixture(root: string): void {
 	rmdir(join(root, "src"));
 	rmdir(join(root, "out"));
 	rmdir(join(root, ".git"));
+	rmdir(join(root, join(".msc", "bin")));
+	rmdir(join(root, ".msc"));
 	rmdir(root);
 }
 
