@@ -44,6 +44,7 @@ msc-*
 
 # docs/ is published selectively
 docs/*
+!docs/HCR.md
 !docs/LANG.md
 !docs/LANG-BUILD.md
 !docs/LANG-CONCURRENCE.md

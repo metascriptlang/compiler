@@ -475,7 +475,7 @@ runtime/
   types.h                 ← msRefHeader, msTypeInfo (shared by both)
   arena.h                 ← arena allocator implementation
   fs.h, process.h, os.h  ← single-file modules (flat, no subdirs)
-  hcr.h / hcrHost.c      ← HCR Phase 1/2 POSIX prototype; architecture: paper/MULTI-MODULE.md Pillar D
+  hcr.h / hcrHost.c      ← HCR Phase 1/2 POSIX prototype; architecture: docs/HCR.md
   core/                   ← core types every program needs
     system.h/.c, string.h/.c, array.h/.c, buffer.h/.c, test.h, abort.h
   promise/                ← async subsystem

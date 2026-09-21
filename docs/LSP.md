@@ -75,7 +75,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 *   **LSP wiring note**: `dbSetStdPath` is exported but not yet called from `server.ms`. When LSP gets `stdPath` config (via init params or env var), wire it to `dbSetStdPath(db, stdPath)` to enable stdlib durability optimization.
 
 ### Phase 6: Live-Coding & HCR Intelligence (Pillar D)
-*   **Goal**: expose the contracts in `paper/MULTI-MODULE.md` Pillar D; the paper owns the architecture.
+*   **Goal**: expose the contracts in [`HCR.md`](HCR.md); that document owns the architecture.
 *   **Tasks**:
     - [ ] **State-layout diagnostics**: compare the current `_GlobalState` manifest against the last accepted HCR build; any change requires restart under the strict Phase-4 contract.
     - [ ] **HCR visibility**: mark lifted globals and calls indirected through a module vtable.
