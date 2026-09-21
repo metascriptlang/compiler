@@ -2501,7 +2501,7 @@ function typeVisitHas(seen: Cursor<Type>[], t: Type): boolean {
 }
 
 class TypeVisitSet {
-	entries: Readonly<Type>[];
+	entries: Cursor<Type>[];
 	table: int32[];
 	constructor() {
 		this.entries = [];
@@ -2509,7 +2509,7 @@ class TypeVisitSet {
 	}
 }
 
-function typeVisitSlot(visited: TypeVisitSet, t: Readonly<Type>): int32 {
+function typeVisitSlot(visited: TypeVisitSet, t: Cursor<Type>): int32 {
 	const mask: int32 = visited.table.length - 1;
 	let h: int32 = ((t as unknown).hash() & (mask as int64)) as int32;
 	while (visited.table[h] != 0 && visited.entries[visited.table[h] - 1] != t) h = (h + 1) & mask;
@@ -2525,7 +2525,7 @@ function typeVisitGrow(visited: TypeVisitSet): void {
 	}
 }
 
-function typeVisitAdd(visited: TypeVisitSet, t: Readonly<Type>): boolean {
+function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
 	if (visited.table.length < (visited.entries.length + 1) * 2) typeVisitGrow(visited);
 	const h = typeVisitSlot(visited, t);
 	if (visited.table[h] != 0) return false;
