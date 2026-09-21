@@ -31,7 +31,7 @@ import {
 import { isLastReadInContext } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
-import { isLastReadCfgCached, isLastReadCfgNodeCached, clearCfgCache } from "./cfg";
+import { isLastReadCfgNodeCached, clearCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
@@ -1480,7 +1480,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	if (nameSetContains(dctx.finallyProtectedVars, sym.name)) return false;
 	// Phase C: use CFG-based analysis when function body is available
 	if (dctx.currentFuncBody != null && node != null) {
-		return isLastReadCfgCached(sym.name, node, dctx.currentFuncBody, dctx.cfgCache);
+		return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
 	}
 	// Fallback: conservative forward scan
 	if (!isLastReadInContext(sym, idx, stmts, dctx.outerCtx)) return false;

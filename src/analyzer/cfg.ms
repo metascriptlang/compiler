@@ -12,7 +12,7 @@ import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
-import { makeIdent, makeIdentResolved } from "../transform/util";
+import { makeIdentResolved } from "../transform/util";
 import { parseInput } from "../transform/testUtil";
 
 // ===== Data Structures =====
@@ -28,8 +28,6 @@ export enum CfgInstrKind {
 export interface CfgInstr {
 	kind: CfgInstrKind;
 	dest: int32;       // relative offset for goto/fork/loop
-	line: int32;       // source location for use/def (matching)
-	col: int32;
 	n: Node;           // original AST node for alias-aware comparison (Phase B)
 }
 
@@ -47,8 +45,7 @@ interface LoopInfo {
 
 interface BuildCtx {
 	cfg: CfgInstr[];
-	vn: string;              // variable name for name-based matching (backwards compat)
-	rootSym: Symbol | null;         // root symbol for identity-based matching (field-level tracking)
+	rootSym: Symbol;
 	loops: LoopInfo[];
 }
 
@@ -56,26 +53,26 @@ interface BuildCtx {
 
 const nullNode = null as unknown as Node;
 
-function emitUse(ctx: BuildCtx, line: int32, col: int32, node: Node): void {
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgUse, dest: 0, line, col, n: node };
+function emitUse(ctx: BuildCtx, node: Node): void {
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgUse, dest: 0, n: node };
 	ctx.cfg.push(instr);
 }
 
-function emitDef(ctx: BuildCtx, line: int32, col: int32, node: Node): void {
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgDef, dest: 0, line, col, n: node };
+function emitDef(ctx: BuildCtx, node: Node): void {
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgDef, dest: 0, n: node };
 	ctx.cfg.push(instr);
 }
 
 function emitGoto(ctx: BuildCtx): int32 {
 	const idx = ctx.cfg.length;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgGoto, dest: 0, line: 0, col: 0, n: nullNode };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgGoto, dest: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
 
 function emitFork(ctx: BuildCtx): int32 {
 	const idx = ctx.cfg.length;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgFork, dest: 0, line: 0, col: 0, n: nullNode };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgFork, dest: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
@@ -83,7 +80,7 @@ function emitFork(ctx: BuildCtx): int32 {
 function emitLoop(ctx: BuildCtx, targetIdx: int32): void {
 	const idx = ctx.cfg.length;
 	const offset = targetIdx - idx;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgLoop, dest: offset, line: 0, col: 0, n: nullNode };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgLoop, dest: offset, n: nullNode };
 	ctx.cfg.push(instr);
 }
 
@@ -92,41 +89,25 @@ function patchDest(ctx: BuildCtx, instrIdx: int32, targetIdx: int32): void {
 }
 
 // ===== Root matching helper =====
-// Returns true if the node's root matches the tracked variable (by symbol or name).
 
 function matchesRoot(node: Node, ctx: BuildCtx): boolean {
-	if (ctx.rootSym != null) {
-		const root = getRootSym(node);
-		return root != null && root == ctx.rootSym;
-	}
-	// Name-based fallback (backwards compat for buildCfg)
 	const root = getRootSym(node);
-	if (root != null) return root.name == ctx.vn;
-	// No resolvedSym — fall back to identifier name check
-	return false;
+	return root != null && root == ctx.rootSym;
 }
 
-function matchesName(node: Node, ctx: BuildCtx): boolean {
-	if (node.kind != NodeKind.Identifier) return false;
-	const d = node.data as IdentifierData;
-	if (ctx.rootSym != null) {
-		return node.resolvedSym != null && node.resolvedSym == ctx.rootSym;
-	}
-	return d.name == ctx.vn;
+function isTrackedIdent(node: Node, ctx: BuildCtx): boolean {
+	return node.kind == NodeKind.Identifier && node.resolvedSym == ctx.rootSym;
 }
 
 // ===== Expression Walker =====
-// Walks expressions looking for uses of the tracked variable.
-// When rootSym is set, emits full path nodes (x.f, x[i]) for alias-aware BFS.
-// When rootSym is null (name-based), behaves like the original name-only tracking.
 
 function walkExpr(node: Node | null, ctx: BuildCtx): void {
 	if (node == null) return;
 
 	match (node.kind) {
 		NodeKind.Identifier => {
-			if (matchesName(node, ctx)) {
-				emitUse(ctx, node.location.line, node.location.column, node);
+			if (isTrackedIdent(node, ctx)) {
+				emitUse(ctx, node);
 			}
 		},
 		// Don't enter inner functions
@@ -150,8 +131,8 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 		NodeKind.MemberExpr => {
 			// Field-level: if root matches, emit use for full path and don't descend
 			// (avoids double-counting bare x when we already recorded x.f)
-			if (ctx.rootSym != null && matchesRoot(node, ctx)) {
-				emitUse(ctx, node.location.line, node.location.column, node);
+			if (matchesRoot(node, ctx)) {
+				emitUse(ctx, node);
 			} else {
 				walkExpr((node.data as MemberExprData).object, ctx);
 			}
@@ -159,8 +140,8 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			// Field-level: if root matches, emit use for full path
-			if (ctx.rootSym != null && matchesRoot(node, ctx)) {
-				emitUse(ctx, node.location.line, node.location.column, node);
+			if (matchesRoot(node, ctx)) {
+				emitUse(ctx, node);
 				// Still walk index for sub-expression uses (e.g. x[x] edge case)
 				walkExpr(d.index, ctx);
 			} else {
@@ -196,8 +177,8 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			// Field-level: if root matches, emit use for full path (reference: genUse stores orig node)
-			if (ctx.rootSym != null && matchesRoot(node, ctx)) {
-				emitUse(ctx, node.location.line, node.location.column, node);
+			if (matchesRoot(node, ctx)) {
+				emitUse(ctx, node);
 			} else {
 				walkExpr((node.data as HiddenDerefData).expr, ctx);
 			}
@@ -248,25 +229,25 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 					walkExpr(bd.right, ctx);
 					// LHS: check if it's a direct identifier or field path to our var
 					if (bd.left != null && bd.left.kind == NodeKind.Identifier) {
-						if (matchesName(bd.left, ctx)) {
+						if (isTrackedIdent(bd.left, ctx)) {
 							if (bd.operator == "=") {
-								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitDef(ctx, bd.left);
 							} else {
 								// Compound: read + write
-								emitUse(ctx, bd.left.location.line, bd.left.location.column, bd.left);
-								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitUse(ctx, bd.left);
+								emitDef(ctx, bd.left);
 							}
 							return;
 						}
-					} else if (bd.left != null && ctx.rootSym != null &&
+					} else if (bd.left != null &&
 							(bd.left.kind == NodeKind.MemberExpr || bd.left.kind == NodeKind.ArrayAccess)) {
 						// Field-level: x.f = expr or x[i] = expr → def on the field path
 						if (matchesRoot(bd.left, ctx)) {
 							if (bd.operator == "=") {
-								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitDef(ctx, bd.left);
 							} else {
-								emitUse(ctx, bd.left.location.line, bd.left.location.column, bd.left);
-								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitUse(ctx, bd.left);
+								emitDef(ctx, bd.left);
 							}
 							return;
 						}
@@ -282,11 +263,8 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as VariableDeclData;
 			// Initializer first (RHS uses before def)
 			walkExpr(d.initializer, ctx);
-			// Match by symbol on the decl node, or by name fallback
-			if (ctx.rootSym != null && node.resolvedSym != null && node.resolvedSym == ctx.rootSym) {
-				emitDef(ctx, node.location.line, node.location.column, makeIdentResolved(ctx.rootSym, node.location));
-			} else if (d.declName == ctx.vn) {
-				emitDef(ctx, node.location.line, node.location.column, makeIdent(d.declName, node.location));
+			if (node.resolvedSym == ctx.rootSym) {
+				emitDef(ctx, makeIdentResolved(ctx.rootSym, node.location));
 			}
 		},
 		NodeKind.ReturnStmt => {
@@ -435,21 +413,9 @@ function finalizeCfg(ctx: BuildCtx): Cfg {
 	return { instrs: ctx.cfg };
 }
 
-export function buildCfg(body: Node, vn: string): Cfg {
-	const ctx: BuildCtx = {
-		cfg: [],
-		vn,
-		rootSym: null,
-		loops: [],
-	};
-	walkStmt(body, ctx);
-	return finalizeCfg(ctx);
-}
-
 export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 	const ctx: BuildCtx = {
 		cfg: [],
-		vn: rootSym != null ? rootSym.name : "",
 		rootSym,
 		loops: [],
 	};
@@ -457,74 +423,8 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 	return finalizeCfg(ctx);
 }
 
-// ===== Last-Read Query: BFS (reference isLastRead implementation) =====
-
-export function isLastReadCfg(cfg: Cfg, line: int32, col: int32): boolean {
-	const instrs = cfg.instrs;
-	const len = instrs.length;
-
-	// Find the use instruction matching this location
-	let j = 0;
-	while (j < len) {
-		const instr = instrs[j];
-		if (instr.kind == CfgInstrKind.CfgUse && instr.line == line && instr.col == col) break;
-		j = j + 1;
-	}
-	if (j >= len) return false;  // use not found in CFG — conservative: assume NOT last read (don't move)
-
-	// BFS from j+1: explore all forward paths
-	// If any path finds another use before a def → not last read
-	const pcs: int32[] = [];
-	pcs.push(j + 1);
-	// Visited set: int32 array (0=unvisited, 1=visited; no bool array in runtime).
-	// Preallocated — a push-per-slot loop would realloc len times per query.
-	const visited: int32[] = new Array(len + 1);
-
-	while (pcs.length > 0) {
-		let pc = pcs.pop();
-
-		while (pc >= 0 && pc < len) {
-			if (visited[pc] == 1) break;
-			visited[pc] = 1;
-
-			const instr = instrs[pc];
-
-			if (instr.kind == CfgInstrKind.CfgLoop) {
-				const target = pc + instr.dest;
-				if (target >= 0 && target < len && visited[target] == 0) {
-					pc = target;
-				} else {
-					break;  // already visited back-edge
-				}
-			} else if (instr.kind == CfgInstrKind.CfgGoto) {
-				const target = pc + instr.dest;
-				pc = target;
-			} else if (instr.kind == CfgInstrKind.CfgFork) {
-				// Queue fallthrough path, follow fork target
-				const fallthrough = pc + 1;
-				if (fallthrough < len && visited[fallthrough] == 0) {
-					pcs.push(fallthrough);
-				}
-				const target = pc + instr.dest;
-				pc = target;
-			} else if (instr.kind == CfgInstrKind.CfgUse) {
-				// Another use of this variable reachable — NOT last read
-				return false;
-			} else if (instr.kind == CfgInstrKind.CfgDef) {
-				// Variable redefined on this path — this path is safe
-				break;
-			} else {
-				pc = pc + 1;
-			}
-		}
-		// pc >= len or < 0: reached end of CFG on this path — safe (no more uses)
-	}
-
-	return true;
-}
-
 // ===== Alias-Aware Last-Read Query (Phase B) =====
-// Uses aliases() for field-level comparison instead of line:col matching.
+// Uses aliases() for field-level comparison.
 // Reference: isLastReadImpl with bidirectional alias checks.
 
 export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
@@ -602,71 +502,39 @@ export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
 // ===== CFG Cache =====
 
 export interface CfgCacheEntry {
-	varName: string;
+	sym: Symbol;
 	cfg: Cfg;
 }
 
 export interface CfgCache {
-	entries: CfgCacheEntry[];      // name-based CFGs (buildCfg)
-	symEntries: CfgCacheEntry[];   // symbol-based CFGs (buildCfgForSym) — separate to avoid collision
+	entries: CfgCacheEntry[];
 }
 
 export function createCfgCache(): CfgCache {
-	return { entries: [], symEntries: [] };
-}
-
-export function getCachedCfg(cache: CfgCache, vn: string): Cfg {
-	for (const entry of cache.entries) {
-		if (entry.varName == vn) return entry.cfg;
-	}
-	return null as unknown as Cfg;
-}
-
-export function cacheCfg(cache: CfgCache, vn: string, cfg: Cfg): void {
-	const entry: CfgCacheEntry = { varName: vn, cfg };
-	cache.entries.push(entry);
+	return { entries: [] };
 }
 
 export function clearCfgCache(cache: CfgCache): void {
 	while (cache.entries.length > 0) {
 		cache.entries.pop();
 	}
-	while (cache.symEntries.length > 0) {
-		cache.symEntries.pop();
-	}
 }
 
-// ===== Cached Last-Read Query (Phase C) =====
-// Builds CFG once per variable per function, caches for reuse.
 
-export function isLastReadCfgCached(varName: string, node: Node, funcBody: Node, cache: CfgCache): boolean {
-	if (node == null || funcBody == null) return false;
-	let cfg = getCachedCfg(cache, varName);
-	if (cfg == null) {
-		cfg = buildCfg(funcBody, varName);
-		cacheCfg(cache, varName, cfg);
-	}
-	return isLastReadCfg(cfg, node.location.line, node.location.column);
-}
-
-// ===== Alias-Aware Cached Last-Read Query (Phase B) =====
-// Builds CFG once per root symbol per function, caches for reuse.
-// Uses isLastReadCfgNode for field-level alias comparison.
-
-function getCachedCfgBySym(cache: CfgCache, rootSym: Symbol): Cfg {
-	for (const entry of cache.symEntries) {
-		if (entry.varName == rootSym.name) return entry.cfg;
+function getCachedCfg(cache: CfgCache, rootSym: Symbol): Cfg {
+	for (const entry of cache.entries) {
+		if (entry.sym == rootSym) return entry.cfg;
 	}
 	return null as unknown as Cfg;
 }
 
 export function isLastReadCfgNodeCached(rootSym: Symbol, queryNode: Node, funcBody: Node, cache: CfgCache): boolean {
 	if (rootSym == null || queryNode == null || funcBody == null) return false;
-	let cfg = getCachedCfgBySym(cache, rootSym);
+	let cfg = getCachedCfg(cache, rootSym);
 	if (cfg == null) {
 		cfg = buildCfgForSym(funcBody, rootSym);
-		const entry: CfgCacheEntry = { varName: rootSym.name, cfg };
-		cache.symEntries.push(entry);
+		const entry: CfgCacheEntry = { sym: rootSym, cfg };
+		cache.entries.push(entry);
 	}
 	return isLastReadCfgNode(cfg, queryNode);
 }
@@ -679,10 +547,16 @@ function getBody(code: string): Node {
 	return result.value;
 }
 
+function buildCfgForName(body: Node, name: string): Cfg {
+	const sym = makeTestSym(name);
+	attachSymAll(body, name, sym);
+	return buildCfgForSym(body, sym);
+}
+
 function countKind(code: string, vn: string, kind: CfgInstrKind): int32 {
 	const body = getBody(code);
 	if (body == null) return 0;
-	const cfg = buildCfg(body, vn);
+	const cfg = buildCfgForName(body, vn);
 	let count = 0;
 	for (const instr of cfg.instrs) {
 		if (instr.kind == kind) count = count + 1;
@@ -755,18 +629,18 @@ test "last stmt is last read" {
 	const ts = "const a = 1; const b = a;";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "a");
+	const cfg = buildCfgForName(body, "a");
 	const use = findLastUse(cfg);
-	assert isLastReadCfg(cfg, use.line, use.col);
+	assert isLastReadCfgNode(cfg, use.n);
 }
 
 test "not last when used after" {
 	const ts = "const a = 1; const b = a; const c = a;";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "a");
+	const cfg = buildCfgForName(body, "a");
 	const use = findFirstUse(cfg);
-	assert !isLastReadCfg(cfg, use.line, use.col);
+	assert !isLastReadCfgNode(cfg, use.n);
 }
 
 test "branch merge: both branches consume" {
@@ -774,19 +648,19 @@ test "branch merge: both branches consume" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); }";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "x");
+	const cfg = buildCfgForName(body, "x");
 	assert countKind(ts, "x", CfgInstrKind.CfgUse) == 2;
 	const use = findFirstUse(cfg);
-	assert isLastReadCfg(cfg, use.line, use.col);
+	assert isLastReadCfgNode(cfg, use.n);
 }
 
 test "branch merge: used after if is not last read" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); } final(x);";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "x");
+	const cfg = buildCfgForName(body, "x");
 	const use = findFirstUse(cfg);
-	assert !isLastReadCfg(cfg, use.line, use.col);
+	assert !isLastReadCfgNode(cfg, use.n);
 }
 
 test "def in one branch makes other last-read" {
@@ -794,10 +668,10 @@ test "def in one branch makes other last-read" {
 	const ts = "let x = 1; if (c) { use(x); } else { x = 2; } foo(x);";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "x");
+	const cfg = buildCfgForName(body, "x");
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
 	const use = findFirstUse(cfg);
-	assert !isLastReadCfg(cfg, use.line, use.col);
+	assert !isLastReadCfgNode(cfg, use.n);
 }
 
 test "return terminates path" {
@@ -805,10 +679,10 @@ test "return terminates path" {
 	const ts = "const x = 1; if (c) { return x; } foo(x);";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "x");
+	const cfg = buildCfgForName(body, "x");
 	// The first use (return x) is last read on its path because return terminates
 	const use = findFirstUse(cfg);
-	assert isLastReadCfg(cfg, use.line, use.col);
+	assert isLastReadCfgNode(cfg, use.n);
 }
 
 test "loop use is not last read" {
@@ -816,9 +690,9 @@ test "loop use is not last read" {
 	const ts = "const x = 1; while (c) { use(x); }";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
-	const cfg = buildCfg(body, "x");
+	const cfg = buildCfgForName(body, "x");
 	const use = findFirstUse(cfg);
-	assert !isLastReadCfg(cfg, use.line, use.col);
+	assert !isLastReadCfgNode(cfg, use.n);
 }
 
 // ===== Field-Level Tests (Phase B: alias-aware BFS) =====
@@ -911,4 +785,19 @@ test "field-level: x.f last-read when x.g assigned later" {
 	const d = (body.data as ProgramData).programStmts;
 	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
 	assert isLastReadCfgNode(cfg, firstArg);  // x.f IS last-read (x.g def doesn't alias x.f)
+}
+
+test "two variables spelled alike each get their own cached CFG" {
+	const body = getBody("{ const x = mk(); foo(x); } { const x = mk(); bar(x); }");
+	if (body == null) { assert false; return; }
+	const stmts = (body.data as ProgramData).programStmts;
+	const symA = makeTestSym("x");
+	const symB = makeTestSym("x");
+	attachSymAll(stmts[0], "x", symA);
+	attachSymAll(stmts[1], "x", symB);
+	const argA = (((stmts[0].data as BlockStmtData).statements[1].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	const argB = (((stmts[1].data as BlockStmtData).statements[1].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	const cache = createCfgCache();
+	assert isLastReadCfgNodeCached(symA, argA, body, cache);
+	assert isLastReadCfgNodeCached(symB, argB, body, cache);
 }
