@@ -26,11 +26,12 @@ export function printUsage(): void {
 	console.log(yellow("PACKAGE MANAGER:"));
 	console.log("  " + cyan("add") + " <name>@<ver>     Add a dependency (registry / file: / git:)");
 	console.log("  " + cyan("remove") + " <name>        Remove a dependency");
-	console.log("  " + cyan("install") + "              Install locked dependencies");
+	console.log("  " + cyan("install") + "              Install locked dependencies " + dim("(-g <pkg>: install its commands globally)"));
 	console.log("  " + cyan("publish") + "              Publish current package to registry");
 	console.log("  " + cyan("login") + "                Authenticate with the registry (GitHub)");
 	console.log("  " + cyan("logout") + "               Remove stored credentials");
 	console.log("  " + cyan("whoami") + "               Print current user " + dim("(--json for full user object)"));
+	console.log("  " + cyan("x") + " <command>          Run a command a dependency declares " + dim("(no args: list them)"));
 	console.log("");
 	console.log(yellow("VISIBILITY/DEBUGGING:"));
 	console.log("  " + cyan("dump-tokens") + " <file>    Show tokenization output");

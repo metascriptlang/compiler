@@ -22,6 +22,7 @@ import { setExtraGlobalImports } from "./checker/prelude";
 // errors from OTHER files in the working tree are pre-existing, not caused by
 // this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
+import { cmdX, syncShims, projectShimDir, cmdInstallGlobal } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { ensureVersionMarker } from "./compiler/cache";
 
@@ -156,6 +157,7 @@ export function main(): number {
 			if (opts.inputFile != "") addArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { addArgs.push(ea); }
 			if (!cmdAdd(projectRoot, addArgs)) process.exit(1);
+			if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
 		},
 		"remove" => {
 			const rmArgs: string[] = [];
@@ -163,7 +165,16 @@ export function main(): number {
 			if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
 		},
 		"install" => {
-			if (!cmdInstall(projectRoot)) process.exit(1);
+			let globalInstall = false;
+			for (const ea of opts.extraArgs) {
+				if (ea == "-g" || ea == "--global") globalInstall = true;
+			}
+			if (globalInstall) {
+				if (!cmdInstallGlobal(opts.inputFile)) process.exit(1);
+			} else {
+				if (!cmdInstall(projectRoot)) process.exit(1);
+				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
+			}
 		},
 		"login" => {
 			if (!cmdLogin(projectRoot)) process.exit(1);
@@ -186,6 +197,12 @@ export function main(): number {
 			if (opts.inputFile != "") orgArgs.push(opts.inputFile);
 			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
 			if (!cmdOrg(orgArgs)) process.exit(1);
+		},
+		"x" => {
+			const xArgs: string[] = [];
+			if (opts.inputFile != "") xArgs.push(opts.inputFile);
+			for (const ea of opts.extraArgs) { xArgs.push(ea); }
+			if (!cmdX(projectRoot, xArgs, opts)) process.exit(1);
 		},
 		"upgrade" => { process.exit(cmdUpgrade(opts)); },
 		_ => {

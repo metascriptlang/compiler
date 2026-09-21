@@ -66,7 +66,7 @@ interface Item { name: string; price: number; qty: number; }
 interface Order { items: Item[]; discount: number; }
 
 function orderTotal(order: Order): number {
-	let total = 0;
+	let total: number = 0;
 	let i = 0;
 	while (i < order.items.length) {
 		total += order.items[i].price * order.items[i].qty;

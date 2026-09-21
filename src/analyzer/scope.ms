@@ -8,9 +8,9 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol, Type } from "../ast/node";
+import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol, SymbolKind, Type } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
-import { hasFlag, SymbolFlag } from "../checker/symbol";
+import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
@@ -22,15 +22,14 @@ export const noSym: Symbol | null = null;
 // ===== Variable Info =====
 
 export interface VarInfo {
-	varName: string;
-	sym: Symbol | null;          // resolved symbol — used by codegen for unique naming
+	sym: Symbol;                 // identity — the only key, and what codegen names the variable by
 	rcInfo: RcInfo;
 	isCursor: boolean;    // borrowed ref — never destroyed
 	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
 }
 
 export class MovedVar {
-	varName: string;       // variable name (empty for expression-level moves)
+	sym: Symbol | null;    // moved variable (null for expression-level moves)
 	exprNode: Node;        // pre-built wasMoved call node (null for variable-level moves)
 }
 
@@ -153,12 +152,19 @@ export function scopeDepth(dctx: DrcContext): number {
 
 // ===== Variable Registration =====
 
-export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean, sym: Symbol | null): void {
+export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean, sym: Symbol | null): void {
+	// A variable the checker or a transform left without a Symbol has no identity
+	// to track it by — report it rather than tracking it under a name that another
+	// binding in a sibling scope may share.
+	if (sym == null) {
+		dctx.ctx.errors.push("DRC: a variable reached the analyzer without a resolved symbol");
+		return;
+	}
 	if (isCursor) {
 		// Cursors are borrowed — never cleaned up, but MUST be registered so
 		// field accesses (d.field) are recognized as borrows by isLastReadFieldSafe.
 		const scope = currentScope(dctx);
-		const info: VarInfo = { varName, sym, rcInfo, isCursor: true, isInitialized: true };
+		const info: VarInfo = { sym, rcInfo, isCursor: true, isInitialized: true };
 		scope.varsToCleanup.push(info);
 		return;
 	}
@@ -169,15 +175,15 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 	// declaration, which routes a global's destroy to a program-exit list instead
 	// of the scope's final section; module globals are never destroyed here, so
 	// declining to register is that same routing.
-	if (sym != null && hasFlag(sym, SymbolFlag.Global)) return;
+	if (hasFlag(sym, SymbolFlag.Global)) return;
 	const scope = currentScope(dctx);
-	const info: VarInfo = { varName, sym, rcInfo, isCursor: false, isInitialized: true };
+	const info: VarInfo = { sym, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
 }
 
 // Mark a variable as uninitialized (for `let x;` without initializer — Phase D first-write optimization)
-export function markUninitialized(dctx: DrcContext, varName: string): void {
-	const vi = findVarInfoInContext(dctx, varName);
+export function markUninitialized(dctx: DrcContext, sym: Symbol | null): void {
+	const vi = findVarInfoInContext(dctx, sym);
 	if (vi != null) {
 		vi.isInitialized = false;
 	}
@@ -185,69 +191,74 @@ export function markUninitialized(dctx: DrcContext, varName: string): void {
 
 // ===== Move Tracking =====
 
-export function recordMove(dctx: DrcContext, varName: string): void {
+export function recordMove(dctx: DrcContext, sym: Symbol | null): void {
+	if (sym == null) return;
 	const scope = currentScope(dctx);
-	if (wasMovedInScope(scope, varName)) return;
-	const mv: MovedVar = { varName, exprNode: null as unknown as Node };
+	if (wasMovedInScope(scope, sym)) return;
+	const mv: MovedVar = { sym, exprNode: null as unknown as Node };
 	scope.wasMoved.push(mv);
 }
 
-export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
+export function wasMovedInScope(scope: DrcScope, sym: Symbol | null): boolean {
+	if (sym == null) return false;
 	for (const mv of scope.wasMoved) {
-		if (mv.varName == varName) return true;
+		if (mv.sym == sym) return true;
 	}
 	return false;
 }
 
 // Record move bookkeeping in the scope that tracks the variable — read only by
 // varMovedInContext (the self-consume assignment gates); cleanup destroys unconditionally.
-export function recordMoveInContext(dctx: DrcContext, varName: string): void {
+export function recordMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
+	if (sym == null) return;
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		const vi = findVarInfo(dctx.scopes[i], varName);
+		const vi = findVarInfo(dctx.scopes[i], sym);
 		if (vi != null) {
-			if (!wasMovedInScope(dctx.scopes[i], varName)) {
-				const mv: MovedVar = { varName, exprNode: null as unknown as Node };
+			if (!wasMovedInScope(dctx.scopes[i], sym)) {
+				const mv: MovedVar = { sym, exprNode: null as unknown as Node };
 				dctx.scopes[i].wasMoved.push(mv);
 			}
 			return;
 		}
 	}
 	// Fallback: record on current scope
-	recordMove(dctx, varName);
+	recordMove(dctx, sym);
 }
 
 // Record an expression-level wasMoved call (for move obj.field / move arr[i]).
-// Stored in wasMoved with empty varName — emitted in finally before destructors.
+// Stored in wasMoved with a null symbol — emitted in finally before destructors.
 export function recordMoveExpr(dctx: DrcContext, wasMovedCall: Node): void {
 	const scope = currentScope(dctx);
-	const mv: MovedVar = { varName: "", exprNode: wasMovedCall };
+	const mv: MovedVar = { sym: null, exprNode: wasMovedCall };
 	scope.wasMoved.push(mv);
 }
 
-// True if varName was recorded moved in the scope that actually tracks it.
-export function varMovedInContext(dctx: DrcContext, varName: string): boolean {
+// True if the variable was recorded moved in the scope that actually tracks it.
+export function varMovedInContext(dctx: DrcContext, sym: Symbol | null): boolean {
+	if (sym == null) return false;
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		if (findVarInfo(dctx.scopes[i], varName) != null) {
-			return wasMovedInScope(dctx.scopes[i], varName);
+		if (findVarInfo(dctx.scopes[i], sym) != null) {
+			return wasMovedInScope(dctx.scopes[i], sym);
 		}
 	}
 	return false;
 }
 
-// Clear the moved record for varName in its owning scope — used when a reassignment gives
+// Clear the moved record for the variable in its owning scope — used when a reassignment gives
 // the var a fresh value, so scope-exit destroys the new value instead of skipping it.
-export function clearMoveInContext(dctx: DrcContext, varName: string): void {
+export function clearMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
+	if (sym == null) return;
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		if (findVarInfo(dctx.scopes[i], varName) != null) {
+		if (findVarInfo(dctx.scopes[i], sym) != null) {
 			const filtered: MovedVar[] = [];
 			for (const mv of dctx.scopes[i].wasMoved) {
-				if (mv.varName != varName) filtered.push(mv);
+				if (mv.sym != sym) filtered.push(mv);
 			}
 			dctx.scopes[i].wasMoved = filtered;
 			return;
@@ -276,19 +287,20 @@ export function setNeedsTryAll(dctx: DrcContext): void {
 
 // ===== Lookup =====
 
-export function findVarInfo(scope: DrcScope, varName: string): VarInfo {
+export function findVarInfo(scope: DrcScope, sym: Symbol | null): VarInfo {
+	if (sym == null) return null as unknown as VarInfo;
 	for (const vi of scope.varsToCleanup) {
-		if (vi.varName == varName) return vi;
+		if (vi.sym == sym) return vi;
 	}
 	return null as unknown as VarInfo;
 }
 
 // Search all scopes from innermost outward
-export function findVarInfoInContext(dctx: DrcContext, varName: string): VarInfo {
+export function findVarInfoInContext(dctx: DrcContext, sym: Symbol | null): VarInfo {
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		const vi = findVarInfo(dctx.scopes[i], varName);
+		const vi = findVarInfo(dctx.scopes[i], sym);
 		if (vi != null) return vi;
 	}
 	return null as unknown as VarInfo;
@@ -297,12 +309,12 @@ export function findVarInfoInContext(dctx: DrcContext, varName: string): VarInfo
 // Search scopes only within the current function boundary.
 // Stops at function scope boundaries — won't find module-level variables.
 // Use this when determining if a variable is "local owned" vs "borrowed from outer scope".
-export function findVarInfoInFunction(dctx: DrcContext, varName: string): VarInfo {
+export function findVarInfoInFunction(dctx: DrcContext, sym: Symbol | null): VarInfo {
 	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
 		const scope = dctx.scopes[i];
-		const vi = findVarInfo(scope, varName);
+		const vi = findVarInfo(scope, sym);
 		if (vi != null) return vi;
 		// Once we pass through a function scope, everything below is outer/module scope
 		if (scope.isFunction) return null as unknown as VarInfo;
@@ -400,6 +412,10 @@ export function testStringRc(): RcInfo {
 	};
 }
 
+export function testVarSym(name: string): Symbol {
+	return makeSymbol(name, SymbolKind.Variable, null, true);
+}
+
 function testMinimalRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
@@ -440,9 +456,19 @@ test "register RC var" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
-	registerVar(dctx, "s", rcInfo, false, noSym);
+	const s = testVarSym("s");
+	registerVar(dctx, rcInfo, false, s);
 	assert currentScope(dctx).varsToCleanup.length == 1;
-	assert currentScope(dctx).varsToCleanup[0].varName == "s";
+	assert currentScope(dctx).varsToCleanup[0].sym == s;
+	popScope(dctx);
+}
+
+test "register without a symbol is an error" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	registerVar(dctx, testStringRc(), false, noSym);
+	assert currentScope(dctx).varsToCleanup.length == 0;
+	assert dctx.ctx.errors.length == 1;
 	popScope(dctx);
 }
 
@@ -450,7 +476,7 @@ test "skip non-cleanup type" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const info = noRcInfo();
-	registerVar(dctx, "x", info, false, noSym);
+	registerVar(dctx, info, false, testVarSym("x"));
 	assert currentScope(dctx).varsToCleanup.length == 0;
 	popScope(dctx);
 }
@@ -459,22 +485,24 @@ test "skip cursor" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
-	registerVar(dctx, "s", rcInfo, true, noSym);
+	const s = testVarSym("s");
+	registerVar(dctx, rcInfo, true, s);
 	// Cursor IS registered (for findVarInfoInContext visibility) but marked isCursor=true.
 	// generateCleanup skips cursor vars, so no destroy/wasMoved is emitted.
 	assert currentScope(dctx).varsToCleanup.length == 1;
 	const vi = currentScope(dctx).varsToCleanup[0];
 	assert vi.isCursor;
-	assert vi.varName == "s";
+	assert vi.sym == s;
 	popScope(dctx);
 }
 
 test "recordMove + wasMovedInScope" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
-	recordMove(dctx, "x");
-	assert wasMovedInScope(currentScope(dctx), "x");
-	assert !wasMovedInScope(currentScope(dctx), "y");
+	const x = testVarSym("x");
+	recordMove(dctx, x);
+	assert wasMovedInScope(currentScope(dctx), x);
+	assert !wasMovedInScope(currentScope(dctx), testVarSym("y"));
 	popScope(dctx);
 }
 
@@ -510,17 +538,18 @@ test "findVarInfo found" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testMinimalRc();
-	registerVar(dctx, "s", rcInfo, false, noSym);
-	const vi = findVarInfo(currentScope(dctx), "s");
+	const s = testVarSym("s");
+	registerVar(dctx, rcInfo, false, s);
+	const vi = findVarInfo(currentScope(dctx), s);
 	assert vi != null;
-	assert vi.varName == "s";
+	assert vi.sym == s;
 	popScope(dctx);
 }
 
 test "findVarInfo not found" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
-	const vi = findVarInfo(currentScope(dctx), "nope");
+	const vi = findVarInfo(currentScope(dctx), testVarSym("nope"));
 	assert vi == null;
 	popScope(dctx);
 }
@@ -529,12 +558,13 @@ test "findVarInfoInContext searches outer scopes" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testMinimalRc();
-	registerVar(dctx, "outer", rcInfo, false, noSym);
+	const outer = testVarSym("outer");
+	registerVar(dctx, rcInfo, false, outer);
 	pushScope(dctx, false, false);
-	const vi = findVarInfoInContext(dctx, "outer");
+	const vi = findVarInfoInContext(dctx, outer);
 	assert vi != null;
-	assert vi.varName == "outer";
-	const none = findVarInfoInContext(dctx, "nope");
+	assert vi.sym == outer;
+	const none = findVarInfoInContext(dctx, testVarSym("nope"));
 	assert none == null;
 	popScope(dctx);
 	popScope(dctx);

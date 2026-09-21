@@ -1759,6 +1759,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = st0 != null ? st0 : inferredType();
 				}
+				if (isReadonlyView(st0) && node.nodeType != null) node.nodeType = createReadonlyView(node.nodeType);
 				node.flags = node.flags.incl(NodeFlag.Sem);
 				return;
 			}
@@ -1834,7 +1835,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& !isUnresolvedType(targetType) && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
 			}
-			node.nodeType = node.nodeType; return;
+			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = createReadonlyView(node.nodeType);
+			return;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;

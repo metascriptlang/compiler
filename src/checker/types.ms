@@ -1361,10 +1361,15 @@ function identSafeKey(s: string): string {
 	return out + s.length.toString();
 }
 
+function moduleQualifiedName(inner: Type): string {
+	const owner = inner.sym != null ? inner.sym.modulePath : "";
+	return owner == "" ? inner.typeName : inner.typeName + "_" + identSafeKey(owner);
+}
+
 function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
 	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
-	if (inner.typeName != "") return inner.typeName;
+	if (inner.typeName != "") return moduleQualifiedName(inner);
 	if (isAllStringLiteralUnion(inner)) {
 		let key = "slu";
 		for (const c of inner.typeChildren) {
@@ -1457,7 +1462,7 @@ export function isLockedRef(t: Type | null): boolean {
 
 export function isReadonlyView(t: Type | null): boolean {
 	if (t == null) return false;
-	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct) return false;
+	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return false;
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
@@ -1507,7 +1512,7 @@ export function createReadonlyView(t: Type | null): Type {
 	if (isReadonlyView(t)) return t;
 	if (t.readonlyView != null) return t.readonlyView;
 	const viewable = t.kind == TypeKind.Array || (t.kind == TypeKind.Ref && !isAtomicRef(t))
-		|| (t.kind == TypeKind.Struct && structCarriesRef(t, 0));
+		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsReadonly);
@@ -3774,6 +3779,28 @@ test "getProperty" {
 	assert getProperty(obj, "y").kind == TypeKind.String;
 	assert getProperty(obj, "z").kind == TypeKind.Inferred;
 	assert getProperty(numberType(), "x").kind == TypeKind.Inferred;
+}
+
+test "a ref-carrying union is viewable" {
+	const leaf = createRef(createStruct("Leaf", ["v"], [int32Type()], false));
+	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const structUnion = createUnion([pair, name]);
+	assert !isReadonlyView(structUnion);
+	assert isReadonlyView(createReadonlyView(structUnion));
+	assert withoutReadonlyView(createReadonlyView(structUnion)) == structUnion;
+}
+
+test "a union of ref variants is viewable" {
+	const namedA = createRef(createStruct("NamedA", ["leaf"], [createRef(createStruct("Leaf", ["v"], [int32Type()], false))], false));
+	const namedB = createRef(createStruct("NamedB", ["label"], [stringType()], false));
+	const classUnion = createUnion([namedA, namedB]);
+	assert isReadonlyView(createReadonlyView(classUnion));
+}
+
+test "a pod union is not viewable" {
+	const podUnion = createUnion([int32Type(), stringType()]);
+	assert !isReadonlyView(createReadonlyView(podUnion));
 }
 
 test "substitute generic param" {

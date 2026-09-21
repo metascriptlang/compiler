@@ -1449,7 +1449,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					const bound = hasDefault ? destrDefaultedType(derived) : derived;
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
-					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst));
+					const elemSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+					defineSymbol(ctx.table, elemSym);
+					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
 			} else if (elem.kind == NodeKind.SpreadExpr) {
@@ -1462,7 +1464,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 						if (derived == null && iterType != null && iterType.kind != TypeKind.Inferred && iterType.kind != TypeKind.Error && iterType.kind != TypeKind.None) {
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
-						defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst));
+						const restSym = makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
+						defineSymbol(ctx.table, restSym);
+						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
 				}
@@ -1486,7 +1490,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 						if (restType == null && iterType != null && iterType.kind != TypeKind.Inferred && iterType.kind != TypeKind.Error && iterType.kind != TypeKind.None) {
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
-						defineSymbol(ctx.table, makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst));
+						const objRestSym = makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
+						defineSymbol(ctx.table, objRestSym);
+						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
 				}
@@ -1501,7 +1507,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
-				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst));
+				const aliasSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+				defineSymbol(ctx.table, aliasSym);
+				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
 		}

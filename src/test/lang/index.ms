@@ -1,7 +1,7 @@
 // Aggregate for the lang/ tier — one entry per file, so a lane can run the tier
-// with a single `msc test`. NOT wired into the gate's `tests` lane yet: checking
-// the 19 files together reports 11 type errors, and `lang/json.ms` does not build
-// at all (~/metascript/.inbox/compiler/2026-09-20-enum-du-narrowing-in-test-block-reads-variant-payload.md).
+// with a single `msc test`. NOT wired into the gate's `tests` lane yet: the tier
+// type-checks clean, but `lang/syntax.ms` does not build
+// (~/metascript/.inbox/compiler/2026-09-21-optional-chain-into-string-local-in-a-test-block.md).
 
 import "./basics";
 import "./strings";

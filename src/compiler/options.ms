@@ -166,6 +166,16 @@ export function parseArgs(): CliOptions {
 	let i = argStart;
 	while (i < argv.length) {
 		const arg = argv[i];
+		if (opts.command == "x" && positionalIdx >= 1) {
+			if (opts.inputFile == "") {
+				opts.inputFile = arg;
+			} else {
+				opts.extraArgs.push(arg);
+			}
+			positionalIdx += 1;
+			i += 1;
+			continue;
+		}
 		if (arg == "--help" || arg == "-h") {
 			opts.command = "help";
 		} else if (arg == "--version" || arg == "-v") {

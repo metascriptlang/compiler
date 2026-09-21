@@ -287,8 +287,10 @@ function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, 
 		convType: actorRefType,
 	}, syntheticToken(loc));
 	castThis.nodeType = actorRefType;
+	const selfSym = makeSymbol("_self", SymbolKind.Variable, actorRefType, false);
 	const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
 	selfDecl.nodeType = actorRefType;
+	selfDecl.resolvedSym = selfSym;
 	stmts.push(selfDecl);
 
 	let msgKind = 0;
@@ -299,7 +301,7 @@ function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, 
 		// Condition: msMsgKind(_dmsg) === N
 		const kindCall = makeCall(runtimeRef("msMsgKind", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
-		const selfRef = makeIdent("_self", loc);
+		const selfRef = makeIdentResolved(selfSym, loc);
 		selfRef.nodeType = actorRefType;
 		// Build handler call args: _self + unpacked args from msg (slot-aware)
 		const mParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
@@ -346,8 +348,10 @@ function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, 
 		if (isSuspending) {
 			// Phase 5: async _impl returns msFuture*. Suspend actor, chain reply.
 			const bodyStmts: Node[] = [];
+			const implFutSym = makeSymbol("_implFut", SymbolKind.Variable, VOID_PTR, false);
 			const implFutDecl = makeVarDecl("_implFut", handlerCall, DeclKind.Const, loc);
 			implFutDecl.nodeType = VOID_PTR;
+			implFutDecl.resolvedSym = implFutSym;
 			bodyStmts.push(implFutDecl);
 			let replyFutArg: Node = makeNull(loc);
 			if (!isVoid) {
@@ -360,17 +364,17 @@ function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, 
 				replyDecl.nodeType = VOID_PTR;
 				bodyStmts.push(replyDecl);
 				bodyStmts.push(makeExprStmt(
-					makeCall(runtimeRef(chainFn, loc), [makeIdent("_implFut", loc), makeIdent("_replyFut", loc)], loc), loc));
+					makeCall(runtimeRef(chainFn, loc), [makeIdentResolved(implFutSym, loc), makeIdent("_replyFut", loc)], loc), loc));
 				replyFutArg = makeIdent("_replyFut", loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
-			const selfPid = makeMember(makeIdent("_self", loc), "pid", loc);
+			const selfPid = makeMember(makeIdentResolved(selfSym, loc), "pid", loc);
 			selfPid.nodeType = getSysType(TypeKind.Int64);
 			const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [
 				selfPid,
 			], loc);
 			bodyStmts.push(makeExprStmt(
-				makeCall(runtimeRef("msActorSuspend", loc), [actorPtr, makeIdent("_implFut", loc), replyFutArg], loc), loc));
+				makeCall(runtimeRef("msActorSuspend", loc), [actorPtr, makeIdentResolved(implFutSym, loc), replyFutArg], loc), loc));
 			body = makeBlock(bodyStmts, loc);
 		} else if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
@@ -378,20 +382,22 @@ function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, 
 			const retType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : null;
 			const retMk = typeMsgKind(retType);
 			const completeFn = msgCompleteName(retMk);
+			const resultSym = makeSymbol("_result", SymbolKind.Variable, retType != null ? retType : noneType(), false);
 			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
+			resultDecl.resolvedSym = resultSym;
 			const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 			if ((retMk == "array" || retMk == "struct") && retType != null) {
 				// Heap-box: msSinkBoxStruct → msMsgCompletePtr → await side's
 				// msUnboxStruct unboxes. Reply future stays a uniform 8-byte slot.
 				// boxCall.nodeType = void* per PARALOCK I13 (asyncBridge canonical).
-				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [makeIdent("_result", loc)], loc);
+				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [makeIdentResolved(resultSym, loc)], loc);
 				boxCall.nodeType = VOID_PTR;
 				const boxDecl = makeVarDecl("_boxed", boxCall, DeclKind.Const, loc);
 				boxDecl.nodeType = VOID_PTR;
 				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
 				body = makeBlock([resultDecl, boxDecl, makeExprStmt(completeCall, loc)], loc);
 			} else {
-				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdent("_result", loc)], loc);
+				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdentResolved(resultSym, loc)], loc);
 				body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
 			}
 		}
@@ -788,10 +794,12 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		// Cast void* this to actor Ref type
 		const castThis = createNode(NodeKind.HiddenStdConv, { convExpr: selfIdent, convType: actorRefType }, syntheticToken(loc));
 		castThis.nodeType = actorRefType;
+		const sysSelfSym = makeSymbol("_self", SymbolKind.Variable, actorRefType, false);
 		const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
 		selfDecl.nodeType = actorRefType;
+		selfDecl.resolvedSym = sysSelfSym;
 		stmts.push(selfDecl);
-		const selfRef = makeIdent("_self", loc);
+		const selfRef = makeIdentResolved(sysSelfSym, loc);
 		selfRef.nodeType = actorRefType;
 
 		// if (msMsgKind(_smsg) === -1 && hasOnExit) → call onExit_impl(_self, pid, reason)

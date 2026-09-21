@@ -29,7 +29,7 @@ usage: tools/wt.sh <command> [args]
   hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
   hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
   hook-session          SessionStart hook body (prints the current worktree's card
-                        and the compiler inbox tally by State)
+                        and the compiler inbox tally by State, then by Kind)
 
 env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
 USAGE
@@ -64,7 +64,7 @@ seed_card() {
   local c
   c=$(card_path "$1")
   [ -e "$c" ] && return 0
-  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\n\n## Goal\n\n## Done when\n\n## State\n' \
+  printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\nLayer:\nKind:\nMechanism:\n\n## Goal\n\n## Done when\n\n## State\n' \
     "$1" "$MAIN" "$(wt_dir "$1")" "$1" >"$c" || return 1
   say "card: $c"
 }
@@ -96,6 +96,33 @@ inbox_tally() {
   grep -h -m1 '^State:' "$dir"/*.md 2>/dev/null \
     | awk -v n="$n" '{s=$2; sub(/[.,]$/, "", s); t[s]++; k++} END {for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d without a State line ·", n - k}' \
     | sed 's/ ·$//'
+  printf '\n'
+  inbox_kinds "$dir" "$n"
+  inbox_pins "$dir" "$n"
+}
+
+inbox_pins() {
+  local dir=$1 n=$2 pinned unpinned f
+  pinned=$(grep -l -E '^Pinned by:[ \t]*[^ \t]' "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  unpinned=$(grep -l -E '^State:[ \t]*landed' "$dir"/*.md 2>/dev/null | while IFS= read -r f; do
+    grep -qE '^Pinned by:[ \t]*[^ \t]' "$f" || basename "$f"
+  done)
+  printf 'pins: %d of %d card(s) name one' "$pinned" "$n"
+  [ -z "$unpinned" ] || printf ' · fixed but unpinned, do not delete: %s' \
+    "$(printf '%s\n' "$unpinned" | paste -sd, - | sed 's/,/, /g')"
+  printf '\n'
+}
+
+inbox_kinds() {
+  local dir=$1 n=$2 kinds new
+  kinds=$(grep -h -m1 '^Kind:' "$dir"/*.md 2>/dev/null \
+    | awk -v n="$n" '{sub(/^Kind:[ \t]*/, ""); sub(/[ \t]+$/, ""); if (!NF) next; t[$0]++; k++}
+                     END {if (!k) exit; for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d unclassified ·", n - k}' \
+    | sed 's/ ·$//')
+  [ -n "$kinds" ] || return 0
+  new=$(grep -lE '^Mechanism:.*NEW MECHANISM' "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  printf 'by kind:%s' "$kinds"
+  [ "$new" -gt 0 ] && printf ' · %d NEW MECHANISM' "$new"
   printf '\n'
 }
 
@@ -341,7 +368,7 @@ main_blob() {
   if [ -L "$f" ]; then
     printf '%s' "$(readlink "$f")" | git hash-object --stdin
   elif [ -f "$f" ]; then
-    git hash-object --no-filters -- "$f"
+    git hash-object -- "$f"
   fi
 }
 

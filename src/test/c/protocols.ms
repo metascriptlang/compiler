@@ -11,7 +11,7 @@
 // in `examples/testGetDynamicField.ms` and `examples/testAsTargetProtocol.ms`
 // (compile + execute end-to-end).
 
-import { compileToC, compileProjectToC } from "../helpers";
+import { compileToC, compileToCWithStd, compileProjectToC } from "../helpers";
 import { MapEntry } from "../../module/loader";
 
 // =====================================================================
@@ -476,7 +476,7 @@ function main(): void {
 	j.name = jsonString("Bob");
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -495,7 +495,7 @@ function main(): void {
 	}
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 

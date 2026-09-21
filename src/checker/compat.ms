@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -174,6 +174,7 @@ function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
 	if (isNumeric(a) && isNumeric(b)) return !sameElementRepr(a, b);
 	const ak = a.kind == TypeKind.StringLiteral ? TypeKind.String
@@ -201,7 +202,12 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
+	const openA = openNullableUnionPayload(a, b);
+	if (openA != null) return fieldReprMismatch(openA, b.typeReturn);
+	const openB = openNullableUnionPayload(b, a);
+	if (openB != null) return fieldReprMismatch(a.typeReturn, openB);
 	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
 		if (a.typeChildren.length != b.typeChildren.length) return true;
 		let i = 0;
@@ -229,6 +235,13 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	_isaTime = _isaTime + (performance.now() - _isa0);
 	_assignDepth = _assignDepth - 1;
 	return result;
+}
+
+function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
+	if (union.kind != TypeKind.Union || !isMaybeType(carrier)) return null;
+	const payload = nonNullMemberOfNullable(union);
+	if (payload == null || !hasGenericParams(payload)) return null;
+	return payload;
 }
 
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
@@ -277,6 +290,11 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// the same slot from the same function, so the relation can never accept a
 	// widening the emitter has no tag for.
 	if (maybePayloadWidenSlot(source, target) >= 0) return true;
+
+	const openNullableSource = openNullableUnionPayload(source, target);
+	if (openNullableSource != null) return isAssignable(openNullableSource, target.typeReturn);
+	const openNullableTarget = openNullableUnionPayload(target, source);
+	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
 
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
@@ -754,7 +772,8 @@ let _sameTypeDepth = 0;
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	if (!isReadonlyView(source) || isReadonlyView(target)) return false;
-	return target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Struct;
+	if (source.kind == TypeKind.Union && target.kind != TypeKind.Union) return false;
+	return target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Struct || target.kind == TypeKind.Union;
 }
 
 export function sameType(a: Type | null, b: Type | null): boolean {
@@ -1762,4 +1781,16 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	b.genericMatches = 2;
 	const cmp = cmpCandidates(a, b, fnA, fnB);
 	assert cmp == 0;
+}
+
+test "narrowing a readonly union to a variant is not dropping the view" {
+	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
+	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const u = createUnion([pair, name]);
+	const view = createReadonlyView(u);
+	assert isReadonlyView(view);
+	assert !dropsReadonlyView(view, pair);
+	assert dropsReadonlyView(view, u);
+	assert dropsReadonlyView(createReadonlyView(leaf), leaf);
 }
