@@ -16,7 +16,7 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
@@ -448,6 +448,10 @@ function dceInNode(node: Node, ctx: TransformContext): void {
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
 			dceInNode(d.ctorBody, ctx);
+		},
+		NodeKind.TestDecl => {
+			const d = node.data as TestDeclData;
+			dceInNode(d.testBody, ctx);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
