@@ -341,7 +341,7 @@ main_blob() {
   if [ -L "$f" ]; then
     printf '%s' "$(readlink "$f")" | git hash-object --stdin
   elif [ -f "$f" ]; then
-    git hash-object --no-filters -- "$f"
+    git hash-object -- "$f"
   fi
 }
 
