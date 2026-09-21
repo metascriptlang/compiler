@@ -1,4 +1,4 @@
-import { exists, ensureDir, readFile, writeFile, chmod } from "std/fs";
+import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll } from "std/fs";
 import { join } from "std/fs/path";
 import { execFile, env, exit } from "std/process";
 import { exeSuffix } from "./io";
@@ -93,9 +93,31 @@ export function globalShimDir(): string {
 	return join(home, join(".metascript", "bin"));
 }
 
+export function pruneStaleShims(shimDir: string, keep: string[]): int32 {
+	if (!exists(shimDir)) return 0;
+	let pruned = 0;
+	for (const entry of readDir(shimDir)) {
+		let isKeep = false;
+		for (const k of keep) {
+			if (k == entry) isKeep = true;
+		}
+		if (isKeep) continue;
+		const shimPath = join(shimDir, entry);
+		const content = try readFile(shimPath) catch "";
+		if (isShim(content)) {
+			if (remove(shimPath).ok) pruned = pruned + 1;
+		}
+	}
+	return pruned;
+}
+
 export function syncShims(projectRoot: string, shimDir: string): boolean {
 	const declared = declaredCommands(projectRoot);
-	if (declared.commands.length == 0) return true;
+	if (declared.commands.length == 0) {
+		const pruned = pruneStaleShims(shimDir, []);
+		if (pruned > 0) console.log(`pruned ${pruned.toString()} stale command(s) from ${dim(shimDir)}`);
+		return true;
+	}
 
 	let ok = true;
 	let i = 0;
@@ -122,11 +144,14 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 	}
 
 	ensureDir(shimDir);
+	const keep: string[] = [];
 	let written = 0;
 	let s = 0;
 	while (s < declared.commands.length) {
 		const cmd = declared.commands[s];
-		const shimPath = join(shimDir, shimFileName(cmd));
+		const name = shimFileName(cmd);
+		keep.push(name);
+		const shimPath = join(shimDir, name);
 		if (exists(shimPath)) {
 			const current = try readFile(shimPath) catch "";
 			if (!isShim(current)) {
@@ -141,11 +166,30 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 			return false;
 		}
 		chmod(shimPath, SHIM_MODE);
+		console.log(`  ${cyan(cmd)} ${dim(`(${declared.packages[s]})`)}`);
 		written = written + 1;
 		s = s + 1;
 	}
 	console.log(`${written.toString()} command(s) installed in ${dim(shimDir)}`);
+	const pruned = pruneStaleShims(shimDir, keep);
+	if (pruned > 0) console.log(`pruned ${pruned.toString()} stale command(s)`);
 	return true;
+}
+
+test "pruneStaleShims removes stale shims and leaves foreign files" {
+	const base = env.get("TMPDIR");
+	const dir = join(base != "" ? base : "/tmp", "msc-prune-shims-test");
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(join(dir, "greet"), "#!/bin/sh\n# msc shim v1\nexec msc x 'greeter:greet' \"$@\"\n");
+	writeFile(join(dir, "old"), "#!/bin/sh\nexec msc x 'greeter:old' \"$@\"\n");
+	writeFile(join(dir, "mine"), "#!/bin/sh\necho mine\n");
+	const pruned = pruneStaleShims(dir, ["greet"]);
+	assert pruned == 1;
+	assert exists(join(dir, "greet"));
+	assert exists(join(dir, "mine"));
+	assert !exists(join(dir, "old"));
+	removeAll(dir);
 }
 
 const GLOBAL_MANIFEST = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\tpackage: { name: \"metascript-global\", version: \"0.0.0\" },\n\tdeps: {\n\t},\n};\n\nexport default config;\n";

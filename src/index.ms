@@ -15,6 +15,7 @@ import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
 import { join, isAbsolute, normalize } from "std/fs/path";
+import { exists } from "std/fs";
 import { setExtraGlobalImports } from "./checker/prelude";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
@@ -22,7 +23,7 @@ import { setExtraGlobalImports } from "./checker/prelude";
 // errors from OTHER files in the working tree are pre-existing, not caused by
 // this import.
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
-import { cmdX, syncShims, projectShimDir, cmdInstallGlobal } from "./compiler/x";
+import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { ensureVersionMarker } from "./compiler/cache";
 
@@ -160,9 +161,26 @@ export function main(): number {
 			if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
 		},
 		"remove" => {
-			const rmArgs: string[] = [];
-			if (opts.inputFile != "") rmArgs.push(opts.inputFile);
-			if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
+			let globalRemove = false;
+			for (const ea of opts.extraArgs) {
+				if (ea == "-g" || ea == "--global") globalRemove = true;
+			}
+			if (globalRemove) {
+				const root = globalManifestRoot();
+				if (root == "" || !exists(join(root, "build.ms"))) {
+					console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
+					process.exit(1);
+				}
+				const grArgs: string[] = [];
+				if (opts.inputFile != "") grArgs.push(opts.inputFile);
+				if (!cmdRemove(root, grArgs)) process.exit(1);
+				if (!syncShims(root, globalShimDir())) process.exit(1);
+			} else {
+				const rmArgs: string[] = [];
+				if (opts.inputFile != "") rmArgs.push(opts.inputFile);
+				if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
+				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
+			}
 		},
 		"install" => {
 			let globalInstall = false;
