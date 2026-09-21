@@ -18,18 +18,8 @@ import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
 import { testLoc } from "./inject";
-import { testVarSym } from "./scope";
+import { testVarSym, symListHas, symListAdd } from "./scope";
 
-function symListHas(list: Symbol[], sym: Symbol): boolean {
-	for (const s of list) {
-		if (s == sym) return true;
-	}
-	return false;
-}
-
-function symListAdd(list: Symbol[], sym: Symbol): void {
-	if (!symListHas(list, sym)) list.push(sym);
-}
 
 function symListIntersect(a: Symbol[], b: Symbol[]): Symbol[] {
 	const result: Symbol[] = [];

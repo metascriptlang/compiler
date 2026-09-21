@@ -12,7 +12,7 @@ import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Sy
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
-import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
+import { TransformContext, createTransformContext } from "../transform/context";
 import { makeExprStmt, makeNull, attachedOpSym } from "../transform/util";
 import { createArray, stringType } from "../checker/types";
 
@@ -67,7 +67,7 @@ export interface DrcContext {
 	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
-	finallyProtectedVars: NameSet;  // vars in enclosing finally blocks — never last-read (Phase A)
+	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node | null;   // current function body for CFG building — Phase C
 	currentFuncName: string;        // current function name — for DRC hook detection
@@ -97,7 +97,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
-		finallyProtectedVars: createNameSet(),
+		finallyProtectedVars: [],
 		cfgCache: createCfgCache(),
 		currentFuncBody: null,
 		currentFuncName: "",
@@ -351,18 +351,19 @@ export function hasPending(dctx: DrcContext): boolean {
 
 // Remove pending wasMoved stmts for a variable that was prematurely marked as last-read.
 // Used when `x = f(x)` — the RHS arg `x` gets wasMoved but the assignment overwrites `x`.
-export function clearPendingForVar(dctx: DrcContext, varName: string): void {
+export function clearPendingForVar(dctx: DrcContext, sym: Symbol | null): void {
+	if (sym == null) return;
 	const scope = currentScope(dctx);
 	const filtered: Node[] = [];
 	for (const s of scope.pendingStmts) {
-		if (!isPendingWasMovedFor(s, varName)) {
+		if (!isPendingWasMovedFor(s, sym)) {
 			filtered.push(s);
 		}
 	}
 	scope.pendingStmts = filtered;
 }
 
-function isPendingWasMovedFor(s: Node, varName: string): boolean {
+function isPendingWasMovedFor(s: Node, sym: Symbol): boolean {
 	if (s.kind != NodeKind.ExprStmt) return false;
 	const ed = s.data as ExprStmtData;
 	if (ed.expr.kind != NodeKind.CallExpr) return false;
@@ -371,16 +372,27 @@ function isPendingWasMovedFor(s: Node, varName: string): boolean {
 	const arg = cd.arguments[0];
 	// Ref types: msPtrWasMoved(varName) — direct Identifier arg
 	if (arg.kind == NodeKind.Identifier) {
-		return (arg.data as IdentifierData).name == varName;
+		return arg.resolvedSym == sym;
 	}
 	// Named types: T_wasMoved(&varName) — HiddenAddr wrapping Identifier
 	if (arg.kind == NodeKind.HiddenAddr) {
 		const hd = arg.data as { expr: Node };
 		if (hd.expr.kind == NodeKind.Identifier) {
-			return (hd.expr.data as IdentifierData).name == varName;
+			return hd.expr.resolvedSym == sym;
 		}
 	}
 	return false;
+}
+
+export function symListHas(list: Symbol[], sym: Symbol): boolean {
+	for (const s of list) {
+		if (s == sym) return true;
+	}
+	return false;
+}
+
+export function symListAdd(list: Symbol[], sym: Symbol): void {
+	if (!symListHas(list, sym)) list.push(sym);
 }
 
 export function hasPre(dctx: DrcContext): boolean {

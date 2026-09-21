@@ -13,7 +13,7 @@ import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFla
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
-import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
@@ -23,7 +23,7 @@ import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
 	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
-	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar,
+	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar, symListHas, symListAdd,
 	addPre,
 	pushOuterStmts, popOuterStmts,
 	testStringRc, classifyRc,
@@ -47,11 +47,11 @@ export enum DrcMode {
 // because the finally block will use them after the "last" normal read.
 // Prevents use-after-free with defer/try-finally patterns.
 
-function collectIdentsInNode(node: Node, result: NameSet): void {
+function collectIdentsInNode(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 
 	if (node.kind == NodeKind.Identifier) {
-		nameSetAdd(result, (node.data as IdentifierData).name);
+		if (node.resolvedSym != null) symListAdd(result, node.resolvedSym);
 		return;
 	}
 	// Don't descend into nested function/class boundaries. They declare fresh
@@ -68,7 +68,7 @@ function collectIdentsInNode(node: Node, result: NameSet): void {
 	forEachChild(node, (child: Node): void => { collectIdentsInNode(child, result); });
 }
 
-function scanFinallyBlocks(node: Node, result: NameSet): void {
+function scanFinallyBlocks(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 
 	match (node.kind) {
@@ -120,8 +120,8 @@ function scanFinallyBlocks(node: Node, result: NameSet): void {
 	};
 }
 
-function collectFinallyVars(body: Node): NameSet {
-	const result: NameSet = createNameSet();
+function collectFinallyVars(body: Node): Symbol[] {
+	const result: Symbol[] = [];
 	scanFinallyBlocks(body, result);
 	return result;
 }
@@ -920,7 +920,7 @@ function genSink(stmt: Node, dest: Node, destName: string, destSym: Symbol | nul
 	// Identifier LHS: use sinkFn if available, else destroy-assign
 	if (destName != "") {
 		if (deepAliases(dest, rhs)) {
-			clearPendingForVar(dctx, destName);
+			clearPendingForVar(dctx, destSym);
 			return emitSaveAssignDestroySimple(stmt, makeVarRef(destName, destSym, loc), rcInfo, "old", dctx, loc);
 		}
 		if (rcInfo.sinkFn != null) {
@@ -1347,12 +1347,6 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 	return buf;
 }
 
-// ===== Empty NameSet factory (avoids repeated `[]`) =====
-
-function emptyNameSet(): NameSet {
-	return createNameSet();
-}
-
 // ===== Simple scoped statement list (no try/finally) =====
 // Used by switch cases and program-level — push scope, process, pop, append cleanup.
 
@@ -1496,7 +1490,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	const vi = findVarInfoInContext(dctx, sym);
 	if (vi != null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
-	if (nameSetContains(dctx.finallyProtectedVars, sym.name)) return false;
+	if (symListHas(dctx.finallyProtectedVars, sym)) return false;
 	// Phase C: use CFG-based analysis when function body is available
 	if (dctx.currentFuncBody != null && node != null) {
 		return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
@@ -1524,7 +1518,7 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 	if (rootSym.symbolKind == SymbolKind.Parameter) return false;
 	const vi = findVarInfoInContext(dctx, rootSym);
 	if (vi != null && vi.isCursor) return false;
-	if (nameSetContains(dctx.finallyProtectedVars, rootSym.name)) return false;
+	if (symListHas(dctx.finallyProtectedVars, rootSym)) return false;
 	// Field-level CFG query with alias-aware BFS
 	if (dctx.currentFuncBody != null) {
 		return isLastReadCfgNodeCached(rootSym, node, dctx.currentFuncBody, dctx.cfgCache);
@@ -1853,7 +1847,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// for the old value. But reassignment's save-assign-destroy handles the
 	// old value. The pending wasMoved would zero the NEW value. Clear it.
 	if (!isFirstWrite) {
-		clearPendingForVar(dctx, leftD.name);
+		clearPendingForVar(dctx, sym);
 	}
 
 	// Reference parity (Nim wasMoved-then-sink-no-op): when the LHS var is consumed (moved)
@@ -2351,10 +2345,6 @@ test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
 
 test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
 
-test "emptyNameSet creates empty" {
-	const ns = emptyNameSet();
-	assert ns.items.length == 0;
-}
 
 test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");
@@ -2584,37 +2574,50 @@ test "isVarFromOuterLoopScope: nested loops, var in function scope" {
 
 test "collectFinallyVars finds vars in finally block" {
 	const loc = testLoc();
+	const s = testVarSym("s");
 	const finallyBody = makeBlock([
-		makeExprStmt(makeCall(makeIdent("cleanup", loc), [makeIdent("s", loc)], loc), loc),
+		makeExprStmt(makeCall(makeIdent("cleanup", loc), [makeIdentResolved(s, loc)], loc), loc),
 	], loc);
 	const tryStmt = makeTryFinally(
-		makeBlock([makeExprStmt(makeIdent("s", loc), loc)], loc),
+		makeBlock([makeExprStmt(makeIdentResolved(s, loc), loc)], loc),
 		finallyBody,
 		loc,
 	);
 	const body = makeBlock([tryStmt], loc);
 	const vars = collectFinallyVars(body);
-	assert nameSetContains(vars, "s");
-	assert nameSetContains(vars, "cleanup");
+	assert symListHas(vars, s);
+	assert vars.length == 1;
 }
 
 test "collectFinallyVars empty when no finally" {
 	const loc = testLoc();
 	const body = makeBlock([
-		makeExprStmt(makeIdent("x", loc), loc),
+		makeExprStmt(makeIdentResolved(testVarSym("x"), loc), loc),
 	], loc);
 	const vars = collectFinallyVars(body);
-	assert vars.items.length == 0;
+	assert vars.length == 0;
 }
 
 test "finally-protected var blocks move in isLastReadSafe" {
 	const dctx = testDrcContext("const x = 1;");
-	const protVars = createNameSet();
-	nameSetAdd(protVars, "s");
-	dctx.finallyProtectedVars = protVars;
-	// Even with a null symbol, the name check fires first
-	const fakeSym = makeSymbol("s", SymbolKind.Variable, null as unknown as Type, false);
-	assert !isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx);
+	const s = testVarSym("s");
+	dctx.finallyProtectedVars = [s];
+	assert !isLastReadSafe(s, null as unknown as Node, 0, [], dctx);
+}
+
+test "clearPendingForVar clears by symbol identity" {
+	const dctx = testDrcContext("const x: string = \"\";");
+	const rcStr = testStringRc();
+	const loc = testLoc();
+	pushScope(dctx, false, true);
+	const x = testVarSym("x");
+	const lookalike = testVarSym("x");
+	addPending(dctx, makeWasMovedCall("x", rcStr, loc, x));
+	clearPendingForVar(dctx, lookalike);
+	assert hasPending(dctx);
+	clearPendingForVar(dctx, x);
+	assert !hasPending(dctx);
+	popScope(dctx);
 }
 
 test "isVarFromOuterLoopScope: block inside loop, var before loop" {
