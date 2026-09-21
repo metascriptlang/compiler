@@ -23,6 +23,7 @@ import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
+import { isRuntimeProcSym } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
 // Same-module the class symbol carries its ClassDecl directly; imported symbols
@@ -246,7 +247,7 @@ function isNullExpr(node: Readonly<Node>): boolean {
 function isRefArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
-	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "msRefArrayAccess";
+	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess");
 }
 
 // Shared ABI shim for call arguments — reference parity: genArg
@@ -300,11 +301,10 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: C
 function isArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
-	if (callee.kind != NodeKind.Identifier) return false;
-	const name = (callee.data as IdentifierData).name;
-	return name == "msArrayAccess" || name == "msStringArrayAccess"
-		|| name == "msNumberArrayAccess" || name == "msRefArrayAccess"
-		|| name == "msUint8ArrayAccess" || name == "msSizedArrayAccess";
+	const sym = callee.resolvedSym;
+	return isRuntimeProcSym(sym, "msArrayAccess") || isRuntimeProcSym(sym, "msStringArrayAccess")
+		|| isRuntimeProcSym(sym, "msNumberArrayAccess") || isRuntimeProcSym(sym, "msRefArrayAccess")
+		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess");
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).

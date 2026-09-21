@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, opProcSym, runtimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
+import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
@@ -291,7 +291,7 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	const increfSym = attachedOpSym(increfFn, AttachedOp.AttachedAsgn);
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
-	if (increfSym == runtimeProcSym("msStringCopy")) {
+	if (isRuntimeProcSym(increfSym, "msStringCopy")) {
 		buf.items.push(makeExprStmt(makeCall(runtimeRef("msStringCopy", loc),
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
@@ -299,18 +299,18 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 	// Cyclic refs: Nim attachedAsgn isCyclic order (liftdestructors.nim:768-775) —
 	// incref new, assign, decref old last, so a collect triggered by the old value's
 	// destroy never traces a dest still pointing at the dying object.
-	if (increfSym == runtimeProcSym("msIncrefCyclic")) {
+	if (isRuntimeProcSym(increfSym, "msIncrefCyclic")) {
 		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
 	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
 	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
 	// the decref; then decref old, then assign.
-	const decrefFn = increfSym == runtimeProcSym("msIncref") ? "msDecref"
-		: increfSym == runtimeProcSym("msAtomicIncref") ? "msAtomicDecref"
-		: increfSym == runtimeProcSym("msClosureCopy") ? "msClosureDestroy"
-		: increfSym == runtimeProcSym("msClosureIncref") ? "msClosureDecref"
-		: increfSym == runtimeProcSym("msMapIncref") ? "msMapDecref"
+	const decrefFn = isRuntimeProcSym(increfSym, "msIncref") ? "msDecref"
+		: isRuntimeProcSym(increfSym, "msAtomicIncref") ? "msAtomicDecref"
+		: isRuntimeProcSym(increfSym, "msClosureCopy") ? "msClosureDestroy"
+		: isRuntimeProcSym(increfSym, "msClosureIncref") ? "msClosureDecref"
+		: isRuntimeProcSym(increfSym, "msMapIncref") ? "msMapDecref"
 		: "";
 	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
 	if (decrefFn != "") {
@@ -1938,7 +1938,6 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		claimGlobal("msStringArray");
 		const strElemType = stringType();
 		const strArrayType = createArray(strElemType);
-		generateArrayHook("destroy", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("copy", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("sink", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("wasMoved", "msStringArray", strElemType, strArrayType, lctx, loc);
@@ -1949,7 +1948,6 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		claimGlobal("msRefArray");
 		const refElemType = createPrimitive(TypeKind.Ref);
 		const refArrayType = createArray(refElemType);
-		generateArrayHook("destroy", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("copy", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("sink", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("wasMoved", "msRefArray", refElemType, refArrayType, lctx, loc);
