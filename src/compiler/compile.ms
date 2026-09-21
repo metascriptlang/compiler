@@ -46,7 +46,7 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances } from "../checker/instantiate";
-import { ResolveSection, DepsSection, defaultResolveSection, loadBuildConfig } from "./buildConfig";
+import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
@@ -73,11 +73,7 @@ registerPreludeStampFn(toolchainStamp);
 
 // Build ResolverConfig from CLI target + optional build.ms resolve section.
 
-// Scan a DepsSection for file: entries, add as aliases, and recursively
-// walk each dep's own build.ms to discover transitive file: deps.
-// This handles A → B → C chains where each package's build.ms declares
-// its own file: deps. The `visited` set prevents infinite loops on cycles.
-function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverConfig, visited: string[], depth: number = 0): void {
+function addFileDepRoots(deps: DepsSection, baseDir: string, roots: DepsSection, depth: number = 0): void {
 	if (depth > 20) return; // prevent runaway on deep non-cyclic trees
 	let i = 0;
 	while (i < deps.keys.length) {
@@ -86,26 +82,53 @@ function addFileDepAliases(deps: DepsSection, baseDir: string, config: ResolverC
 		if (ver.length > 5 && ver.slice(0, 5) == "file:") {
 			const relPath = ver.slice(5, ver.length);
 			const absPath = isAbsolute(relPath) ? relPath : join(baseDir, relPath);
-			// Skip if already registered (cycle prevention)
 			let alreadyVisited = false;
-			for (const v of visited) { if (v == absPath) alreadyVisited = true; }
+			for (const v of roots.values) { if (v == absPath) alreadyVisited = true; }
 			if (!alreadyVisited) {
-				config.aliasKeys.push(name);
-				config.aliasValues.push(absPath);
-				visited.push(absPath);
+				roots.keys.push(name);
+				roots.values.push(absPath);
 				// Recursively read this dep's own build.ms for transitive file: deps
 				const depBuildMs = join(absPath, "build.ms");
 				if (exists(depBuildMs)) {
 					const depCfg = loadBuildConfig(depBuildMs, false);
 					if (depCfg.valid) {
-						addFileDepAliases(depCfg.deps, absPath, config, visited, depth + 1);
-						addFileDepAliases(depCfg.devDeps, absPath, config, visited, depth + 1);
+						addFileDepRoots(depCfg.deps, absPath, roots, depth + 1);
+						addFileDepRoots(depCfg.devDeps, absPath, roots, depth + 1);
 					}
 				}
 			}
 		}
 		i = i + 1;
 	}
+}
+
+export function depRoots(projectRoot: string): DepsSection {
+	const roots = defaultDepsSection();
+	if (projectRoot != "") {
+		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
+		if (cfg.valid) {
+			addFileDepRoots(cfg.deps, projectRoot, roots);
+			addFileDepRoots(cfg.devDeps, projectRoot, roots);
+		}
+	}
+	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
+	const lock = readLockfile(lockPath);
+	if (lock.valid) {
+		for (const entry of lock.entries) {
+			const name = entryName(entry.key);
+			let srcPath = "";
+			if (entry.source == "git" && entry.url != "" && entry.commit != "") {
+				srcPath = gitSrcPath(entry.url, entry.commit);
+			} else if (entry.version != "") {
+				srcPath = registrySrcPath(name, entry.version);
+			}
+			if (srcPath != "") {
+				roots.keys.push(name);
+				roots.values.push(srcPath);
+			}
+		}
+	}
+	return roots;
 }
 
 export function buildResolverConfig(target: Target, resolve: ResolveSection, targetOs: string = platform, projectRoot: string = ""): ResolverConfig {
@@ -128,39 +151,14 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 		config.aliasKeys = resolve.aliasKeys;
 		config.aliasValues = resolve.aliasValues;
 	}
-	// Package manager: if msc.lock exists in the project root, push cache paths
-	// as aliases so bare imports resolve to cached packages.
 	// projectRoot is found by walking up from CWD for build.ms (Go/Rust convention)
 	// and passed in from the CLI entry point.
-	// file: deps — resolve directly from build.ms without lockfile.
-	// These are local folder references: "my-lib": "file:../my-lib"
-	// Resolved relative to projectRoot. No cache, no download.
-	if (projectRoot != "") {
-		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
-		if (cfg.valid) {
-			const visited: string[] = [];
-			addFileDepAliases(cfg.deps, projectRoot, config, visited);
-			addFileDepAliases(cfg.devDeps, projectRoot, config, visited);
-		}
-	}
-
-	// Registry/git deps — resolve via lockfile → cache paths.
-	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
-	const lock = readLockfile(lockPath);
-	if (lock.valid) {
-		for (const entry of lock.entries) {
-			const name = entryName(entry.key);
-			let srcPath = "";
-			if (entry.source == "git" && entry.url != "" && entry.commit != "") {
-				srcPath = gitSrcPath(entry.url, entry.commit);
-			} else if (entry.version != "") {
-				srcPath = registrySrcPath(name, entry.version);
-			}
-			if (srcPath != "") {
-				config.aliasKeys.push(name);
-				config.aliasValues.push(srcPath);
-			}
-		}
+	const roots = depRoots(projectRoot);
+	let ri = 0;
+	while (ri < roots.keys.length) {
+		config.aliasKeys.push(roots.keys[ri]);
+		config.aliasValues.push(roots.values[ri]);
+		ri = ri + 1;
 	}
 	return config;
 }
