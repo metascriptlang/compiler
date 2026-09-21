@@ -210,3 +210,4 @@ import "./bug195ModuleExportSet";
 import "./bug196PreludeNamedImport";
 import "./bug197ProtocolAppliesInsideOwnBody";
 import "./bug198OpenNullableFieldInGenericArg";
+import "./bug199ValueStructMaybeSlot";
