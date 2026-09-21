@@ -1354,6 +1354,11 @@ function identSafeKey(s: string): string {
 	return out + s.length.toString();
 }
 
+function hasNominalIdentity(inner: Type): boolean {
+	const k = inner.kind;
+	return k == TypeKind.Struct || k == TypeKind.Enum || k == TypeKind.Distinct || k == TypeKind.Result;
+}
+
 function moduleQualifiedName(inner: Type): string {
 	const owner = inner.sym != null ? inner.sym.modulePath : "";
 	return owner == "" ? inner.typeName : inner.typeName + "_" + identSafeKey(owner);
@@ -1365,7 +1370,7 @@ function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.Set) {
 		return inner.typeReturn != null ? "set_" + maybeCacheKey(inner.typeReturn) : "set_any";
 	}
-	if (inner.typeName != "") return moduleQualifiedName(inner);
+	if (inner.typeName != "" && hasNominalIdentity(inner)) return moduleQualifiedName(inner);
 	if (isAllStringLiteralUnion(inner)) {
 		let key = "slu";
 		for (const c of inner.typeChildren) {
