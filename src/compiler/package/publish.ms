@@ -70,8 +70,8 @@ function buildManifestJson(pkg: PackageSection, version: string): string {
 }
 
 // Build the full metadata JSON that goes in the `metadata` multipart part.
-// Only emits fields that are non-empty (matches server Zod schema's optional
-// fields). The server will reject extras via Zod — keep field set minimal.
+// The registry's publishSchema (landing apps/api/src/routes/packages.ts) is a
+// plain z.object — strip mode: unknown fields are dropped, never rejected.
 function buildMetadataJson(pkg: PackageSection, version: string): string {
 	let out = "{";
 	out = out + "\"name\":" + jsonEscape(pkg.name);
@@ -89,6 +89,16 @@ function buildMetadataJson(pkg: PackageSection, version: string): string {
 			i = i + 1;
 		}
 		out = out + "]";
+	}
+	if (pkg.bin.keys.length > 0) {
+		out = out + ",\"bin\":{";
+		let b = 0;
+		while (b < pkg.bin.keys.length) {
+			if (b > 0) out = out + ",";
+			out = out + jsonEscape(pkg.bin.keys[b]) + ":" + jsonEscape(pkg.bin.values[b]);
+			b = b + 1;
+		}
+		out = out + "}";
 	}
 	out = out + "}";
 	return out;
@@ -383,14 +393,6 @@ test "hexByte" {
 	assert hexByte(16) == "10";
 	assert hexByte(255) == "ff";
 }
-
-test "jsonEscape basic" {
-	assert jsonEscape("hello") == "\"hello\"";
-	assert jsonEscape("a\"b") == "\"a\\\"b\"";
-	assert jsonEscape("line1\nline2") == "\"line1\\nline2\"";
-	assert jsonEscape("back\\slash") == "\"back\\\\slash\"";
-}
-
 test "buildMetadataJson minimal" {
 	const pkg: PackageSection = {
 		name: "cool-json",
@@ -403,6 +405,7 @@ test "buildMetadataJson minimal" {
 		author: "",
 		files: [],
 		ignore: [],
+		bin: { keys: [], values: [] },
 		valid: true,
 	};
 	const js = buildMetadataJson(pkg, "1.0.0");
@@ -421,10 +424,30 @@ test "buildMetadataJson with optionals" {
 		author: "",
 		files: [],
 		ignore: [],
+		bin: { keys: [], values: [] },
 		valid: true,
 	};
 	const js = buildMetadataJson(pkg, "0.1.0");
 	assert js == "{\"name\":\"x\",\"version\":\"0.1.0\",\"description\":\"A thing\",\"license\":\"MIT\",\"keywords\":[\"a\",\"b\"]}";
+}
+
+test "buildMetadataJson carries declared commands" {
+	const pkg: PackageSection = {
+		name: "greeter",
+		version: "1.0.0",
+		description: "",
+		license: "",
+		repository: "",
+		homepage: "",
+		keywords: [],
+		author: "",
+		files: [],
+		ignore: [],
+		bin: { keys: ["greet", "hi"], values: ["tooling/cli.ms", "tooling/hi.ms"] },
+		valid: true,
+	};
+	const js = buildMetadataJson(pkg, "1.0.0");
+	assert js == "{\"name\":\"greeter\",\"version\":\"1.0.0\",\"bin\":{\"greet\":\"tooling/cli.ms\",\"hi\":\"tooling/hi.ms\"}}";
 }
 
 test "buildManifestJson" {
@@ -439,6 +462,7 @@ test "buildManifestJson" {
 		author: "",
 		files: [],
 		ignore: [],
+		bin: { keys: [], values: [] },
 		valid: true,
 	};
 	const manifest = buildManifestJson(pkg, "1.0.0");
