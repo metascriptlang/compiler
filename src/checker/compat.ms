@@ -1764,3 +1764,15 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	const cmp = cmpCandidates(a, b, fnA, fnB);
 	assert cmp == 0;
 }
+
+test "narrowing a readonly union to a variant is not dropping the view" {
+	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
+	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const u = createUnion([pair, name]);
+	const view = createReadonlyView(u);
+	assert isReadonlyView(view);
+	assert !dropsReadonlyView(view, pair);
+	assert dropsReadonlyView(view, u);
+	assert dropsReadonlyView(createReadonlyView(leaf), leaf);
+}
