@@ -697,7 +697,7 @@ export function moduleTemp(g: CGen): string {
 // at this boundary (same normalization matchesGlob and cwd handling apply) —
 // Windows accepts either separator and the C preprocessor
 // is happy with forward slashes in #line paths.
-export function emitLineDir(g: CGen, p: CProc, node: Node): void {
+export function emitLineDir(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (node == null) return;
 	const loc = node.location;
 	if (loc.line <= 0) return;

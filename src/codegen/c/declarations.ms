@@ -26,7 +26,7 @@ import { isBakeableAggregateConst } from "../../checker/reachability";
 
 // DCE: check if a function declaration is alive (reachable).
 // Empty aliveSet means no DCE filtering (DCE disabled).
-function isDeclAlive(g: CGen, node: Node): boolean {
+function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 	if (g.aliveSet.entries.length == 0) return true;
 	const d = node.data as FunctionDeclData;
 	const name = d.fnName;
@@ -62,7 +62,7 @@ function isArraySeqHook(name: string): boolean {
 }
 
 
-export function genDecl(g: CGen, node: Node, exported: boolean): void {
+export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
 	if (node == null) return;
 	if (g.preparingDeclarations && node.kind != NodeKind.FunctionDecl
 		&& node.kind != NodeKind.VariableDecl && node.kind != NodeKind.ExportDecl
@@ -105,7 +105,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 // Variables/consts: always provided by @include headers — no codegen emission.
 // Functions: handled by FunctionDecl path (prototype only via SymbolFlag.ImportC).
 
-function genExternDecl(g: CGen, node: Node): void {
+function genExternDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as ExternDeclData;
 
 	if (d.externKind == ExternKind.Class || d.externKind == ExternKind.Type) {
@@ -119,7 +119,7 @@ function genExternDecl(g: CGen, node: Node): void {
 
 // ===== Function Declaration =====
 
-function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
+function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 
@@ -230,7 +230,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 // The C name of a declared type comes from the same sym-aware helper the
 // Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
-function declTypeSym(node: Node): Symbol | null {
+function declTypeSym(node: Readonly<Node>): Symbol | null {
 	const t = node.nodeType;
 	if (t != null && t.sym != null) return t.sym;
 	return node.resolvedSym;
@@ -240,7 +240,7 @@ function declTypeSym(node: Node): Symbol | null {
 // BEFORE any emission. ensureDrcProto and the ctor call sites consult these;
 // lazy registration in the gen* emitters is walk-order dependent (a DRC hook
 // proto can be requested before its type materializes — bug100 union hooks).
-export function registerDeclCName(g: CGen, node: Node): void {
+export function registerDeclCName(g: CGen, node: Readonly<Node>): void {
 	let n = node;
 	if (n.kind == NodeKind.ExportDecl) {
 		n = (n.data as ExportDeclData).exportedDecl;
@@ -260,7 +260,7 @@ export function registerDeclCName(g: CGen, node: Node): void {
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
 }
 
-function genEnumDecl(g: CGen, node: Node): void {
+function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as EnumDeclData;
 
 	// Extern enum: defined in C header — skip emission entirely.
@@ -288,7 +288,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 
 // ===== Interface Declaration (struct) =====
 
-function genInterfaceDecl(g: CGen, node: Node): void {
+function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as InterfaceDeclData;
 
 	// Extern interface: type defined externally — skip struct emission.
@@ -321,7 +321,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	if (ifaceType != null && ifaceType.kind == TypeKind.Ref && ifaceType.typeReturn != null) {
 		ifaceType = ifaceType.typeReturn;
 	}
-	const fieldNames: string[] = ifaceType != null && ifaceType.typeNames != null ? ifaceType.typeNames : d.interfaceFields;
+	const fieldNames = ifaceType != null && ifaceType.typeNames != null ? ifaceType.typeNames : d.interfaceFields;
 	const fieldTypes: string[] = [];
 	for (let i = 0; i < fieldNames.length; i += 1) {
 		const ft = (ifaceType != null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";
@@ -340,7 +340,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 
 // ===== Class Declaration =====
 
-function genClassDecl(g: CGen, node: Node): void {
+function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as ClassDeclData;
 
 	// Merged callable-namespace attachment (Number.MAX_SAFE_INTEGER): the
@@ -418,7 +418,7 @@ function genClassDecl(g: CGen, node: Node): void {
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
+function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
@@ -450,7 +450,7 @@ function genStaticFieldGlobals(g: CGen, d: ClassDeclData): void {
 
 // ===== Method as Free Function =====
 
-function genMethodAsFunction(g: CGen, node: Node, className: string): void {
+function genMethodAsFunction(g: CGen, node: Readonly<Node>, className: string): void {
 	const d = node.data as MethodDeclData;
 	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
 	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
@@ -522,7 +522,7 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 // Resolves emit args (with backtick-interpolated symbols), then routes each line
 // to the appropriate CSection based on section markers.
 
-function genTopLevelEmit(g: CGen, mi: MacroInvocationData): void {
+function genTopLevelEmit(g: CGen, mi: Readonly<MacroInvocationData>): void {
 	const code = resolveEmitArgs(g, mi, null as unknown as CProc);
 	// Split on newlines and route each line through section detection (reference pattern)
 	let start = 0;
@@ -550,7 +550,7 @@ function emitToSection(g: CGen, code: string): void {
 	addLine(sec(g, target), code);
 }
 
-function genTopLevelStmt(g: CGen, node: Node): void {
+function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	// Global variable declarations go to GlobalVars section
 	if (node.kind == NodeKind.VariableDecl) {
 		if (isComptimeOnlyVarDecl(node)) return;
@@ -589,7 +589,7 @@ function genTopLevelStmt(g: CGen, node: Node): void {
 
 // ===== Global Variable Declaration =====
 
-function genGlobalVar(g: CGen, node: Node): void {
+function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
 	// Mangling policy for module-level `const`/`let`:
 	//
@@ -727,7 +727,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 	}
 }
 
-function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
+function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
@@ -756,7 +756,7 @@ function genBakedConstCell(g: CGen, node: Node, varName: string, staticPfx: stri
 	return true;
 }
 
-function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx: string, cType: string): boolean {
+function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const t0 = node.nodeType;
 	if (t0 == null) return false;
@@ -782,7 +782,7 @@ function genBakedConstArrayCell(g: CGen, node: Node, varName: string, staticPfx:
 // Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
 // The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
 
-function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
+function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
 	// Extract base type name: strip "TypeInfo" suffix (8 chars)
 	const baseName = d.declName.slice(0, d.declName.length - 8);
 	// The emitted symbol must match what consumers derive from the Type

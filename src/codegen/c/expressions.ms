@@ -100,8 +100,8 @@ function unwrapPointerLikeForVariant(t: Type | null): Type | null {
 // underlying reference and read its symbol's declared type. The object's own
 // nodeType may be flow-narrowed (variant struct / sub-union) — the declared union
 // is the authoritative v<N> index space for tagged-union routing.
-function duDeclaredUnionOfObject(objNode: Node): Type | null {
-	let walk: Node = objNode;
+function duDeclaredUnionOfObject(objNode: Readonly<Node>): Type | null {
+	let walk: Readonly<Node> | null = objNode;
 	while (walk != null && walk.kind == NodeKind.HiddenDeref) {
 		walk = (walk.data as ExprStmtData).expr;
 	}
@@ -194,8 +194,7 @@ function variantStructCName(g: CGen, unionType: Type, varIdx: number, unionName:
 			if (cached != "") return cached;
 		}
 	}
-	return `${unionName}_v${varIdx}`;
-}
+	return `${unionName}_v${varIdx}`;}
 
 function genAllocCall(g: CGen, cType: string, fn: string): string {
 	const typeArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cType}TypeInfo`;
@@ -234,7 +233,7 @@ function pickAllocExpr(g: CGen, cType: string, innerType: Type | null, argsCover
 // So for indirect args: snippet on stack = (*name), but we need raw pointer = name.
 // We use the raw safeName directly (the reference implementation's snippet is always the raw name).
 // Check if a node is effectively null — unwraps TypeAssertion chains (e.g., `null as unknown as T`).
-function isNullExpr(node: Node): boolean {
+function isNullExpr(node: Readonly<Node>): boolean {
 	let cur = node;
 	while (cur.kind == NodeKind.TypeAssertion) {
 		cur = (cur.data as TypeAssertionData).asExpr;
@@ -244,7 +243,7 @@ function isNullExpr(node: Node): boolean {
 
 // Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
 // to handle void* results from ref array macros. Returns true if the node matches.
-function isRefArrayAccessCall(node: Node): boolean {
+function isRefArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
 	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "msRefArrayAccess";
@@ -253,7 +252,7 @@ function isRefArrayAccessCall(node: Node): boolean {
 // Shared ABI shim for call arguments — reference parity: genArg
 // Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
 // mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
-export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node, mutBits: int32, paramIdx: number): string {
+export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Readonly<Node>, mutBits: int32, paramIdx: number): string {
 	const formal = unwrapVarargs(paramType);
 	if (formal != null && argNode.kind != NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(formal);
@@ -286,7 +285,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 	return arg;
 }
 
-export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, paramType: Type): string {
+export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Type): string {
 	if (argNode.kind == NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
@@ -298,7 +297,7 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, para
 // Check if a CallExpr calls an msArrayAccess-family macro (produces C lvalue).
 // nativeLower rewrites arr[i] to CallExpr("msArrayAccess", [arr, i]).
 // These macros expand to *(&data[idx]) which IS an lvalue in C.
-function isArrayAccessCall(node: Node): boolean {
+function isArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
 	if (callee.kind != NodeKind.Identifier) return false;
@@ -312,7 +311,7 @@ function isArrayAccessCall(node: Node): boolean {
 // Identifiers, member access, array subscripts, and pointer derefs are lvalues.
 // CallExpr to msArrayAccess macros also produce lvalues (nativeLower rewrites arr[i] to these).
 // Everything else (calls, literals, conditionals, casts) needs hoisting to a temp.
-function isLvalueNode(node: Node): boolean {
+function isLvalueNode(node: Readonly<Node>): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.OutExpr) return isLvalueNode((node.data as OutExprData).outArg);
 	return node.kind == NodeKind.Identifier
@@ -343,8 +342,8 @@ function emitTaggedUnionWrapAddr(p: CProc, unionName: string, varIdx: number, va
 // compound literal (starts with '{'), hoist it to a temp variable first.
 // Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
-export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type | null): string {
-	if (snippet.byteLength > 0 && snippet.byteAt(0) == "{".code) {
+export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonly<Node>, paramType: Type | null): string {
+	if (snippet.byteLength> 0 && snippet.byteAt(0) == "{".code) {
 		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
 		// Try 1: exprNode.nodeType
@@ -541,7 +540,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 // Post-order stack traversal: Discover pushes children, Emit combines results.
 
 interface ExprStackItem {
-	node: Node;
+	node: Readonly<Node>;
 	phase: number;       // 0 = Discover, 1 = Emit
 	childCount: number;  // results to pop during Emit
 	tag: number;         // sub-case dispatch (0 = default)
@@ -603,7 +602,7 @@ function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	return s;
 }
 
-function joinArgs(g: CGen, p: CProc, args: Node[]): string {
+function joinArgs(g: CGen, p: CProc, args: Readonly<Node[]>): string {
 	let result = "";
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) result = result + ", ";
@@ -614,7 +613,7 @@ function joinArgs(g: CGen, p: CProc, args: Node[]): string {
 
 // ===== genExpr — iterative post-order stack traversal =====
 
-export function genExpr(g: CGen, p: CProc, node: Node): string {
+export function genExpr(g: CGen, p: CProc, node: Readonly<Node>): string {
 	if (node == null) return "MS_NIL";
 	const ctx: ExprEvalCtx = { workStack: [], results: [] };
 	ctx.workStack.push({ node, phase: 0, childCount: 0, tag: 0 });
@@ -633,7 +632,7 @@ export function genExpr(g: CGen, p: CProc, node: Node): string {
 
 // ===== Discover phase: push leaf results or Emit + children =====
 
-function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
+function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	if (node == null) {
 		ctx.results.push("MS_NIL");
 		return;
@@ -983,19 +982,6 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	if (kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
 		const n = d.properties.length;
-		// Propagate field types from parent struct to untyped children (e.g. empty array literals)
-		if (node.nodeType != null && node.nodeType.typeChildren != null) {
-			let fi = 0;
-			while (fi < n && fi < d.keys.length) {
-				if (d.properties[fi].nodeType == null) {
-					const fieldType = getProperty(node.nodeType, d.keys[fi]);
-					if (fieldType != null) {
-						d.properties[fi].nodeType = fieldType;
-					}
-				}
-				fi += 1;
-			}
-		}
 		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
 		// Push children in reverse order
 		let i = n - 1;
@@ -1144,7 +1130,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 
 // ===== Discover CallExpr — split by call type =====
 
-function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
+function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
@@ -1559,7 +1545,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// VARIANT STRUCT while the C memory is still the union wrapper. Recover the
 		// declared union from the object's symbol and map the narrowed variant back
 		// to its v<N> slot BY IDENTITY — never by field name (offset-blind).
-		let walkObj: Node = d.object;
+		let walkObj: Readonly<Node> | null = d.object;
 		while (walkObj != null && walkObj.kind == NodeKind.HiddenDeref) {
 			// HiddenDerefData and ExprStmtData are both `{ expr: Node }` —
 			// the latter is already imported here and is the canonical alias
@@ -1833,7 +1819,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// deref the narrow implies needs the pointer cast spelled out. The
 		// narrowed type rides the deref node when the operand is an assertion
 		// (`(u as Box).n`), the operand itself otherwise.
-		let declOperand: Node = hd.expr;
+		let declOperand: Readonly<Node> | null = hd.expr;
 		while (declOperand != null && declOperand.kind == NodeKind.TypeAssertion) {
 			declOperand = (declOperand.data as TypeAssertionData).asExpr;
 		}
@@ -2337,7 +2323,7 @@ function wrapPrimitiveUnion(g: CGen, u: Type, idx: number, valC: string): string
 // Declared union type of an object-literal field, or null when the field is
 // not primitive-union-typed. All-strlit unions are msString-carried (no _tag)
 // — they must NOT wrap.
-function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
+function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Type | null {
 	if (node.nodeType == null) return null;
 	const ft = getProperty(node.nodeType, key);
 	if (isTagCarriedUnion(ft)) return ft;
@@ -2347,7 +2333,7 @@ function litFieldPrimitiveUnion(node: Node, key: string): Type | null {
 // typeof runtime lowering. Primitive unions dispatch on _tag; Maybe adds a
 // present-gate (typeof null === "object", TS parity); everything else folds to
 // a constant from the static type.
-function genTypeofExpr(g: CGen, opNode: Node, opC: string): string {
+function genTypeofExpr(g: CGen, opNode: Readonly<Node>, opC: string): string {
 	const t = opNode != null ? opNode.nodeType : null;
 	// All-strlit unions are msString-carried — no _tag to switch on.
 	if (t != null && isTagCarriedUnion(t)) {
@@ -2395,7 +2381,7 @@ function typeofStr(g: CGen, s: string): string {
 // env is LAST parameter (Standard reference pattern).
 // No forward declarations — closure struct is self-contained.
 
-function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Node, ctx: ExprEvalCtx): void {
+function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
 	const fnExpr = callee + ".fn";
@@ -2953,7 +2939,7 @@ function hasAddrPrefix(nativeName: string): boolean {
 	return nativeName.length > 0 && nativeName.charAt(0) == "&";
 }
 
-function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym: Symbol): string {
+function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<Node[]>, sym: Symbol): string {
 	const needsAddr = hasAddrPrefix(nativeName);
 	let cName = stripAddrPrefix(nativeName);
 
@@ -3082,7 +3068,7 @@ export function refArrayCellName(destroyFn: string, arrCType: string): string {
 		: arrCType + "RefCell";
 }
 
-function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
+function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const d = node.data as ArrayLiteralData;
 
 	// Tuple literal: C99 compound literal with designated initializers

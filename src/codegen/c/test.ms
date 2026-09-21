@@ -22,7 +22,7 @@ import { escapeCString } from "./literals";
 // Emits: static void __ms_test_N(void) { body }
 // Registers entry in g.testEntries for later table emission.
 
-export function genTestDeclNode(g: CGen, node: Node): void {
+export function genTestDeclNode(g: CGen, node: Readonly<Node>): void {
 	if (!g.isTestBuild) return;
 	const d = node.data as TestDeclData;
 	if (d.testBody == null) return;

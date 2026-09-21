@@ -116,12 +116,12 @@ export function genHasDestroyHook(typeName: string): boolean {
 	return _hookSyms.get(typeName + "Destroy") != null;
 }
 
-export function procHeader(g: CGen, name: string, fnType: Type, paramNames: string[] | null, mutBits: int32, hookAbi: boolean): string {
+export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Readonly<string[]> | null, mutBits: int32, hookAbi: boolean): string {
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	if (fnType.typeReturn == null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 	const named = paramNames != null;
-	const names: string[] = paramNames != null ? paramNames : [];
+	const names = paramNames != null ? paramNames : [];
 	const count = named ? names.length : fnType.typeChildren.length;
 	let paramList = "";
 	if (nrvo) {
@@ -680,7 +680,7 @@ export function isNrvoReturnType(retType: Type | null, funcType: Type | null): b
 // where the Identifier's nodeType is the original arrow's Function type
 // (set in liftNonCapturing). Without this peek, IIFE callees report null
 // Function type and genClosureCall emits `void(*)(void)` casts.
-function closurePairFuncType(callee: Node): Type | null {
+function closurePairFuncType(callee: Readonly<Node>): Type | null {
 	if (callee == null || callee.kind != NodeKind.ObjectLiteral) return null;
 	if (!callee.flags.has(NodeFlag.Closure)) return null;
 	const od = callee.data as ObjectLiteralData;
@@ -696,7 +696,7 @@ function closurePairFuncType(callee: Node): Type | null {
 	return null;
 }
 
-export function getCalleeReturnType(callNode: Node): Type | null {
+export function getCalleeReturnType(callNode: Readonly<Node>): Type | null {
 	const cd = callNode.data as CallExprData;
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
 		return cd.callee.nodeType.typeReturn;
@@ -710,7 +710,7 @@ export function getCalleeReturnType(callNode: Node): Type | null {
 	return null;
 }
 
-export function getCalleeFuncType(callNode: Node): Type | null {
+export function getCalleeFuncType(callNode: Readonly<Node>): Type | null {
 	const cd = callNode.data as CallExprData;
 	if (cd.callee != null && cd.callee.nodeType != null) {
 		const calleeType = peelTransparentInstance(cd.callee.nodeType);

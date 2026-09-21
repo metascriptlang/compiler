@@ -45,7 +45,7 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
 
-function isUndefinedIdent(node: Node): boolean {
+function isUndefinedIdent(node: Readonly<Node>): boolean {
 	return node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == "undefined";
 }
 
@@ -65,7 +65,7 @@ function isNumericCType(cType: string): boolean {
 		|| cType == "uint8_t" || cType == "uint16_t" || cType == "uint32_t" || cType == "uint64_t";
 }
 
-function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
+function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: string): string {
 	const cd = callNode.data as CallExprData;
 	let callee = genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
@@ -109,7 +109,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 
 // ===== genStmt — main statement dispatcher =====
 
-export function genStmt(g: CGen, p: CProc, node: Node): void {
+export function genStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (node == null) return;
 	emitLineDir(g, p, node);
 
@@ -134,7 +134,7 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== genStmts — emit a list of statements =====
 
-export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
+export function genStmts(g: CGen, p: CProc, stmts: Readonly<Node[]>): void {
 	for (const stmt of stmts) {
 		genStmt(g, p, stmt);
 	}
@@ -150,7 +150,7 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 // resolveEmitArgs resolves @emit macro args to a C code string.
 // Optional CProc enables genExpr for arbitrary expressions (Reference initLocExpr parity).
 // Top-level calls pass null (no CProc available).
-export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): string {
+export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: CProc): string {
 	let result = "";
 	for (const arg of mi.macroArgs) {
 		match (arg.kind) {
@@ -210,7 +210,7 @@ export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): str
 // A statement's top-level value can raise when it is a bare call, or an
 // assignment whose right-hand side is a call (the DRC pass splits
 // `const x = f()` into a no-init decl + a separate `x = f()` assignment).
-function exprTopIsRaisingCall(exprNode: Node): boolean {
+function exprTopIsRaisingCall(exprNode: Readonly<Node>): boolean {
 	if (exprNode == null) return false;
 	if (exprNode.kind == NodeKind.CallExpr) return true;
 	if (exprNode.kind == NodeKind.BinaryExpr) {
@@ -220,7 +220,7 @@ function exprTopIsRaisingCall(exprNode: Node): boolean {
 	return false;
 }
 
-function emitCallRaiseCheck(p: CProc, exprNode: Node): void {
+function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!exprTopIsRaisingCall(exprNode)) return;
 	if (p.errorTargets.length == 0) {
@@ -231,7 +231,7 @@ function emitCallRaiseCheck(p: CProc, exprNode: Node): void {
 	emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
 }
 
-function genExprStmt(g: CGen, p: CProc, node: Node): void {
+function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ExprStmtData;
 	if (d.expr.kind == NodeKind.MacroInvocation) {
 		// @emit inside function body: emit raw C inline (Reference {.emit.} parity)
@@ -265,7 +265,7 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 // ===== Variable Declaration =====
 
 // Detect union narrowing: `expr as VariantType` where expr has Union nodeType
-function isUnionNarrowing(node: Node): boolean {
+function isUnionNarrowing(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.TypeAssertion) return false;
 	const d = node.data as TypeAssertionData;
 	if (d.asExpr == null) return false;
@@ -282,7 +282,7 @@ function isUnionNarrowing(node: Node): boolean {
 // genExpr can emit preparatory statements into the proc, so the guarded block is
 // opened BEFORE the initializer is generated: otherwise that preparation would
 // run on every call while only the store was guarded.
-function genStaticStorageVar(g: CGen, p: CProc, node: Node, d: VariableDeclData): void {
+function genStaticStorageVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
 	const slot = mangledGlobalName(node.resolvedSym, d.declName);
 	let cType = "";
 	if (node.nodeType != null) {
@@ -312,11 +312,11 @@ function genStaticStorageVar(g: CGen, p: CProc, node: Node, d: VariableDeclData)
 	emitStmtsLine(p, `}`);
 }
 
-export function isComptimeOnlyVarDecl(node: Node): boolean {
+export function isComptimeOnlyVarDecl(node: Readonly<Node>): boolean {
 	return node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias);
 }
 
-function genVarDecl(g: CGen, p: CProc, node: Node): void {
+function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (isComptimeOnlyVarDecl(node)) return;
 	const d = node.data as VariableDeclData;
 	if (p != null && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
@@ -379,15 +379,6 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	if (cType == "void") cType = "void*";
 
 	if (d.initializer != null) {
-		// Propagate declared type to untyped initializer (e.g. let arr: string[] = [])
-		if (d.initializer.nodeType == null && node.nodeType != null) {
-			d.initializer.nodeType = node.nodeType;
-		}
-		// Union type: ensure ObjectLiteral has the union type for proper variant construction
-		if (node.nodeType != null && node.nodeType.kind == TypeKind.Union
-			&& d.initializer.kind == NodeKind.ObjectLiteral) {
-			d.initializer.nodeType = node.nodeType;
-		}
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
 		const nrvoRet = (d.initializer.kind == NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null;
@@ -485,12 +476,12 @@ function wrapCond(s: string): string {
 //   L1: { if (!cond2) goto L2; body2; } goto Lend;
 //   L2: { elseBody; }
 //   Lend: ;
-function genIfStmt(g: CGen, p: CProc, node: Node): void {
+function genIfStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// Collect all branches: [{cond, body}, ...] + optional elseBody
-	const branches: Node[] = [];
-	const bodies: Node[] = [];
-	let elseBody: Node | null = null;
-	let current: Node | null = node;
+	const branches: Readonly<Node>[] = [];
+	const bodies: Readonly<Node>[] = [];
+	let elseBody: Readonly<Node> | null = null;
+	let current: Readonly<Node> | null = node;
 	while (current != null && current.kind == NodeKind.IfStmt) {
 		const d = current.data as IfStmtData;
 		branches.push(d.condition);
@@ -536,7 +527,7 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== While Statement =====
 
-function genWhileStmt(g: CGen, p: CProc, node: Node): void {
+function genWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as WhileStmtData;
 
 	// Reference parity: while(1) { cond-eval; if (!cond) break; body; }
@@ -577,7 +568,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Do-While Statement =====
 
-function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
+function genDoWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as DoWhileStmtData;
 
 	// Reference parity: NRVO-safe do-while. Condition must be evaluated inside the loop
@@ -609,7 +600,7 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Block Statement =====
 
-function genBlockStmt(g: CGen, p: CProc, node: Node): void {
+function genBlockStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as BlockStmtData;
 	emitStmtsLine(p, "{");
 	const oldIndent = getStmtsIndent(p);
@@ -621,7 +612,7 @@ function genBlockStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Return Statement =====
 
-function genReturnStmt(g: CGen, p: CProc, node: Node): void {
+function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ReturnStmtData;
 	// NRVO: assign to *__result instead of returning (boolean flag, not name prefix)
 	const isNrvo = p.isNrvo;
@@ -679,7 +670,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Break / Continue =====
 
-function genBreakStmt(g: CGen, p: CProc, node: Node): void {
+function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// Reference parity: a labeled break resolves its target block and leaves via
 	// goto to the block's break landing; a bare break binds the nearest loop
 	// block. Cleanup delta is computed against the resolved target either way.
@@ -702,7 +693,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, "break;");
 }
 
-function genContinueStmt(g: CGen, p: CProc, node: Node): void {
+function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// Same as break — continue must also run finally cleanup
 	const d = node.data as ContinueStmtData;
 	let idx = p.blocks.length - 1;
@@ -732,7 +723,7 @@ function emitErrorGoto(p: CProc): void {
 	emitStmtsLine(p, "goto BeforeRet_;");
 }
 
-function genThrowStmt(g: CGen, p: CProc, node: Node): void {
+function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ThrowStmtData;
 	// `throw new Error(msg)` is sugar over the string-based exception runtime
 	// (msThrow(msString)); the std `Error` class is a checker-only aid and
@@ -768,7 +759,7 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 // Goto-based exceptions: no setjmp overhead. Each try block gets unique labels.
 // After each potentially-raising call, check msErr and goto catch.
 
-function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
+function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as TryCatchStmtData;
 	p.labels = p.labels + 1;
 	const labelId = p.labels;
@@ -911,7 +902,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 
 // ===== Switch Statement (hash dispatch) =====
 
-function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
+function genSwitchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as SwitchStmtData;
 	const discSnippet = genExpr(g, p, d.switchDisc);
 	emitStmtsLine(p, `switch (${discSnippet}) {`);
@@ -951,7 +942,7 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Helper: emit block content or wrap in braces =====
 
-function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
+function genBlockOrBraces(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (node.kind == NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;
 		emitStmts(p, "{\n");
@@ -991,7 +982,7 @@ function escapeForC(s: string): string {
 	return result;
 }
 
-function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
+function genUnreachableStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as UnreachableStmtData;
 	if (d.unreachableMsg.length > 0) {
 		const msg = `"${escapeForC(d.unreachableMsg)}"`;

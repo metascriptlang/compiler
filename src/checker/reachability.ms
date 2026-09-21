@@ -631,7 +631,7 @@ function varDeclNeedsRuntimeInit(node: Node): boolean {
 // p NULL }, a state the runtime already grows from (msArrayPrepareAdd).
 // nativeLower wraps top-level array initializers in msBoxRefArray(lit) before
 // computeAliveSet runs, so the literal is peeled out of that call here.
-function bakeableEmptyArrayLiteral(init: Node): boolean {
+function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
 	if (init.kind == NodeKind.ArrayLiteral) {
 		const ad = init.data as ArrayLiteralData;
 		return ad.elements.length == 0;
@@ -643,7 +643,7 @@ function bakeableEmptyArrayLiteral(init: Node): boolean {
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
 
-export function isClosureThunkConv(node: Node): boolean {
+export function isClosureThunkConv(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.HiddenStdConv) return false;
 	const cv = node.data as HiddenStdConvData;
 	return cv.convType.kind == TypeKind.Function && cv.convType.callConv == CallingConvention.CcClosure
@@ -651,7 +651,7 @@ export function isClosureThunkConv(node: Node): boolean {
 		&& cv.convExpr.nodeType.callConv != CallingConvention.CcClosure;
 }
 
-export function isBakeableAggregateConst(node: Node): boolean {
+export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	const d = node.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return false;
 	if (d.initializer == null) return false;
