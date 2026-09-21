@@ -663,9 +663,19 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 // idiom) against 0 sites of this class. Everything here is a raw pointer cast
 // whose offsets do not line up — a silent wrong-field read, or a reinterpreted
 // pointer when the reprs differ.
+function objectShapeTarget(source: Type | null, target: Type | null): Type | null {
+	const s = skipModifier(source);
+	const t = skipModifier(target);
+	if (s != null && t != null && !isMaybeType(s) && isMaybeType(t) && t.typeReturn != null) {
+		return t.typeReturn;
+	}
+	return target;
+}
+
 export function isObjectShapeMismatch(source: Type | null, target: Type | null): boolean {
+	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
-	const t0 = skipModifier(target);
+	const t0 = skipModifier(shapeTarget);
 	if (s0 == null || t0 == null) return false;
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
@@ -674,15 +684,16 @@ export function isObjectShapeMismatch(source: Type | null, target: Type | null):
 	if (s.typeName == "" || t.typeName == "") return false;
 	if (s.typeName == t.typeName) return false;
 	if (s.sym != null && s.sym == t.sym) return false;
-	return !isAssignable(source, target);
+	return !isAssignable(source, shapeTarget);
 }
 
 // Error-path only: when a rejected object pair HAS every required field but in
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
 export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
+	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
-	const t0 = skipModifier(target);
+	const t0 = skipModifier(shapeTarget);
 	if (s0 == null || t0 == null) return "";
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
