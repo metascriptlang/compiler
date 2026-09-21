@@ -27,7 +27,7 @@ import { downloadPackage } from "./download";
 //   "alice/router@1.0.0"  → { name: "alice/router", version: "1.0.0" }
 //   "@acme/router"        → { name: "@acme/router", version: "" }
 //   "@acme/router@1.0.0"  → { name: "@acme/router", version: "1.0.0" }
-function parseNameVersion(arg: string): { name: string, version: string } {
+export function parseNameVersion(arg: string): { name: string, version: string } {
 	// Git source: entire string is the version spec
 	if (arg.length >= 4 && arg.slice(0, 4) == "git:") {
 		// Extract alias from the repo name (last path segment before @)
@@ -91,7 +91,13 @@ function parseNameVersion(arg: string): { name: string, version: string } {
 		if (arg.charAt(sli) == "/") { slashIdx = sli; sli = arg.length; }
 		sli = sli + 1;
 	}
-	if (slashIdx > 0) {
+	let firstAt = -1;
+	let fai = 0;
+	while (fai < arg.length) {
+		if (arg.charAt(fai) == "@") { firstAt = fai; fai = arg.length; }
+		fai = fai + 1;
+	}
+	if (slashIdx > 0 && (firstAt < 0 || slashIdx < firstAt)) {
 		// Find @ after the slash — that's the version separator
 		let atIdx = -1;
 		let ai = slashIdx + 1;
@@ -301,4 +307,34 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	const devTag = isDev ? " (dev)" : "";
 	console.log("added " + parsed.name + "@" + parsed.version + devTag);
 	return true;
+}
+
+test "a file: version keeps its slashes out of the name" {
+	const p = parseNameVersion("greeter@file:/tmp/greeter");
+	assert p.name == "greeter";
+	assert p.version == "file:/tmp/greeter";
+	const rel = parseNameVersion("greeter@file:../greeter");
+	assert rel.name == "greeter";
+	assert rel.version == "file:../greeter";
+}
+
+test "a user-scoped name still splits on the slash" {
+	const p = parseNameVersion("acme/cool-json@1.2.3");
+	assert p.name == "acme/cool-json";
+	assert p.version == "1.2.3";
+	const bare = parseNameVersion("acme/cool-json");
+	assert bare.name == "acme/cool-json";
+	assert bare.version == "";
+}
+
+test "an org-scoped name with a file: version" {
+	const p = parseNameVersion("@acme/ion@file:/tmp/ion");
+	assert p.name == "@acme/ion";
+	assert p.version == "file:/tmp/ion";
+}
+
+test "a plain name@version is unchanged" {
+	const p = parseNameVersion("cool-json@1.2.3");
+	assert p.name == "cool-json";
+	assert p.version == "1.2.3";
 }
