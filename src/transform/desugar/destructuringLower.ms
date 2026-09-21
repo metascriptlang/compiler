@@ -107,7 +107,7 @@ export function expandArrayRet(
 				let init = access;
 				if (i < apd.patternDefaults.length && apd.patternDefaults[i] != null) {
 					const def = apd.patternDefaults[i];
-					init = nullishLowered(access, def, loc, elemType);
+					init = nullishLowered(access, def, loc, elemType, ctx);
 					if (destrHasRuntimeLength(base.nodeType)) {
 						const lenMember = makeMember(base, "length", loc);
 						lenMember.nodeType = int32Type();
@@ -168,7 +168,7 @@ export function expandObjectRet(
 			const fieldType = destrNamedFieldType(base.nodeType, p.propKey);
 			if (fieldType != null) memberAccess.nodeType = fieldType;
 			let init = memberAccess;
-			if (p.propDefault != null) init = nullishLowered(memberAccess, p.propDefault, loc, fieldType);
+			if (p.propDefault != null) init = nullishLowered(memberAccess, p.propDefault, loc, fieldType, ctx);
 			const propDecl = makeVarDecl(id.name, init, declKind, loc);
 			propDecl.resolvedSym = p.propAlias.resolvedSym;
 			items.push(propDecl);

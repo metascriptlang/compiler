@@ -4,8 +4,8 @@
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 // Note: evaluates LHS twice for complex expressions (same limitation as reference).
 
-import { Node, NodeKind, BinaryExprData, TypeKind, SourceLocation, Type } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType } from "../../checker/types";
+import { Node, NodeKind, BinaryExprData, TypeAssertionData, TypeKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
+import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember } from "../util";
@@ -14,12 +14,24 @@ import { firstExprKindAfter } from "../testUtil";
 // ===== Main Entry Point =====
 
 export function lowerNullishCoalesce(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, lowerNullishNode);
+	return walkNode(program, (node: Node): Node => lowerNullishNode(node, ctx));
 }
 
 // ===== Visitor =====
 
-export function nullishLowered(left: Node, right: Node, loc: SourceLocation, resultType: Type | null): Node {
+function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	let checked = left;
+	if (ctx.jsBackend) {
+		checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: left, asType: "unknown" } as TypeAssertionData, loc);
+		checked.nodeType = unknownType();
+	} else if (left.nodeType != null && isStringLike(left.nodeType)) {
+		checked = makeMember(left, "p", loc);
+		checked.nodeType = unknownType();
+	}
+	return makeBinary(checked, "!==", makeNull(loc), loc);
+}
+
+export function nullishLowered(left: Node, right: Node, loc: SourceLocation, resultType: Type | null, ctx: TransformContext): Node {
 	// A scalar left operand carries no null, and the lowered test would emit
 	// `double !== NULL`, which is not valid C. TS keeps the expression legal and
 	// its value is the left operand.
@@ -29,7 +41,7 @@ export function nullishLowered(left: Node, right: Node, loc: SourceLocation, res
 	}
 
 	// x ?? y → x !== null ? x : y
-	const cond = makeBinary(left, "!==", makeNull(loc), loc);
+	const cond = nullishPresence(left, loc, ctx);
 
 	// Value-carried nullable (Maybe struct in C): when the fallback is non-null the
 	// result type is the UNWRAPPED T, so the then-arm must read x.value — raw x would
@@ -50,11 +62,11 @@ export function nullishLowered(left: Node, right: Node, loc: SourceLocation, res
 	return lowered;
 }
 
-function lowerNullishNode(node: Node): Node {
+function lowerNullishNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator != "??") return node;
-	return nullishLowered(d.left, d.right, node.location, node.nodeType);
+	return nullishLowered(d.left, d.right, node.location, node.nodeType, ctx);
 }
 
 // ===== Tests =====
