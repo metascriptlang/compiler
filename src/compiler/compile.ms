@@ -544,6 +544,7 @@ interface ModuleEmissionJob {
 	program: Node;
 	ctx: CheckerContext;
 	modPath: string;
+	weight: int32;
 }
 
 class ModuleEmissionResult {
@@ -605,17 +606,11 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	return results;
 }
 
-function emissionWeight(job: Readonly<ModuleEmissionJob>): int32 {
-	const program: Node | null = job.program;
-	if (program == null) return 0;
-	return program.location.endLine;
-}
-
 function emissionOrder(jobs: ModuleEmissionJob[]): int32[] {
 	const order: int32[] = [];
 	const weights: int32[] = [];
 	for (let i = 0; i < jobs.length; i += 1) {
-		const weight = emissionWeight(jobs[i]);
+		const weight = jobs[i].weight;
 		let at = order.length;
 		order.push(i);
 		weights.push(weight);
@@ -656,7 +651,7 @@ function probeDiagnosticModuleEmission(job: Readonly<ModuleEmissionJob>, aliveSe
 test "bounded module emission preserves slots and joins before stopping" {
 	const jobs: ModuleEmissionJob[] = [];
 	for (let slot = 0; slot < 12; slot += 1) {
-		jobs.push({ slot, program: null as unknown as Node, ctx: null as unknown as CheckerContext, modPath: slot.toString() });
+		jobs.push({ slot, program: null as unknown as Node, ctx: null as unknown as CheckerContext, modPath: slot.toString(), weight: 0 });
 	}
 	const aliveSet = createAliveSet();
 	const facts = new CEmissionFacts();
@@ -1667,7 +1662,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
-		emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath });
+		emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	}
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
@@ -2092,7 +2087,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
 	}
 	const emissionJobs: ModuleEmissionJob[] = [];
-	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath });
+	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
 	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr);
 	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
