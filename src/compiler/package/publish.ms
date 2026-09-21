@@ -12,6 +12,7 @@ import { join } from "std/fs/path";
 import { loadBuildConfig, PackageSection } from "../buildConfig";
 import { loadToken } from "./login";
 import { collectPublishFiles } from "./walker";
+import { validateBin, binEntryFor } from "./bin";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
 import { createHeaders, setHeader } from "std/http/headers";
@@ -164,6 +165,20 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	if (cfg.package.version == "") {
 		console.log(`${errStyle("error")}: ${cyan("package.version")} is required for publishing`);
 		return false;
+	}
+	const binErrors = validateBin(cfg.package.bin);
+	if (binErrors.length > 0) {
+		for (const be of binErrors) {
+			console.log(`${errStyle("error")}: ${cyan("package.bin")}: ${be}`);
+		}
+		return false;
+	}
+	for (const bc of cfg.package.bin.keys) {
+		const entry = binEntryFor(cfg.package, bc);
+		if (!exists(join(projectRoot, entry))) {
+			console.log(`${errStyle("error")}: ${cyan("package.bin")}: command '${bc}': entry ${bold(entry)} not found`);
+			return false;
+		}
 	}
 
 	const version = stripVPrefix(cfg.package.version);
