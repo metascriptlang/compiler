@@ -128,6 +128,7 @@ export interface PackageSection {
 	author: string;
 	files: string[];        // publish include globs (empty = all)
 	ignore: string[];       // publish exclude globs (applied after files)
+	bin: DepsSection;       // command name → .ms entry, relative to the package root
 	valid: boolean;         // false if no `package` block present
 }
 
@@ -135,7 +136,7 @@ export function defaultPackageSection(): PackageSection {
 	const kw: string[] = [];
 	const files: string[] = [];
 	const ignore: string[] = [];
-	return { name: "", version: "", description: "", license: "", repository: "", homepage: "", keywords: kw, author: "", files, ignore, valid: false };
+	return { name: "", version: "", description: "", license: "", repository: "", homepage: "", keywords: kw, author: "", files, ignore, bin: defaultDepsSection(), valid: false };
 }
 
 export interface DepsSection {
@@ -368,6 +369,8 @@ function extractPackage(pkgNode: Node): PackageSection {
 	if (filesNode != null) pkg.files = nodeStringArray(filesNode);
 	const ignoreNode = findObjField(pkgNode, "ignore");
 	if (ignoreNode != null) pkg.ignore = nodeStringArray(ignoreNode);
+	const binNode = findObjField(pkgNode, "bin");
+	if (binNode != null) pkg.bin = extractDeps(binNode);
 	pkg.valid = pkg.name.length > 0;
 	return pkg;
 }
