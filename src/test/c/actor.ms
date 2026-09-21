@@ -157,6 +157,37 @@ actor W {
 	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
 }
 
+test "E2E C: E24 — narrowing a union field with as keeps the view" {
+	const src = `
+class Leaf { v: int32 = 7; }
+type PairData = { leaf: Leaf, other: Leaf };
+type NameData = { label: string };
+type Data = PairData | NameData;
+interface Holder { data: Data; }
+function mutate(h: Readonly<Holder>): void {
+	const d = h.data as PairData;
+	d.leaf.v = 999;
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
+}
+
+test "E2E C: E24 — a non-null assertion keeps the view" {
+	const src = `
+class Leaf { v: int32 = 7; }
+interface Holder { leaf: Leaf | null; }
+function mutate(h: Readonly<Holder>): void {
+	const l = h.leaf!;
+	l.v = 999;
+}
+`;
+	const c = compileToC(src);
+	assert !c.ok;
+	if (!c.ok) { assert c.error.contains("PARALOCK E24"); }
+}
+
 test "E2E C: E24 — deep write through captured field fails" {
 	const src = `
 actor W {
