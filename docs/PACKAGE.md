@@ -156,7 +156,7 @@ package: {
 ```
 
 A command name is lowercase letters, digits and `-`, starting with a letter. Two gates fail loud
-and install nothing (both measured, exit 1):
+and install no command (both measured, exit 1):
 
 ```text
 $ msc add rival@file:../rival
@@ -172,6 +172,12 @@ no command was installed
 A name colliding with an `msc` subcommand is refused at `publish` and again at install
 (`reservedCommands`, `src/compiler/package/bin.ms`); the entry must be a relative `.ms` path
 inside the package and must exist.
+
+**The dep stays when the command is refused.** `msc add rival` above writes `rival` into
+`build.ms` first, then refuses to install the colliding command — the dependency is the thing
+you asked for, the command is a derived effect, and the refusal names both claimants so you can
+drop one or address it as `msc x <package>:greet`. Rolling the dep back would undo the requested
+operation to save you from a side effect you were just told about.
 
 ### Running one — `msc x`
 
@@ -192,23 +198,55 @@ output with no reinstall.
 
 ### Shims — running one by name
 
-`msc add` and `msc install` write one shim per declared command into `<project>/.msc/bin/`:
+`msc add` and `msc install` write one shim per declared command into `<project>/.msc/bin/`,
+listing what landed:
 
-```sh
+```text
+$ msc add greeter@file:../greeter
+added greeter → file:../greeter
+  greet (greeter)
+1 command(s) installed in …/.msc/bin
+
 $ cat .msc/bin/greet
 #!/bin/sh
+# msc shim v1
 exec msc x 'greeter:greet' "$@"
 ```
 
 The shim names the package and the command, **never the version** — an upgrade rewrites
 `msc.lock` (or the `file:` target moves) and the same shim keeps resolving. Measured: shim
 SHA-256 identical before and after a 1.0.0 → 2.0.0 bump that changed output. On Windows the shim
-is `<command>.cmd` holding `@msc x <pkg>:<cmd> %*`. A file that is not an msc-written shim is
-never overwritten — it is left alone and reported.
+is `<command>.cmd` holding `@msc x <pkg>:<cmd> %*`.
+
+**A file that is not an msc shim is never overwritten** — it is left alone, reported, and the
+install exits 1. Recognition is by the `# msc shim v1` / `rem msc shim v1` marker line (the
+pre-marker formats are still recognised); a hand-written wrapper that merely mentions `msc x`
+is foreign. Measured: a wrapper containing the words `msc x` survived `msc add` untouched.
+
+Shims are pruned by the same sync that writes them: `msc remove` (or a package renaming its
+command) leaves no stale shim behind — measured: `msc remove greeter` prints
+`pruned 1 stale command(s) from …/.msc/bin`.
 
 Global install is explicit: `msc install -g greeter@file:../greeter` adds the package to
 `~/.metascript/global/build.ms` and writes the shim into `~/.metascript/bin/`, beside `msc` and
-already on `PATH`. `msc add` never touches the global namespace.
+already on `PATH`. `msc add` never touches the global namespace, and `msc remove -g greeter`
+undoes a global install — manifest entry and shim both (measured).
+
+### Trust boundary — what runs when
+
+**Installing runs no package code.** `msc add`/`install` parse `build.ms` with the compiler's
+own AST parser and write files; there are no lifecycle scripts and nothing executes. This is
+deliberate — install-time execution is the top malware vector in npm-land, and the design keeps
+it structurally impossible.
+
+**Building runs package code.** MetaScript macros and decorators execute during compilation —
+in the Raiser VM, with host `fs`/`process` functions available (`src/compiler/meta/`,
+`src/raiser/hostRegistry.ms`). So the first `msc x` of a dependency executes that dependency's
+macro code on your machine before its command ever runs — the same trust position as Cargo's
+`build.rs`. `msc.lock` pins the *identity* of registry/git sources (SHA-256 integrity, commit),
+which makes builds reproducible, not audited: pinned ≠ trusted. Until dependency macro
+execution is sandboxed (an open design question), treat `msc x` on an untrusted package exactly
+as you would treat running it.
 
 ## Command reference
 
@@ -216,29 +254,27 @@ already on `PATH`. `msc add` never touches the global namespace.
 |---|---|
 | `msc init <name>` | Scaffold `build.ms` + `src/index.ms`. **Currently writes `root:` where the loader wants `entry:`** — rename it before `msc build` (see "not wired"). |
 | `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@git:host/path@ref`, `name@file:path`. Also rewrites `msc.lock` for registry/git. |
-| `msc remove <name>` | Remove the dep from `build.ms`. Measured: manifest cleaned, `msc x` then reports `no dependency declares a command`. |
+| `msc remove <name>` | Remove the dep from `build.ms` + `msc.lock`, then prune its shims from `.msc/bin/`. `-g <name>` removes a global install (manifest + `~/.metascript/bin/` shim). |
 | `msc install` | Verify locked deps are present, install commands into `.msc/bin/`. `-g <spec>` = global (see shims). |
 | `msc x <cmd> [args…]` | Run a declared command. No argument lists them. |
-| `msc publish [--dry-run]` | Pack `package.files`/`package.ignore` selection and upload to the registry with the stored token. `--dry-run` prints the resolved list — measured: `files: 3 … build.ms, src/index.ms, tooling/cli.ms`. |
+| `msc publish [--dry-run]` | Pack `package.files`/`package.ignore` selection and upload with the stored token; the metadata sent to the registry carries `bin`, so the registry can show which commands a package installs (server-side exposure pending — `.inbox/landing/pkg-bin-metadata.md`). `--dry-run` prints the resolved list — measured: `files: 3 … build.ms, src/index.ms, tooling/cli.ms`. |
 | `msc login` / `msc logout` | GitHub device-flow OAuth → registry bearer token in `~/.metascript/credentials` (mode 0600); logout revokes server-side then truncates. |
 | `msc whoami [--json]` | Verify the token against the registry. Measured with a rejected token: exit 1, `error: token rejected by registry (expired or revoked)`. |
 | `msc org …` | Registry organization management (`src/compiler/package/org.ms`). |
 
 There is no `msc update` yet — bump versions by editing `build.ms` / re-running `msc add`.
 
-Publish metadata (`description`, `license`, `repository`, `homepage`, `keywords`, `author`) and
-file selection (`files`, `ignore` — `.gitignore`-subset globs; `.git/`, `msc.lock`, `.env*` and
-friends are always excluded) live on the `package` block. `~/.metascript/cache/` holds registry
-and git downloads plus command binaries; `src/compiler/package/cache.ms` owns the layout.
+Publish metadata (`description`, `license`, `repository`, `homepage`, `keywords`, `author`, and
+`bin`) and file selection (`files`, `ignore` — `.gitignore`-subset globs; `.git/`, `out/`,
+`.msc/`, `msc.lock`, `.env*` and friends are always excluded) live on the `package` block.
+`~/.metascript/cache/` holds registry and git downloads plus command binaries;
+`src/compiler/package/cache.ms` owns the layout.
 
 ## Verified / not verified
 
-Measured 2026-09-22 on `msc` v0.2.55 (installed build `b201f063`, worktree compiler `18971cb9`):
-`entry`/`outFile`/`optimize` builds, dep import by name+subpath, `file:` add/remove, `msc x`
-(before and after upgrade), project shims, both refusal gates, `publish --dry-run`, `whoami`
-error path, `msc init` scaffold.
-
-**Not verified here** (network or unimplemented paths — treat as best-effort): registry
-`add`/`publish`/`login` end-to-end against the live registry, `git:` source add and download,
-`install` of registry/git deps (the cache must already hold them; there is no download-on-install
-yet), `msc org`, Windows `.cmd` shims (code-read only).
+Measured 2026-09-22 on `msc` v0.2.55 (installed build `b201f063`; the hardening behaviours —
+marker shims, foreign-file refusal, prune on remove, `remove -g`, install listing — on a
+worktree build carrying `55a8c5ce`): `entry`/`outFile`/`optimize` builds, dep import by
+name+subpath, `file:` add/remove, `msc x` (before and after upgrade), project + global shims,
+both refusal gates, the foreign-shim refusal, `remove -g`, `publish --dry-run`, `whoami` error
+path, `msc init` scaffold.
