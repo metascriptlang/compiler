@@ -34,8 +34,9 @@ export class MovedVar {
 }
 
 export class BorrowRead {
-	readName: string;      // variable name read inline (Normal mode) in the current statement
-	readNode: Node;        // the identifier node — rewritten in place if the var moves later
+	readName: string;
+	readNode: Node;
+	preStmtIdx: int32;
 }
 
 // ===== DRC Scope =====

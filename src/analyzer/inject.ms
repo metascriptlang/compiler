@@ -418,17 +418,13 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 	return makeIdentResolved(tmpSym, loc);
 }
 
-// The pre-hoisted zero in destructiveMoveVar reorders against same-statement reads
-// that stay inline (Nim's zero sits inline at the occurrence via nkStmtListExpr).
-// Re-sequence: capture each earlier inline read into a plain borrow temp — its
-// preStmt lands before the zero — and rewrite the read node in place.
 function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcContext): void {
-	const remaining: BorrowRead[] = [];
-	for (const r of dctx.stmtBorrowReads) {
-		if (r.readName != srcName) {
-			remaining.push(r);
-			continue;
-		}
+	const preStmts = currentScope(dctx).preStmts;
+	let i = dctx.stmtBorrowReads.length;
+	while (i > 0) {
+		i -= 1;
+		const r = dctx.stmtBorrowReads[i];
+		if (r.readName != srcName) continue;
 		const loc = r.readNode.location;
 		const readType = r.readNode.nodeType != null ? r.readNode.nodeType : fallbackType;
 		const bSym = freshTempSym(dctx.ctx, "pborrow", readType);
@@ -437,9 +433,18 @@ function retroHoistStmtReads(srcName: string, fallbackType: Type, dctx: DrcConte
 		const decl = makeVarDecl(bSym.name, init, DeclKind.Const, loc);
 		decl.nodeType = readType;
 		decl.resolvedSym = bSym;
-		addPre(dctx, decl);
+		preStmts.splice(r.preStmtIdx, 0, decl);
+		let j = i + 1;
+		while (j < dctx.stmtBorrowReads.length) {
+			dctx.stmtBorrowReads[j].preStmtIdx += 1;
+			j += 1;
+		}
 		r.readNode.resolvedSym = bSym;
 		(r.readNode.data as IdentifierData).name = bSym.name;
+	}
+	const remaining: BorrowRead[] = [];
+	for (const r of dctx.stmtBorrowReads) {
+		if (r.readName != srcName) remaining.push(r);
 	}
 	dctx.stmtBorrowReads = remaining;
 }
@@ -737,7 +742,11 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	}
 
 	if (mode == DrcMode.Normal) {
-		const br: BorrowRead = { readName: d.name, readNode: node };
+		const br: BorrowRead = {
+			readName: d.name,
+			readNode: node,
+			preStmtIdx: currentScope(dctx).preStmts.length,
+		};
 		dctx.stmtBorrowReads.push(br);
 	}
 	return node;
