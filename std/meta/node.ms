@@ -205,6 +205,8 @@ export enum SymbolFlag {
 	Cursor, // binding does not own its referent — DRC skips incref and destroy
 	Throws, // @throws — an extern routine that raises through the runtime error flag rather than returning
 	Converter,
+	DestroyOp,
+	WasMovedOp,
 }
 
 // ===== Symbol =====

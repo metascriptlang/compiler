@@ -15,7 +15,7 @@ import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef } from "../
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { NameSet, TransformContext, createNameSet, nameSetContains, nameSetAdd, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
-	hookRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
+	hookRef, opRef, makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
@@ -777,38 +777,28 @@ function needsDestAddr(rcInfo: RcInfo): boolean {
 	return true;
 }
 
-function makeRcCallStmt(fnName: string, varName: string, sym: Symbol | null, loc: SourceLocation): Node {
-	if (fnName == "") return makeExprStmt(makeNull(loc), loc);
-	return makeExprStmt(
-		makeCall(hookRef(fnName, loc), [makeVarRef(varName, sym, loc)], loc), loc);
+function makeRcCallStmt(callee: Node, varName: string, sym: Symbol | null, loc: SourceLocation): Node {
+	return makeExprStmt(makeCall(callee, [makeVarRef(varName, sym, loc)], loc), loc);
 }
 
 // Reference parity: all hooks take var T (pointer).
 // Runtime macros (empty typeName) still take by value — they're C macros, not generated hooks.
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
 	if (rcInfo.destroyFn == "") return makeExprStmt(makeNull(loc), loc);
-	if (rcInfo.rcKind == RcKind.Named) {
-		if (!needsDestAddr(rcInfo)) {
-			return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
-		}
-		return makeExprStmt(
-			makeCall(hookRef(rcInfo.destroyFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
+	const callee = opRef(rcInfo.destroyFn, SymbolFlag.DestroyOp, loc);
+	if (rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo)) {
+		return makeExprStmt(makeCall(callee, [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
-	return makeRcCallStmt(rcInfo.destroyFn, varName, sym, loc);
+	return makeRcCallStmt(callee, varName, sym, loc);
 }
 
 function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation, sym: Symbol | null): Node {
 	if (rcInfo.wasMovedFn == "") return makeExprStmt(makeNull(loc), loc);
-	if (rcInfo.rcKind == RcKind.Named) {
-		// Runtime macros (msArrayStringWasMoved etc.): value args
-		if (!needsDestAddr(rcInfo)) {
-			return makeRcCallStmt(rcInfo.wasMovedFn, varName, sym, loc);
-		}
-		// Named structs + generated array hooks: pointer arg
-		return makeExprStmt(
-			makeCall(hookRef(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
+	const callee = opRef(rcInfo.wasMovedFn, SymbolFlag.WasMovedOp, loc);
+	if (rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo)) {
+		return makeExprStmt(makeCall(callee, [makeHiddenAddr(makeVarRef(varName, sym, loc), loc)], loc), loc);
 	}
-	return makeRcCallStmt(rcInfo.wasMovedFn, varName, sym, loc);
+	return makeRcCallStmt(callee, varName, sym, loc);
 }
 
 // Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure.
@@ -838,7 +828,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 		return makeExprStmt(makeCall(hookRef(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 	}
 	// Unary incref: msIncref(dest), msClosureCopy(dest), etc.
-	return makeRcCallStmt(rcInfo.copyFn, destName, destSym, loc);
+	return makeRcCallStmt(hookRef(rcInfo.copyFn, loc), destName, destSym, loc);
 }
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
@@ -858,24 +848,11 @@ function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: Sour
 		makeCall(hookRef(rcInfo.sinkFn, loc), [makeVarRef(destName, sym, loc), srcExpr], loc), loc);
 }
 
-// RC call on arbitrary expression (for field/element wasMoved)
-function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): Node {
-	if (fnName == "") return makeExprStmt(makeNull(loc), loc);
-	return makeExprStmt(
-		makeCall(hookRef(fnName, loc), [argExpr], loc), loc);
-}
-
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.wasMovedFn == "") return makeExprStmt(makeNull(loc), loc);
-	if (rcInfo.rcKind == RcKind.Named) {
-		// Runtime macros: value args. Named structs + generated hooks: pointer.
-		if (!needsDestAddr(rcInfo)) {
-			return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
-		}
-		return makeExprStmt(
-			makeCall(hookRef(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
-	}
-	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
+	const callee = opRef(rcInfo.wasMovedFn, SymbolFlag.WasMovedOp, loc);
+	const arg = rcInfo.rcKind == RcKind.Named && needsDestAddr(rcInfo) ? makeHiddenAddr(argExpr, loc) : argExpr;
+	return makeExprStmt(makeCall(callee, [arg], loc), loc);
 }
 
 // ===== Self-Assignment Detection (reference parity) =====
