@@ -22,7 +22,7 @@ import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify"
 import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, BorrowRead,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
 	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar,
 	addPre,
 	pushOuterStmts, popOuterStmts,
@@ -277,7 +277,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	tmpDecl.nodeType = exprType;
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
-	registerVar(dctx, tmpName, rcInfo, false, tmpSym);
+	registerVar(dctx, rcInfo, false, tmpSym);
 	dctx.capturedNodes.push(node);
 	dctx.capturedSyms.push(tmpSym);
 	return makeIdentResolved(tmpSym, loc);
@@ -604,8 +604,7 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		const rcInfo = classifyType(moveType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
 			if (md.moveArg.kind == NodeKind.Identifier) {
-				const srcName = (md.moveArg.data as IdentifierData).name;
-				recordMoveInContext(dctx, srcName);
+				recordMoveInContext(dctx, md.moveArg.resolvedSym);
 			} else if (consume) {
 				if (md.moveArg.kind == NodeKind.MemberExpr) {
 					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
@@ -648,8 +647,8 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// (copy/move). Without this, the branch assignment `$cond = src.field`
 	// falls through processAssignment (no resolvedSym, no VarInfo → no copy).
 	const rcInfo = classifyType(resultType, dctx.ctx);
-	registerVar(dctx, tmpName, rcInfo, false, tmpSym);
-	markUninitialized(dctx, tmpName);
+	registerVar(dctx, rcInfo, false, tmpSym);
+	markUninitialized(dctx, tmpSym);
 	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
 	pushScope(dctx, false, false);
 	const thenProcessed = processBranchAssign(tmpName, tmpSym, resultType!, cd.ternaryConsequent, dctx, loc);
@@ -693,20 +692,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const d = node.data as IdentifierData;
 	const sym = node.resolvedSym;
 
-	// Lambda lifting creates env idents without resolvedSym.
-	// Fall back to VarInfo so DRC can emit copy for env fields in closure literals.
-	// Without this, closure env structs are destroyed at scope exit (double-free).
-	// Reference parity: closure fields processed with sinkArg (injectdestructors:862).
-	// Use passCopyToSink (not move) because shared envs are read after closure use.
-	if (sym == null) {
-		if (mode == DrcMode.SinkArg || mode == DrcMode.Consumed) {
-			const vi = findVarInfoInContext(dctx, d.name);
-			if (vi != null && vi.rcInfo.needsCleanup) {
-				return passCopyToSink(node, dctx);
-			}
-		}
-		return node;
-	}
+	if (sym == null) return node;
 
 	// Implementation parity: function/method declarations are static — no RC needed.
 	// Bare function names inside closure thunks (e.g. { fn: isEven, env: null })
@@ -1009,12 +995,12 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 	// Rule 1: self-assignment removal (Reference: sameLocation)
 	if (sameLocation(dest, rhs)) return stmt;
 	// Rule 2: cursor variables are borrows — no RC (Reference: isCursor)
-	if (destName != "") {
-		const vi = findVarInfoInContext(dctx, destName);
-		if (vi != null && vi.isCursor) return stmt;
-	}
 	// Reference parity: thread dest symbol through to RC builders for unique naming
 	const destSym = dest.resolvedSym;
+	if (dest.kind == NodeKind.Identifier) {
+		const destVi = findVarInfoInContext(dctx, destSym);
+		if (destVi != null && destVi.isCursor) return stmt;
+	}
 	// Rule 3: dispatch on RHS kind (Reference: case ri2.kind)
 	return match (rhs.kind) {
 		// Fresh values → sink (ownership transfer, no copy needed)
@@ -1121,7 +1107,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 					if (rcInfo.wasMovedFn != "") {
 						moveResult.push(makeWasMovedCall(srcName, rcInfo, loc, md.moveArg.resolvedSym));
 					}
-					recordMoveInContext(dctx, srcName);
+					recordMoveInContext(dctx, md.moveArg.resolvedSym);
 				}
 				if ((flags & MOC_IS_DECL) == 0) {
 					moveResult.push(makeDestroyCall(destName, rcInfo, loc, destSym));
@@ -1143,7 +1129,7 @@ function moveOrCopy(stmt: Node, dest: Node, destName: string, rhs: Node, rcInfo:
 				if (rcInfo.wasMovedFn != "") {
 					addPending(dctx, makeWasMovedCall(rhsD.name, rcInfo, loc, rhsSym));
 				}
-				recordMove(dctx, rhsD.name);
+				recordMove(dctx, rhsSym);
 				return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 			}
 			// Copy: shared reference (Reference: genCopy)
@@ -1218,7 +1204,7 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 		if (rcInfo.wasMovedFn != "") {
 			addPending(dctx, makeWasMovedCall(srcName, rcInfo, loc, moveArg.resolvedSym));
 		}
-		recordMoveInContext(dctx, srcName);
+		recordMoveInContext(dctx, moveArg.resolvedSym);
 		return true;
 	}
 	if (moveArg.kind == NodeKind.MemberExpr) {
@@ -1241,10 +1227,10 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 
 // ===== Scope Cleanup Generation =====
 
-function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLocation): Node[] {
+function generateCleanup(scope: DrcScope, loc: SourceLocation): Node[] {
 	const result: Node[] = [];
 	for (const mv of scope.wasMoved) {
-		if (mv.varName == "" && mv.exprNode != null) {
+		if (mv.sym == null && mv.exprNode != null) {
 			result.push(mv.exprNode);
 		}
 	}
@@ -1253,9 +1239,8 @@ function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLoca
 		i -= 1;
 		const vi = scope.varsToCleanup[i];
 		if (vi.isCursor) continue;
-		if (excludeNames != null && nameSetContains(excludeNames, vi.varName)) continue;
 		if (vi.rcInfo.destroyFn == "") continue;
-		result.push(makeDestroyCall(vi.varName, vi.rcInfo, loc, vi.sym));
+		result.push(makeDestroyCall(vi.sym.name, vi.rcInfo, loc, vi.sym));
 	}
 	return result;
 }
@@ -1274,16 +1259,14 @@ function isUndefinedInit(node: Node): boolean {
 function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[], loc: SourceLocation): boolean {
 	if (stmt.kind != NodeKind.VariableDecl) return false;
 	const d = stmt.data as VariableDeclData;
-	const vi = findVarInfo(scope, d.declName);
+	const vi = findVarInfo(scope, stmt.resolvedSym);
 	if (vi == null || !vi.rcInfo.needsCleanup) return false;
 	const hoistDecl = makeVarDecl(d.declName, makeNull(loc), DeclKind.Let, loc);
 	if (stmt.nodeType != null) {
 		hoistDecl.nodeType = stmt.nodeType;
 	}
-	// Propagate resolvedSym from original VarDecl (checker-stamped) or VarInfo (DRC temp).
-	// Checker vars have vi.sym=noSym but stmt.resolvedSym is valid.
-	const hoistSym = vi.sym != null ? vi.sym : stmt.resolvedSym;
-	if (hoistSym != null) { hoistDecl.resolvedSym = hoistSym; }
+	const hoistSym = vi.sym;
+	hoistDecl.resolvedSym = hoistSym;
 	hoisted.push(hoistDecl);
 	if (d.initializer != null && d.initializer.kind != NodeKind.NullLiteral && !isUndefinedInit(d.initializer)) {
 		const lhs = makeVarRef(d.declName, hoistSym, loc);
@@ -1381,7 +1364,7 @@ function processStmtListScoped(stmts: Node[], dctx: DrcContext, loc: SourceLocat
 	pushScope(dctx, false, false);
 	const processed = processStmtList(stmts, dctx, loc);
 	const scope = popScope(dctx);
-	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	const cleanup = generateCleanup(scope, loc);
 	for (const cs of cleanup) { processed.push(cs); }
 	return processed;
 }
@@ -1402,7 +1385,7 @@ function processBlockBody(body: Node, dctx: DrcContext, isLoop: boolean, isFunct
 	pushScope(dctx, isLoop, isFunction);
 	const processed = processStmtList(bd.statements, dctx, loc);
 	const scope = popScope(dctx);
-	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	const cleanup = generateCleanup(scope, loc);
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
@@ -1473,7 +1456,7 @@ function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
 // because the loop repeats and uses them again. The forward scan misses this
 // because it doesn't see loop back-edges.
 
-function isVarFromOuterLoopScope(varName: string, dctx: DrcContext): boolean {
+function isVarFromOuterLoopScope(sym: Symbol, dctx: DrcContext): boolean {
 	let passedInnerLoop = false;
 	let i = dctx.scopes.length;
 	while (i > 0) {
@@ -1484,7 +1467,7 @@ function isVarFromOuterLoopScope(varName: string, dctx: DrcContext): boolean {
 			continue;  // skip the innermost loop scope itself
 		}
 		if (passedInnerLoop) {
-			const vi = findVarInfo(scope, varName);
+			const vi = findVarInfo(scope, sym);
 			if (vi != null) return true;
 		}
 		if (scope.isFunction) break;
@@ -1514,7 +1497,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// Cursor vars (for-of bindings, $-prefixed temps) don't own the data;
 	// the source array/container still holds its own reference.
 	// Moving a cursor would leave the source with a dangling pointer.
-	const vi = findVarInfoInContext(dctx, sym.name);
+	const vi = findVarInfoInContext(dctx, sym);
 	if (vi != null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
 	if (nameSetContains(dctx.finallyProtectedVars, sym.name)) return false;
@@ -1526,7 +1509,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	if (!isLastReadInContext(sym, idx, stmts, dctx.outerCtx)) return false;
 	// If variable is from a scope outside a loop, it's not truly last-read
 	// inside the loop body (the loop will repeat and use it again).
-	if (isVarFromOuterLoopScope(sym.name, dctx)) return false;
+	if (isVarFromOuterLoopScope(sym, dctx)) return false;
 	return true;
 }
 
@@ -1543,7 +1526,7 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 	if (rootSym == null) return false;
 	// Standard safety checks (same as isLastReadSafe)
 	if (rootSym.symbolKind == SymbolKind.Parameter) return false;
-	const vi = findVarInfoInContext(dctx, rootSym.name);
+	const vi = findVarInfoInContext(dctx, rootSym);
 	if (vi != null && vi.isCursor) return false;
 	if (nameSetContains(dctx.finallyProtectedVars, rootSym.name)) return false;
 	// Field-level CFG query with alias-aware BFS
@@ -1581,7 +1564,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 				// Params are borrows registered as cursors (Nim default — no sink
 				// params, ea38c2a): the caller owns the value; stores inside the
 				// callee copy at the assignment point.
-				registerVar(dctx, pName, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+				registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 			}
 		}
 	}
@@ -1645,7 +1628,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 		scope.needsTry = false;
 	}
 
-	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	const cleanup = generateCleanup(scope, loc);
 	popOuterStmts(dctx);  // pop function boundary sentinel
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
@@ -1709,12 +1692,12 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// This lets the C codegen resolve same-named variables in different scopes to unique C names.
 	// Without resolvedSym, lookupLocalName returns the last mapping, which may be from an
 	// inner scope — causing double-free when the outer scope also cleans up.
-	const varSym = stmt.resolvedSym != null ? stmt.resolvedSym : noSym;
+	const varSym = stmt.resolvedSym;
 
 	// Register cursor variables even without cleanup — they must be visible in DRC scope
 	// so field accesses through them (d.field) are recognized as borrows.
 	if (isCursor && !rcInfo.needsCleanup) {
-		registerVar(dctx, d.declName, rcInfo, true, varSym);
+		registerVar(dctx, rcInfo, true, varSym);
 		return stmt;
 	}
 
@@ -1734,14 +1717,14 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	}
 
 	// Register for scope cleanup
-	registerVar(dctx, d.declName, rcInfo, isCursor, varSym);
+	registerVar(dctx, rcInfo, isCursor, varSym);
 
 	// Cursor variables borrow — no move/copy on initializer (source stays alive)
 	if (isCursor) return stmt;
 
 	// Phase D: first-write optimization — `let x;` without initializer is uninitialized
 	if (d.initializer == null) {
-		markUninitialized(dctx, d.declName);
+		markUninitialized(dctx, varSym);
 		return stmt;
 	}
 
@@ -1837,7 +1820,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 
 	// Demand-driven: use resolvedSym from Phase 2, fall back to VarInfo for synthetic temps
 	const sym = bd.left.resolvedSym;
-	const vi = findVarInfoInContext(dctx, leftD.name);
+	const vi = findVarInfoInContext(dctx, sym);
 	let rcInfo: RcInfo = noRcInfo();
 	if (sym != null) {
 		rcInfo = classifyType(sym.symbolType, dctx.ctx);
@@ -1864,7 +1847,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// Snapshot the LHS var's move-state BEFORE the RHS, so we can tell whether THIS RHS
 	// consumes it (`x = f([..., x])`) versus it having been conditionally moved earlier
 	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
-	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, leftD.name);
+	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, sym);
 
 	// Process RHS recursively with Consumed mode
 	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
@@ -1883,9 +1866,9 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// double-frees. Treat as a fresh write (no destroy-old) and clear the stale move so the
 	// new value is still destroyed at scope exit. Gate on !movedBeforeRhs so a prior
 	// conditional move is not mistaken for consumption by this RHS.
-	const consumedInRhs = !isFirstWrite && !movedBeforeRhs && varMovedInContext(dctx, leftD.name);
+	const consumedInRhs = !isFirstWrite && !movedBeforeRhs && varMovedInContext(dctx, sym);
 	if (consumedInRhs) {
-		clearMoveInContext(dctx, leftD.name);
+		clearMoveInContext(dctx, sym);
 		return moveOrCopy(stmt, bd.left, leftD.name, bd.right, rcInfo, MOC_IS_DECL, idx, stmts, dctx, loc);
 	}
 
@@ -1958,7 +1941,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 				return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 			}
 		}
-		const vi = findVarInfoInFunction(dctx, name);
+		const vi = findVarInfoInFunction(dctx, expr.resolvedSym);
 		if (vi != null) return false;  // function-local var — moved out via destructiveMoveVar at the return
 		// Not a local var (parameter or global) — check if RC pointer type
 		if (expr.nodeType != null) {
@@ -2083,9 +2066,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// temp for a "non-local identifier" and call passCopyToSink AGAIN,
 		// producing a double-borrow chain ($borrow_N → $borrow_N+1 → return).
 		const origKind = d.argument.kind;
-		const origName = origKind == NodeKind.Identifier
-			? (d.argument.data as IdentifierData).name
-			: "";
+		const origSym = origKind == NodeKind.Identifier ? d.argument.resolvedSym : noSym;
 
 		// Process return argument recursively with Consumed mode
 		d.argument = processNode(d.argument, dctx, DrcMode.Consumed);
@@ -2114,7 +2095,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Gate on ORIGINAL identifier name so a fresh borrow temp introduced by
 		// processNode doesn't get copied a second time.
 		if (origKind == NodeKind.Identifier) {
-			const vi = findVarInfoInFunction(dctx, origName);
+			const vi = findVarInfoInFunction(dctx, origSym);
 			if (vi == null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
 				const retRc = classifyType(d.argument.nodeType, dctx.ctx);
@@ -2215,10 +2196,10 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 			const rcInfo = classifyType(catchType, dctx.ctx);
 			if (rcInfo.needsCleanup) {
 				pushScope(dctx, false, false);
-				registerVar(dctx, d.catchName, rcInfo, false, stmt.resolvedSym);
+				registerVar(dctx, rcInfo, false, stmt.resolvedSym);
 				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
 				const scope = popScope(dctx);
-				const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+				const cleanup = generateCleanup(scope, loc);
 				const cbd = d.catchBody.data as BlockStmtData;
 				for (const cs of cleanup) { cbd.statements.push(cs); }
 				handled = true;
@@ -2241,7 +2222,7 @@ function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation
 	pushScope(dctx, false, false);
 	const processed = processStmtList(cd.caseStmts, dctx, loc);
 	const scope = popScope(dctx);
-	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	const cleanup = generateCleanup(scope, loc);
 	cd.caseStmts = assembleScope(processed, cleanup, scope, loc);
 }
 
@@ -2349,10 +2330,10 @@ test "generateCleanup LIFO order" {
 	const dctx = testDrcContext("const x = 1;");
 	pushScope(dctx, false, true);
 	const rcStr = testStringRc();
-	registerVar(dctx, "a", rcStr, false, noSym);
-	registerVar(dctx, "b", rcStr, false, noSym);
+	registerVar(dctx, rcStr, false, testVarSym("a"));
+	registerVar(dctx, rcStr, false, testVarSym("b"));
 	const scope = popScope(dctx);
-	const cleanup = generateCleanup(scope, emptyNameSet(), testLoc());
+	const cleanup = generateCleanup(scope, testLoc());
 	assert cleanup.length == 2;
 }
 
@@ -2360,26 +2341,14 @@ test "generateCleanup skips moved" {
 	const dctx = testDrcContext("const x = 1;");
 	pushScope(dctx, false, true);
 	const rcStr = testStringRc();
-	registerVar(dctx, "a", rcStr, false, noSym);
-	registerVar(dctx, "b", rcStr, false, noSym);
-	recordMove(dctx, "b");
+	registerVar(dctx, rcStr, false, testVarSym("a"));
+	const b = testVarSym("b");
+	registerVar(dctx, rcStr, false, b);
+	recordMove(dctx, b);
 	const scope = popScope(dctx);
-	const cleanup = generateCleanup(scope, emptyNameSet(), testLoc());
+	const cleanup = generateCleanup(scope, testLoc());
 	// wasMoved(b) + destroy(a) = 2 nodes
 	assert cleanup.length == 2;
-}
-
-test "generateCleanup skips excluded" {
-	const dctx = testDrcContext("const x = 1;");
-	pushScope(dctx, false, true);
-	const rcStr = testStringRc();
-	registerVar(dctx, "a", rcStr, false, noSym);
-	registerVar(dctx, "b", rcStr, false, noSym);
-	const scope = popScope(dctx);
-	const exclude = createNameSet();
-	nameSetAdd(exclude, "b");
-	const cleanup = generateCleanup(scope, exclude, testLoc());
-	assert cleanup.length == 1;
 }
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
@@ -2408,16 +2377,17 @@ test "recordMoveInContext finds correct scope" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);
-	registerVar(dctx, "a", rcStr, false, noSym);
+	const a = testVarSym("a");
+	registerVar(dctx, rcStr, false, a);
 	pushScope(dctx, false, false);
-	registerVar(dctx, "b", rcStr, false, noSym);
+	registerVar(dctx, rcStr, false, testVarSym("b"));
 	// Record move for "a" — should find it in outer scope
-	recordMoveInContext(dctx, "a");
+	recordMoveInContext(dctx, a);
 	const innerScope = popScope(dctx);
 	const outerScope = popScope(dctx);
 	// "a" should be marked as moved in the outer scope
-	assert wasMovedInScope(outerScope, "a");
-	assert !wasMovedInScope(innerScope, "a");
+	assert wasMovedInScope(outerScope, a);
+	assert !wasMovedInScope(innerScope, a);
 }
 
 test "both fresh branches are SINK" {
@@ -2522,9 +2492,10 @@ test "needsReturnIncref false for local var (moved)" {
 	const dctx = testDrcContext("function foo(): string { const s = \"\"; return s; }");
 	pushScope(dctx, false, true);
 	const rcStr = testStringRc();
-	registerVar(dctx, "s", rcStr, false, noSym);
+	const sSym = testVarSym("s");
+	registerVar(dctx, rcStr, false, sSym);
 	const loc = testLoc();
-	const ident = makeIdent("s", loc);
+	const ident = makeIdentResolved(sSym, loc);
 	assert !needsReturnIncref(ident, dctx);
 	popScope(dctx);
 }
@@ -2553,9 +2524,10 @@ test "isVarFromOuterLoopScope: var in function scope, inside loop" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	pushScope(dctx, true, false);    // loop scope
-	assert isVarFromOuterLoopScope("x", dctx);
+	assert isVarFromOuterLoopScope(x, dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2565,8 +2537,9 @@ test "isVarFromOuterLoopScope: var in loop scope, not outer" {
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
 	pushScope(dctx, true, false);    // loop scope
-	registerVar(dctx, "s", rcStr, false, noSym);
-	assert !isVarFromOuterLoopScope("s", dctx);
+	const sv = testVarSym("s");
+	registerVar(dctx, rcStr, false, sv);
+	assert !isVarFromOuterLoopScope(sv, dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2575,9 +2548,10 @@ test "isVarFromOuterLoopScope: no loop, returns false" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	pushScope(dctx, false, false);   // block scope (not loop)
-	assert !isVarFromOuterLoopScope("x", dctx);
+	assert !isVarFromOuterLoopScope(x, dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2587,9 +2561,10 @@ test "isVarFromOuterLoopScope: nested loops, var in outer loop" {
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
 	pushScope(dctx, true, false);    // outer loop
-	registerVar(dctx, "s", rcStr, false, noSym);
+	const sv = testVarSym("s");
+	registerVar(dctx, rcStr, false, sv);
 	pushScope(dctx, true, false);    // inner loop
-	assert isVarFromOuterLoopScope("s", dctx);
+	assert isVarFromOuterLoopScope(sv, dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2599,10 +2574,11 @@ test "isVarFromOuterLoopScope: nested loops, var in function scope" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	pushScope(dctx, true, false);    // outer loop
 	pushScope(dctx, true, false);    // inner loop
-	assert isVarFromOuterLoopScope("x", dctx);
+	assert isVarFromOuterLoopScope(x, dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2649,10 +2625,11 @@ test "isVarFromOuterLoopScope: block inside loop, var before loop" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);    // function scope
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	pushScope(dctx, true, false);    // loop scope
 	pushScope(dctx, false, false);   // block inside loop
-	assert isVarFromOuterLoopScope("x", dctx);
+	assert isVarFromOuterLoopScope(x, dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2663,9 +2640,10 @@ test "emitMoveSourceWasMoved on identifier emits pending wasMoved" {
 	const rcStr = testStringRc();
 	const loc = testLoc();
 	pushScope(dctx, false, true);
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	const stmts: Node[] = [makeExprStmt(makeNull(loc), loc)];
-	const handled = emitMoveSourceWasMoved(makeIdent("x", loc), rcStr, 0, stmts, dctx, loc, false);
+	const handled = emitMoveSourceWasMoved(makeIdentResolved(x, loc), rcStr, 0, stmts, dctx, loc, false);
 	assert handled;
 	assert hasPending(dctx);
 	popScope(dctx);
@@ -2734,13 +2712,14 @@ test "first-write: uninitialized var marked not initialized" {
 	const dctx = testDrcContext("let x: string;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);
-	registerVar(dctx, "x", rcStr, false, noSym);
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
 	// After register, isInitialized is true by default
-	const vi1 = findVarInfoInContext(dctx, "x");
+	const vi1 = findVarInfoInContext(dctx, x);
 	assert vi1 != null;
 	assert vi1.isInitialized;
 	// markUninitialized sets it to false
-	markUninitialized(dctx, "x");
+	markUninitialized(dctx, x);
 	assert !vi1.isInitialized;
 	popScope(dctx);
 }
@@ -2749,9 +2728,10 @@ test "first-write: second assignment restores initialized" {
 	const dctx = testDrcContext("let x: string;");
 	const rcStr = testStringRc();
 	pushScope(dctx, false, true);
-	registerVar(dctx, "x", rcStr, false, noSym);
-	markUninitialized(dctx, "x");
-	const vi = findVarInfoInContext(dctx, "x");
+	const x = testVarSym("x");
+	registerVar(dctx, rcStr, false, x);
+	markUninitialized(dctx, x);
+	const vi = findVarInfoInContext(dctx, x);
 	assert !vi.isInitialized;
 	// Simulate first-write marking it initialized
 	vi.isInitialized = true;
