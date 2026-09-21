@@ -3728,6 +3728,28 @@ test "getProperty" {
 	assert getProperty(numberType(), "x").kind == TypeKind.Inferred;
 }
 
+test "a ref-carrying union is viewable" {
+	const leaf = createRef(createStruct("Leaf", ["v"], [int32Type()], false));
+	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const structUnion = createUnion([pair, name]);
+	assert !isReadonlyView(structUnion);
+	assert isReadonlyView(createReadonlyView(structUnion));
+	assert withoutReadonlyView(createReadonlyView(structUnion)) == structUnion;
+}
+
+test "a union of ref variants is viewable" {
+	const namedA = createRef(createStruct("NamedA", ["leaf"], [createRef(createStruct("Leaf", ["v"], [int32Type()], false))], false));
+	const namedB = createRef(createStruct("NamedB", ["label"], [stringType()], false));
+	const classUnion = createUnion([namedA, namedB]);
+	assert isReadonlyView(createReadonlyView(classUnion));
+}
+
+test "a pod union is not viewable" {
+	const podUnion = createUnion([int32Type(), stringType()]);
+	assert !isReadonlyView(createReadonlyView(podUnion));
+}
+
 test "substitute generic param" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "T", numberType());
