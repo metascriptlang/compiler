@@ -1107,7 +1107,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				argType = argNode.resolvedSym.symbolType;
 			}
 		}
-		argTypes.push(argType);
+		argTypes.push(argType!);
 		// Source 3: forward inference. Single-walk — subsequent args see
 		// the updated bindings, prior args are never re-checked.
 		if (_isGenericCall && _formal != null && argType != null
@@ -1165,6 +1165,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				argTypes[ci] = d.arguments[ci].nodeType!;
 			}
 		}
+		relateCallArgs(ctx, node, calleeType!, argTypes, false);
 		// Static class methods need mono-instantiation
 		// for both explicit `<T>` AND arg-driven inference (e.g.
 		// `JSON.stringify(person)` without `<T>` should infer T=Person from
@@ -1294,153 +1295,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
 		}
-		// Type-check provided args (rest args check against element type of rest param)
-		const restParamIdx = hasRest ? calleeType.typeChildren.length - 1 : -1;
-		let actorBorrowReported = false;
-		for (let pi = 0; pi < argTypes.length; pi += 1) {
-			let paramType: Type = null as unknown as Type;
-			if (hasRest && pi >= restParamIdx) {
-				const restArr = unwrapRef(unwrapVarargs(lastCT));
-				const restElem = getElementType(restArr);
-				paramType = restElem.kind == TypeKind.Inferred ? restArr : restElem;
-			} else if (pi < calleeType.typeChildren.length) {
-				paramType = calleeType.typeChildren[pi];
-			} else {
-				continue;
-			}
-			if (argTypes[pi] == null || argTypes[pi] == null) continue;
-			if (isUnknownType(paramType)) {
-				let argSrcT = argTypes[pi];
-				let argProbe = d.arguments[pi];
-				while (argProbe.kind == NodeKind.TypeAssertion) {
-					argProbe = (argProbe.data as TypeAssertionData).asExpr;
-					if (argProbe != null && argProbe.nodeType != null) argSrcT = argProbe.nodeType;
-				}
-				const argCastOk = argProbe != d.arguments[pi] && argSrcT != null
-					&& (isIntegerType(argSrcT) || argSrcT.kind == TypeKind.Boolean || argSrcT.kind == TypeKind.Char || argSrcT.kind == TypeKind.Enum);
-				if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
-					addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
-				}
-			} else if (isUnknownType(argTypes[pi]) && paramType.kind != TypeKind.Unknown && !isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam) {
-				const collapsedParam = paramType.kind == TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
-				if (collapsedParam == null || (collapsedParam.kind != TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
-					addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
-				}
-			}
-			const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
-				|| peelTransparentInstance(paramType).kind == TypeKind.Function;
-			if (!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
-				&& !isUnresolvedType(argTypes[pi]) && argTypes[pi].kind != TypeKind.Error
-				&& !(fnShaped && hasGenericParams(paramType))) {
-				// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
-				// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
-				// call args go through this site instead of fitNode. Applied
-				// independently of isAssignable because (a) null IS assignable
-				// to struct (so isAssignable would skip the wrap), but codegen
-				// still needs a typed null to emit {0}, and (b) inner T is
-				// not directly assignable to Maybe<T> — we want a struct literal.
-				// Generic-containing formals never wrap here — deferred to the
-				// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
-				if (isMaybeType(paramType) && paramType.typeReturn != null
-						&& !isMaybeType(argTypes[pi])
-						&& (d.arguments[pi].kind == NodeKind.NullLiteral
-							|| argTypes[pi].kind == TypeKind.Null
-							|| isAssignable(argTypes[pi], paramType.typeReturn))) {
-					d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
-					argTypes[pi] = paramType;
-				}
-				// `A | null` meeting `A | B | null`. Same reason the wrap above
-				// lives here: an argument never reaches fitNode, so the carrier
-				// widening has to be applied at this site too.
-				if (isMaybeType(paramType) && isMaybeType(argTypes[pi])) {
-					const widenedArg = widenMaybePayload(d.arguments[pi], paramType, argTypes[pi]);
-					if (widenedArg != null as unknown as Node) {
-						d.arguments[pi] = widenedArg;
-						argTypes[pi] = paramType;
-					}
-				}
-				const adoptedArg = tryAdoptAnonStruct(d.arguments[pi], paramType, argTypes[pi]);
-				if (adoptedArg != null as unknown as Node) {
-					d.arguments[pi] = adoptedArg;
-					argTypes[pi] = paramType;
-				}
-				if (paramType.kind == TypeKind.CString
-						&& (argTypes[pi].kind == TypeKind.String || argTypes[pi].kind == TypeKind.StringLiteral)) {
-					d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
-					argTypes[pi] = paramType;
-				}
-				const literalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
-					&& d.arguments[pi].kind == NodeKind.ObjectLiteral && hasGenericParams(paramType);
-				if (!literalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
-					if (needsStdConv(argTypes[pi], paramType)) {
-						// float/number → integer: the fractional part would be cut
-						// with no annotation beside the value to warn the reader —
-						// the cut has to be the programmer's word (`as intN`).
-						if ((argTypes[pi].kind == TypeKind.Number || isFloatType(argTypes[pi])) && isIntegerType(paramType)
-							&& !isIntegralNumberLiteral(d.arguments[pi])) {
-							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "implicit " + typeDisplayName(argTypes[pi]) + " → " + typeDisplayName(paramType)
-								+ " narrowing in '" + calleeName + "' arg " + String(pi)
-								+ " drops the fractional part — write an explicit 'as " + typeDisplayName(paramType) + "'",
-								node.location.line, node.location.column);
-						}
-					} else {
-						const coerced = tryApplyConverter(ctx, d.arguments[pi], argTypes[pi], paramType);
-						if (coerced != null) {
-							d.arguments[pi] = coerced;
-							if (coerced.nodeType != null) { argTypes[pi] = coerced.nodeType; }
-						} else {
-							const readAsValue = !hasGenericParams(paramType) && valueOfInPlace(ctx, d.arguments[pi]) && d.arguments[pi].nodeType != null;
-							if (readAsValue) { argTypes[pi] = d.arguments[pi].nodeType!; }
-							if (readAsValue && (isAssignable(argTypes[pi], paramType) || needsStdConv(argTypes[pi], paramType))) {
-								d.arguments[pi] = fitNode(ctx, d.arguments[pi], paramType, argTypes[pi]);
-								argTypes[pi] = d.arguments[pi].nodeType!;
-							} else {
-								const calleeName = getCalleeName(d.callee);
-								addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
-							}
-						}
-					}
-				}
-				// Reference parity: var/out params require lvalue argument
-				if (paramType.kind == TypeKind.Var && pi < d.arguments.length) {
-					let lvArg = d.arguments[pi];
-					if (lvArg.kind == NodeKind.OutExpr) { lvArg = (lvArg.data as OutExprData).outArg; }
-					const argKind = lvArg.kind;
-					if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess) {
-						const calleeName = getCalleeName(d.callee);
-						addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
-					}
-				}
-				if (needsStdConv(argTypes[pi], paramType)) {
-					// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
-					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
-					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
-					convNode.nodeType = paramType;
-					convNode.flags = convNode.flags.incl(NodeFlag.Sem);
-					d.arguments[pi] = convNode;
-				}
-				if (paramType.kind == TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
-					const uw = widenVariantToUnion(d.arguments[pi], paramType, argTypes[pi]);
-					if (uw != null as unknown as Node) d.arguments[pi] = uw;
-				}
-				if (paramType.kind != TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
-					const pj = narrowUnionToVariant(d.arguments[pi], argTypes[pi]);
-					if (pj != null as unknown as Node) d.arguments[pi] = pj;
-				}
-				// Sendable check: actor method args must be safe to cross boundary
-				if (isActorMethodCall && pi < d.arguments.length) {
-					const sendClass = calleeType == null || calleeType.typeReturn == null
-						|| calleeType.typeReturn.kind == TypeKind.Void;
-					const borrowed = checkActorArgSendable(ctx, d.arguments[pi], pi, sendClass);
-					if (borrowed && !actorBorrowReported && node == ctx.stmtPosExpr) {
-						actorBorrowReported = true;
-						addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
-							node.location.line, node.location.column);
-					}
-				}
-			}
-		}
+		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive
 		// instantiation). Handles both regular FunctionDecl and STATIC class
 		// MethodDecl — non-static methods on generic classes go through the
@@ -1479,6 +1334,161 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 }
 
 // Resolve generic return type using explicit type arg (e.g. parse<Person>)
+function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], isActorMethodCall: boolean): void {
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo") return;
+	const d = node.data as CallExprData;
+	const lastCT = calleeType.typeChildren.length > 0
+		? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
+	const hasRest = lastCT != null && lastCT.kind == TypeKind.Varargs;
+	// Type-check provided args (rest args check against element type of rest param)
+	const restParamIdx = hasRest ? calleeType.typeChildren.length - 1 : -1;
+	let actorBorrowReported = false;
+	for (let pi = 0; pi < argTypes.length; pi += 1) {
+		let paramType: Type = null as unknown as Type;
+		if (hasRest && pi >= restParamIdx) {
+			const restArr = unwrapRef(unwrapVarargs(lastCT));
+			const restElem = getElementType(restArr);
+			paramType = restElem.kind == TypeKind.Inferred ? restArr : restElem;
+		} else if (pi < calleeType.typeChildren.length) {
+			paramType = calleeType.typeChildren[pi];
+		} else {
+			continue;
+		}
+		if (argTypes[pi] == null || argTypes[pi] == null) continue;
+		if (isUnknownType(paramType)) {
+			let argSrcT = argTypes[pi];
+			let argProbe = d.arguments[pi];
+			while (argProbe.kind == NodeKind.TypeAssertion) {
+				argProbe = (argProbe.data as TypeAssertionData).asExpr;
+				if (argProbe != null && argProbe.nodeType != null) argSrcT = argProbe.nodeType;
+			}
+			const argCastOk = argProbe != d.arguments[pi] && argSrcT != null
+				&& (isIntegerType(argSrcT) || argSrcT.kind == TypeKind.Boolean || argSrcT.kind == TypeKind.Char || argSrcT.kind == TypeKind.Enum);
+			if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
+				addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+			}
+		} else if (isUnknownType(argTypes[pi]) && paramType.kind != TypeKind.Unknown && !isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam) {
+			const collapsedParam = paramType.kind == TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
+			if (collapsedParam == null || (collapsedParam.kind != TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
+				addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
+			}
+		}
+		const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
+			|| peelTransparentInstance(paramType).kind == TypeKind.Function;
+		if (!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
+			&& !isUnresolvedType(argTypes[pi]) && argTypes[pi].kind != TypeKind.Error
+			&& !(fnShaped && hasGenericParams(paramType))) {
+			// Maybe<T> coercion: f(42) / f(null) where f: (number | null) → ...
+			// Mirrors the fitNode wrap rule used for var-decl/return/assignment;
+			// call args go through this site instead of fitNode. Applied
+			// independently of isAssignable because (a) null IS assignable
+			// to struct (so isAssignable would skip the wrap), but codegen
+			// still needs a typed null to emit {0}, and (b) inner T is
+			// not directly assignable to Maybe<T> — we want a struct literal.
+			// Generic-containing formals never wrap here — deferred to the
+			// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
+			if (isMaybeType(paramType) && paramType.typeReturn != null
+					&& !isMaybeType(argTypes[pi])
+					&& (d.arguments[pi].kind == NodeKind.NullLiteral
+						|| argTypes[pi].kind == TypeKind.Null
+						|| isAssignable(argTypes[pi], paramType.typeReturn))) {
+				d.arguments[pi] = synthMaybeWrap(d.arguments[pi], paramType, argTypes[pi]);
+				argTypes[pi] = paramType;
+			}
+			// `A | null` meeting `A | B | null`. Same reason the wrap above
+			// lives here: an argument never reaches fitNode, so the carrier
+			// widening has to be applied at this site too.
+			if (isMaybeType(paramType) && isMaybeType(argTypes[pi])) {
+				const widenedArg = widenMaybePayload(d.arguments[pi], paramType, argTypes[pi]);
+				if (widenedArg != null as unknown as Node) {
+					d.arguments[pi] = widenedArg;
+					argTypes[pi] = paramType;
+				}
+			}
+			const adoptedArg = tryAdoptAnonStruct(d.arguments[pi], paramType, argTypes[pi]);
+			if (adoptedArg != null as unknown as Node) {
+				d.arguments[pi] = adoptedArg;
+				argTypes[pi] = paramType;
+			}
+			if (paramType.kind == TypeKind.CString
+					&& (argTypes[pi].kind == TypeKind.String || argTypes[pi].kind == TypeKind.StringLiteral)) {
+				d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
+				argTypes[pi] = paramType;
+			}
+			const literalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
+				&& d.arguments[pi].kind == NodeKind.ObjectLiteral && hasGenericParams(paramType);
+			if (!literalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
+				if (needsStdConv(argTypes[pi], paramType)) {
+					// float/number → integer: the fractional part would be cut
+					// with no annotation beside the value to warn the reader —
+					// the cut has to be the programmer's word (`as intN`).
+					if ((argTypes[pi].kind == TypeKind.Number || isFloatType(argTypes[pi])) && isIntegerType(paramType)
+						&& !isIntegralNumberLiteral(d.arguments[pi])) {
+						const calleeName = getCalleeName(d.callee);
+						addError(ctx, "implicit " + typeDisplayName(argTypes[pi]) + " → " + typeDisplayName(paramType)
+							+ " narrowing in '" + calleeName + "' arg " + String(pi)
+							+ " drops the fractional part — write an explicit 'as " + typeDisplayName(paramType) + "'",
+							node.location.line, node.location.column);
+					}
+				} else {
+					const coerced = tryApplyConverter(ctx, d.arguments[pi], argTypes[pi], paramType);
+					if (coerced != null) {
+						d.arguments[pi] = coerced;
+						if (coerced.nodeType != null) { argTypes[pi] = coerced.nodeType; }
+					} else {
+						const readAsValue = !hasGenericParams(paramType) && valueOfInPlace(ctx, d.arguments[pi]) && d.arguments[pi].nodeType != null;
+						if (readAsValue) { argTypes[pi] = d.arguments[pi].nodeType!; }
+						if (readAsValue && (isAssignable(argTypes[pi], paramType) || needsStdConv(argTypes[pi], paramType))) {
+							d.arguments[pi] = fitNode(ctx, d.arguments[pi], paramType, argTypes[pi]);
+							argTypes[pi] = d.arguments[pi].nodeType!;
+						} else {
+							const calleeName = getCalleeName(d.callee);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
+						}
+					}
+				}
+			}
+			// Reference parity: var/out params require lvalue argument
+			if (paramType.kind == TypeKind.Var && pi < d.arguments.length) {
+				let lvArg = d.arguments[pi];
+				if (lvArg.kind == NodeKind.OutExpr) { lvArg = (lvArg.data as OutExprData).outArg; }
+				const argKind = lvArg.kind;
+				if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess) {
+					const calleeName = getCalleeName(d.callee);
+					addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+				}
+			}
+			if (needsStdConv(argTypes[pi], paramType)) {
+				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
+				const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
+				const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
+				convNode.nodeType = paramType;
+				convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+				d.arguments[pi] = convNode;
+			}
+			if (paramType.kind == TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
+				const uw = widenVariantToUnion(d.arguments[pi], paramType, argTypes[pi]);
+				if (uw != null as unknown as Node) d.arguments[pi] = uw;
+			}
+			if (paramType.kind != TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
+				const pj = narrowUnionToVariant(d.arguments[pi], argTypes[pi]);
+				if (pj != null as unknown as Node) d.arguments[pi] = pj;
+			}
+			// Sendable check: actor method args must be safe to cross boundary
+			if (isActorMethodCall && pi < d.arguments.length) {
+				const sendClass = calleeType == null || calleeType.typeReturn == null
+					|| calleeType.typeReturn.kind == TypeKind.Void;
+				const borrowed = checkActorArgSendable(ctx, d.arguments[pi], pi, sendClass);
+				if (borrowed && !actorBorrowReported && node == ctx.stmtPosExpr) {
+					actorBorrowReported = true;
+					addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
+						node.location.line, node.location.column);
+				}
+			}
+		}
+	}
+}
+
 function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type | null, explicitArg: string, ctx: CheckerContext, node: Node): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType == null) return inferredType();
@@ -2667,6 +2677,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
+	if (winnerType.kind == TypeKind.Function) relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
@@ -3021,7 +3032,7 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 		names.push(name);
 		paramTypes.push(sym.symbolType);
 		paramAnnots.push("");
-		paramDefaults.push(null);
+		paramDefaults.push(null as unknown as Node);
 		moveArgs.push(createNodeAt(NodeKind.MoveExpr, { moveArg: el }, el.location));
 		movedKeys.push(symbolConsumeKey(sym));
 	}
