@@ -2,8 +2,6 @@
   "corpus": {
     "619-mapTupleValueLeak [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-tuple-value done acc=0'; measured 2026-09-21"},
     "628-mapMutationGuardOk [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-guard-ok sum=280 sum2=288 set=4 hmk=6 hs=4'; measured 2026-09-21"},
-    "630-raiserCycleCollect [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'raiser-cycle freed=200000 keeperOk=1'; measured 2026-09-21"},
-    "630-raiserCycleCollect [js]": {"since":"52ae61ea","note":"runs but stdout misses 'raiser-cycle freed=200000 keeperOk=1'; measured 2026-09-21"},
     "704-macroExprHoist [c]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "704-macroExprHoist [danger]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "704-macroExprHoist [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
