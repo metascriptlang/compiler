@@ -13,13 +13,14 @@
 //   "a" + 1          — mixed types
 
 import {
-	Node, NodeKind, SourceLocation,
-	BinaryExprData, UnaryExprData, MemberExprData,
+	Node, NodeKind, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
+	BinaryExprData, UnaryExprData, MemberExprData, VariableDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../../ast/node";
+import { isIntegerType, isFloatType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeNumber, makeIntNumber, makeString, makeBool } from "../util";
+import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -34,46 +35,305 @@ function foldNode(node: Node): Node {
 		NodeKind.BinaryExpr => foldBinary(node),
 		NodeKind.UnaryExpr => foldUnary(node),
 		NodeKind.MemberExpr => foldMember(node),
+		NodeKind.Identifier => foldConstantExpression(node),
+		NodeKind.TypeAssertion => foldConstantExpression(node),
+		NodeKind.HiddenStdConv => foldConstantExpression(node),
 		_ => node,
 	};
+}
+
+
+const CONSTANT_CHAIN_LIMIT: int32 = 64;
+
+function foldConstantExpression(node: Node): Node {
+	const literal = constantLiteralOf(node, 0);
+	return literal != null ? literal : node;
+}
+
+function isInlineConstantType(t: Type | null): boolean {
+	if (t == null) return false;
+	return isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean;
+}
+
+function moduleConstInitializer(node: Node): Node {
+	const none = null as unknown as Node;
+	const sym = node.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Variable) return none;
+	if (!sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.Mutable)) return none;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
+	if (!isInlineConstantType(decl.nodeType)) return none;
+	const d = decl.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const || d.initializer == null) return none;
+	return d.initializer;
+}
+
+function enumMemberOrdinal(expr: Node): int64 {
+	if (expr == null || expr.kind != NodeKind.Identifier || expr.nodeType == null) return -1;
+	const sym = expr.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.EnumMember) return -1;
+	const t = expr.nodeType;
+	const enumType = t.kind == TypeKind.Enum ? t : (t.kind == TypeKind.EnumLiteral ? t.typeReturn : null);
+	if (enumType == null || enumType.kind != TypeKind.Enum) return -1;
+	let index = 0;
+	for (const member of enumType.typeNames) {
+		if (member == sym.name) {
+			if (enumType.typeChildren != null && index < enumType.typeChildren.length) return enumType.typeChildren[index].typeValue as int64;
+			return index as int64;
+		}
+		index = index + 1;
+	}
+	return -1;
+}
+
+function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Node {
+	const none = null as unknown as Node;
+	if (literal.kind == NodeKind.BooleanLiteral) {
+		if (t != null && t.kind != TypeKind.Boolean) return none;
+		return makeBool((literal.data as BooleanLiteralData).boolValue, loc);
+	}
+	if (literal.kind != NodeKind.NumberLiteral) return none;
+	const nd = literal.data as NumberLiteralData;
+	if (t != null && isIntegerType(t)) {
+		if (nd.isFloat) return none;
+		return makeTypedInteger(wrapToWidth(nd.intVal as uint64, t), t, loc);
+	}
+	const copy = createNode(NodeKind.NumberLiteral, { value: nd.value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
+	copy.nodeType = t != null ? t : literal.nodeType;
+	return copy;
+}
+
+function constantLiteralOf(expr: Node, depth: int32): Node {
+	const none = null as unknown as Node;
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return none;
+	match (expr.kind) {
+		NodeKind.NumberLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
+		NodeKind.BooleanLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
+		NodeKind.Identifier => {
+			const initializer = moduleConstInitializer(expr);
+			if (initializer == null) return none;
+			const value = constantLiteralOf(initializer, depth + 1);
+			if (value == null) return none;
+			return retypedLiteral(value, expr.resolvedSym.declNode.nodeType, expr.location);
+		},
+		NodeKind.BinaryExpr => {
+			const d = expr.data as BinaryExprData;
+			const left = constantLiteralOf(d.left, depth + 1);
+			if (left == null) return none;
+			const right = constantLiteralOf(d.right, depth + 1);
+			if (right == null) return none;
+			const folded = foldBinaryLiterals(d.operator, left, right, expr);
+			return folded != expr ? folded : none;
+		},
+		NodeKind.UnaryExpr => {
+			const d = expr.data as UnaryExprData;
+			const operand = constantLiteralOf(d.operand, depth + 1);
+			if (operand == null) return none;
+			const folded = foldUnaryLiteral(d.unaryOp, operand, expr);
+			return folded != expr ? folded : none;
+		},
+		NodeKind.TypeAssertion => {
+			const target = expr.nodeType;
+			if (target == null || !isIntegerType(target)) return none;
+			const asserted = (expr.data as TypeAssertionData).asExpr;
+			const ordinal = enumMemberOrdinal(asserted);
+			if (ordinal >= 0) return makeTypedInteger(wrapToWidth(ordinal as uint64, target), target, expr.location);
+			const inner = constantLiteralOf(asserted, depth + 1);
+			if (inner == null) return none;
+			return retypedLiteral(inner, target, expr.location);
+		},
+		NodeKind.HiddenStdConv => {
+			const inner = constantLiteralOf((expr.data as HiddenStdConvData).convExpr, depth + 1);
+			if (inner == null || !isIntegerType(expr.nodeType)) return none;
+			return retypedLiteral(inner, expr.nodeType, expr.location);
+		},
+		_ => {},
+	};
+	return none;
+}
+
+
+function integerBitWidth(t: Type): int32 {
+	return match (t.kind) {
+		TypeKind.Int8 => 8,
+		TypeKind.Uint8 => 8,
+		TypeKind.Int16 => 16,
+		TypeKind.Uint16 => 16,
+		TypeKind.Int32 => 32,
+		TypeKind.Uint32 => 32,
+		_ => 64,
+	};
+}
+
+function isUnsignedIntegerType(t: Type): boolean {
+	return t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64;
+}
+
+function wrapToWidth(bits: uint64, t: Type): int64 {
+	const width = integerBitWidth(t);
+	if (width == 64) return bits as int64;
+	const modulus: int64 = (1 as int64) << (width as int64);
+	const low: int64 = (bits as int64) & (modulus - 1);
+	if (isUnsignedIntegerType(t)) return low;
+	return low >= modulus / 2 ? low - modulus : low;
+}
+
+function literalFitsWidth(d: NumberLiteralData, t: Type): boolean {
+	if (t.kind == TypeKind.Uint64) return true;
+	if (d.outOfRangeText != "") return false;
+	if (d.intVal < 0 && d.value > 0) return false;
+	if (t.kind == TypeKind.Int64) return true;
+	return wrapToWidth(d.intVal as uint64, t) == d.intVal;
+}
+
+function makeTypedInteger(value: int64, t: Type, loc: SourceLocation): Node {
+	const magnitude: number = isUnsignedIntegerType(t) ? (value as uint64) as number : value as number;
+	const n = createNode(NodeKind.NumberLiteral, { value: magnitude, isFloat: false, intVal: value, outOfRangeText: "", isBitPattern: false }, syntheticToken(loc));
+	n.nodeType = t;
+	return n;
+}
+
+function signedMagnitude(value: int64): uint64 {
+	return value < 0 ? 0 - (value as uint64) : value as uint64;
+}
+
+function signedMagnitudeLimit(negative: boolean, t: Type): uint64 {
+	const signBit = (1 as uint64) << ((integerBitWidth(t) - 1) as uint64);
+	return negative ? signBit : signBit - 1;
+}
+
+function signedMinValue(t: Type): int64 {
+	const signBit = (1 as uint64) << ((integerBitWidth(t) - 1) as uint64);
+	return wrapToWidth(signBit, t);
+}
+
+function signedResultIsExact(op: string, left: int64, right: int64, t: Type): boolean {
+	if (op == "*") {
+		const leftMagnitude = signedMagnitude(left);
+		const rightMagnitude = signedMagnitude(right);
+		const negative = (left < 0) != (right < 0);
+		const limit = signedMagnitudeLimit(negative, t);
+		return rightMagnitude == 0 || leftMagnitude <= limit / rightMagnitude;
+	}
+	const bits: uint64 = op == "+" ? (left as uint64) + (right as uint64) : (left as uint64) - (right as uint64);
+	const result = bits as int64;
+	if (op == "+") {
+		if (left >= 0 && right >= 0 && result < 0) return false;
+		if (left < 0 && right < 0 && result >= 0) return false;
+	} else {
+		if (left >= 0 && right < 0 && result < 0) return false;
+		if (left < 0 && right >= 0 && result >= 0) return false;
+	}
+	return wrapToWidth(bits, t) == result;
+}
+
+function foldIntegerArithmetic(op: string, leftValue: int64, rightValue: int64, t: Type, loc: SourceLocation, fallback: Node): Node {
+	const width = integerBitWidth(t);
+	const unsigned = isUnsignedIntegerType(t);
+	const left = wrapToWidth(leftValue as uint64, t);
+	const right = wrapToWidth(rightValue as uint64, t);
+	const leftBits = left as uint64;
+	const rightBits = right as uint64;
+	if (op == "+" || op == "-" || op == "*") {
+		if (!unsigned && !signedResultIsExact(op, left, right, t)) return fallback;
+		const bits: uint64 = match (op) {
+			"+" => leftBits + rightBits,
+			"-" => leftBits - rightBits,
+			_ => leftBits * rightBits,
+		};
+		return makeTypedInteger(wrapToWidth(bits, t), t, loc);
+	}
+	if (op == "/" || op == "%") {
+		if (right == 0) return fallback;
+		if (unsigned) {
+			const bits: uint64 = op == "/" ? leftBits / rightBits : leftBits % rightBits;
+			return makeTypedInteger(wrapToWidth(bits, t), t, loc);
+		}
+		if (left == signedMinValue(t) && right == -1) return fallback;
+		const quotient: int64 = op == "/" ? left / right : left % right;
+		return makeTypedInteger(quotient, t, loc);
+	}
+	if (op == "&" || op == "|" || op == "^") {
+		const bits: uint64 = match (op) {
+			"&" => leftBits & rightBits,
+			"|" => leftBits | rightBits,
+			_ => leftBits ^ rightBits,
+		};
+		return makeTypedInteger(wrapToWidth(bits, t), t, loc);
+	}
+	if (op == "<<" || op == ">>") {
+		if (right < 0 || right >= (width as int64)) return fallback;
+		if (op == "<<") return makeTypedInteger(wrapToWidth(leftBits << rightBits, t), t, loc);
+		if (unsigned) return makeTypedInteger(wrapToWidth(leftBits >> rightBits, t), t, loc);
+		return makeTypedInteger(left >> right, t, loc);
+	}
+	return fallback;
+}
+
+function foldIntegerComparison(op: string, leftValue: int64, rightValue: int64, t: Type, loc: SourceLocation, fallback: Node): Node {
+	const left = wrapToWidth(leftValue as uint64, t);
+	const right = wrapToWidth(rightValue as uint64, t);
+	if (op == "===" || op == "==") return makeBool(left == right, loc);
+	if (op == "!==" || op == "!=") return makeBool(left != right, loc);
+	const unsigned = isUnsignedIntegerType(t);
+	const leftBits = left as uint64;
+	const rightBits = right as uint64;
+	return match (op) {
+		"<" => makeBool(unsigned ? leftBits < rightBits : left < right, loc),
+		"<=" => makeBool(unsigned ? leftBits <= rightBits : left <= right, loc),
+		">" => makeBool(unsigned ? leftBits > rightBits : left > right, loc),
+		">=" => makeBool(unsigned ? leftBits >= rightBits : left >= right, loc),
+		_ => fallback,
+	};
+}
+
+function isComparisonOperator(op: string): boolean {
+	return op == "<" || op == "<=" || op == ">" || op == ">=" || op == "===" || op == "!==" || op == "==" || op == "!=";
 }
 
 // ===== Binary Folding =====
 
 function foldBinary(node: Node): Node {
 	const d = node.data as BinaryExprData;
-	const loc = node.location;
 	// NOTE: do NOT create `const op = d.operator` — DRC treats it as a move from d->operator,
 	// which zeroes the node's operator field because d is a pointer alias into node.data.
 	// Use d.operator directly everywhere instead.
+	return foldBinaryLiterals(d.operator, d.left, d.right, node);
+}
 
-	// Both operands must be the same literal kind
-	if (d.left.kind != d.right.kind) return node;
+function foldBinaryLiterals(op: string, left: Node, right: Node, node: Node): Node {
+	const loc = node.location;
+	if (left.kind != right.kind) return node;
 
-	const result = match (d.left.kind) {
+	const result = match (left.kind) {
 		NodeKind.NumberLiteral => {
-			const ld = d.left.data as NumberLiteralData;
-			const rd = d.right.data as NumberLiteralData;
-			// The fold table runs on doubles. Folding operands a double cannot hold
-			// would bake in a wrong constant, so leave the expression alone and let
-			// the backend's own integer arithmetic evaluate it.
+			const ld = left.data as NumberLiteralData;
+			const rd = right.data as NumberLiteralData;
+			if (!ld.isFloat && !rd.isFloat) {
+				if (isComparisonOperator(op) && left.nodeType != null && isIntegerType(left.nodeType)
+						&& literalFitsWidth(ld, left.nodeType) && literalFitsWidth(rd, left.nodeType)) {
+					return foldIntegerComparison(op, ld.intVal, rd.intVal, left.nodeType, loc, node);
+				}
+				if (!isComparisonOperator(op) && node.nodeType != null && isIntegerType(node.nodeType)
+						&& literalFitsWidth(ld, node.nodeType) && literalFitsWidth(rd, node.nodeType)) {
+					return foldIntegerArithmetic(op, ld.intVal, rd.intVal, node.nodeType, loc, node);
+				}
+			}
 			if (!fitsDouble(ld) || !fitsDouble(rd)) return node;
-			return foldNumberBinary(d.operator, ld.value, rd.value, loc, node);
+			return foldNumberBinary(op, ld.value, rd.value, loc, node);
 		},
 		NodeKind.StringLiteral => {
-			const ls = (d.left.data as StringLiteralData).value;
-			const rs = (d.right.data as StringLiteralData).value;
-			return foldStringBinary(d.operator, ls, rs, loc, node);
+			const ls = (left.data as StringLiteralData).value;
+			const rs = (right.data as StringLiteralData).value;
+			return foldStringBinary(op, ls, rs, loc, node);
 		},
 		NodeKind.BooleanLiteral => {
-			const lb = (d.left.data as BooleanLiteralData).boolValue;
-			const rb = (d.right.data as BooleanLiteralData).boolValue;
-			return foldBoolBinary(d.operator, lb, rb, loc, node);
+			const lb = (left.data as BooleanLiteralData).boolValue;
+			const rb = (right.data as BooleanLiteralData).boolValue;
+			return foldBoolBinary(op, lb, rb, loc, node);
 		},
 		_ => node,
 	};
-	// Preserve checker-stamped type through constant folding.
-	// Reference parity: constant folding preserves original type on folded literals.
 	if (result != node && node.nodeType != null) {
 		result.nodeType = node.nodeType;
 	}
@@ -129,26 +389,33 @@ function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: SourceLocatio
 
 function foldUnary(node: Node): Node {
 	const d = node.data as UnaryExprData;
-	const loc = node.location;
 	// NOTE: do NOT copy d.unaryOp to local — same DRC alias issue as foldBinary.
+	return foldUnaryLiteral(d.unaryOp, d.operand, node);
+}
 
-	match (d.operand.kind) {
+function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
+	const loc = node.location;
+
+	match (operand.kind) {
 		NodeKind.BooleanLiteral => {
-			if (d.unaryOp == "!") {
-				const bv = (d.operand.data as BooleanLiteralData).boolValue;
+			if (op == "!") {
+				const bv = (operand.data as BooleanLiteralData).boolValue;
 				return makeBool(!bv, loc);
 			}
 		},
 		NodeKind.NumberLiteral => {
-			const od = d.operand.data as NumberLiteralData;
+			const od = operand.data as NumberLiteralData;
 			const nv = od.value;
-			const result = match (d.unaryOp) {
+			if (!od.isFloat && node.nodeType != null && isIntegerType(node.nodeType) && literalFitsWidth(od, node.nodeType) && (op == "-" || op == "+")) {
+				if (op == "-" && !isUnsignedIntegerType(node.nodeType) && od.intVal == signedMinValue(node.nodeType)) return node;
+				const bits: uint64 = op == "-" ? 0 - (od.intVal as uint64) : od.intVal as uint64;
+				return makeTypedInteger(wrapToWidth(bits, node.nodeType), node.nodeType, loc);
+			}
+			const result = match (op) {
 				"-" => od.isFloat ? makeNumber(0 - nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
 				"+" => od.isFloat ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
-			// Preserve checker-stamped type through constant folding.
-			// Reference parity: constant folding preserves original type on folded literals.
 			if (result != node && node.nodeType != null) {
 				result.nodeType = node.nodeType;
 			}
