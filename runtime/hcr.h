@@ -3,65 +3,22 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <dlfcn.h>
 
-// ===== HCR State Handover =====
-// Allocate-or-reuse pattern for module global state.
-// First load: calloc + run init. Reload: reuse existing state pointer.
-//
-// Usage in generated code:
-//   void* ModName_hcr_handover(void* old_state) {
-//       MS_HCR_HANDOVER(ModName_GlobalState, ModName__Init000)
-//   }
-
-#define MS_HCR_HANDOVER(StateType, InitFn) \
-    if (old_state == NULL) { \
-        StateType* _gs = (StateType*)calloc(1, sizeof(StateType)); \
-        InitFn(_gs); \
-        return _gs; \
-    } \
-    return old_state;
-
-// ===== HCR Module Handle =====
-
-typedef struct {
-    void* handle;        // dlopen handle
-    void* globalState;   // heap-anchored GlobalState (survives reload)
-    const char* path;    // .so/.dylib path
-} MsHcrModule;
-
-// Load or reload a module
-static MsHcrModule msHcrLoad(const char* soPath, MsHcrModule* prev) {
-    MsHcrModule mod;
-    mod.path = soPath;
-    mod.handle = dlopen(soPath, RTLD_NOW | RTLD_LOCAL);
-    if (mod.handle == NULL) {
-        fprintf(stderr, "HCR: dlopen failed: %s\n", dlerror());
-        mod.globalState = (prev != NULL) ? prev->globalState : NULL;
-        return mod;
-    }
-    // Find handover symbol
-    typedef void* (*HandoverFn)(void*);
-    HandoverFn handover = (HandoverFn)dlsym(mod.handle, "_hcr_handover");
-    if (handover != NULL) {
-        void* oldState = (prev != NULL) ? prev->globalState : NULL;
-        mod.globalState = handover(oldState);
-    } else {
-        mod.globalState = (prev != NULL) ? prev->globalState : NULL;
-    }
-    // Close old handle (state is heap-anchored, survives close)
-    if (prev != NULL && prev->handle != NULL) {
-        dlclose(prev->handle);
-    }
-    return mod;
-}
-
-// Unload module (frees handle, NOT globalState)
-static void msHcrUnload(MsHcrModule* mod) {
-    if (mod->handle != NULL) {
-        dlclose(mod->handle);
-        mod->handle = NULL;
-    }
-}
+#if defined(_WIN32)
+#include <stdint.h>
+#include <windows.h>
+#define MS_HCR_EXPORT __declspec(dllexport)
+static inline void* msHcrWinOpen(const char* path) { return (void*)LoadLibraryA(path); }
+static inline void* msHcrWinSymbol(void* handle, const char* name) { return (void*)GetProcAddress((HMODULE)handle, name); }
+static inline int32_t msHcrWinClose(void* handle) { return FreeLibrary((HMODULE)handle) ? 1 : 0; }
+static inline uint32_t msHcrWinLastError(void) { return (uint32_t)GetLastError(); }
+static inline int32_t msHcrWinIsNull(void* value) { return value == NULL ? 1 : 0; }
+static inline uint64_t msHcrWinAddress(void* value) { return (uint64_t)(uintptr_t)value; }
+static inline void* msHcrWinCallHandover(void* raw, void* state) { return ((void* (*)(void*))raw)(state); }
+static inline void msHcrWinCallInit(void* raw) { ((void (*)(void))raw)(); }
+static inline int32_t msHcrWinCallProbe(void* raw) { return ((int32_t (*)(void))raw)(); }
+#else
+#define MS_HCR_EXPORT __attribute__((visibility("default")))
+#endif
 
 #endif

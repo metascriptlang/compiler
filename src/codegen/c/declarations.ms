@@ -174,7 +174,9 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
-	const prefix = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
+	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
+	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
+	const prefix = exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;

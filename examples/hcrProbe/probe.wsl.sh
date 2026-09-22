@@ -4,20 +4,14 @@ cd "$1"
 
 gcc -O1 -o out/hcrHost ../../runtime/hcrHost.c -ldl
 
-# First exported bump__ symbol per generation (no awk `exit`: it SIGPIPEs nm
-# under pipefail and kills the script with 141).
-symof() { nm -D "$1" | awk '$3 ~ /bump__/ && !f {print $3; f=1}'; }
-S1=$(symof out/gen/g1/module.so)
-S2=$(symof out/gen/g2/module.so)
-S3=$(symof out/gen/g3/module.so)
-[ -n "$S1" ] && [ -n "$S2" ] && [ -n "$S3" ] || { echo "PROBE FAIL: bump not exported"; exit 1; }
+SYMBOL=hcrProbeBump
 
 # g4 is a truncated copy of g2; its pair only matters if dlopen wrongly succeeds.
 out/hcrHost --probe \
-	"$S1" out/gen/g1/module.so \
-	"$S2" out/gen/g2/module.so \
-	"$S3" out/gen/g3/module.so \
-	"$S2" out/gen/g4/module.so \
+	"$SYMBOL" out/gen/g1/module.so \
+	"$SYMBOL" out/gen/g2/module.so \
+	"$SYMBOL" out/gen/g3/module.so \
+	"$SYMBOL" out/gen/g4/module.so \
 	>out/probe.out 2>out/probe.err
 
 cat out/probe.out

@@ -88,8 +88,6 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	// Pass 3: Synthesize HCR nodes via @emit
 	const emitNodes: Node[] = [];
 
-	// Include hcr.h
-	emitNodes.push(makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc));
 
 	// GlobalState struct typedef (with _struct_hash for reload safety)
 	let structDef = "/*TYPESECTION*/typedef struct { uint64_t _struct_hash;";
@@ -108,7 +106,7 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 
 	// Handover function — allocates GlobalState on first load, reuses on reload.
 	// On reload, checks structural hash to detect incompatible layout changes.
-	const handover = "__attribute__((visibility(\"default\"))) void* _hcr_handover(void* old_state) { "
+	const handover = "MS_HCR_EXPORT void* _hcr_handover(void* old_state) { "
 		+ "if (old_state == NULL) { _ms_gs = (_GlobalState*)calloc(1, sizeof(_GlobalState)); _ms_gs->_struct_hash = _MS_STRUCT_HASH; return _ms_gs; } "
 		+ "if (((_GlobalState*)old_state)->_struct_hash != _MS_STRUCT_HASH) { "
 		+ "fprintf(stderr, \"HCR: incompatible state layout change, full restart required\\n\"); return ((void*)0); } "

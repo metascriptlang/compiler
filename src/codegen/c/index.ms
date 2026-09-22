@@ -113,6 +113,9 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <stddef.h>");
+	if (g.isHcr) {
+		addLine(sec(g, CSection.Headers), "#include \"runtime/hcr.h\"");
+	}
 	if (ctx == null || ctx.targetOs != "solana") {
 		// Solana/BPF has no libc — manual.h provides memcpy/memset/strlen
 		addLine(sec(g, CSection.Headers), "#include <string.h>");
@@ -197,6 +200,7 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const modName = mangleModuleName(g.modulePath);
 	const datInitName = g.isHcr ? "DatInit000" : `${modName}__DatInit000`;
 	const initName = g.isHcr ? "Init000" : `${modName}__Init000`;
+	const exportPrefix = g.isHcr ? "MS_HCR_EXPORT " : "";
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
@@ -216,8 +220,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const skipGuard = ost == "solana" || ost == "bare";
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
-	addLine(hdrs, `void ${datInitName}(void);`);
-	addLine(procs, `void ${datInitName}(void) {`);
+	addLine(hdrs, `${exportPrefix}void ${datInitName}(void);`);
+	addLine(procs, `${exportPrefix}void ${datInitName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
 		addLine(procs, `  if (${datInitName}_guard_) return;`);
@@ -230,8 +234,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	addNewline(procs);
 
 	// Init000: user top-level code (non-static for cross-module visibility)
-	addLine(hdrs, `void ${initName}(void);`);
-	addLine(procs, `void ${initName}(void) {`);
+	addLine(hdrs, `${exportPrefix}void ${initName}(void);`);
+	addLine(procs, `${exportPrefix}void ${initName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
 		addLine(procs, `  if (${initName}_guard_) return;`);
