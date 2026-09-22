@@ -41,7 +41,7 @@ function stripRestParamPrefix(params: string[]): boolean {
 // ===== A. Resolve Annotation Strings =====
 
 // Tier 3: find a keyword string at top level (not inside brackets/parens/braces/angles).
-function findTopLevelKeyword(text: string, keyword: string): number {
+function findTopLevelKeyword(text: string, keyword: string): int32 {
 	let depth = 0;
 	for (let i = 0; i <= text.length - keyword.length; i += 1) {
 		const c = text.charAt(i);
@@ -53,7 +53,7 @@ function findTopLevelKeyword(text: string, keyword: string): number {
 }
 
 // Tier 3: find a single character at top level (not inside brackets/parens/braces/angles).
-function findTopLevelChar(text: string, ch: string): number {
+function findTopLevelChar(text: string, ch: string): int32 {
 	let depth = 0;
 	for (let i = 0; i < text.length; i += 1) {
 		const c = text.charAt(i);
