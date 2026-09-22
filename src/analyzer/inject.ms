@@ -1811,6 +1811,10 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// Demand-driven: use resolvedSym from Phase 2, fall back to VarInfo for synthetic temps
 	const sym = bd.left.resolvedSym;
 	const vi = findVarInfoInContext(dctx, sym);
+	if (vi != null && vi.isCursor) {
+		bd.right = processNode(bd.right, dctx, DrcMode.Normal);
+		return stmt;
+	}
 	let rcInfo: RcInfo = noRcInfo();
 	if (sym != null) {
 		rcInfo = classifyRc(sym.symbolType, dctx);
