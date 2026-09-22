@@ -1512,7 +1512,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						while (pi < d.properties.length) {
 							const probe = cloneNodeForCheck(d.properties[pi]);
 							checkExpr(ctx, probe, null);
-							propTypes.push(probe.nodeType);
+							propTypes.push(probe.nodeType!);
 							pi = pi + 1;
 						}
 						const refined = findUnionVariant(objExpected, d.keys, propTypes);
@@ -1557,7 +1557,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
 					if (ft != rawFt) d.properties[pi] = fitNode(ctx, d.properties[pi], ft, rawFt);
 					if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
-					fieldTypes.push(ft);
+					fieldTypes.push(ft!);
 					pi = pi + 1;
 				}
 				const anonName = anonStructName(fieldNames, fieldTypes);
@@ -1696,7 +1696,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (elemExpected == null && d.elements.length > 1
 					&& !(elemType != null && isAwaitable(elemType))) {
 					const elemJoinTypes: Type[] = [];
-					for (const el of d.elements) elemJoinTypes.push(el.nodeType);
+					for (const el of d.elements) elemJoinTypes.push(el.nodeType!);
 					const joinedElem = joinBranchTypes(elemJoinTypes);
 					if (!isUnresolvedType(joinedElem)) {
 						let fi = 0;

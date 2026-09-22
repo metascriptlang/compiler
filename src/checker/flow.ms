@@ -643,7 +643,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		if (ft.t == state.declaredType) {
 			return flowType(state.declaredType, anyIncomplete);
 		}
-		antecedents.push(ft.t);
+		antecedents.push(ft.t!);
 		list = list.next;
 	}
 	if (antecedents.length == 0) {
