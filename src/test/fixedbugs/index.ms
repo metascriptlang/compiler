@@ -212,3 +212,6 @@ import "./bug197ProtocolAppliesInsideOwnBody";
 import "./bug198OpenNullableFieldInGenericArg";
 import "./bug199ValueStructMaybeSlot";
 import "./bug200AssertedFieldSinkArgCopies";
+import "./bug201MethodCallArgumentsChecked";
+import "./bug202StackedParamModifiers";
+import "./bug203ReadonlyGenericBinding";
