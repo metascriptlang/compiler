@@ -3436,7 +3436,7 @@ test "function with params" {
 	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
 	assert sigs.length == 1;
-	assert sigs[0].label == "log(line: int32, msg: string): void";
+	assert sigs[0].label == "log(line: number, msg: string): void";
 	assert sigs[0].paramLabels.length == 2;
 }
 
