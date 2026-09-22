@@ -2887,7 +2887,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
-		bindings.types.push(closureStorageType(withoutReadonlyView(concrete)));
+		bindings.types.push(closureStorageType(concrete));
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {

@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
+import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
@@ -157,6 +157,24 @@ function deduplicateBindings(names: string[], types: Type[]): { names: string[],
 		}
 	}
 	return { names: outNames, types: outTypes };
+}
+
+function readonlyViewShape(t: Type | null, depth: int32): string {
+	if (t == null || depth > 8) return "";
+	const inner = t.kind == TypeKind.Array || t.kind == TypeKind.Ref ? readonlyViewShape(t.typeReturn, depth + 1) : "";
+	if (isReadonlyView(t)) return "r" + inner;
+	return inner == "" ? "" : "m" + inner;
+}
+
+function readonlyViewSuffix(types: Type[]): string {
+	let marked = false;
+	let suffix = "";
+	for (const t of types) {
+		const shape = readonlyViewShape(t, 0);
+		if (shape != "") marked = true;
+		suffix = suffix + "_" + (shape == "" ? "0" : shape);
+	}
+	return marked ? "__ro" + suffix : "";
 }
 
 // Add a type symbol to scope if not already present. Returns true if injected.
@@ -515,7 +533,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 			if (recv != "") mangleBase = recv + "_" + sym.name;
 		}
 	}
-	const mangledName = mangleMonoName(mangleBase, dedup.types);
+	const mangledName = mangleMonoName(mangleBase, dedup.types) + readonlyViewSuffix(dedup.types);
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
