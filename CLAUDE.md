@@ -77,54 +77,20 @@ Architecture detail: [`docs/PIPELINE.md`](docs/PIPELINE.md). File tree + pattern
 
 **Checklist**: (1) reference does it in transform or earlier → Transform. (2) type resolution → Checker. (3) desugaring/lowering → `src/transform/`. (4) pure C syntax emission → only then codegen.
 
-## Writing Idiomatic MetaScript
+## Writing MetaScript
 
-Looks like TypeScript, differs semantically. Full reference with examples: [`docs/LANG.md`](docs/LANG.md).
+Before writing or reviewing `.ms`, follow the canonical
+[`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md). Use [`docs/LANG.md`](docs/LANG.md) for
+language behavior the style guide does not cover.
 
-**Match** — prefer over if-else chains for enum/string/number dispatch.
-- `_` is the wildcard (NOT `default`); `|` for alternatives; `when (…)` for guards
-- Bare identifiers are always BINDINGS, never value comparisons
-- Expression arms (`=> value`) return implicitly; block arms (`=> { … }`) require explicit `return`
-- **`try` in a match arm FAILS** — use if-else when an arm needs `try`
-- **`break`/`continue` in a match arm** target the generated switch, not the enclosing loop
-- **C-style `for` in a match arm FAILS** (not normalized) — use `while` or `for..of`
+## Entry points
 
-**`Result<T, E>` + `try`** — `try expr` unwraps or early-returns the error; `try expr catch fallback` unwraps or substitutes. Fields: `result.ok`, `result.value` (only after `if (r.ok)`), `result.error` (else branch). Internally a boolean-discriminated match-type Union, so the C layout is a tagged union and `r.value` is unreachable when `!r.ok`.
-
-**`interface` = reference type** (heap-allocated, refcounted, constructed from object literals). **`struct` = value type** (stack-allocated, copied). No `implements`, no method dispatch.
-
-**`"a".code`** — compile-time character code, zero runtime cost. Works in match patterns.
-
-**Numeric types — no bare `number` in this compiler.** Project convention, not a language rule. `number` **is** `float64` (8-byte double) and most values here are integers, so bare `number` wastes memory and is a soundness footgun: `int32[]` was silently accepted where `number[]` was expected and reinterpreted by a raw pointer cast (4- vs 8-byte elements) → out-of-bounds read. Use `int32` for index/length/count/depth/offset/id (`int64` past 2^31), `float64` when genuinely fractional. Bare int literals infer `int32`.
-
-**Null** — MetaScript has no `undefined`. `null as unknown as T` is the idiom for nullable typed fields.
-
-**Loops** — always reach for `for..of` first; C-style `for` when you need the index; `while` only when neither fits (condition-driven scanners, polling, multi-variable termination). Never `let i = 0; while (i < arr.length)`.
-
-| Context | `for..of` | `for (let i…)` | `while` |
-|---|---|---|---|
-| Top-level / function body | **preferred** | OK | last resort |
-| Match arms | **preferred** | **FAILS** | OK |
-| Closures / callbacks | **preferred** | OK | last resort |
-
-**TypeScript pitfalls**: `interface` is a data struct, not a contract · `type` is a reserved keyword (use `tokenType`, `nodeType`) · no `indexOf`/`includes` on strings — use `slice`/`length`/`findChar`/`charAt` from `utils/string.ms` · arrays pass by pointer, strings are value types · narrow discriminated unions with `as`.
-
-**Other syntax**: `move` (ownership transfer) · `defer` (LIFO scope-exit) · `unreachable` · `out` parameters · `distinct` (right-hand: `type M = distinct int32`) · `extern function` (C FFI) · decorators `@comptime`, `@emit` (backend-conditional code is `when (c) { … }`) · sized integers `int8`…`uint64`, `float32`, `float64`.
-
-## Entry Point: there is no `main()` auto-call
-
-**Nothing calls `main` for you.** A program is the top-level code of its entry module; `main` is an ordinary function with no special status in codegen (removed 2026-08-16, `15df69d`, both backends). Symptom of relying on the old behaviour: builds and links clean, prints nothing, exits 0.
-
-| Signature | Call site |
-|---|---|
-| `main(): void` | `main();` |
-| `async main()` | `await main();` — preferred (a bare call also completes, but reads like a bug) |
-| `main(): number` as exit status | `process.exit(main());` |
-
-- Test-suite programs scored by exit code: a bare `main();` swallows the status and turns a red guard green. Forward it: `const rc = main(); if (rc !== 0) process.exit(rc);`
-- **A module that is both a CLI and a test target needs a guard** — a test build still executes top-level code. `src/index.ms` ends with `when (!testBuild) { process.exit(main()); }`. Without it, `msc test src/index.ms` runs the CLI instead of the tests. (`test` is a keyword and cannot be the flag name.)
-- **Exit = event loop empty; orphan rejections = exit 1** (Node semantics). `msDrainUntilIdle()` completes pending timers/continuations/pool workers, then `msReportOrphanFailures()` prints unhandled rejections and forces exit 1. `process.exit()` skips both.
-- **`MsMain()` is program-wide init, not per-module init** — it runs `__DatInit000()` + `__Init000()` for *every* alive module. For `--app=lib` hosts, call the entry module's own init functions instead. Matrix: [`docs/BARE.md`](docs/BARE.md).
+- Nothing auto-calls `main`; the program is the entry module's top-level code. CLI and
+  test-target call sites follow [`../docs/CODE-STYLE.md`](../docs/CODE-STYLE.md) §9.
+- Exit means the event loop is empty. `msDrainUntilIdle()` finishes pending work and
+  `msReportOrphanFailures()` turns unhandled rejections into exit 1; `process.exit()` skips both.
+- For `--app=lib` hosts, call the entry module's init functions rather than the program-wide
+  `MsMain()`. Read [`docs/BARE.md`](docs/BARE.md) before changing host or init behavior.
 
 ## Runtime C — avoid variadic struct args
 
@@ -179,8 +145,6 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 | Two directions both track the reference, or the fix crosses a recorded intentional divergence | ask — one question, with a recommendation |
 | The work has to leave the task's scope | stop and report |
 | The fix needs a pass, structure or protocol the design and the reference both lack | stop and ask, marked **NEW MECHANISM**, before writing it |
-| A unit of work is done on your own `wt/<name>` branch | commit without asking, through `/split-commit` |
-| Time to push, or to land with `--no-gate` | ask, every time |
 
 ## Commits
 
