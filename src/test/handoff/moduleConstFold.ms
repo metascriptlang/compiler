@@ -1,5 +1,5 @@
 import { fullPipeline, findFnDecl } from "./helpers";
-import { Node, NodeKind, FunctionDeclData, BlockStmtData, ReturnStmtData, NumberLiteralData } from "../../ast/node";
+import { Node, NodeKind, FunctionDeclData, BlockStmtData, ReturnStmtData, NumberLiteralData, ProgramData, ClassDeclData, PropertyDeclData } from "../../ast/node";
 
 function foldedReturn(source: string, name: string): Node | null {
 	const program = fullPipeline(source);
@@ -22,4 +22,19 @@ test "module const handoff: an enum cast becomes one literal" {
 	const value = foldedReturn("enum Level { Whole, Half } const STEP: int32 = (Level.Whole as int32) + 1; function read(): int32 { return STEP; }", "read");
 	assert value != null && value.kind == NodeKind.NumberLiteral;
 	assert (value.data as NumberLiteralData).intVal == 1;
+}
+
+test "module const handoff: a readonly scalar static is inlined without storage" {
+	const source = "class Knobs { static readonly VALUE: int32 = 7; } function read(): int32 { return Knobs.VALUE; }";
+	const program = fullPipeline(source);
+	const value = foldedReturn(source, "read");
+	assert value != null && value.kind == NodeKind.NumberLiteral;
+	assert (value.data as NumberLiteralData).intVal == 7;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.ClassDecl) continue;
+		for (const member of (stmt.data as ClassDeclData).classBody) {
+			if (member.kind != NodeKind.PropertyDecl) continue;
+			assert (member.data as PropertyDeclData).propName != "VALUE";
+		}
+	}
 }
