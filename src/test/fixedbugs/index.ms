@@ -212,3 +212,4 @@ import "./bug197ProtocolAppliesInsideOwnBody";
 import "./bug198OpenNullableFieldInGenericArg";
 import "./bug199ValueStructMaybeSlot";
 import "./bug200_dead_branch_without_else";
+import "./bug201_module_const_fold";

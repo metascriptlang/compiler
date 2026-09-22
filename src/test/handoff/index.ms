@@ -73,3 +73,4 @@ import "./fnFormalArgFit";
 import "./maybeRefPayloadKey";
 import "./sinkParam";
 import "./callMagic";
+import "./moduleConstFold";
