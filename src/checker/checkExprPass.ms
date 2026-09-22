@@ -1512,7 +1512,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						while (pi < d.properties.length) {
 							const probe = cloneNodeForCheck(d.properties[pi]);
 							checkExpr(ctx, probe, null);
-							propTypes.push(probe.nodeType!);
+							const probeType = probe.nodeType;
+							propTypes.push(probeType!);
 							pi = pi + 1;
 						}
 						const refined = findUnionVariant(objExpected, d.keys, propTypes);
@@ -1696,7 +1697,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (elemExpected == null && d.elements.length > 1
 					&& !(elemType != null && isAwaitable(elemType))) {
 					const elemJoinTypes: Type[] = [];
-					for (const el of d.elements) elemJoinTypes.push(el.nodeType!);
+					for (const el of d.elements) {
+						const elType = el.nodeType;
+						elemJoinTypes.push(elType!);
+					}
 					const joinedElem = joinBranchTypes(elemJoinTypes);
 					if (!isUnresolvedType(joinedElem)) {
 						let fi = 0;

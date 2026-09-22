@@ -98,7 +98,8 @@ function collectDeclTypes(node: Node, names: string[], types: Type[], syms: Symb
 			if (t != null) {
 				names.push(d.declName);
 				types.push(t);
-				syms.push(node.resolvedSym!);
+				const declSym = node.resolvedSym;
+				syms.push(declSym!);
 			}
 		},
 		NodeKind.BlockStmt => {
