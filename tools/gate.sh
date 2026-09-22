@@ -4,6 +4,7 @@ set -uo pipefail
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 RULES=(
   'tools|^tools/'
+  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile)\.ms$'
   'build,suite,tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/'
   'tests|^src/(checker|transform|codegen)/'
   'build,suite,guard|^src/test/guard/'
@@ -12,9 +13,9 @@ RULES=(
   'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build suite tests suite-orc corpus san guard"
-LADDER="build suite tests suite-orc corpus san guard"
-KNOWN_LANES="suite suite-orc tests corpus san guard"
+ORDER="tools build suite hcr tests suite-orc corpus san guard"
+LADDER="build suite hcr tests suite-orc corpus san guard"
+KNOWN_LANES="suite hcr suite-orc tests corpus san guard"
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$'
 
 usage() {
@@ -26,7 +27,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build suite tests suite-orc corpus san guard
+  --lanes a,b    run exactly these lanes: tools build suite hcr tests suite-orc corpus san guard
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -100,7 +101,7 @@ reds_of() {
       '
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
-    guard) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
+    guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
   esac | sort -u
 }
 
@@ -238,6 +239,7 @@ lane_cmd() {
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
     tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; %s test src/test/lang/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
+    hcr) printf 'MSC=%s src/test/hcr/run.sh' "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     guard) printf 'MSC=%s src/test/guard/run.sh' "$CAND" ;;
@@ -389,7 +391,7 @@ flaky_ids >"$OUT/flaky.ids"
 
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
-case " $lanes " in *" build "*|*" suite "*|*" suite-orc "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
+case " $lanes " in *" build "*|*" suite "*|*" hcr "*|*" suite-orc "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
 
 for lane in $lanes; do
   if [ -n "$stopped" ]; then say "gate: $lane skipped, $stopped has a new red"; continue; fi
@@ -407,7 +409,7 @@ for lane in $lanes; do
     rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); reused=" (reused log)"
   else case "$lane" in
     tools) run_tools_lane >"$log" 2>&1; rc=$? ;;
-    corpus|san|guard) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   printf '\nRC=%d\nEND\n' "$rc" >>"$log"
