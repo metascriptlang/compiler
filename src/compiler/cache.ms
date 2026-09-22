@@ -682,8 +682,14 @@ function linkCacheFile(): string {
 	return `${getCacheDir()}/link.cache`;
 }
 
+function objectListKey(oFiles: string[]): string {
+	let identity = "";
+	for (const path of oFiles) identity = `${identity}${path.length}:${path}`;
+	return hashContent(identity);
+}
+
 // Check if link step can be skipped.
-export function isLinkCached(oFileList: string, linkFlags: string, outputFile: string): boolean {
+export function isLinkCached(oFiles: string[], linkFlags: string, outputFile: string): boolean {
 	if (_forceRebuild) return false;
 	const cFile = linkCacheFile();
 	if (!exists(cFile) || !exists(outputFile)) return false;
@@ -706,16 +712,16 @@ export function isLinkCached(oFileList: string, linkFlags: string, outputFile: s
 	}
 
 	if (storedCmd != linkFlags) return false;
-	if (storedOFiles != oFileList) return false;
+	if (storedOFiles != objectListKey(oFiles)) return false;
 	const currentOutputHash = hashFile(outputFile);
 	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
 
 // Write link cache after successful link step.
-export function writeLinkCache(oFileList: string, linkFlags: string, outputFile: string): void {
+export function writeLinkCache(oFiles: string[], linkFlags: string, outputFile: string): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
-	content = content + `${PRE_OFILES}${oFileList}\n`;
+	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(), content);
 }

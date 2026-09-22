@@ -55,6 +55,7 @@ import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCo
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
+import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
@@ -684,6 +685,14 @@ interface CBuildState {
 	includePaths: HashSet<string>;
 }
 
+function flagArgsOrExit(flags: string): string[] {
+	const parsed = splitCcFlags(flags);
+	if (parsed.ok) return parsed.value;
+	console.log(`${error("error")}: ${parsed.error}`);
+	exit(1);
+	return [];
+}
+
 // Dedupe on merge: many modules' @passC carry the same -I dirs (the crypto
 // prelude chain repeats its 5 vendor dirs per importing module); appending
 // them raw duplicated each dir hundreds of times until the cc command line
@@ -692,15 +701,15 @@ interface CBuildState {
 function mergeFlagsDeduped(base: string, add: string): string {
 	if (add == "") return base;
 	const seen: HashSet<string> = new HashSet<string>();
-	for (const tok of base.split(" ")) {
+	for (const tok of flagArgsOrExit(base)) {
 		if (tok != "") seen.add(tok);
 	}
 	let result = base;
-	for (const tok of add.split(" ")) {
+	for (const tok of flagArgsOrExit(add)) {
 		if (tok == "") continue;
 		if (seen.has(tok)) continue;
 		seen.add(tok);
-		result = appendFlag(result, tok);
+		result = appendFlag(result, quoteCcArg(tok));
 	}
 	return result;
 }
@@ -714,7 +723,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	const compilerRoot = resolveRuntimeDir();
 	if (compilerRoot != "") {
 		includePaths.add(compilerRoot);
-		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
+		allFlags = appendFlag(allFlags, quoteCcArg(`-I${compilerRoot}`));
 	}
 	// Project root is NOT added to global flags — it varies per project and
 	// would invalidate ccache deduplication for stdlib compiles. Instead it is
@@ -726,7 +735,9 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	if ((opts.targetOs == "bare" || opts.targetOs == "solana") && compilerRoot != "") {
 		let defines = "-DMSOS_BARE";
 		if (opts.targetOs == "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
-		allFlags = appendFlag(allFlags, `${defines} -include ${compilerRoot}/runtime/manual.h`);
+		allFlags = appendFlag(allFlags, defines);
+		allFlags = appendFlag(allFlags, "-include");
+		allFlags = appendFlag(allFlags, quoteCcArg(`${compilerRoot}/runtime/manual.h`));
 	}
 	// --os=wasm/emcc: define MSOS_WASM/MSOS_EMCC for runtime @compile files (disables threading)
 	if (opts.targetOs == "wasm") {
@@ -758,7 +769,7 @@ function userProjectFlag(path: string, projectRoot: string, compilerRoot: string
 	if (projectRoot == "" || projectRoot == compilerRoot) return "";
 	if (path == "" || path == ".") return "";
 	if (isUnder(path, compilerRoot)) return "";
-	return `-I${projectRoot}`;
+	return quoteCcArg(`-I${projectRoot}`);
 }
 
 // Resolve a relative directory path against the include search list.
@@ -779,9 +790,8 @@ function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
 // directives work from any CWD when the compiler is installed elsewhere.
 function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): string {
 	if (flags == "") return flags;
-	const parts = flags.split(" ");
 	let result = "";
-	for (const p of parts) {
+	for (const p of flagArgsOrExit(flags)) {
 		let resolved = p;
 		if (p.length > 2 && p.slice(0, 2) == "-I") {
 			resolved = "-I" + resolveIncludeDir(p.slice(2, p.length), includePaths);
@@ -790,7 +800,7 @@ function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): stri
 		} else if (p.length > 8 && p.slice(0, 8) == "-isystem") {
 			resolved = "-isystem" + resolveIncludeDir(p.slice(8, p.length), includePaths);
 		}
-		result = result == "" ? resolved : `${result} ${resolved}`;
+		result = appendFlag(result, quoteCcArg(resolved));
 	}
 	return result;
 }
@@ -798,8 +808,7 @@ function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): stri
 // Register -I/-iquote paths from a module's compiler flags into the include path set.
 function registerIncludePaths(flags: string, paths: HashSet<string>): void {
 	if (flags == "") return;
-	const parts = flags.split(" ");
-	for (const p of parts) {
+	for (const p of flagArgsOrExit(flags)) {
 		if (p.length > 2 && p.slice(0, 2) == "-I") paths.add(p.slice(2, p.length));
 		else if (p.length > 7 && p.slice(0, 7) == "-iquote") paths.add(p.slice(7, p.length));
 	}
@@ -817,7 +826,6 @@ interface CompileJob {
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
-// Returns space-separated .o file paths to add to the link list.
 //
 // Parallel architecture:
 //   1. GATHER (serial) — parse directives, dedup via _compiledOFiles, filter
@@ -833,9 +841,9 @@ interface CompileJob {
 // project. Set by cmdBuildC.
 let emitOnlyMode = false;
 
-function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string {
-	if (emitOnlyMode) return "";
-	if (directives == "") return "";
+function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
+	if (emitOnlyMode) return [];
+	if (directives == "") return [];
 	// Per-call user-project flag: non-empty only when moduleDir is user code.
 	// Applied to every @compile job this call emits (all share same moduleDir).
 	const upFlag = userProjectFlag(moduleDir, projectRoot, compilerRoot);
@@ -940,8 +948,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	for (const f of futures) exitCodes.push(await f);
 
 	// === 3. COLLECT (serial from main thread) ===
-	let oFiles = "";
-	for (const o of hitOFiles) oFiles = appendFlag(oFiles, o);
+	const oFiles: string[] = [];
+	for (const o of hitOFiles) oFiles.push(o);
 	let ci = 0;
 	while (ci < jobs.length) {
 		const j = jobs[ci];
@@ -961,7 +969,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			exit(1);
 		}
 		writeCompileCache(j.oFile, j.fp);
-		oFiles = appendFlag(oFiles, j.oFile);
+		oFiles.push(j.oFile);
 		ci = ci + 1;
 	}
 	return oFiles;
@@ -1250,10 +1258,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 }
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
-// Returns the .o paths to append via appendFlag, or "" for bare / Solana.
-// Shared by cmdBuildC and cmdTestC so test binaries link the same runtime.
-function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string {
-	if (opts.targetOs == "bare" || opts.targetOs == "solana") return "";
+function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string[] {
+	if (opts.targetOs == "bare" || opts.targetOs == "solana") return [];
 
 	let rtFiles = "";
 	if (opts.targetOs == "emcc") {
@@ -1280,7 +1286,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
 
-	if (rtFiles == "") return "";
+	if (rtFiles == "") return [];
 	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 }
 
@@ -1401,7 +1407,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
-	let oFiles = "";
+	let oFiles: string[] = [];
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
 	const fsAsyncHits: { modPath: string, source: string, line: int32, column: int32 }[] = [];
@@ -1645,12 +1651,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
-		oFiles = appendFlag(oFiles, preludeObjs);
+		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
 
-	// Platform-specific runtime: dispatch + selectors + pool + fs.
 	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
-	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
+	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module
 	setConcurrentTypeQueries(true);
@@ -1707,7 +1712,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let modulesRecompiled = 0;
 	const moduleOutputs: CModuleOutput[] = [];
 	const cd = cacheDir();
-	const oSlots: string[] = [];
+	const oSlots: string[][] = [];
 	oSlots.push(oFiles);
 	const cJobs: ModuleCompileJob[] = [];
 	for (let emitIndex = 0; emitIndex < emissionJobs.length; emitIndex += 1) {
@@ -1735,8 +1740,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			writeOutput(emitPath, cCode);
 			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
-			let modFlags = appendFlag(allFlags, `-iquote${dirname(p.modPath)}`);
-			modFlags = appendFlag(modFlags, `-iquote${cd}`);
+			let modFlags = appendFlag(allFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
+			modFlags = appendFlag(modFlags, quoteCcArg(`-iquote${cd}`));
 			// Per-module MS→.c: add -I<projectRoot> only for user modules (paths
 			// under projectRoot, not under compilerRoot). Stdlib modules get
 			// stable command text so ccache can dedupe across projects.
@@ -1747,7 +1752,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			const oFile = stableOFileFp(p.modPath, modFp);
 
 			if (isCCodeCached(p.modPath, modFp)) {
-				oSlots.push(oFile);
+				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 			} else {
 				// Write only .c source BEFORE compile (always — debuggable).
@@ -1756,7 +1761,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 				writeCSource(p.modPath, modFp, cCode);
 				const cFile = stableCFileFp(p.modPath, modFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
-				oSlots.push("");
+				oSlots.push([]);
 				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
 			}
@@ -1806,7 +1811,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
 		writeCSource("_dispatch", dispFp, dispatcher);
 		const dispFile = stableCFileFp("_dispatch", dispFp);
-		oSlots.push("");
+		oSlots.push([]);
 		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 	}
 
@@ -1825,7 +1830,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const code = cCodes[cji];
 		if (code == 0) {
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = cj.oFile;
+			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			exit(1);
@@ -1841,15 +1846,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		cji = cji + 1;
 	}
 	if (moduleCompileFailed) exit(1);
-	oFiles = "";
+	oFiles = [];
 	for (const slot of oSlots) {
-		if (slot != "") oFiles = appendFlag(oFiles, slot);
+		for (const oFile of slot) oFiles.push(oFile);
 	}
 
 	// Link all .o files into final binary (or shared library for HCR)
 	// Build link flags from global linkState (Set = deduplicated)
 	let allLink = cliLinkFlags(allFlags, opts);
-	for (const obj of globalLinkObjects()) { allLink = appendFlag(allLink, obj); }
+	for (const obj of globalLinkObjects()) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
 	let linkFlags = allLink;
 
@@ -1951,7 +1956,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
-	let oFiles = "";
+	let oFiles: string[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	const sharedHookOwners = createNameSet();
@@ -2073,12 +2078,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
-		oFiles = appendFlag(oFiles, preludeObjs);
+		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
 
-	// Platform-specific runtime: same set as cmdBuildC, shared via helper.
 	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
-	if (rtObjs != "") oFiles = appendFlag(oFiles, rtObjs);
+	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
 	setConcurrentTypeQueries(true);
@@ -2112,7 +2116,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	}
 	let compiled = 0;
 	const tcd = cacheDir();
-	const oSlots: string[] = [];
+	const oSlots: string[][] = [];
 	oSlots.push(oFiles);
 	const cJobs: ModuleCompileJob[] = [];
 	for (let emitIndex = 0; emitIndex < emissionJobs.length; emitIndex += 1) {
@@ -2126,8 +2130,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		oSlots.push(compileObjs);
 
-		let testModFlags = appendFlag(allFlags, `-iquote${dirname(p.modPath)}`);
-		testModFlags = appendFlag(testModFlags, `-iquote${tcd}`);
+		let testModFlags = appendFlag(allFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
+		testModFlags = appendFlag(testModFlags, quoteCcArg(`-iquote${tcd}`));
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 		if (upFlag != "") testModFlags = appendFlag(testModFlags, upFlag);
 		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags);
@@ -2135,14 +2139,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const oFile = stableOFileFp(p.modPath, modFp);
 
 		if (isCCodeCached(p.modPath, modFp)) {
-			oSlots.push(oFile);
+			oSlots.push([oFile]);
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
 			// Same as main path — defer fingerprint until success.
 			writeCSource(p.modPath, modFp, cCode);
 			const cFile = stableCFileFp(p.modPath, modFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
-			oSlots.push("");
+			oSlots.push([]);
 			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
@@ -2157,7 +2161,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
-	oSlots.push("");
+	oSlots.push([]);
 	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
@@ -2168,7 +2172,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const code = cCodes[cji];
 		if (code == 0) {
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = cj.oFile;
+			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
 			console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
@@ -2180,9 +2184,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		cji = cji + 1;
 	}
 	if (testFailed) exit(1);
-	oFiles = "";
+	oFiles = [];
 	for (const slot of oSlots) {
-		if (slot != "") oFiles = appendFlag(oFiles, slot);
+		for (const oFile of slot) oFiles.push(oFile);
 	}
 
 	// Link and execute
@@ -2197,7 +2201,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// went unnoticed. forceExe keeps --app=lib / --hcr from turning the test
 	// binary into a shared library: execFile below has to run it.
 	let testLink = cliLinkFlags(allFlags, opts, true);
-	for (const obj of globalLinkObjects()) { testLink = appendFlag(testLink, obj); }
+	for (const obj of globalLinkObjects()) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linkRes.ok) {

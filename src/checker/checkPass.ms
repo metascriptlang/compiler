@@ -31,6 +31,7 @@ import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
+import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
 import { gensymSplicePrefix } from "./template";
@@ -2404,9 +2405,10 @@ function resolveDirectiveString(ctx: CheckerContext, node: Node): string {
 // std's `-Ivendor/...` keeps resolving through the compiler root.
 function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
 	if (flags == "" || modDir == "") return flags;
-	const parts = flags.split(" ");
+	const parsed = splitCcFlags(flags);
+	if (!parsed.ok) return flags;
 	let result = "";
-	for (const p of parts) {
+	for (const p of parsed.value) {
 		let prefixLen = 0;
 		if (p.length > 2 && p.slice(0, 2) == "-I") prefixLen = 2;
 		else if (p.length > 7 && p.slice(0, 7) == "-iquote") prefixLen = 7;
@@ -2418,7 +2420,8 @@ function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
 				resolved = p.slice(0, prefixLen) + modDir + "/" + dir;
 			}
 		}
-		result = result == "" ? resolved : `${result} ${resolved}`;
+		const encoded = quoteCcArg(resolved);
+		result = result == "" ? encoded : `${result} ${encoded}`;
 	}
 	return result;
 }
@@ -2443,7 +2446,7 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
 		ctx.includeDirectives = ctx.includeDirectives + arg0Str;
 		const modDir = getModuleDir(ctx.modulePath);
-		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + modDir);
+		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + modDir));
 	} else if (name == "compile") {
 		if (ctx.compileDirectives != "") ctx.compileDirectives = ctx.compileDirectives + "\n";
 		// Per-file custom flags: @compile("file.c", "-O3") → "file.c\t-O3" (tab-separated).

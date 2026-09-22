@@ -2,7 +2,7 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, spawnFailed, processError, ProcessError, ProcessErrorKind } from "std/process";
+import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, processError, ProcessError, ProcessErrorKind } from "std/process";
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
@@ -10,6 +10,7 @@ import { CliOptions, MODE_DANGER } from "./options";
 import { renameReplace, atomicWriteFile } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
+import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 
 // -- Runtime resolution --
 
@@ -215,7 +216,7 @@ function sbfCompilerBuiltins(): string {
 // and ld.lld ships inside platform-tools. --gc-sections drops unreferenced
 // functions (verified: strips a dead function, 952 → 880 bytes), rooted at the
 // `entrypoint` symbol via --entry.
-export function linkSolana(oFileList: string, outBinary: string): Result<void, ProcessError> {
+export function linkSolana(oFiles: string[], outBinary: string): Result<void, ProcessError> {
 	const lld = resolveSbfLinker();
 	if (lld == "") {
 		return Result.err({
@@ -242,17 +243,25 @@ export function linkSolana(oFileList: string, outBinary: string): Result<void, P
 			message: `cannot write linker script ${scriptPath}`,
 		});
 	}
-	// --threads=1 / -z notext / --Bdynamic mirror the rustc target's pre-link-args.
-	//
-	// -shared is load-bearing twice over. (1) Syscalls (`sol_log_`, `sol_memcpy_`,
-	// …) are never defined in the program — the VM binds them at load time — so a
-	// non-shared link fails with "undefined symbol: sol_log_". (2) It yields ELF
-	// type DYN, which is what the loader expects (the rustc target is
-	// `only-cdylib`); --unresolved-symbols=ignore-all also links but produces EXEC.
+	const args = [
+		"--threads=1",
+		"-z",
+		"notext",
+		"--Bdynamic",
+		"-shared",
+		"--script",
+		scriptPath,
+		"--entry",
+		"entrypoint",
+		"--gc-sections",
+		"--no-undefined",
+		"-o",
+		outBinary,
+	];
+	for (const oFile of oFiles) args.push(oFile);
 	const builtins = sbfCompilerBuiltins();
-	const builtinsArg = builtins == "" ? "" : ` "${builtins}"`;
-	const cmd = `"${lld}" --threads=1 -z notext --Bdynamic -shared --script "${scriptPath}" --entry entrypoint --gc-sections --no-undefined -o "${outBinary}" ${oFileList}${builtinsArg}`;
-	const r = exec(cmd);
+	if (builtins != "") args.push(builtins);
+	const r = execFileCapture(lld, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
@@ -505,7 +514,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		// the program does not reach.
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		const rtDir = resolveRuntimeDir();
-		if (rtDir != "") flags = appendFlag(flags, `-isystem ${rtDir}/runtime/freestanding`);
+		if (rtDir != "") flags = appendFlag(appendFlag(flags, "-isystem"), quoteCcArg(`${rtDir}/runtime/freestanding`));
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
@@ -604,90 +613,59 @@ export function cliAllFlags(opts: CliOptions): string {
 
 // -- Build command construction --
 
-function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): string {
-	const isCpp = isCppFile(cFile);
-	// Single-file path (compileC) doesn't go through processCompileDirectives,
-	// so the flag-set lives here too. For the multi-file @compile pipeline,
-	// the canonical set is markCppCompile called from compile.ms.
-	if (isCpp) _hasCppCompile = true;
-	const baseCompiler = getCompilerName(ccOption, ccBinary);
-	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
-	const stdFlag = isCpp ? "-std=c++17" : "-std=gnu11";
-	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
-
-	const rtDir = resolveRuntime();
-	if (rtDir != "") {
-		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
-	}
-
-	cmd = `${cmd} ${cFile} -o ${outBinary} -lm`;
-	if (extraFlags != "") cmd = `${cmd} ${extraFlags}`;
-	return cmd;
+struct ToolCommand {
+	path: string;
+	args: string[];
 }
 
-// Invoke the C compiler/linker/archiver. The command is BUILT as a string (it
-// doubles as the .o cache key and the --verbose display) but EXECUTED as argv
-// — no shell between msc and the toolchain (see execFileCapture). A shell in
-// that loop only added failure modes: cmd.exe quote-stripping, the 8191-char
-// line cap, AutoRun hooks, and POSIX-isms (`rm -f`) that break on Windows.
-// Tokenizing on spaces is exact: these command strings never embed a space
-// inside a token (paths are glued to their -I/-iquote prefix; the same
-// assumption powers resolveIncludeFlags in compile.ms). "zig cc" tokenizes to
-// exe "zig" + first arg "cc", which is precisely what we want.
-// Shell word-splitting on a token: unescaped double quotes are removed (they
-// are quoting syntax, not payload). This is POSIX word semantics — and exactly
-// what the old cmd.exe//bin/sh path delivered, because both strip embedded
-// quotes while parsing the command line. Keeping the quotes would change the
-// meaning of flag values: -DMBEDTLS_CONFIG_FILE="<mbedtls/mbedtlsConfig.h>"
-// must reach the compiler as -DMBEDTLS_CONFIG_FILE=<mbedtls/mbedtlsConfig.h>
-// (an angle include), not as a macro whose value is a quoted string with
-// literal brackets (a filename that never exists).
-function shellUnquote(tok: string): string {
-	let hasQuote = false;
-	for (let i = 0; i < tok.length; i++) {
-		if (tok.charAt(i) == "\"") { hasQuote = true; break; }
+function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): ToolCommand {
+	const base = getCompilerName(ccOption, ccBinary);
+	if (ccBinary != "") {
+		return { path: isCpp ? toCppCompiler(base) : base, args: [] };
 	}
-	if (!hasQuote) return tok;
-	let out = "";
-	for (let i = 0; i < tok.length; i++) {
-		const c = tok.charAt(i);
-		if (c == "\\") {
-			// Backslash escapes the next char (incl. a quote) — keep both.
-			if (i + 1 < tok.length) {
-				out = out + tok.charAt(i) + tok.charAt(i + 1);
-				i = i + 1;
-			} else {
-				out = out + c;
-			}
-			continue;
-		}
-		if (c == "\"") continue;
-		out = out + c;
+	if (isZigCC(base)) {
+		return {
+			path: base.slice(0, base.length - 3),
+			args: [isCpp ? "c++" : "cc"],
+		};
 	}
-	return out;
+	return { path: isCpp ? toCppCompiler(base) : base, args: [] };
 }
 
-function runCc(cmd: string): Result<string, ProcessError> {
-	const parts: string[] = [];
-	for (const raw of cmd.split(" ")) {
-		if (raw == "") continue;
-		const tok = shellUnquote(raw);
-		if (tok != "") parts.push(tok);
+
+function appendParsedFlags(command: string, args: string[], flags: string): Result<void, ProcessError> {
+	const parsed = splitCcFlags(flags);
+	if (!parsed.ok) {
+		return Result.err(processError(ProcessErrorKind.Unknown, command, parsed.error));
 	}
-	if (parts.length == 0) return Result.err(spawnFailed(cmd, "empty command"));
-	const rest: string[] = [];
-	for (let i = 1; i < parts.length; i++) {
-		rest.push(parts[i]);
-	}
-	return execFileCapture(parts[0], rest);
+	for (const arg of parsed.value) args.push(arg);
+	return Result.ok(null);
+}
+
+function runCc(command: ToolCommand, args: string[]): Result<string, ProcessError> {
+	return execFileCapture(command.path, args);
 }
 
 // Compile a .c file to a native binary.
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
-	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
-	const r = runCc(cmd);
+	const isCpp = isCppFile(cFile);
+	if (isCpp) _hasCppCompile = true;
+	const command = compilerCommand(ccOption, ccBinary, isCpp);
+	const args = command.args;
+	args.push(isCpp ? "-std=c++17" : "-std=gnu11");
+	const modeArgs = appendParsedFlags(command.path, args, modeFlags(mode));
+	if (!modeArgs.ok) return Result.err(modeArgs.error);
+	const rtDir = resolveRuntime();
+	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
+	args.push(cFile);
+	args.push("-o");
+	args.push(outBinary);
+	args.push("-lm");
+	const flags = appendParsedFlags(command.path, args, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	const r = runCc(command, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
@@ -697,90 +675,96 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const isCpp = isCppFile(cFile);
-	const baseCompiler = getCompilerName(ccOption, ccBinary);
-	const compiler = isCpp ? toCppCompiler(baseCompiler) : baseCompiler;
-	const stdFlag = isCpp ? "-std=c++17" : "-std=gnu11";
-	let cmd = `${compiler} ${stdFlag}${modeFlags(mode)}`;
-
+	const command = compilerCommand(ccOption, ccBinary, isCpp);
+	const args = command.args;
+	args.push(isCpp ? "-std=c++17" : "-std=gnu11");
+	const modeArgs = appendParsedFlags(command.path, args, modeFlags(mode));
+	if (!modeArgs.ok) return Result.err(modeArgs.error);
 	const rtDir = resolveRuntime();
-	if (rtDir != "") {
-		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
-	}
-
-	// Compile into a per-invocation tmp sibling, then publish over oFile with
-	// an atomic rename. A concurrent build linking through the old .o keeps
-	// reading the old bytes until the swap; it never links a half-written
-	// object or hits a missing file (the pre-fix direct -o raced readers).
+	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
 	const tmp = `${oFile}.tmp.${performance.now()}`;
-	cmd = `${cmd} -c ${cFile} -o ${tmp}`;
-	if (extraFlags != "") cmd = `${cmd} ${extraFlags}`;
-	const r = runCc(cmd);
+	args.push("-c");
+	args.push(cFile);
+	args.push("-o");
+	args.push(tmp);
+	const flags = appendParsedFlags(command.path, args, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	const r = runCc(command, args);
 	if (!r.ok) {
 		remove(tmp);
 		if (env.get("MSC_DEBUG_CC") != "") {
-			console.log(`[cc-fail] len=${cmd.length} kind=${r.error.kind} exit=${r.error.exitCode} msg=${r.error.message}`);
-			console.log(`[cc-fail] ${cmd}`);
+			console.log(`[cc-fail] kind=${r.error.kind} exit=${r.error.exitCode} msg=${r.error.message}`);
+			console.log(`[cc-fail] ${command.path} ${args.join(" ")}`);
 		}
 		return Result.err(r.error);
 	}
 	if (!renameReplace(tmp, oFile)) {
 		remove(tmp);
-		// oFile is fp-keyed, so anything already published there was compiled
-		// from the same .c with the same command: a sibling build's object is
-		// as good as ours. The rename only fails while a concurrent reader
-		// holds the target open, and losing that swap is not a build failure.
 		if (exists(oFile)) return Result.ok(null);
 		return Result.err(processError(
 			ProcessErrorKind.Unknown,
-			cmd,
+			command.path,
 			`failed to publish object ${oFile} (target locked by a concurrent reader?)`
 		));
 	}
 	return Result.ok(null);
 }
 
-// Response files were introduced for cmd.exe's 8191-char line cap. The spawn
-// path no longer goes through a shell (runCc → execFileCapture →
-// CreateProcessW / posix_spawnp), whose ceiling is 32767; 30000 leaves
-// headroom. Over that (hundreds of .o files), the bulk still spills to a
-// per-binary @rsp that gcc/clang/zig parse from file.
 const LINK_CMD_LIMIT = 30000;
 
-// Link object files + runtime into a binary.
-// oFileList: space-separated list of .o file paths
-// Returns Result.ok on exit-code 0; Result.err carries linker stderr.
-export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+function commandLength(command: ToolCommand, args: string[]): int32 {
+	let length = command.path.length;
+	for (const arg of args) length = length + arg.length + 1;
+	return length;
+}
+
+function responseFileBody(args: string[]): string {
+	let body = "";
+	for (const arg of args) body = body + quoteCcArg(arg) + "\n";
+	return body;
+}
+
+export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
-	const baseCompiler = getCompilerName(ccOption, ccBinary);
-	// Sticky flag: any .cpp file compiled in this build → use C++ driver for
-	// the final link so libc++ / libstdc++ is pulled automatically. Pure-C
-	// builds keep the existing C-driver behavior (no behavior change).
-	const compiler = _hasCppCompile ? toCppCompiler(baseCompiler) : baseCompiler;
+	const command = compilerCommand(ccOption, ccBinary, _hasCppCompile);
+	const prefix = command.args;
 	const rtDir = resolveRuntime();
-	const rtFlag = rtDir != "" ? ` -iquote${dirname(dirname(rtDir))}` : "";
-	const bulk = extraFlags != "" ? `${oFileList} ${extraFlags}` : oFileList;
-	const cmd = `${compiler}${rtFlag} ${bulk} -o ${outBinary} -lm`;
+	if (rtDir != "") prefix.push(`-iquote${dirname(dirname(rtDir))}`);
+	const bulk: string[] = [];
+	for (const oFile of oFiles) bulk.push(oFile);
+	const flags = appendParsedFlags(command.path, bulk, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	const direct: string[] = [];
+	for (const arg of prefix) direct.push(arg);
+	for (const arg of bulk) direct.push(arg);
+	direct.push("-o");
+	direct.push(outBinary);
+	direct.push("-lm");
 
 	let r: Result<string, ProcessError>;
-	if (cmd.length <= LINK_CMD_LIMIT) {
-		r = runCc(cmd);
+	if (commandLength(command, direct) <= LINK_CMD_LIMIT) {
+		r = runCc(command, direct);
 	} else {
-		// Overflow: bulk args go to a per-binary response file. The path is keyed to
-		// outBinary (not its dir) so concurrent builds in a shared dir don't clobber it.
 		const rspPath = `${outBinary}_link.rsp`;
-		atomicWriteFile(rspPath, bulk);
-		r = runCc(`${compiler}${rtFlag} @${rspPath} -o ${outBinary} -lm`);
+		atomicWriteFile(rspPath, responseFileBody(bulk));
+		const responseArgs: string[] = [];
+		for (const arg of prefix) responseArgs.push(arg);
+		responseArgs.push(`@${rspPath}`);
+		responseArgs.push("-o");
+		responseArgs.push(outBinary);
+		responseArgs.push("-lm");
+		r = runCc(command, responseArgs);
 	}
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
 
-// Archive object files into a static library for --app=staticlib. Remove the stale
-// archive first: `ar rcs` appends, so a leftover would keep already-dropped members.
-export function archiveStatic(oFileList: string, outArchive: string): Result<void, ProcessError> {
+export function archiveStatic(oFiles: string[], outArchive: string): Result<void, ProcessError> {
 	ensureDir(dirname(outArchive));
 	if (exists(outArchive)) remove(outArchive);
-	const r = runCc(`ar rcs ${outArchive} ${oFileList}`);
+	const args = ["rcs", outArchive];
+	for (const oFile of oFiles) args.push(oFile);
+	const r = execFileCapture("ar", args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }
