@@ -4,7 +4,7 @@ set -uo pipefail
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 RULES=(
   'tools|^tools/'
-  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile)\.ms$'
+  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'build,suite,tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/'
   'tests|^src/(checker|transform|codegen)/'
   'build,suite,guard|^src/test/guard/'
