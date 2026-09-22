@@ -29,14 +29,16 @@ backend and DRC/ORC runtime.
 | `--hcr` and module-global state lifting | Implemented |
 | Structural hash rejecting changed `_GlobalState` layout | Implemented |
 | Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
+| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `runWindows.sh`: body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
 | Per-module shared libraries | Not implemented |
 | Cross-module vtable calls | Not implemented |
-| Transactional current/old/candidate loader | Not implemented |
-| Windows, iOS and automated watch/deploy loops | Not implemented |
+| Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
+| iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`, `runtime/hcr.h`,
-`runtime/hcrHost.c`, and the `--hcr` branch in the compiler build driver.
+`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, and the `--hcr` branch in the
+compiler build driver.
 
 ## Architecture decision
 
@@ -50,12 +52,18 @@ MetaScript uses **cooperative indirection**, not debugger-driven binary patching
 **Data is permanent; code is transient.** Everything is gated by `--hcr`; a normal build
 pays no vtable cost and must remain output-identical.
 
-The design combines four proven contracts:
+The design combines these proven contracts:
 
 - explicit lifted state and function tables from native C game/tool hosts;
+- immutable generation paths and retained accepted modules from native C/C++ reload hosts;
 - dependency-order initialization, copy-load artifacts and generation cleanup from nimhcr;
-- incomplete-image retry and rollback from cr.h;
+- incomplete-image retry from cr.h;
 - BEAM's current/old generations and external-call switch boundary.
+
+The Windows foundation deliberately does not copy cr.h's unload-current-before-load order:
+the candidate is loaded, resolved and handed over before publication, so rejection cannot
+remove the callable current generation. Accepted prior DLLs remain loaded until a later safe
+point can prove they are unreachable.
 
 Rejected foundations:
 
@@ -161,21 +169,24 @@ chosen.
 
 The recompiler arc proceeds in this order:
 
-1. **Re-pin the foundation:** recreate a minimal single-image POSIX probe proving state
+1. **Re-pin the POSIX foundation:** recreate a minimal single-image probe proving state
    survives a body-only reload and incompatible layout fails loud.
-2. **Input-keyed per-module build:** skip emission/compile/link for unchanged modules and
+2. **Establish the Windows-native foundation:** build generation-unique DLLs, load and
+   validate a candidate before publication, keep current callable on rejection, and keep the
+   production host/state machine in MetaScript.
+3. **Input-keyed per-module build:** skip emission/compile/link for unchanged modules and
    produce one generation artifact per alive module.
-3. **Module ABI manifest:** assign stable exported slots and classify reload, dependent
+4. **Module ABI manifest:** assign stable exported slots and classify reload, dependent
    reload, or restart.
-4. **VTable transform:** rewrite cross-module exported calls through current module tables;
+5. **VTable transform:** rewrite cross-module exported calls through current module tables;
    keep private/same-module calls direct. This belongs in native transform, not C codegen.
-5. **Transactional loader:** current/old/candidate registry, copy-load, dependency ordering,
+6. **Transactional loader:** current/old/candidate registry, copy-load, dependency ordering,
    bad-image retry, rollback, handlers and safe-point API.
-6. **DRC/TypeInfo contract:** stable TypeInfo ownership and exactly-once destructor behavior
+7. **DRC/TypeInfo contract:** stable TypeInfo ownership and exactly-once destructor behavior
    across accepted reloads.
-7. **Watch/deploy adapters:** save-triggered rebuild, host notification, Windows copy-load,
+8. **Watch/deploy adapters:** save-triggered rebuild, host notification, Windows copy-load,
    macOS/iOS Simulator loading, and development-signed iOS device deployment.
-8. **Diagnostics and measurement:** exact rejection reason and edit-to-visible timing.
+9. **Diagnostics and measurement:** exact rejection reason and edit-to-visible timing.
 
 ## Neon Fast Refresh boundary
 
@@ -231,8 +242,21 @@ Physical iOS devices add deploy/sign latency; the semantic contract stays identi
 | Windows | `LoadLibrary` with versioned copies; never overwrite/eagerly unload current or rollback-old |
 | Linux | `.so`/`dlopen`; reference POSIX implementation |
 
-This is architecture scope. The current implementation is only a single-image POSIX
-prototype.
+The current implementation has single-image foundations for POSIX and native Windows.
+Per-module artifacts, vtable dispatch, the full module registry and automated deployment
+remain later slices.
+
+On 2026-09-22, Windows 11 x64 source tree
+`112b9d0a69e7a1058ba3931d15f69dec3e61a9a0` was built as a candidate compiler, then
+`MSC=<candidate> bash examples/hcrProbe/runWindows.sh` completed four generations with one
+stable state pointer and values `10`, `40`, `60`, `80`. The layout and truncated-image
+candidates both failed loud; the accepted generation remained callable after each rejection.
+`llvm-readobj --coff-exports` reported the fixed ABI names `DatInit000`, `Init000`,
+`_hcr_handover` and `hcrProbeBump`. A temporary Win32 C oracle and the MetaScript host both
+exited zero with the same eight normalized transition lines and both error contracts. The
+same candidate also passed `examples/hcrProbe/run.sh` through WSL. The temporary C oracle was
+then deleted; production orchestration is MetaScript and `runtime/hcr.h` is only the Win32
+loader/raw-function-pointer ABI edge.
 
 ## Verification
 
@@ -268,6 +292,8 @@ Measurements are recorded only after running these contracts, with tree and plat
   migration as synchronized, explicit work.
 - [cr.h](https://github.com/fungos/cr) — versioned copies, incomplete-image retry and
   rollback.
+- [Runtime Compiled C++](https://github.com/RuntimeCompiledCPlusPlus/RuntimeCompiledCPlusPlus)
+  — unique temporary module paths and retention of loaded module handles.
 - [nimhcr](https://github.com/nim-lang/Nim/blob/devel/lib/nimhcr.nim) — dependency-order
   reload, generation cleanup and lifecycle handlers.
 - [Visual Studio C++ Hot Reload](https://learn.microsoft.com/en-us/visualstudio/debugger/edit-and-continue-visual-cpp)
