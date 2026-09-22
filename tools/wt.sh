@@ -1,48 +1,6 @@
-#!/usr/bin/env bash
-set -uo pipefail
-
-usage() {
-  cat <<'USAGE'
-usage: tools/wt.sh <command> [args]
-
-  new <name> [rev]      create branch wt/<name> at rev (default main) in
-                        $MSC_WT_ROOT/wt-<name>, provision vendor, paper and a
-                        builder ./msc, seed the card $MSC_WT_ROOT/<name>.md;
-                        prints the worktree path as the last line
-  card [name|path]      print the card of a worktree (default: the current one):
-                        its path, then Goal, Done when and State
-  ls [--stale]          one line per worktree: branch, dirty files, unlanded
-                        commits, live processes, out/ size, the card's goal or
-                        NO CARD, then every card that has no wt/<name> branch;
-                        --stale hides the ones a process still works in
-  rm <name|path> [--force]
-                        remove a worktree; refuses while it holds dirty files,
-                        unlanded commits or live processes, and names them;
-                        --force discards exactly what it names
-  land [name] [--also '<cmd>']... [--no-gate]
-                        rebase onto main, gate (tools/gate.sh picks the lanes
-                        from the diff, then each --also command), then move
-                        main forward and sync the main checkout path by path;
-                        a main that moved during the gate only by paths no lane
-                        tests is rebased onto without a second gate;
-                        --no-gate lands on evidence gathered outside the gate
-  hook-create           WorktreeCreate hook body (reads the hook JSON on stdin)
-  hook-remove           WorktreeRemove hook body (reads the hook JSON on stdin)
-  hook-session          SessionStart hook body (prints the current worktree's card
-                        and the compiler inbox tally by State, then by Kind)
-
-env: MSC_WT_ROOT (default $HOME/metascript/.wt), MSC_BUILDER (tried first)
-USAGE
-}
-
-say() { printf '%s\n' "$*" >&2; }
-die() { say "wt: $*"; exit 1; }
-
-MAIN=$(git worktree list --porcelain 2>/dev/null | awk 'NR==1 && /^worktree /{print substr($0,10); exit}')
-[ -n "$MAIN" ] || die "not inside a git repository"
-ROOT=${MSC_WT_ROOT:-$HOME/metascript/.wt}
-BASE=main
-
+MAIN=$WT_MAIN
+ROOT=${MSC_WT_ROOT:-$WT_CARD_ROOT}
+BASE=$WT_BASE
 wt_dir() { printf '%s/%s\n' "$ROOT" "$(printf 'wt/%s' "$1" | tr '/' '-')"; }
 
 card_path() { printf '%s/%s.md\n' "$ROOT" "$(printf '%s' "$1" | tr '/' '-')"; }
@@ -252,7 +210,7 @@ cmd_card() {
 
 hook_session() {
   local w name c
-  w=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --show-toplevel 2>/dev/null) || return 0
+  w=$WT_CURRENT
   if name=$(card_name_of "$w"); then
     c=$(card_path "$name")
     if [ -e "$c" ]; then
@@ -492,20 +450,6 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   say "landed $(git -C "$MAIN" rev-list --count "$old..$new") commit(s): $BASE $(git -C "$MAIN" rev-parse --short "$old")..$(git -C "$MAIN" rev-parse --short "$new")"
 }
 
-hook_field() {
-  jq -r --arg k "$1" '.[$k] // empty'
+cmd_context() {
+  hook_session
 }
-
-case "${1:-}" in
-  new) shift; cmd_new "$@" ;;
-  card) shift; cmd_card "$@" ;;
-  ls) shift; cmd_ls "$@" ;;
-  __ls_row) ls_row "${2%%$'\t'*}" "${2#*$'\t'}" ;;
-  rm) shift; cmd_rm "$@" ;;
-  land) shift; cmd_land "$@" ;;
-  hook-create) name=$(hook_field name); cmd_new "$name" ;;
-  hook-remove) path=$(hook_field worktree_path); cmd_rm "$path" ;;
-  hook-session) hook_session ;;
-  -h|--help|help|"") usage ;;
-  *) usage >&2; exit 2 ;;
-esac

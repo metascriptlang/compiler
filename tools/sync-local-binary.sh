@@ -34,7 +34,7 @@ uncommitted=$(git -C "$SRC" status --porcelain -- $DEPLOYED_PATHS 2>/dev/null)
 if [ -n "$uncommitted" ]; then
 	echo "error: $SRC holds uncommitted work under: $DEPLOYED_PATHS" >&2
 	echo "$uncommitted" | head -10 >&2
-	echo "sync from a clean worktree of main: tools/wt.sh new <name>" >&2
+	echo "sync from a clean worktree of main: ~/nerdtools/claude/tools/wt.sh new <name>" >&2
 	exit 1
 fi
 
