@@ -8,11 +8,11 @@
 
 // ===== Internal helpers =====
 
-function isSepCode(c: number): boolean {
+function isSepCode(c: int32): boolean {
 	return c == "/".code || c == "\\".code;
 }
 
-function isAlphaCode(c: number): boolean {
+function isAlphaCode(c: int32): boolean {
 	return (c >= "a".code && c <= "z".code) || (c >= "A".code && c <= "Z".code);
 }
 
@@ -30,7 +30,7 @@ function hasUncPrefix(p: string): boolean {
 // Length of the root prefix: 0 for relative, 1 for POSIX root,
 // 2 for bare drive ("C:"), 3 for drive+sep ("C:/"), or length of
 // "//server/share" for UNC. Returns 0 if not absolute.
-function rootLen(p: string): number {
+function rootLen(p: string): int32 {
 	if (p.length == 0) return 0;
 	if (hasUncPrefix(p)) {
 		let i = 2;

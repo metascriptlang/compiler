@@ -12,9 +12,9 @@ import { JsonKind, JsonValue } from "./types";
 import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
 // fromCodePoint is exported from std/core/string prelude — available globally
 
-const DEPTH_LIMIT: number = 1000;
+const DEPTH_LIMIT: int32 = 1000;
 
-type ParseOk = { node: JsonValue, pos: number };
+type ParseOk = { node: JsonValue, pos: int32 };
 type ParseResult = Result<ParseOk, string>;
 
 // ===== Public API =====
@@ -32,7 +32,7 @@ export function parseJson(input: string): Result<JsonValue, string> {
 
 // ===== Scanning Helpers =====
 
-function skipWs(input: string, pos: number): number {
+function skipWs(input: string, pos: int32): int32 {
 	let p = pos;
 	const len = input.byteLength;
 	while (p < len) {
@@ -43,13 +43,13 @@ function skipWs(input: string, pos: number): number {
 	return p;
 }
 
-function errorAt(msg: string, pos: number): ParseResult {
+function errorAt(msg: string, pos: int32): ParseResult {
 	return Result.err(`${msg} at position ${pos}`);
 }
 
 // ===== Value Parser =====
 
-function parseValue(input: string, pos: number, depth: number): ParseResult {
+function parseValue(input: string, pos: int32, depth: int32): ParseResult {
 	if (depth > DEPTH_LIMIT) return errorAt("Maximum nesting depth exceeded", pos);
 	if (pos >= input.byteLength) return errorAt("Unexpected end of input", pos);
 
@@ -72,8 +72,8 @@ function parseValue(input: string, pos: number, depth: number): ParseResult {
 
 // ===== Literal Parser =====
 
-function parseLiteral(input: string, pos: number, expected: string, value: JsonValue): ParseResult {
-	const expectedLen = expected.byteLength as number;
+function parseLiteral(input: string, pos: int32, expected: string, value: JsonValue): ParseResult {
+	const expectedLen = expected.byteLength;
 	if (pos + expectedLen > input.byteLength) {
 		return errorAt(`Expected '${expected}'`, pos);
 	}
@@ -89,7 +89,7 @@ function parseLiteral(input: string, pos: number, expected: string, value: JsonV
 // other case, and the count is known from the scan positions without touching the
 // string. Byte reads are not free on the js backend, so the common path must not
 // do any. (std cannot import src, so this mirrors the checker's own bound check.)
-function int64FitsAtLimitWidth(input: string, digitStart: number, negative: boolean): boolean {
+function int64FitsAtLimitWidth(input: string, digitStart: int32, negative: boolean): boolean {
 	const limit = negative ? "9223372036854775808" : "9223372036854775807";
 	for (let i = 0; i < 19; i = i + 1) {
 		const a = input.byteAt(digitStart + i);
@@ -100,7 +100,7 @@ function int64FitsAtLimitWidth(input: string, digitStart: number, negative: bool
 	return true;
 }
 
-function parseNumber(input: string, pos: number): ParseResult {
+function parseNumber(input: string, pos: int32): ParseResult {
 	let p = pos;
 	const len = input.byteLength;
 
@@ -168,7 +168,7 @@ function parseNumber(input: string, pos: number): ParseResult {
 
 // ===== String Parser =====
 
-function parseString(input: string, pos: number): ParseResult {
+function parseString(input: string, pos: int32): ParseResult {
 	if (input.byteAt(pos) != "\"".code) return errorAt("Expected '\"'", pos);
 	let p = pos + 1;
 	const len = input.byteLength;
@@ -253,7 +253,7 @@ function parseHex(s: string): number {
 
 // ===== Array Parser =====
 
-function parseArray(input: string, pos: number, depth: number): ParseResult {
+function parseArray(input: string, pos: int32, depth: int32): ParseResult {
 	let p = pos + 1; // skip [
 	p = skipWs(input, p);
 	const items: JsonValue[] = [];
@@ -283,7 +283,7 @@ function parseArray(input: string, pos: number, depth: number): ParseResult {
 
 // ===== Object Parser =====
 
-function parseObject(input: string, pos: number, depth: number): ParseResult {
+function parseObject(input: string, pos: int32, depth: int32): ParseResult {
 	let p = pos + 1; // skip {
 	p = skipWs(input, p);
 	const keys: string[] = [];

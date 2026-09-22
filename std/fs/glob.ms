@@ -143,7 +143,7 @@ export function globMatchAny(gs: Glob[], path: string): boolean {
 
 // --- Internal: segment-level recursive matcher ---
 
-function matchSegments(pats: string[], pi: number, paths: string[], si: number): boolean {
+function matchSegments(pats: string[], pi: int32, paths: string[], si: int32): boolean {
 	while (pi < pats.length) {
 		const pat = pats[pi];
 		if (pat == "**") {
@@ -171,7 +171,7 @@ function segMatch(pat: string, s: string): boolean {
 	return segMatchAt(pat, 0, s, 0);
 }
 
-function segMatchAt(pat: string, piIn: number, s: string, siIn: number): boolean {
+function segMatchAt(pat: string, piIn: int32, s: string, siIn: int32): boolean {
 	let pi = piIn;
 	let si = siIn;
 	while (pi < pat.length) {
