@@ -21,4 +21,14 @@ static inline int32_t msHcrWinCallProbe(void* raw) { return ((int32_t (*)(void))
 #define MS_HCR_EXPORT __attribute__((visibility("default")))
 #endif
 
+#include <stdint.h>
+
+typedef struct MsHcrHandle {
+	void* const* current;
+	uint32_t slotCount;
+} MsHcrHandle;
+
+MsHcrHandle* msHcrHandle(const char* moduleId);
+void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount);
+
 #endif
