@@ -28,7 +28,7 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 	// Reference parity: pop entries before generating
 	// finally bodies, then restore. Prevents infinite recursion if a finally
 	// body contains return/break which would re-trigger blockLeaveActions.
-	const stack: Node[] = [];
+	const stack: Readonly<Node>[] = [];
 	for (let i = 0; i < howManyFinallys; i += 1) {
 		const fin = p.nestedFinally.pop();
 		stack.push(fin);

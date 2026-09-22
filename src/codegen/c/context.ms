@@ -170,7 +170,7 @@ export class CProc {
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
-	nestedFinally: Node[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
+	nestedFinally: Readonly<Node>[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
 	errorTargets: string[];    // stack of goto labels for error propagation (reference: p.nestedTryStmts[].label → raiseExit)
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
