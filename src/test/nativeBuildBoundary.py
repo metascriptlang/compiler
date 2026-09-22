@@ -29,8 +29,13 @@ def fixture(name, directives, native, header="", native_name="native.c"):
     return cwd
 
 
-def build(cwd, label, output="probe", flags=(), env=None, cc="clang"):
-    return command(cwd, label, [compiler, "build", "main.ms", "--cc=" + cc, "--output=" + output, *flags], env)
+def build(cwd, label, output="probe", flags=(), env=None, cc=None):
+    argv = [compiler, "build", "main.ms", "--output=" + output, *flags]
+    if cc is not None:
+        argv.insert(3, "--cc=" + cc)
+    elif os.name != "nt":
+        argv.insert(3, "--cc=clang")
+    return command(cwd, label, argv, env)
 
 
 def value(cwd, output="probe"):
@@ -126,12 +131,36 @@ def run_audit():
         '@compile("./native.c");',
         "int probeValue(void) { return TOOL_VALUE; }\n",
     )
-    wrapper = toolchain / "cc-wrapper"
-    wrapper.write_text("#!/bin/sh\nexec clang -DTOOL_VALUE=47 \"$@\"\n")
-    wrapper.chmod(0o755)
+    if os.name == "nt":
+        wrapper = toolchain / "cc-wrapper.exe"
+        wrapper_source = toolchain / "cc-wrapper.c"
+        zig = (Path.home() / ".metascript" / "zig" / "zig.exe").as_posix()
+
+        def write_wrapper(value):
+            wrapper_source.write_text(
+                "#include <process.h>\n#include <stdlib.h>\n"
+                "int main(int argc, char **argv) {\n"
+                "  char **args = malloc(sizeof(char *) * (argc + 3));\n"
+                f'  args[0] = "{zig}";\n'
+                '  args[1] = "cc";\n'
+                f'  args[2] = "-DTOOL_VALUE={value}";\n'
+                "  for (int i = 1; i < argc; i++) args[i + 2] = argv[i];\n"
+                "  args[argc + 2] = NULL;\n"
+                f'  return (int)_spawnv(_P_WAIT, "{zig}", (const char * const *)args);\n'
+                "}\n"
+            )
+            subprocess.run(["gcc", str(wrapper_source), "-o", str(wrapper)], check=True)
+    else:
+        wrapper = toolchain / "cc-wrapper"
+
+        def write_wrapper(value):
+            wrapper.write_text(f'#!/bin/sh\nexec clang -DTOOL_VALUE={value} "$@"\n')
+            wrapper.chmod(0o755)
+
+    write_wrapper(47)
     assert build(toolchain, "first-toolchain", cc=str(wrapper)).returncode == 0
     assert value(toolchain) == "47"
-    wrapper.write_text("#!/bin/sh\nexec clang -DTOOL_VALUE=49 \"$@\"\n")
+    write_wrapper(49)
     assert build(toolchain, "second-toolchain", cc=str(wrapper)).returncode == 0
     record("compiler binary replacement", "49", value(toolchain))
 
@@ -200,7 +229,9 @@ def run_argv():
         record("quoted flag value executable", "4", value(quoted))
 
     response = fixture("response file", '@compile("./native.c");', "int probeValue(void) { return 47; }\n")
-    long_flags = tuple("--passL=-Wl,-rpath,/tmp/native-boundary-%04d" % i for i in range(900))
+    flag_template = "--passL=-LC:/tmp/native-boundary-%04d" if os.name == "nt" else "--passL=-L/tmp/native-boundary-%04d"
+    flag_count = 820 if os.name == "nt" else 900
+    long_flags = tuple(flag_template % i for i in range(flag_count))
     response_result = build(response, "response-file", output="products with spaces/response probe", flags=long_flags)
     record("response file preserves arguments", 0, response_result.returncode)
     if response_result.returncode == 0:
