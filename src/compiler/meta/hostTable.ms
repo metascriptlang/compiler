@@ -545,7 +545,7 @@ function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1])));
+	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1]) as int32));
 }
 
 function _bridgeMsStringPadStart(args: RaiserValue[]): RaiserValue {

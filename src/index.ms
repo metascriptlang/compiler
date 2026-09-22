@@ -35,7 +35,7 @@ function requireFile(opts: CliOptions): void {
 	}
 }
 
-export function main(): number {
+export function main(): int32 {
 	// Windows-only: delete stale msc.exe.bak-* files left by previous upgrades.
 	// No-op on Unix. Must run before any network/heavy work.
 	sweepUpgradeBackups();

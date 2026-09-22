@@ -21,7 +21,7 @@ export interface ParsedVersion {
 
 // Parse a strict digit sequence. Returns -1 on empty, leading-zero, or non-digit.
 // A single "0" is allowed; "01" or "007" are not.
-function parseDigitsStrict(s: string, start: number, end: number): number {
+function parseDigitsStrict(s: string, start: int32, end: int32): number {
 	if (end <= start) return -1;
 	if (end - start > 1 && s.charAt(start) == "0") return -1;
 	let result = 0;
@@ -36,7 +36,7 @@ function parseDigitsStrict(s: string, start: number, end: number): number {
 }
 
 // Find the next `.` in s at or after start, before end. Returns -1 if not found.
-function findDot(s: string, start: number, end: number): number {
+function findDot(s: string, start: int32, end: int32): int32 {
 	let i = start;
 	while (i < end) {
 		if (s.charAt(i) == ".") return i;
@@ -283,7 +283,7 @@ function isHexSha40(s: string): boolean {
 }
 
 // Find the last occurrence of `@` in a string. Returns -1 if not found.
-function findLastAt(s: string): number {
+function findLastAt(s: string): int32 {
 	let last = -1;
 	let i = 0;
 	while (i < s.length) {

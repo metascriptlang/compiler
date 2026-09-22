@@ -25,7 +25,7 @@ export function readManifest(buildPath: string): { package: PackageSection, deps
 
 // --- String helpers ---
 
-function findStr(content: string, needle: string, from: number): number {
+function findStr(content: string, needle: string, from: int32): int32 {
 	let i = from;
 	while (i <= content.length - needle.length) {
 		let match = true;
@@ -40,7 +40,7 @@ function findStr(content: string, needle: string, from: number): number {
 	return -1;
 }
 
-function findClosingBrace(content: string, openPos: number): number {
+function findClosingBrace(content: string, openPos: int32): int32 {
 	let depth = 0;
 	let i = openPos;
 	while (i < content.length) {
