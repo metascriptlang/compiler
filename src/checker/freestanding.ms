@@ -1,4 +1,4 @@
-// Freestanding-runtime diagnostics — FREESTANDING E01.
+// Freestanding-runtime diagnostics — FREESTANDING E01/E02.
 //
 // The freestanding runtime (`--gc=manual`, forced by `--os=bare` and
 // `--os=solana`) has no dispatcher, no thread pool and no await slots:
@@ -17,11 +17,13 @@
 // std/promise are only observable through one of those three, so widening
 // the surface would only duplicate diagnostics.
 
-import { Node, NodeKind, SourceLocation, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, createNodeAt, makeLoc } from "../ast/node";
+import { Node, NodeKind, SourceLocation, Symbol, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 
 // Single wording shared by both consumers — only the severity differs.
 export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher, no thread pool, no await slots (FREESTANDING E01)";
+export const WRITABLE_MODULE_LET_MSG: string = "a module-level 'let' needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata. Keep the state in an account, or make it a 'const' with a compile-time initializer (FREESTANDING E02)";
+export const WRITABLE_MODULE_CONST_MSG: string = "the initializer of this module-level 'const' is not a compile-time constant, so the binding needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata (FREESTANDING E02)";
 
 // Mirrors checkExprPass's isAsync test (fnFlags is a free-form flag string,
 // "async" / "async_generator" / combinations).
@@ -116,6 +118,42 @@ export function collectFreestandingAsync(program: Node): Node[] {
 	return out;
 }
 
+function moduleBindingOf(node: Node): Node | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.VariableDecl) return node;
+	if (node.kind == NodeKind.ExportDecl) return moduleBindingOf((node.data as ExportDeclData).exportedDecl);
+	if (node.kind == NodeKind.DecoratedDecl) return moduleBindingOf((node.data as DecoratedDeclData).decoratedNode);
+	return null;
+}
+
+export function moduleBindingNeedsWritableStorage(node: Node): boolean {
+	const binding = moduleBindingOf(node);
+	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.modulePath == "") return false;
+	const d = binding.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const) return true;
+	if (d.initializer == null) return true;
+	return d.initializer.kind != NodeKind.NumberLiteral
+		&& d.initializer.kind != NodeKind.BooleanLiteral;
+}
+
+export function writableModuleBindingMessage(node: Node): string {
+	const binding = moduleBindingOf(node);
+	if (binding == null) return WRITABLE_MODULE_LET_MSG;
+	const d = binding.data as VariableDeclData;
+	return d.declKind == DeclKind.Const ? WRITABLE_MODULE_CONST_MSG : WRITABLE_MODULE_LET_MSG;
+}
+
+export function collectWritableModuleBindings(program: Node): Node[] {
+	const out: Node[] = [];
+	if (program == null || program.kind != NodeKind.Program) return out;
+	const d = program.data as ProgramData;
+	for (const stmt of d.programStmts) {
+		const binding = moduleBindingOf(stmt);
+		if (binding != null && moduleBindingNeedsWritableStorage(binding)) out.push(binding);
+	}
+	return out;
+}
+
 // ===== Tests =====
 // Hand-built AST: this module must not import the parser (it is consumed by
 // both the checker-side gate and the LSP handler).
@@ -151,6 +189,58 @@ function fsFn(name: string, flags: string, body: Node): Node {
 function fsProgram(stmts: Node[]): Node {
 	return createNodeAt(NodeKind.Program, { programStmts: stmts }, fsLoc());
 }
+function fsNumber(value: int64): Node {
+	return createNodeAt(NodeKind.NumberLiteral, {
+		value: value as number,
+		isFloat: false,
+		intVal: value,
+		outOfRangeText: "",
+		isBitPattern: false,
+	}, fsLoc());
+}
+
+function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
+	const node = createNodeAt(NodeKind.VariableDecl, {
+		declName: name,
+		declType: "int32",
+		initializer,
+		declKind: kind,
+		nameLocation: fsLoc(),
+	}, fsLoc());
+	const sym = new Symbol();
+	sym.name = name;
+	sym.modulePath = "test.ms";
+	node.resolvedSym = sym;
+	return node;
+}
+
+function fsCall(): Node {
+	return createNodeAt(NodeKind.CallExpr, {
+		callee: fsIdent("compute"),
+		arguments: [],
+		isDirectCall: true,
+		resolvedOverloadIdx: -1,
+	}, fsLoc());
+}
+
+test "freestanding: surviving writable module bindings are collected through wrappers" {
+	const writableLet = fsVariable("counter", DeclKind.Let, fsNumber(0));
+	const nonConstant = fsVariable("computed", DeclKind.Const, fsCall());
+	const decorated = createNodeAt(NodeKind.DecoratedDecl, { decorators: [], decoratedNode: nonConstant }, fsLoc());
+	const exported = createNodeAt(NodeKind.ExportDecl, { exportedDecl: decorated }, fsLoc());
+	const hits = collectWritableModuleBindings(fsProgram([writableLet, exported]));
+	assert hits.length == 2;
+	assert hits[0] == writableLet;
+	assert hits[1] == nonConstant;
+}
+
+test "freestanding: scalar module const literals need no writable storage" {
+	const numberConst = fsVariable("limit", DeclKind.Const, fsNumber(12));
+	const boolConst = fsVariable("enabled", DeclKind.Const,
+		createNodeAt(NodeKind.BooleanLiteral, { boolValue: true }, fsLoc()));
+	assert collectWritableModuleBindings(fsProgram([numberConst, boolConst])).length == 0;
+}
+
 
 test "freestanding: async declaration is one report" {
 	const body = fsBlock([]);
