@@ -549,6 +549,7 @@ function emitToSection(g: CGen, code: string): void {
 	if (code.startsWith("/*TYPESECTION*/")) target = CSection.Types;
 	else if (code.startsWith("/*VARSECTION*/")) target = CSection.GlobalVars;
 	else if (code.startsWith("/*INCLUDESECTION*/")) target = CSection.Headers;
+	else if (code.startsWith("/*DATINITSECTION*/")) target = CSection.DatInit;
 	addLine(sec(g, target), code);
 }
 
