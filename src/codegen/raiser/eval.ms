@@ -16,7 +16,7 @@ import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString }
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM, vmCallFunction } from "../../raiser/vm";
+import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols } from "../../checker/symbol";
@@ -28,6 +28,7 @@ import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgram
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
+import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
 
 // --- Full Pipeline API ---
 
@@ -235,7 +236,7 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 	}
 	if (result.funcIdx < 0) return createContext();
 	const noArgs: RaiserValue[] = [];
-	const resultVal = vmCallFunction(result.vm, result.funcIdx, noArgs);
+	const resultVal = callWithComptimeHostPolicy(result.vm, result.funcIdx, noArgs, token.modulePath);
 	if (result.vm.diagMessage != "") {
 		const diagMsg = result.vm.diagMessage;
 		result.vm.diagMessage = "";

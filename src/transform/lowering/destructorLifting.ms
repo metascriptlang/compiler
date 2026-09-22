@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { hookRef, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
+import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
@@ -191,15 +191,18 @@ function hookSuffix(hook: string): string {
 
 // Reference parity (sfGeneratedOp): mark a generated function node so DRC skips injection.
 // Reference sets sfGeneratedOp on the symbol in produceSym/symPrototype.
-function markGeneratedOp(fnNode: Node, name: string): void {
-	fnNode.resolvedSym = hookComplete(name, fnNode.nodeType);
+function markGeneratedOp(fnNode: Node, name: string): Symbol {
+	const sym = hookComplete(name, fnNode.nodeType);
+	fnNode.resolvedSym = sym;
+	return sym;
 }
 
-function markLifecycleOp(fnNode: Node, name: string, hook: string): void {
+function markLifecycleOp(fnNode: Node, name: string, hook: string): Symbol {
 	const sym = hookComplete(name, fnNode.nodeType);
 	fnNode.resolvedSym = sym;
 	if (hook == "destroy") setFlag(sym, SymbolFlag.DestroyOp);
 	else if (hook == "wasMoved") setFlag(sym, SymbolFlag.WasMovedOp);
+	return sym;
 }
 
 // Set hook function param/return types to concrete Types.
@@ -263,20 +266,32 @@ function clonePath(node: Node, loc: SourceLocation): Node {
 
 // ===== Emit helpers =====
 
+function attachedOpOf(hook: string): AttachedOp {
+	return match (hook) {
+		"destroy" => AttachedOp.AttachedDestructor,
+		"copy" => AttachedOp.AttachedAsgn,
+		"sink" => AttachedOp.AttachedSink,
+		"wasMoved" => AttachedOp.AttachedWasMoved,
+		_ => AttachedOp.AttachedTrace,
+	};
+}
+
 // Emit runtime call — unary (destroy/wasMoved) or binary (copy/sink)
 function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc: SourceLocation): void {
+	const callee = makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [x], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(callee, [x], loc), loc));
 	} else {
-		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [x, y], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(callee, [x, y], loc), loc));
 	}
 }
 
 // Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
 // For unary incref (msIncref, msClosureCopy), emit incref-new + decref-old + assign.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
+	const increfSym = attachedOpSym(increfFn, AttachedOp.AttachedAsgn);
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
-	if (increfFn == "msStringCopy") {
+	if (isRuntimeProcSym(increfSym, "msStringCopy")) {
 		buf.items.push(makeExprStmt(makeCall(runtimeRef("msStringCopy", loc),
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
@@ -284,22 +299,22 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 	// Cyclic refs: Nim attachedAsgn isCyclic order (liftdestructors.nim:768-775) —
 	// incref new, assign, decref old last, so a collect triggered by the old value's
 	// destroy never traces a dest still pointing at the dying object.
-	if (increfFn == "msIncrefCyclic") {
+	if (isRuntimeProcSym(increfSym, "msIncrefCyclic")) {
 		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
 	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
 	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
 	// the decref; then decref old, then assign.
-	const decrefFn = increfFn == "msIncref" ? "msDecref"
-		: increfFn == "msAtomicIncref" ? "msAtomicDecref"
-		: increfFn == "msClosureCopy" ? "msClosureDestroy"
-		: increfFn == "msClosureIncref" ? "msClosureDecref"
-		: increfFn == "msMapIncref" ? "msMapDecref"
+	const decrefFn = isRuntimeProcSym(increfSym, "msIncref") ? "msDecref"
+		: isRuntimeProcSym(increfSym, "msAtomicIncref") ? "msAtomicDecref"
+		: isRuntimeProcSym(increfSym, "msClosureCopy") ? "msClosureDestroy"
+		: isRuntimeProcSym(increfSym, "msClosureIncref") ? "msClosureDecref"
+		: isRuntimeProcSym(increfSym, "msMapIncref") ? "msMapDecref"
 		: "";
-	buf.items.push(makeExprStmt(makeCall(hookRef(increfFn, loc), [clonePath(y, loc)], loc), loc));
+	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
 	if (decrefFn != "") {
-		buf.items.push(makeExprStmt(makeCall(hookRef(decrefFn, loc), [clonePath(x, loc)], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(runtimeRef(decrefFn, loc), [clonePath(x, loc)], loc), loc));
 	}
 	buf.items.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
 }
@@ -503,7 +518,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "sink") {
 		// Inline sink: destroy(&xf) + assign(xf = yf)
-		buf.items.push(makeExprStmt(makeCall(hookRef(typeName + "Destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(typeName + "Destroy", AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(xf, loc)], loc), loc));
 		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 		return;
 	}
@@ -511,12 +526,12 @@ function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Nod
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
-		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc), [ax], loc), loc));
 	} else if (hook == "trace") {
-		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax, yf], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc), [ax, yf], loc), loc));
 	} else {
 		const ay = makeHiddenAddr(yf, loc);
-		buf.items.push(makeExprStmt(makeCall(hookRef(name, loc), [ax, ay], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc), [ax, ay], loc), loc));
 	}
 }
 
@@ -957,7 +972,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Sy
 		emitTagCopy(buf, s1, s2, loc);
 		const copyChain = buildVariantDispatch("copy", typeName, objType, s1, s2, false, lctx, loc);
 		if (copyChain != null) buf.items.push(copyChain);
-		buf.items.push(makeExprStmt(makeCall(hookRef(typeName + "Destroy", loc),
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(typeName + "Destroy", AttachedOp.AttachedDestructor), null, loc),
 			[makeHiddenAddr(makeIdent(blobName, loc), loc)], loc), loc));
 		return;
 	}
@@ -1030,7 +1045,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const callArgs: Node[] = (isUnary && hook != "trace")
 				? [a1]
 				: [a1, a2];
-				const callStmt = makeExprStmt(makeCall(hookRef(helperName, loc), callArgs, loc), loc);
+				const callStmt = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(helperName, attachedOpOf(hook)), null, loc), callArgs, loc), loc);
 				chain = makeIf(cond, makeBlock([callStmt], loc), chain != null ? chain : makeNull(loc), loc);
 			}
 		}
@@ -1152,7 +1167,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 // classType is non-null for class types (= sym.symbolType = Ref<Struct>),
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
-function generateHook(hook: string, typeName: string, cName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): void {
+function generateHook(hook: string, typeName: string, cName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const buf = newBuf();
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
@@ -1280,8 +1295,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	}
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
-	markLifecycleOp(fnNode, cName + suffix, hook);
+	const sym = markLifecycleOp(fnNode, cName + suffix, hook);
 	lctx.collector.push(fnNode);
+	return sym;
 }
 
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,
@@ -1320,9 +1336,9 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 // Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
 function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
-	const traceFn = hasCycles ? hookRef(cName + "Trace", loc) : makeNull(loc);
+	const traceFn = hasCycles ? makeTypedIdentResolved(attachedOpSym(cName + "Trace", AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
 	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, hookRef(cName + "Destroy", loc)];
+	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1335,7 +1351,7 @@ function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, l
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;
 // value types copy through <T>Copy. Signature identical to the paired Ref/val
 // dup emission in the old Path A / Path B, just deduplicated.
-function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const dupStmts: Node[] = [];
 	const srcSym = makeSymbol("src", SymbolKind.Variable, classType != null ? classType : objType, false);
 	const resultSym = makeSymbol("$result", SymbolKind.Variable, classType != null ? classType : objType, true);
@@ -1349,15 +1365,16 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
 		dupStmts.push(resultDecl);
-		dupStmts.push(makeExprStmt(makeCall(hookRef(cName + "Copy", loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
+		dupStmts.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(cName + "Copy", AttachedOp.AttachedAsgn), null, loc), [makeHiddenAddr(makeTypedIdentResolved(resultSym, null, loc), loc), makeHiddenAddr(makeIdentResolved(srcSym, loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeTypedIdentResolved(resultSym, null, loc), loc));
 	}
 	const dupNode = makeFnDecl(cName + "Dup", [srcSym], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	const dupType = classType != null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
-	markGeneratedOp(dupNode, cName + "Dup");
+	const sym = markGeneratedOp(dupNode, cName + "Dup");
 	lctx.collector.push(dupNode);
+	return sym;
 }
 
 // `emitTypeInfo` gates whether this call should push the `<T>TypeInfo`
@@ -1460,24 +1477,24 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	let hasCycles = false;
 
 	if (shouldEmitHooks) {
-		generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
-		generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
-		generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
-		generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
-		setAttachedOp(objType, AttachedOp.AttachedDestructor, cName + "Destroy");
-		setAttachedOp(objType, AttachedOp.AttachedAsgn,       cName + "Copy");
-		setAttachedOp(objType, AttachedOp.AttachedSink,       cName + "Sink");
-		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   cName + "WasMoved");
+		const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
+		const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
+		const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
+		const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
+		setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
+		setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
+		setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
+		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
 
 		const visited: NameSet = createNameSet();
 		hasCycles = isCyclicType(objType, lctx, visited);
 		if (hasCycles) {
-			generateHook("trace", typeName, cName, objType, classType, lctx, loc);
-			setAttachedOp(objType, AttachedOp.AttachedTrace, cName + "Trace");
+			const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
+			setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 		}
 
-		emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
-		setAttachedOp(objType, AttachedOp.AttachedDup, cName + "Dup");
+		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
 
 		claimGlobal(cName);
 	} else if (shouldEmitTypeInfo) {
@@ -1531,14 +1548,14 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
 	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
 		ensureEq(fieldType.typeName, lctx, loc);
-		return makeCall(hookRef(fieldType.typeName + "Eq", loc), [aField, bField], loc);
+		return makeCall(makeTypedIdentResolved(opProcSym(fieldType.typeName + "Eq"), null, loc), [aField, bField], loc);
 	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
 	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
 	if (fieldType.kind == TypeKind.Tuple) {
 		const tn = tupleTypeName(fieldType);
 		ensureTupleEq(tn, fieldType, lctx, loc);
-		return makeCall(hookRef(tn + "Eq", loc), [aField, bField], loc);
+		return makeCall(makeTypedIdentResolved(opProcSym(tn + "Eq"), null, loc), [aField, bField], loc);
 	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
@@ -1921,7 +1938,6 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		claimGlobal("msStringArray");
 		const strElemType = stringType();
 		const strArrayType = createArray(strElemType);
-		generateArrayHook("destroy", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("copy", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("sink", "msStringArray", strElemType, strArrayType, lctx, loc);
 		generateArrayHook("wasMoved", "msStringArray", strElemType, strArrayType, lctx, loc);
@@ -1932,7 +1948,6 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		claimGlobal("msRefArray");
 		const refElemType = createPrimitive(TypeKind.Ref);
 		const refArrayType = createArray(refElemType);
-		generateArrayHook("destroy", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("copy", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("sink", "msRefArray", refElemType, refArrayType, lctx, loc);
 		generateArrayHook("wasMoved", "msRefArray", refElemType, refArrayType, lctx, loc);

@@ -777,9 +777,9 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 // The owning module (has InterfaceDecl/ClassDecl → in declaredThings) emits the definition.
 // Consuming modules emit extern. Compiler-generated types ($Env_*) are always local.
 //
-// Optional `objType` parameter wires the destroyFn field from the type's AttachedOps.
-// destructorLifting calls setAttachedOp(type, AttachedDestructor, "<typeName>Destroy")
-// when it generates the Destroy hook. When the caller has the Type available, pass
+// Optional `objType` parameter wires the destroyFn field from the type's attachedOps.
+// destructorLifting registers the generated destroy hook's Symbol there
+// (setAttachedOp(type, AttachedDestructor, sym)). When the caller has the Type available, pass
 // it here so the TypeInfo gets `.destroyFn = (msDestroyProc)<mangled-destroy>;`. For
 // types where destructorLifting ALSO emits a full TypeInfo (e.g. user-declared
 // classes/interfaces with explicit InterfaceDecl), both paths assign the same value
@@ -848,8 +848,9 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
 	let destroyHook = "";
-	if (objType != null && hasDestructor(objType)) {
-		destroyHook = mangle(getAttachedOp(objType, AttachedOp.AttachedDestructor));
+	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
+	if (destroySym != null) {
+		destroyHook = mangle(destroySym.name);
 	} else if (isGeneric && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
@@ -886,9 +887,11 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 	// name is an undefined symbol at link. types.h documents destroyFn == NULL
 	// as the "no RC fields" convention; the destroy dispatch skips NULL.
 	if (pointeeType != null && hasDestructor(pointeeType) && arrayElementNeedsCleanup(pointeeType)) {
-		const hookName = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
-		destroyHook = mangle(hookName);
-		ensureDrcProto(g, destroyHook, lookupHookSym(hookName));
+		const hookSym = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
+		if (hookSym != null) {
+			destroyHook = mangle(hookSym.name);
+			ensureDrcProto(g, destroyHook, lookupHookSym(hookSym.name));
+		}
 	}
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
 	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);

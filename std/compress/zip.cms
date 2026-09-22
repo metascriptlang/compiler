@@ -8,6 +8,7 @@
 // exposes entry metadata + extraction. The writer builds a new archive in a
 // growable heap buffer and returns the finalised bytes.
 
+@passC("-Iruntime/compress");
 @compile("runtime/compress/zip.c");
 @compile("vendor/miniz/miniz.c");
 @compile("vendor/miniz/miniz_tinfl.c");

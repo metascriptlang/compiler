@@ -60,6 +60,7 @@ import "./c/protocols";
 import "./c/typeIntrospection";
 import "./c/multidecl";
 import "./c/importedStmtMacroDiagnostics";
+import "./c/macroSandbox";
 import "./c/toycodec";
 import "./c/structuralPrefix";
 import "./c/drcLifecycle";

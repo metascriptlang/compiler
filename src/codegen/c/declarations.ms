@@ -45,10 +45,10 @@ function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 		|| (name.length >= 4 && name.slice(0, 4) == "$fn_");
 	if (isLiftedClosure) return aliveSetHas(g.aliveSet, g.modulePath, name);
 	if (name.length > 0 && name.slice(0, 1) == "$") return true;
+	const sym = node.resolvedSym;
 	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
 		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
-	const isRuntimeArrayHook = name == "msStringArrayDestroy" || name == "msRefArrayDestroy" || name == "msNumberArrayDestroy";
-	if (isSeqHookSuffix && !isRuntimeArrayHook) return true;
+	if (isSeqHookSuffix) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 

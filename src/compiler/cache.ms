@@ -13,7 +13,7 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec, env, platform, argv } from "std/process";
+import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -103,6 +103,8 @@ export function toolchainStamp(): string {
 
 let _cacheDir = "";
 let _forceRebuild = false;
+let _nativeProjectDeps: string[] = [];
+let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -117,6 +119,8 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	ensureDir(_cacheDir);
 	ensureLocalSchema();
 	_forceRebuild = forceRebuild;
+	_nativeProjectDeps = [];
+	_nativeProjectDepSet = new HashSet<string>();
 	toolchainStamp();
 }
 
@@ -190,6 +194,66 @@ function fpKey(fp: string): string {
 	return hashContent(fp).slice(0, 18);
 }
 
+export function nativeDepFile(srcPath: string, compileCmd: string): string {
+	return `${getCacheDir()}/${sanitizePath(srcPath)}.${fpKey(compileCmd)}.d`;
+}
+
+function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
+	const result: string[] = [];
+	const path = nativeDepFile(srcPath, compileCmd);
+	if (!exists(path)) return result;
+	const content = try readFile(path) catch "";
+	let colon = 0;
+	while (colon < content.length && content.charAt(colon) != ":") colon = colon + 1;
+	if (colon == content.length) return result;
+	let current = "";
+	let i = colon + 1;
+	while (i < content.length) {
+		const c = content.charAt(i);
+		if (c == "\\") {
+			if (i + 1 < content.length && content.charAt(i + 1) == "\n") {
+				i = i + 2;
+				continue;
+			}
+			if (i + 2 < content.length && content.charAt(i + 1) == "\r" && content.charAt(i + 2) == "\n") {
+				i = i + 3;
+				continue;
+			}
+			if (i + 1 < content.length) {
+				current = current + content.charAt(i + 1);
+				i = i + 2;
+				continue;
+			}
+		}
+		if (c == " " || c == "\t" || c == "\n" || c == "\r") {
+			if (current != "") {
+				result.push(current);
+				current = "";
+			}
+		} else {
+			current = current + c;
+		}
+		i = i + 1;
+	}
+	if (current != "") result.push(current);
+	return result;
+}
+
+export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
+	return nativeDependencyPaths(srcPath, compileCmd).length > 0;
+}
+
+export function registerNativeDependencies(srcPath: string, compileCmd: string): void {
+	registerNativeProjectDep(srcPath);
+	for (const path of nativeDependencyPaths(srcPath, compileCmd)) registerNativeProjectDep(path);
+}
+
+function registerNativeProjectDep(path: string): void {
+	if (_nativeProjectDepSet.has(path)) return;
+	_nativeProjectDepSet.add(path);
+	_nativeProjectDeps.push(path);
+}
+
 // Local object path keyed by source path AND fingerprint: builds with
 // different flags / gc mode / emitted C write DIFFERENT physical files and
 // never rename over each other. The old shared-by-srcPath scheme let a drc
@@ -224,8 +288,8 @@ function ensureLocalSchema(): void {
 }
 
 // Full compile command for fingerprint — includes compiler, -std, mode flags.
-export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string): string {
-	return `${getCompilerName(ccOption, "")} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
+export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string): string {
+	return `${getCompilerHash(ccOption, ccBinary)} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
 }
 
 // Fingerprint folds in VERSION and toolchainStamp(): the stamp content-hashes
@@ -240,7 +304,15 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // (avoids any shared module-state read-after-write races).
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
-	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
+	registerNativeProjectDep(srcPath);
+	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
+	const deps = nativeDependencyPaths(srcPath, compileCmd);
+	if (deps.length == 0) return result + `:dependencies-unresolved:${srcPath}`;
+	for (const path of deps) {
+		registerNativeProjectDep(path);
+		result = result + `:${path}=${hashFile(path)}`;
+	}
+	return result;
 }
 
 // ===== Global Content-Addressed Cache =====
@@ -393,14 +465,13 @@ function tryRemoveFile(path: string): void {
 // linking through it right now (the old remove-on-miss raced links into
 // FileNotFound); a miss only means "this build recompiles", and the fresh
 // object is published atomically over the stale one by the compile path.
-export function isCompileCached(oFile: string, fp: string): boolean {
+export function isCompileCached(oFile: string, fp: string, allowGlobalRestore: boolean): boolean {
 	const fpFile = oFile + ".fp";
 	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
 		if (stored == fp) return true;
 	}
-	// Local miss (or forceRebuild bypass of local) — try the global cache.
-	if (tryRestoreFromGlobal(oFile, fp)) return true;
+	if (allowGlobalRestore && tryRestoreFromGlobal(oFile, fp)) return true;
 	return false;
 }
 
@@ -422,35 +493,37 @@ export function writeCompileCache(oFile: string, fp: string): void {
 // We track: cacheVersion, outputFile, cmdline (compile+link flags+mode+compiler), depfiles (hash each).
 // Stored as simple key=value lines in out/.cache_{d|r}/project.cache.
 
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 
 // Build the project cache file path.
 function projectCacheFile(): string {
 	return `${getCacheDir()}/project.cache`;
 }
 
-// Build command line fingerprint — everything that affects the build output.
-// Cache compiler identity hash (once per build session).
-// Captures `clang --version` output to detect version upgrades.
-// Reference parity: hashes the compiler binary to detect upgrades.
-// Link flags are tracked separately in link.cache.
 let _compilerHash = "";
-function getCompilerHash(ccOption: number): string {
-	if (_compilerHash != "") return _compilerHash;
-	const name = getCompilerName(ccOption, "");
-	// New exec() captures stdout; no more tmp-file shell redirect needed.
-	const r = exec(`${name} --version 2>&1`);
-	const version = r.ok ? r.value : (r.error.output != "" ? r.error.output : r.error.errorOutput);
-	if (version.length > 0) {
-		_compilerHash = hashContent(version);
-	} else {
-		_compilerHash = name;
+let _compilerHashKey = "";
+
+function getCompilerHash(ccOption: number, ccBinary: string): string {
+	const name = getCompilerName(ccOption, ccBinary);
+	if (_compilerHash != "" && _compilerHashKey == name) return _compilerHash;
+	let path = name;
+	const args: string[] = [];
+	if (ccBinary == "" && name.endsWith(" cc")) {
+		path = name.slice(0, name.length - 3);
+		args.push("cc");
 	}
+	const resolved = findOnPath(path);
+	if (resolved != "") path = resolved;
+	args.push("--version");
+	const r = execFileCapture(path, args);
+	const version = r.ok ? r.value : r.error.errorOutput;
+	_compilerHashKey = name;
+	_compilerHash = hashContent(`${name}:${hashFile(path)}:${version}`);
 	return _compilerHash;
 }
 
-function buildCmdFingerprint(ccOption: number, mode: number, compileFlags: string): string {
-	return `${getCompilerHash(ccOption)}:${mode}:${compileFlags}:${toolchainStamp()}`;
+function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
+	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.
@@ -489,6 +562,20 @@ function splitLines(s: string): string[] {
 // to avoid hashing every source file twice on successful builds.
 let _cachedDepHashes: string[] = [];
 
+function storedDepPath(entry: string): string {
+	let i = entry.length - 1;
+	while (i >= 0) {
+		if (entry.charAt(i) == "=") return entry.slice(0, i);
+		i = i - 1;
+	}
+	return "";
+}
+
+function projectCacheMiss(cacheFile: string): boolean {
+	tryRemoveFile(cacheFile);
+	return true;
+}
+
 // Check if the project needs rebuilding.
 // Reference-aligned: changeDetectedViaJsonBuildInstructions.
 // Returns true if anything changed (= must rebuild). Returns false if up-to-date.
@@ -496,17 +583,16 @@ export function projectCacheChanged(
 	depPaths: string[],
 	outputFile: string,
 	ccOption: number,
+	ccBinary: string,
 	mode: number,
 	flags: string
 ): boolean {
 	_cachedDepHashes = [];
-	if (_forceRebuild) return true;
-
 	const cacheFile = projectCacheFile();
-	if (!exists(cacheFile) || !exists(outputFile)) return true;
-
+	if (_forceRebuild) return projectCacheMiss(cacheFile);
+	if (!exists(cacheFile) || !exists(outputFile)) return projectCacheMiss(cacheFile);
 	const cacheResult = readFile(cacheFile);
-	if (!cacheResult.ok) return true;
+	if (!cacheResult.ok) return projectCacheMiss(cacheFile);
 	const lines = splitLines(cacheResult.value);
 
 	// Parse header fields
@@ -529,26 +615,31 @@ export function projectCacheChanged(
 		if (val != "") { storedDeps.push(val); }
 	}
 
-	const currentCmd = buildCmdFingerprint(ccOption, mode, flags);
+	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
 
 	// Reference-aligned: check cacheVersion, outputFile, cmdline
-	if (storedVersion != CACHE_VERSION) return true;
-	if (storedOutput != outputFile) return true;
-	if (storedCmd != currentCmd) return true;
+	if (storedVersion != CACHE_VERSION) return projectCacheMiss(cacheFile);
+	if (storedOutput != outputFile) return projectCacheMiss(cacheFile);
+	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
 
 	// Reference-aligned: check output binary modification (detect external tampering)
 	const currentOutputHash = hashFile(outputFile);
-	if (storedOutputHash != currentOutputHash) return true;
+	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
 
-	// Reference-aligned: check depfiles — hash every source file
-	if (storedDeps.length != depPaths.length) return true;
+	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
 	let di = 0;
 	while (di < depPaths.length) {
 		const path = depPaths[di];
-		const h = hashFile(path);
-		const currentEntry = `${path}=${h}`;
-		if (storedDeps[di] != currentEntry) return true;
-		// Cache for writeProjectCache reuse (avoid double-read)
+		const currentEntry = `${path}=${hashFile(path)}`;
+		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
+		_cachedDepHashes.push(currentEntry);
+		di = di + 1;
+	}
+	while (di < storedDeps.length) {
+		const path = storedDepPath(storedDeps[di]);
+		if (path == "") return projectCacheMiss(cacheFile);
+		const currentEntry = `${path}=${hashFile(path)}`;
+		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
 		_cachedDepHashes.push(currentEntry);
 		di = di + 1;
 	}
@@ -563,24 +654,30 @@ export function writeProjectCache(
 	depPaths: string[],
 	outputFile: string,
 	ccOption: number,
+	ccBinary: string,
 	mode: number,
 	flags: string
 ): void {
+	const allDeps: string[] = [];
+	const seen = new HashSet<string>();
+	for (const path of depPaths) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		allDeps.push(path);
+	}
+	for (const path of _nativeProjectDeps) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		allDeps.push(path);
+	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${outputFile}\n`;
-	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, mode, flags)}\n`;
+	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, ccBinary, mode, flags)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
-
-	if (_cachedDepHashes.length == depPaths.length) {
-		// Reuse hashes from projectCacheChanged — no double-read
-		for (const entry of _cachedDepHashes) {
-			content = content + `${PRE_DEP}${entry}\n`;
-		}
+	if (_cachedDepHashes.length == allDeps.length) {
+		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;
 	} else {
-		// Fresh computation (first build, or force rebuild skipped projectCacheChanged)
-		for (const path of depPaths) {
-			content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
-		}
+		for (const path of allDeps) content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
 	atomicWriteFile(projectCacheFile(), content);
 }
@@ -689,13 +786,26 @@ export function invalidateCompileCache(modPath: string, fp: string): void {
 
 const PRE_LINKCMD = "linkcmd:";
 const PRE_OFILES = "ofiles:";
+const PRE_LINKINPUTS = "linkInputs:";
 
 function linkCacheFile(): string {
 	return `${getCacheDir()}/link.cache`;
 }
 
+function objectListKey(oFiles: string[]): string {
+	let identity = "";
+	for (const path of oFiles) identity = `${identity}${path.length}:${path}`;
+	return hashContent(identity);
+}
+
+function externalInputKey(paths: string[]): string {
+	let identity = "";
+	for (const path of paths) identity = `${identity}${path.length}:${path}:${hashFile(path)}`;
+	return hashContent(identity);
+}
+
 // Check if link step can be skipped.
-export function isLinkCached(oFileList: string, linkFlags: string, outputFile: string): boolean {
+export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): boolean {
 	if (_forceRebuild) return false;
 	const cFile = linkCacheFile();
 	if (!exists(cFile) || !exists(outputFile)) return false;
@@ -707,27 +817,32 @@ export function isLinkCached(oFileList: string, linkFlags: string, outputFile: s
 	let storedCmd = "";
 	let storedOFiles = "";
 	let storedOutputHash = "";
+	let storedInputs = "";
 
 	for (const line of lines) {
 		let val = parseLineValue(line, PRE_LINKCMD);
 		if (val != "") { storedCmd = val; continue; }
 		val = parseLineValue(line, PRE_OFILES);
 		if (val != "") { storedOFiles = val; continue; }
+		val = parseLineValue(line, PRE_LINKINPUTS);
+		if (val != "") { storedInputs = val; continue; }
 		val = parseLineValue(line, PRE_OUTHASH);
 		if (val != "") { storedOutputHash = val; continue; }
 	}
 
 	if (storedCmd != linkFlags) return false;
-	if (storedOFiles != oFileList) return false;
+	if (storedOFiles != objectListKey(oFiles)) return false;
+	if (storedInputs != externalInputKey(externalInputs)) return false;
 	const currentOutputHash = hashFile(outputFile);
 	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
 
 // Write link cache after successful link step.
-export function writeLinkCache(oFileList: string, linkFlags: string, outputFile: string): void {
+export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
-	content = content + `${PRE_OFILES}${oFileList}\n`;
+	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
+	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(), content);
 }

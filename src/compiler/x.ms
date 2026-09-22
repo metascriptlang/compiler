@@ -1,4 +1,4 @@
-import { exists, ensureDir, readFile, writeFile, chmod } from "std/fs";
+import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll, rename, isDir } from "std/fs";
 import { join } from "std/fs/path";
 import { execFile, env, exit } from "std/process";
 import { exeSuffix } from "./io";
@@ -93,9 +93,39 @@ export function globalShimDir(): string {
 	return join(home, join(".metascript", "bin"));
 }
 
+export function dirEntryName(entry: string): string {
+	if (entry.length > 1 && entry.charAt(entry.length - 1) == "/") {
+		return entry.slice(0, entry.length - 1);
+	}
+	return entry;
+}
+
+export function pruneStaleShims(shimDir: string, keep: string[]): int32 {
+	if (!exists(shimDir)) return 0;
+	let pruned = 0;
+	for (const rawEntry of readDir(shimDir)) {
+		const entry = dirEntryName(rawEntry);
+		let isKeep = false;
+		for (const k of keep) {
+			if (k == entry) isKeep = true;
+		}
+		if (isKeep) continue;
+		const shimPath = join(shimDir, entry);
+		const content = try readFile(shimPath) catch "";
+		if (isShim(content)) {
+			if (remove(shimPath).ok) pruned = pruned + 1;
+		}
+	}
+	return pruned;
+}
+
 export function syncShims(projectRoot: string, shimDir: string): boolean {
 	const declared = declaredCommands(projectRoot);
-	if (declared.commands.length == 0) return true;
+	if (declared.commands.length == 0) {
+		const pruned = pruneStaleShims(shimDir, []);
+		if (pruned > 0) console.log(`pruned ${pruned.toString()} stale command(s) from ${dim(shimDir)}`);
+		return true;
+	}
 
 	let ok = true;
 	let i = 0;
@@ -122,11 +152,14 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 	}
 
 	ensureDir(shimDir);
+	const keep: string[] = [];
 	let written = 0;
 	let s = 0;
 	while (s < declared.commands.length) {
 		const cmd = declared.commands[s];
-		const shimPath = join(shimDir, shimFileName(cmd));
+		const name = shimFileName(cmd);
+		keep.push(name);
+		const shimPath = join(shimDir, name);
 		if (exists(shimPath)) {
 			const current = try readFile(shimPath) catch "";
 			if (!isShim(current)) {
@@ -141,11 +174,30 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 			return false;
 		}
 		chmod(shimPath, SHIM_MODE);
+		console.log(`  ${cyan(cmd)} ${dim(`(${declared.packages[s]})`)}`);
 		written = written + 1;
 		s = s + 1;
 	}
 	console.log(`${written.toString()} command(s) installed in ${dim(shimDir)}`);
+	const pruned = pruneStaleShims(shimDir, keep);
+	if (pruned > 0) console.log(`pruned ${pruned.toString()} stale command(s)`);
 	return true;
+}
+
+test "pruneStaleShims removes stale shims and leaves foreign files" {
+	const base = env.get("TMPDIR");
+	const dir = join(base != "" ? base : "/tmp", "msc-prune-shims-test");
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(join(dir, "greet"), "#!/bin/sh\n# msc shim v1\nexec msc x 'greeter:greet' \"$@\"\n");
+	writeFile(join(dir, "old"), "#!/bin/sh\nexec msc x 'greeter:old' \"$@\"\n");
+	writeFile(join(dir, "mine"), "#!/bin/sh\necho mine\n");
+	const pruned = pruneStaleShims(dir, ["greet"]);
+	assert pruned == 1;
+	assert exists(join(dir, "greet"));
+	assert exists(join(dir, "mine"));
+	assert !exists(join(dir, "old"));
+	removeAll(dir);
 }
 
 const GLOBAL_MANIFEST = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\tpackage: { name: \"metascript-global\", version: \"0.0.0\" },\n\tdeps: {\n\t},\n};\n\nexport default config;\n";
@@ -181,6 +233,61 @@ function packageKey(pkg: string, version: string, root: string): string {
 	const safePkg = pkg.replace("/", "-");
 	if (isImmutableRoot(root) && version != "") return `${safePkg}@${version}`;
 	return safePkg;
+}
+
+let tmpBuildSeq: int32 = 0;
+
+function tempBuildPath(binPath: string): string {
+	tmpBuildSeq = tmpBuildSeq + 1;
+	return `${binPath}.tmp${performance.now().toString()}.${tmpBuildSeq.toString()}`;
+}
+
+export const BIN_CACHE_CAP: int32 = 32;
+
+function readBinJournal(binRoot: string): string[] {
+	const raw = try readFile(join(binRoot, ".lru")) catch "";
+	if (raw == "") return [];
+	const keys: string[] = [];
+	for (const line of raw.split("\n")) {
+		if (line != "") keys.push(line);
+	}
+	return keys;
+}
+
+export function recordBinUse(binRoot: string, key: string): void {
+	const prev = readBinJournal(binRoot);
+	const kept: string[] = [];
+	const start = prev.length - (BIN_CACHE_CAP - 1);
+	let i0 = start > 0 ? start : 0;
+	while (i0 < prev.length) {
+		if (prev[i0] != key) kept.push(prev[i0]);
+		i0 = i0 + 1;
+	}
+	kept.push(key);
+
+	const dirs: string[] = [];
+	for (const rawEntry of readDir(binRoot)) {
+		const entry = dirEntryName(rawEntry);
+		if (isDir(join(binRoot, entry))) dirs.push(entry);
+	}
+	if (prev.length == 0) {
+		for (const d of dirs) {
+			if (kept.length >= BIN_CACHE_CAP) break;
+			let known = false;
+			for (const k of kept) { if (k == d) known = true; }
+			if (!known) kept.push(d);
+		}
+	} else if (dirs.length > BIN_CACHE_CAP) {
+		for (const d of dirs) {
+			let live = false;
+			for (const k of kept) { if (k == d) live = true; }
+			if (!live) removeAll(join(binRoot, d));
+		}
+	}
+
+	let out = "";
+	for (const k of kept) { out = out + k + "\n"; }
+	writeFile(join(binRoot, ".lru"), out);
 }
 
 export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boolean {
@@ -247,7 +354,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 		console.log(`${errStyle("error")}: cannot locate ~/.metascript — set HOME`);
 		return false;
 	}
-	const binDir = join(cache, join("bin", packageKey(declared.packages[hit], declared.versions[hit], root)));
+	const key = packageKey(declared.packages[hit], declared.versions[hit], root);
+	const binDir = join(cache, join("bin", key));
 	const binPath = join(binDir, wantCmd + exeSuffix());
 
 	const forwarded: string[] = [];
@@ -260,11 +368,51 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 	if (!isImmutableRoot(root) || !exists(binPath)) {
 		ensureDir(binDir);
 		const depCfg = loadBuildConfig(join(root, "build.ms"), false);
-		opts.outputPath = binPath;
+		const tmpPath = tempBuildPath(binPath);
+		opts.outputPath = tmpPath;
 		opts.projectRoot = root;
 		cmdBuildC(entryPath, opts, depCfg.resolve);
+		const moved = rename(tmpPath, binPath);
+		if (!moved.ok) {
+			remove(tmpPath);
+			console.log(`${errStyle("error")}: cannot finalize ${binPath}: ${moved.error.message}`);
+			return false;
+		}
 	}
+	recordBinUse(join(cache, "bin"), key);
 
 	exit(execFile(binPath, forwarded));
 	return true;
+}
+
+test "recordBinUse adopts unjournaled dirs, then evicts least-recent past the cap" {
+	const base = env.get("TMPDIR");
+	const binRoot = join(base != "" ? base : "/tmp", "msc-bincache-test");
+	removeAll(binRoot);
+	ensureDir(binRoot);
+	for (const k of ["a", "b", "c"]) {
+		ensureDir(join(binRoot, k));
+		writeFile(join(binRoot, k), "x");
+	}
+	recordBinUse(binRoot, "a");
+	assert exists(join(binRoot, "b"));
+	assert exists(join(binRoot, "c"));
+	recordBinUse(binRoot, "b");
+	assert exists(join(binRoot, "c"));
+	let n = 0;
+	while (n < 40) {
+		const k = `p${n.toString()}`;
+		ensureDir(join(binRoot, k));
+		recordBinUse(binRoot, k);
+		n = n + 1;
+	}
+	assert !exists(join(binRoot, "a"));
+	assert !exists(join(binRoot, "c"));
+	assert exists(join(binRoot, "p39"));
+	let dirCount = 0;
+	for (const entry of readDir(binRoot)) {
+		if (isDir(join(binRoot, entry))) dirCount = dirCount + 1;
+	}
+	assert dirCount <= BIN_CACHE_CAP;
+	removeAll(binRoot);
 }

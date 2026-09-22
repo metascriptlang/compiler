@@ -67,7 +67,8 @@ import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
-import { RaiserVM, vmCallFunction } from "../../raiser/vm";
+import { RaiserVM } from "../../raiser/vm";
+import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
@@ -1733,8 +1734,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
 		marshalArgs.push(av);
 	}
+	const declPath = regCtx.macroDeclModuleRegistry.get(d.macroName);
+	const macroSourcePath = declPath != null && declPath != "" ? declPath : regCtx.modulePath;
 	pushActiveMetaCtx(ctx, node.location.line, node.location.column);
-	const resultVal = vmCallFunction(vm, cm.funcIdx, marshalArgs);
+	const resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
 	popActiveMetaCtx();
 
 	if (vm.diagMessage != "") {

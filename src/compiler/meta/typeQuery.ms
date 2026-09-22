@@ -3,7 +3,7 @@ import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField, heapObjectSetField } from "../../raiser/value";
-import { registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
+import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, boundSymAt, registerBoundType, boundTypeAt } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
@@ -164,11 +164,11 @@ function hostSymKind(args: RaiserValue[]): RaiserValue {
 }
 
 export function registerTypeQueryHostFns(): void {
-	registerHostFn("msMetaBindSym", hostBindSym);
-	registerHostFn("msMetaGetType", hostGetType);
-	registerHostFn("msMetaGetImpl", hostGetImpl);
-	registerHostFn("msMetaResolveType", hostResolveType);
-	registerHostFn("msMetaTypeKind", hostTypeKind);
-	registerHostFn("msMetaSameType", hostSameType);
-	registerHostFn("msMetaSymKind", hostSymKind);
+	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);
+	registerHostFn("msMetaGetType", hostGetType, HostCapability.Pure);
+	registerHostFn("msMetaGetImpl", hostGetImpl, HostCapability.Pure);
+	registerHostFn("msMetaResolveType", hostResolveType, HostCapability.Pure);
+	registerHostFn("msMetaTypeKind", hostTypeKind, HostCapability.Pure);
+	registerHostFn("msMetaSameType", hostSameType, HostCapability.Pure);
+	registerHostFn("msMetaSymKind", hostSymKind, HostCapability.Pure);
 }

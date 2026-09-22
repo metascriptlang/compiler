@@ -8,6 +8,7 @@ import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { normalize } from "std/fs/path";
+import { quoteCcArg } from "../utils/commandLine";
 import { getGenericDecl } from "../parser/context";
 import { callDecoratorDefers } from "./checkerCallbacks";
 
@@ -1222,7 +1223,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// Propagate -iquote for header search path
 				if (exportInfo.headerPath != "" && exportInfo.definingModule != "") {
 					const searchDir = getModuleDir(exportInfo.definingModule);
-					if (searchDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + searchDir);
+					if (searchDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + searchDir));
 				}
 				propagateImportedOverloads(ctx, primarySym, exportInfo, sourcePath, importName, localAlias, false);
 				// If imported symbol is an extension method, register primary locally.

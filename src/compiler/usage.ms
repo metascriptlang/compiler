@@ -25,7 +25,7 @@ export function printUsage(): void {
 	console.log("");
 	console.log(yellow("PACKAGE MANAGER:"));
 	console.log("  " + cyan("add") + " <name>@<ver>     Add a dependency (registry / file: / git:)");
-	console.log("  " + cyan("remove") + " <name>        Remove a dependency");
+	console.log("  " + cyan("remove") + " <name>        Remove a dependency " + dim("(-g <name>: remove a global install)"));
 	console.log("  " + cyan("install") + "              Install locked dependencies " + dim("(-g <pkg>: install its commands globally)"));
 	console.log("  " + cyan("publish") + "              Publish current package to registry");
 	console.log("  " + cyan("login") + "                Authenticate with the registry (GitHub)");

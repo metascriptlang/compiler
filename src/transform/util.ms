@@ -2,12 +2,13 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
-import { makeSymbol, setFlag, SymbolFlag } from "../checker/symbol";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
+import { IdentCache, getIdentId } from "../checker/idents";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -170,9 +171,11 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 
 let _runtimeSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _compilerFuncs: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _runtimeIdentCache: IdentCache | null = null;
 
-export function bindCompilerFuncs(declared: HashMap<string, Symbol>): void {
+export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): void {
 	_compilerFuncs = declared;
+	_runtimeIdentCache = identCache;
 	_runtimeSyms = new HashMap<string, Symbol>();
 }
 
@@ -183,30 +186,37 @@ export function runtimeProcSym(procName: string): Symbol {
 	if (existing != null) return existing;
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
+	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
 }
 
+export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
+	const runtimeSym = runtimeProcSym(procName);
+	if (sym == runtimeSym) return true;
+	return sym != null && sym.nameId != 0 && sym.nameId == runtimeSym.nameId
+		&& hasFlag(sym, SymbolFlag.ImportC);
+}
+
 export function isRuntimeProcCall(node: Node, procName: string): boolean {
-	return node.kind == NodeKind.CallExpr && node.resolvedSym == runtimeProcSym(procName);
+	return node.kind == NodeKind.CallExpr && isRuntimeProcSym(node.resolvedSym, procName);
 }
 
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
-
-export function hookRef(hookName: string, loc: SourceLocation): Node {
-	const sym = lookupHookSym(hookName);
-	if (sym == null) return makeIdent(hookName, loc);
-	return makeTypedIdentResolved(sym, null, loc);
+export function opProcSym(name: string): Symbol {
+	const hook = lookupHookSym(name);
+	return hook != null ? hook : runtimeProcSym(name);
 }
 
-export function opRef(opName: string, op: SymbolFlag, loc: SourceLocation): Node {
-	const hook = lookupHookSym(opName);
-	const sym = hook != null ? hook : runtimeProcSym(opName);
-	setFlag(sym, op);
-	return makeTypedIdentResolved(sym, null, loc);
+export function attachedOpSym(name: string, op: AttachedOp): Symbol {
+	const sym = opProcSym(name);
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	return sym;
 }
+
 
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));

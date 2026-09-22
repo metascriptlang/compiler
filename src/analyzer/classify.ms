@@ -1,4 +1,4 @@
-// Type Classification for DRC — determines RC needs and runtime function names
+// Type Classification for DRC — determines RC needs and lifecycle ops
 //
 // Each type maps to: no-op (primitive), runtime call (string/array/ref/closure),
 // or generated lifecycle hook (named Object types from destructorLifting).
@@ -8,7 +8,8 @@
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType, isPrimitiveUnionMember } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
-import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
+import { attachedOpSym } from "../transform/util";
+import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { mangleMonoName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName } from "../codegen/c/types";
@@ -30,10 +31,10 @@ export interface RcInfo {
 	rcKind: RcKind;
 	typeName: string;        // "Token", "Node" etc. Empty for builtins.
 	needsCleanup: boolean;   // true if scope-exit destroy is needed
-	destroyFn: string;       // runtime function name for =destroy
-	copyFn: string;          // runtime function name for =copy
-	wasMovedFn: string;      // runtime function name for =wasMoved
-	sinkFn: string;          // runtime function name for =sink (empty = raw assign)
+	destroyFn: Symbol | null;   // =destroy op (null = none)
+	copyFn: Symbol | null;      // =copy op (null = none)
+	wasMovedFn: Symbol | null;  // =wasMoved op (null = none)
+	sinkFn: Symbol | null;      // =sink op (null = raw assign)
 	seqLike: boolean;        // reference parity: sequence/string destroy by-value, copy src by-value
 }
 
@@ -44,10 +45,10 @@ export function noRcInfo(): RcInfo {
 		rcKind: RcKind.None,
 		typeName: "",
 		needsCleanup: false,
-		destroyFn: "",
-		copyFn: "",
-		wasMovedFn: "",
-		sinkFn: "",
+		destroyFn: null,
+		copyFn: null,
+		wasMovedFn: null,
+		sinkFn: null,
 		seqLike: false,
 	};
 }
@@ -55,7 +56,13 @@ export function noRcInfo(): RcInfo {
 // ===== RC Info Factory — reduces verbose inline literals =====
 
 function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: string, wasMoved: string, sink: string, seqLike: boolean): RcInfo {
-	return { rcKind: kind, typeName, needsCleanup: true, destroyFn: destroy, copyFn: copy, wasMovedFn: wasMoved, sinkFn: sink, seqLike };
+	return {
+		rcKind: kind, typeName, needsCleanup: true, seqLike,
+		destroyFn: destroy != "" ? attachedOpSym(destroy, AttachedOp.AttachedDestructor) : null,
+		copyFn: copy != "" ? attachedOpSym(copy, AttachedOp.AttachedAsgn) : null,
+		wasMovedFn: wasMoved != "" ? attachedOpSym(wasMoved, AttachedOp.AttachedWasMoved) : null,
+		sinkFn: sink != "" ? attachedOpSym(sink, AttachedOp.AttachedSink) : null,
+	};
 }
 
 // ===== Array Subclassification =====
@@ -381,7 +388,7 @@ test "pure strlit union → String ops (msString repr)" {
 	const u = createUnion([createStringLiteral("column"), createStringLiteral("row")]);
 	const info = classifyType(u, ctx);
 	assert info.rcKind == RcKind.String;
-	assert info.destroyFn == "msStringDecref";
+	assert (info.destroyFn as Symbol).name == "msStringDecref";
 }
 
 test "number → None" {
@@ -438,9 +445,11 @@ test "string → String" {
 	const info = classifyType(stringType(), ctx);
 	assert info.rcKind == RcKind.String;
 	assert info.needsCleanup;
-	assert info.destroyFn == "msStringDecref";
-	assert info.copyFn == "msStringCopy";
-	assert info.wasMovedFn == "msStringWasMoved";
+	assert (info.destroyFn as Symbol).name == "msStringDecref";
+	assert hasFlag(info.destroyFn as Symbol, SymbolFlag.DestroyOp);
+	assert (info.copyFn as Symbol).name == "msStringCopy";
+	assert (info.wasMovedFn as Symbol).name == "msStringWasMoved";
+	assert hasFlag(info.wasMovedFn as Symbol, SymbolFlag.WasMovedOp);
 }
 
 test "array of number → Array" {
@@ -448,7 +457,8 @@ test "array of number → Array" {
 	const info = classifyType(createArray(numberType()), ctx);
 	assert info.rcKind == RcKind.Array;
 	assert info.needsCleanup;
-	assert info.destroyFn == "msArrayDestroy";
+	assert (info.destroyFn as Symbol).name == "msArrayDestroy";
+	assert hasFlag(info.destroyFn as Symbol, SymbolFlag.DestroyOp);
 }
 
 test "array of string → Named (standalone procs)" {
@@ -456,7 +466,7 @@ test "array of string → Named (standalone procs)" {
 	const info = classifyType(createArray(stringType()), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.seqLike;
-	assert info.destroyFn == "msArrayStringDestroy";
+	assert (info.destroyFn as Symbol).name == "msArrayStringDestroy";
 }
 
 test "function → Closure" {
@@ -464,7 +474,7 @@ test "function → Closure" {
 	const info = classifyType(createFunction([], [], voidType()), ctx);
 	assert info.rcKind == RcKind.Closure;
 	assert info.needsCleanup;
-	assert info.destroyFn == "msClosureDestroy";
+	assert (info.destroyFn as Symbol).name == "msClosureDestroy";
 }
 
 test "named object with managed field → Named" {
@@ -472,9 +482,10 @@ test "named object with managed field → Named" {
 	const info = classifyType(createStruct("Token", ["value"], [stringType()], false), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.needsCleanup;
-	assert info.destroyFn == "TokenDestroy";
-	assert info.copyFn == "TokenCopy";
-	assert info.wasMovedFn == "TokenWasMoved";
+	assert (info.destroyFn as Symbol).name == "TokenDestroy";
+	assert hasFlag(info.destroyFn as Symbol, SymbolFlag.DestroyOp);
+	assert (info.copyFn as Symbol).name == "TokenCopy";
+	assert (info.wasMovedFn as Symbol).name == "TokenWasMoved";
 }
 
 test "named object without managed field → noRcInfo" {
@@ -494,7 +505,7 @@ test "ref → Ref" {
 	const t = createPrimitive(TypeKind.Ref);
 	const info = classifyType(t, ctx);
 	assert info.rcKind == RcKind.Ref;
-	assert info.destroyFn == "msDecrefCyclic";
+	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
 }
 
 test "ref to self-cyclic struct → cyclic ops" {
@@ -503,8 +514,9 @@ test "ref to self-cyclic struct → cyclic ops" {
 	s.typeChildren[0] = createRef(s);
 	const info = classifyType(createRef(s), ctx);
 	assert info.rcKind == RcKind.Ref;
-	assert info.destroyFn == "msDecrefCyclic";
-	assert info.copyFn == "msIncrefCyclic";
+	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
+	assert hasFlag(info.destroyFn as Symbol, SymbolFlag.DestroyOp);
+	assert (info.copyFn as Symbol).name == "msIncrefCyclic";
 }
 
 test "ref to leaf struct → plain ops" {
@@ -513,8 +525,8 @@ test "ref to leaf struct → plain ops" {
 	const leaf = createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false);
 	const info = classifyType(createRef(leaf), ctx);
 	assert info.rcKind == RcKind.Ref;
-	assert info.destroyFn == "msDecref";
-	assert info.copyFn == "msIncref";
+	assert (info.destroyFn as Symbol).name == "msDecref";
+	assert (info.copyFn as Symbol).name == "msIncref";
 }
 
 test "ptr → None (unmanaged)" {

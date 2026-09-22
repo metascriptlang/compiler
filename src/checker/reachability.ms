@@ -234,10 +234,9 @@ function walkBody(node: Node, modulePath: string): void {
 // name them directly, no AST edge exists). Keep them rooted; the linker strips
 // unreferenced static functions, so dead ones cost nothing. Mirror of
 // isArraySeqHook in codegen/c/declarations.ms — keep in lock-step.
-function isArraySeqHookName(name: string): boolean {
-	if (name == "msStringArrayDestroy" || name == "msRefArrayDestroy" || name == "msNumberArrayDestroy") return false;
-	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+function isArraySeqHookName(fn: string): boolean {
+	return fn.endsWith("ArrayDestroy") || fn.endsWith("ArrayCopy") ||
+		fn.endsWith("ArraySink") || fn.endsWith("ArrayWasMoved");
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls by

@@ -24,7 +24,7 @@ import {
 	raiserString, raiserBool, raiserNil, raiserArray,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
-import { vmCallFunction } from "../../raiser/vm";
+import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { nodeToValue, valueToNode } from "./bridge";
 import { forEachChild } from "../../ast/visitor";
 
@@ -660,7 +660,8 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	}
 	const program = buildWrapper(ctx, regCtx, sym, decl, md, isFactory, shape, loc);
 	if (program == null) return target;
-	setMacroDeclModulePath(sym.modulePath);
+	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
+	setMacroDeclModulePath(decoratorSourcePath);
 	const result = callMacroEngineCompiler(program, ctx, applyFnName);
 	if (result == null) {
 		addError(ctx, `decorator '${name}' evaluator unavailable`, loc.line, loc.column);
@@ -700,7 +701,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		raiserArray(inheritedKeysHandle), raiserArray(inheritedValuesHandle), initVal,
 	];
 	pushActiveMetaCtx(ctx, loc.line, loc.column);
-	const res = vmCallFunction(vm, result.funcIdx, args);
+	const res = callWithComptimeHostPolicy(vm, result.funcIdx, args, decoratorSourcePath);
 	popActiveMetaCtx();
 	if (vm.error != "") {
 		addError(ctx, `decorator '${name}' failed: ${vm.error}`, loc.line, loc.column);

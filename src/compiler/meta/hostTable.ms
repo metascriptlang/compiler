@@ -42,7 +42,7 @@ import {
 	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, raiserArray,
 } from "../../raiser/value";
 import {
-	registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
+	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
 	activeHostObjectHeap, activeHostArrayHeap,
 } from "../../raiser/hostRegistry";
 import {
@@ -758,22 +758,22 @@ export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
 
 	// fs predicates
-	registerHostFn("msFsExists",         _bridgeMsFsExists);
-	registerHostFn("msFsRealPath",       _bridgeMsFsRealPath);
-	registerHostFn("msFsIsFile",         _bridgeMsFsIsFile);
-	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir);
-	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable);
-	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize);
+	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
+	registerHostFn("msFsRealPath",       _bridgeMsFsRealPath, HostCapability.FileRead);
+	registerHostFn("msFsIsFile",         _bridgeMsFsIsFile, HostCapability.FileRead);
+	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir, HostCapability.FileRead);
+	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable, HostCapability.FileRead);
+	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize, HostCapability.FileRead);
 	// fs read/write/mutate + errno polling
-	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile);
-	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno);
+	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
+	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
 	registerHostFn("msFsRename",         _bridgeMsFsRename);
-	registerHostFn("msFsReadDirEntries", _bridgeMsFsReadDirEntries);
+	registerHostFn("msFsReadDirEntries", _bridgeMsFsReadDirEntries, HostCapability.FileRead);
 	// process accessors
 	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);
 	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform);
@@ -786,23 +786,23 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);
 	// macro Node child accessors (std/meta childCount/childAt)
-	registerHostFn("msNodeChildCount",      _bridgeMsNodeChildCount);
-	registerHostFn("msNodeChildAt",         _bridgeMsNodeChildAt);
+	registerHostFn("msNodeChildCount",      _bridgeMsNodeChildCount, HostCapability.Pure);
+	registerHostFn("msNodeChildAt",         _bridgeMsNodeChildAt, HostCapability.Pure);
 	// string ops — extension methods called as `s.trim()` etc.
 	// Coverage: trim family + case + indexOf/contains/start/end + replace.
 	// Hot paths (charAt/slice) stay hardcoded in raiser/expressions.ms for
 	// direct-opcode performance.
-	registerHostFn("msStringTrim",          _bridgeMsStringTrim);
-	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart);
-	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd);
-	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf);
-	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt);
-	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart);
-	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd);
-	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt);
-	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat);
-	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint);
-	registerHostFn("msStringFromValue",     _bridgeMsStringFromValue);
+	registerHostFn("msStringTrim",          _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
+	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
+	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
+	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
+	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt, HostCapability.Pure);
+	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
+	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
+	registerHostFn("msStringFromValue",     _bridgeMsStringFromValue, HostCapability.Pure);
 	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
@@ -831,49 +831,49 @@ export function ensureHostTableLoaded(): void {
 		registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
 		registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
 	}
-	registerHostFn("msStringSplit",         _bridgeMsStringSplit);
-	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral);
-	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue);
-	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue);
-	registerHostFn("msNodeStringValue",     _bridgeMsNodeStringValue);
-	registerHostFn("msStringToLower",       bridgeMsStringToLower);
-	registerHostFn("msStringToUpper",       bridgeMsStringToUpper);
-	registerHostFn("msStringContains",      bridgeMsStringContains);
-	registerHostFn("msStringStartsWith",    _bridgeMsStringStartsWith);
-	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith);
-	registerHostFn("msStringReplace",       _bridgeMsStringReplace);
-	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll);
-	registerHostFn("msAsBytes",             _bridgeMsAsBytes);
-	registerHostFn("msAsString",            _bridgeMsAsString);
+	registerHostFn("msStringSplit",         _bridgeMsStringSplit, HostCapability.Pure);
+	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral, HostCapability.Pure);
+	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
+	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue, HostCapability.Pure);
+	registerHostFn("msNodeStringValue",     _bridgeMsNodeStringValue, HostCapability.Pure);
+	registerHostFn("msStringToLower",       bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("msStringToUpper",       bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("msStringContains",      bridgeMsStringContains, HostCapability.Pure);
+	registerHostFn("msStringStartsWith",    _bridgeMsStringStartsWith, HostCapability.Pure);
+	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith, HostCapability.Pure);
+	registerHostFn("msStringReplace",       _bridgeMsStringReplace, HostCapability.Pure);
+	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
+	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
+	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
-	registerHostFn("fabs",  _bridgeFabs);
-	registerHostFn("ceil",  _bridgeCeil);
-	registerHostFn("floor", _bridgeFloor);
-	registerHostFn("trunc", _bridgeTrunc);
-	registerHostFn("sqrt",  _bridgeSqrt);
-	registerHostFn("cbrt",  _bridgeCbrt);
-	registerHostFn("pow",   _bridgePow);
-	registerHostFn("exp",   _bridgeExp);
-	registerHostFn("expm1", _bridgeExpm1);
-	registerHostFn("log",   _bridgeLog);
-	registerHostFn("log1p", _bridgeLog1p);
-	registerHostFn("log2",  _bridgeLog2);
-	registerHostFn("log10", _bridgeLog10);
-	registerHostFn("hypot", _bridgeHypot);
-	registerHostFn("sin",   _bridgeSin);
-	registerHostFn("cos",   _bridgeCos);
-	registerHostFn("tan",   _bridgeTan);
-	registerHostFn("asin",  _bridgeAsin);
-	registerHostFn("acos",  _bridgeAcos);
-	registerHostFn("atan",  _bridgeAtan);
-	registerHostFn("atan2", _bridgeAtan2);
-	registerHostFn("sinh",  _bridgeSinh);
-	registerHostFn("cosh",  _bridgeCosh);
-	registerHostFn("tanh",  _bridgeTanh);
-	registerHostFn("asinh", _bridgeAsinh);
-	registerHostFn("acosh", _bridgeAcosh);
-	registerHostFn("atanh", _bridgeAtanh);
-	registerHostFn("fmod",  _bridgeFmod);
+	registerHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
+	registerHostFn("ceil",  _bridgeCeil, HostCapability.Pure);
+	registerHostFn("floor", _bridgeFloor, HostCapability.Pure);
+	registerHostFn("trunc", _bridgeTrunc, HostCapability.Pure);
+	registerHostFn("sqrt",  _bridgeSqrt, HostCapability.Pure);
+	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
+	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
+	registerHostFn("exp",   _bridgeExp, HostCapability.Pure);
+	registerHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
+	registerHostFn("log",   _bridgeLog, HostCapability.Pure);
+	registerHostFn("log1p", _bridgeLog1p, HostCapability.Pure);
+	registerHostFn("log2",  _bridgeLog2, HostCapability.Pure);
+	registerHostFn("log10", _bridgeLog10, HostCapability.Pure);
+	registerHostFn("hypot", _bridgeHypot, HostCapability.Pure);
+	registerHostFn("sin",   _bridgeSin, HostCapability.Pure);
+	registerHostFn("cos",   _bridgeCos, HostCapability.Pure);
+	registerHostFn("tan",   _bridgeTan, HostCapability.Pure);
+	registerHostFn("asin",  _bridgeAsin, HostCapability.Pure);
+	registerHostFn("acos",  _bridgeAcos, HostCapability.Pure);
+	registerHostFn("atan",  _bridgeAtan, HostCapability.Pure);
+	registerHostFn("atan2", _bridgeAtan2, HostCapability.Pure);
+	registerHostFn("sinh",  _bridgeSinh, HostCapability.Pure);
+	registerHostFn("cosh",  _bridgeCosh, HostCapability.Pure);
+	registerHostFn("tanh",  _bridgeTanh, HostCapability.Pure);
+	registerHostFn("asinh", _bridgeAsinh, HostCapability.Pure);
+	registerHostFn("acosh", _bridgeAcosh, HostCapability.Pure);
+	registerHostFn("atanh", _bridgeAtanh, HostCapability.Pure);
+	registerHostFn("fmod",  _bridgeFmod, HostCapability.Pure);
 	markHostRegistryInitialized();
 }
 

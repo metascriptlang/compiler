@@ -31,12 +31,13 @@
 // entirely). Storage: ~/.metascript/cache/prelude/<key>.pk, marker-GC'd on
 // toolStamp change.
 
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, AttachedOp, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId } from "./idents";
 import { emptyType, noneType } from "./types";
 import { makeSymbolState } from "./symbol";
+import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
@@ -721,7 +722,11 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 			for (const c of t.typeChildren) children.push(idxType(c));
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
-		const ops: string[] = t.attachedOps != null ? t.attachedOps : [];
+		const opsRaw: (Symbol | null)[] = t.attachedOps != null ? t.attachedOps : [];
+		const ops: string[] = [];
+		for (const o of opsRaw) {
+			ops.push(o != null ? o.name : "");
+		}
 		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(ops)}`);
 	}
 
@@ -1179,7 +1184,11 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeReturnIdx.push(f[9].parseInt() as int32);
 			typeExtraIdx.push(f[10].parseInt() as int32);
 			typeSymIdx.push(f[11].parseInt() as int32);
-			t.attachedOps = splitCsv(f[12]);
+			const opsRaw = splitCsv(f[12]);
+			t.attachedOps = [];
+			for (let oi = 0; oi < opsRaw.length; oi += 1) {
+				t.attachedOps.push(opsRaw[oi] != "" ? attachedOpSym(opsRaw[oi], oi as int32 as unknown as AttachedOp) : null);
+			}
 			types.push(t);
 		} else if (f[0] == "N") {
 			const kind = f[2].parseInt() as int32 as unknown as NodeKind;

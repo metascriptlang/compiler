@@ -367,7 +367,7 @@ An explicit `--gc=` always wins over the `--os` implication, which is what the t
 gate keys on the effective gc mode, not on the platform.
 
 The language server reports the same sites as **warnings** (severity 2) when `build.ms` declares a
-freestanding target via `lsp = { os, gc }` — see docs/LANG-BUILD.md "LSP Target" for the measured
+freestanding target via `lsp = { os, gc }` — see docs/PACKAGE.md "`lsp` — editor-only target" for
 matrix. A project with no `lsp` section resolves to the host os and never to `manual`, so it gets
 zero new diagnostics.
 

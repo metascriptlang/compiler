@@ -21,7 +21,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { lookupHostFn, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 // --- VM State ---
@@ -145,6 +145,8 @@ export interface RaiserVM {
 	diagColumn: number;
 	diagEndLine: number;
 	diagEndColumn: number;
+	hostCallsRestricted: boolean;
+	hostPolicySource: string;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -203,7 +205,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "" };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -1602,6 +1604,10 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `Unknown host function: ${name}`);
 		return;
 	}
+	if (vm.hostCallsRestricted && !hostFnAllowedInRestrictedMode(name)) {
+		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${name}'`);
+		return;
+	}
 
 	// Collect args from R[A+1] .. R[A+C]
 	const args: RaiserValue[] = [];
@@ -2384,6 +2390,38 @@ test "CallHost unknown name errors" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error.length > 0;
 	assert vm.halted;
+}
+
+test "restricted CallHost rejects an unclassified host" {
+	_resetHostRegistryForTests();
+	const fn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(1);
+	registerHostFn("unsafe", fn);
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const vm = createVM(makeTestModule(code, [raiserString("unsafe")]));
+	vm.hostCallsRestricted = true;
+	vm.hostPolicySource = "/cache/evil.ms";
+	execLoop(vm);
+	assert vm.error.indexOf("host function 'unsafe'", 0) >= 0;
+	assert vm.error.indexOf("/cache/evil.ms", 0) >= 0;
+}
+
+test "restricted CallHost allows a classified pure host" {
+	_resetHostRegistryForTests();
+	const fn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(7);
+	registerHostFn("pure", fn, HostCapability.Pure);
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const vm = createVM(makeTestModule(code, [raiserString("pure")]));
+	vm.hostCallsRestricted = true;
+	vm.hostPolicySource = "/cache/good.ms";
+	execLoop(vm);
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 7;
 }
 
 test "instruction line field preserved" {
