@@ -30,15 +30,17 @@ backend and DRC/ORC runtime.
 | Structural hash rejecting changed `_GlobalState` layout | Implemented |
 | Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
 | Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `runWindows.sh`: body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
+| Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.sh` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Not implemented |
 | Cross-module vtable calls | Not implemented |
 | Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
-Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`, `runtime/hcr.h`,
-`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, and the `--hcr` branch in the
-compiler build driver.
+Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
+`src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
+`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.sh`, and the
+`--hcr` branch in the compiler build driver.
 
 ## Architecture decision
 
@@ -51,6 +53,11 @@ MetaScript uses **cooperative indirection**, not debugger-driven binary patching
 
 **Data is permanent; code is transient.** Everything is gated by `--hcr`; a normal build
 pays no vtable cost and must remain output-identical.
+
+The contract is platform-neutral; the artifact pipeline is not. Each supported target uses
+its native object format, linker, loader, generation-retention rules and, where required,
+sign/deploy flow. The core must neither impose PE import mechanics on ELF/Mach-O nor depend
+on POSIX unresolved-symbol behavior that Windows cannot provide.
 
 The design combines these proven contracts:
 
@@ -174,12 +181,16 @@ The recompiler arc proceeds in this order:
 2. **Establish the Windows-native foundation:** build generation-unique DLLs, load and
    validate a candidate before publication, keep current callable on rejection, and keep the
    production host/state machine in MetaScript.
-3. **Input-keyed per-module build:** skip emission/compile/link for unchanged modules and
-   produce one generation artifact per alive module.
+3. **Per-module object cache:** fingerprint each emitted C module together with its compile
+   command and retain one target-native object per fingerprint. A body-only edit recompiles
+   only the changed module; C emission remains the correctness boundary. Loadable per-module
+   libraries wait until the next two steps define their link boundary.
 4. **Module ABI manifest:** assign stable exported slots and classify reload, dependent
    reload, or restart.
-5. **VTable transform:** rewrite cross-module exported calls through current module tables;
-   keep private/same-module calls direct. This belongs in native transform, not C codegen.
+5. **VTable transform and module packaging:** rewrite cross-module exported calls through
+   current module tables; keep private/same-module calls direct, then package each module
+   through the target's native shared-library adapter. This belongs in native transform and
+   platform tooling, not C codegen.
 6. **Transactional loader:** current/old/candidate registry, copy-load, dependency ordering,
    bad-image retry, rollback, handlers and safe-point API.
 7. **DRC/TypeInfo contract:** stable TypeInfo ownership and exactly-once destructor behavior
@@ -187,6 +198,18 @@ The recompiler arc proceeds in this order:
 8. **Watch/deploy adapters:** save-triggered rebuild, host notification, Windows copy-load,
    macOS/iOS Simulator loading, and development-signed iOS device deployment.
 9. **Diagnostics and measurement:** exact rejection reason and edit-to-visible timing.
+
+S1 deliberately keeps the generated-C fingerprint boundary instead of adding a pre-emission
+semantic hash. On Windows 11 x64, source tree
+`65f14fd864208b09f7c04b84e4a118485a3e58f9`, an isolated two-module
+`<candidate> build <temp>/app.ms --hcr --verbose --time --output=<temp>/module.dll` rebuild
+after changing only `logic.ms` compiled `logic`, reused `app`, and linked once in 1.34 s.
+Emission cost 5.8 ms wall / 15.8 ms summed over 11 workers. Changing only the imported
+function's return type then recompiled both `logic` and unchanged `app`, proving a module
+source hash cannot safely predict emitted C. A correct early key would need canonical
+lowered-AST, type, symbol, flag, reachability and global-emission inputs; that new cache
+mechanism was rejected rather than risk serving stale native objects for the measured
+sub-percent wall-time gain.
 
 ## Neon Fast Refresh boundary
 
@@ -241,6 +264,10 @@ Physical iOS devices add deploy/sign latency; the semantic contract stays identi
 | iOS App Store/release | Unsupported by platform policy; HCR is development-only |
 | Windows | `LoadLibrary` with versioned copies; never overwrite/eagerly unload current or rollback-old |
 | Linux | `.so`/`dlopen`; reference POSIX implementation |
+
+These adapters implement one publication, compatibility and state-survival contract; they
+do not share a lowest-common-denominator linker strategy. A target is supported only when
+its native adapter proves that contract end to end.
 
 The current implementation has single-image foundations for POSIX and native Windows.
 Per-module artifacts, vtable dispatch, the full module registry and automated deployment
