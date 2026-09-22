@@ -3,8 +3,8 @@
 import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { parseSource } from "../parser/statements/validation";
-import { Node, ProgramData } from "../ast/node";
-import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
+import { Node, ProgramData, SymbolKind, Type } from "../ast/node";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
@@ -20,15 +20,15 @@ import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName } from "../codegen/c/names";
+import { mangleModuleName, mangleProcName, safeName } from "../codegen/c/names";
 import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { TargetInfo, hostTargetInfo, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
-import { lookupSymbol, SymbolFlag } from "../checker/symbol";
+import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
+import { SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
@@ -50,7 +50,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
-import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
+import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -59,6 +59,8 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
 // checker/context → module/graph layering; callbacks pattern). Registered at
@@ -1311,6 +1313,216 @@ export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: R
 	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
 }
 
+interface HcrBuildAbi {
+	bundlePath: string;
+	hadCurrent: boolean;
+	current: HcrModuleAbi[];
+	candidate: HcrModuleAbi[];
+	modulePaths: string[];
+}
+
+function hcrBuildRoot(entryPath: string, projectRoot: string): string {
+	let root = projectRoot != "" ? normalize(projectRoot) : dirname(entryPath);
+	if (!isUnder(entryPath, root)) root = dirname(entryPath);
+	return root;
+}
+
+function hcrModuleId(modPath: string, root: string): string {
+	if (!isUnder(modPath, root)) return "";
+	return replaceExt(relative(root, modPath), "");
+}
+
+function hcrFunctionSymbol(
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): string {
+	if (info.name == "main") return safeName(info.name);
+	if (exportName != "") return exportName;
+	if (nativeName != "") return nativeName;
+	const baseName = info.originalName != "" ? info.originalName : info.name;
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
+	return mangleProcName(baseName, mangleModuleName(info.definingModule), disamb);
+}
+function hcrFunctionSlot(
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): string {
+	if (info.name == "main") return safeName(info.name);
+	if (exportName != "") return exportName;
+	const baseName = info.originalName != "" ? info.originalName : info.name;
+	if (nativeName != "") return nativeName;
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
+	return `${baseName}#${disamb}`;
+}
+
+
+function appendHcrFunctionExport(
+	exports: HcrAbiExport[],
+	moduleId: string,
+	info: ExportedSymInfo,
+	t: Type,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): Result<void, string> {
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasGenericParams(t)) {
+		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
+	}
+	const symbol = hcrFunctionSymbol(info, nativeName, exportName, flags, disamb);
+	const slot = hcrFunctionSlot(info, nativeName, exportName, flags, disamb);
+	exports.push(createHcrAbiExport(moduleId, symbol, hcrSignatureKey(t), slot));
+	return Result.ok(null);
+}
+
+function hcrModuleExports(moduleId: string, modPath: string): Result<HcrAbiExport[], string> {
+	const exports: HcrAbiExport[] = [];
+	const moduleExports = findModuleExports(graphRegistry, modPath);
+	if (moduleExports == null) return Result.ok(exports);
+	for (const info of moduleExports.symbols) {
+		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+		const primary = appendHcrFunctionExport(
+			exports,
+			moduleId,
+			info,
+			info.symType,
+			info.nativeName,
+			info.exportName,
+			info.primaryFlags,
+			info.disamb,
+		);
+		if (!primary.ok) return Result.err(primary.error);
+		for (let i = 0; i < info.overloadTypes.length; i += 1) {
+			const overload = appendHcrFunctionExport(
+				exports,
+				moduleId,
+				info,
+				info.overloadTypes[i],
+				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
+				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
+				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
+				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
+			);
+			if (!overload.ok) return Result.err(overload.error);
+		}
+	}
+	return Result.ok(exports);
+}
+
+function prepareHcrBuildAbi(
+	graph: ModuleGraph,
+	entryPath: string,
+	outBinary: string,
+	opts: CliOptions,
+	compileFlags: string,
+): Result<HcrBuildAbi, string> {
+	const bundlePath = outBinary + ".hcrabi";
+	const hadCurrent = exists(bundlePath);
+	let current: HcrModuleAbi[] = [];
+	if (hadCurrent) {
+		const content = try readFile(bundlePath) catch "";
+		if (content == "") return Result.err(`cannot read current HCR ABI bundle '${bundlePath}'`);
+		const parsed = parseHcrAbiBundle(content);
+		if (!parsed.ok) return Result.err(`invalid current HCR ABI bundle '${bundlePath}': ${parsed.error}`);
+		current = parsed.value;
+	}
+
+	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const cpu = opts.targetInfo.cpu != "" ? opts.targetInfo.cpu : "host";
+	const targetKey = `${opts.targetOs}:${cpu}:${opts.targetInfo.ptrSize}:${opts.targetInfo.floatSize}`;
+	const toolchainKey = `${VERSION}:${toolchainStamp()}:${getCompilerName(opts.ccCompiler, opts.ccBinary)}:${hashContent(compileFlags)}`;
+	const candidate: HcrModuleAbi[] = [];
+	const modulePaths: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		const moduleId = hcrModuleId(modPath, root);
+		if (moduleId == "") continue;
+		const mod = findModule(graph, modPath);
+		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
+		const dependencies: string[] = [];
+		for (const imported of mod.imports) {
+			const dependencyId = hcrModuleId(imported.sourcePath, root);
+			if (dependencyId != "") dependencies.push(dependencyId);
+		}
+		const exports = hcrModuleExports(moduleId, modPath);
+		if (!exports.ok) return Result.err(exports.error);
+		const manifest = buildHcrModuleAbi(
+			moduleId,
+			targetKey,
+			opts.gcMode,
+			toolchainKey,
+			dependencies,
+			exports.value,
+		);
+		if (!manifest.ok) return Result.err(manifest.error);
+		candidate.push(manifest.value);
+		modulePaths.push(modPath);
+	}
+	return Result.ok({ bundlePath, hadCurrent, current, candidate, modulePaths });
+}
+
+function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
+	for (const manifest of manifests) {
+		if (manifest.moduleId == moduleId) return manifest;
+	}
+	return null as unknown as HcrModuleAbi;
+}
+
+function hcrPathChanged(paths: string[], path: string): boolean {
+	for (const changed of paths) {
+		if (changed == path) return true;
+	}
+	return false;
+}
+
+function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
+	const decisions: HcrReloadDecision[] = [];
+	if (state.hadCurrent) {
+		for (const current of state.current) {
+			if (hcrManifestById(state.candidate, current.moduleId) == null) {
+				decisions.push({
+					kind: HcrReloadKind.ReloadDependents,
+					reason: HcrReloadReason.ModuleRemoved,
+					subject: current.moduleId,
+				});
+			}
+		}
+		for (let i = 0; i < state.candidate.length; i += 1) {
+			const candidate = state.candidate[i];
+			const current = hcrManifestById(state.current, candidate.moduleId);
+			if (current == null) {
+				decisions.push({
+					kind: HcrReloadKind.ReloadModule,
+					reason: HcrReloadReason.ModuleAdded,
+					subject: candidate.moduleId,
+				});
+			} else if (hcrAbiFingerprint(current) != hcrAbiFingerprint(candidate)) {
+				decisions.push(classifyHcrReload(current, candidate));
+			} else if (hcrPathChanged(changedPaths, state.modulePaths[i])) {
+				decisions.push(classifyHcrReload(current, candidate));
+			}
+		}
+	}
+
+	const encoded = serializeHcrAbiBundle(state.candidate);
+	if (!encoded.ok) {
+		console.log(`${error("error")}: cannot serialize HCR ABI bundle: ${encoded.error}`);
+		exit(1);
+	}
+	if (!atomicWriteFile(state.bundlePath, encoded.value)) {
+		console.log(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
+		exit(1);
+	}
+	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
+	console.log(`${green("  Wrote")} ${bold(state.bundlePath)}`);
+}
+
 // ===== C Build =====
 // Loads module graph, two-pass separate compilation:
 //   Pass 1: Collect exported prototypes from all modules
@@ -1395,7 +1607,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
-	if (!projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags)) {
+	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
+	if (opts.isHcr && !opts.emitC) {
+		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0);
+		if (!prepared.ok) {
+			console.log(`${error("error")}: ${prepared.error}`);
+			exit(1);
+		}
+		hcrBuildAbi = prepared.value;
+	}
+	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+	if (!projectChanged && (hcrBuildAbi == null || hcrBuildAbi.hadCurrent)) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
@@ -1717,6 +1939,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let clangTime: float64 = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
+	const recompiledModulePaths: string[] = [];
 	const moduleOutputs: CModuleOutput[] = [];
 	const cd = cacheDir();
 	const oSlots: string[][] = [];
@@ -1771,6 +1994,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 				oSlots.push([]);
 				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
+				recompiledModulePaths.push(p.modPath);
 			}
 		}
 		compiled = compiled + 1;
@@ -1876,6 +2100,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
+		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
@@ -1923,6 +2148,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			exit(1);
 		}
 	}
+	if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 
 	// Persist link cache after successful link
 	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary);

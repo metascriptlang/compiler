@@ -2,6 +2,7 @@ import { Type, TypeKind } from "../ast/node";
 import { createFunction, createPrimitive, int32Type, stringType } from "../checker/types";
 import { monoTypeKey } from "../monomorphize/registry";
 import { djb2, fingerprint, hashToHex } from "std/hash";
+import { JsonKind, JsonValue, jsonArray, jsonNumber, jsonObject, jsonString, parseJson, stringifyPretty } from "std/core/json";
 
 export const HCR_ABI_VERSION: int32 = 1;
 
@@ -38,6 +39,8 @@ export enum HcrReloadReason {
 	ModuleIdentityChanged,
 	TargetChanged,
 	GcModeChanged,
+	ModuleAdded,
+	ModuleRemoved,
 	ToolchainChanged,
 }
 
@@ -55,9 +58,9 @@ export function hcrExportId(moduleId: string, symbol: string): string {
 	return `${moduleId}::${symbol}`;
 }
 
-export function createHcrAbiExport(moduleId: string, symbol: string, signature: string): HcrAbiExport {
+export function createHcrAbiExport(moduleId: string, symbol: string, signature: string, slot: string = ""): HcrAbiExport {
 	return {
-		id: hcrExportId(moduleId, symbol),
+		id: hcrExportId(moduleId, slot != "" ? slot : symbol),
 		symbol,
 		signature,
 	};
@@ -250,6 +253,8 @@ export function hcrReloadReasonText(reason: HcrReloadReason): string {
 		HcrReloadReason.TargetChanged => "target changed",
 		HcrReloadReason.GcModeChanged => "GC mode changed",
 		HcrReloadReason.ToolchainChanged => "toolchain changed",
+		HcrReloadReason.ModuleAdded => "module added",
+		HcrReloadReason.ModuleRemoved => "module removed",
 	};
 }
 
@@ -260,6 +265,172 @@ export function hcrReloadDiagnostic(decision: HcrReloadDecision): string {
 		HcrReloadKind.RestartRequired => "restart required",
 	};
 	return `HCR ${action}: ${hcrReloadReasonText(decision.reason)} (${decision.subject})`;
+}
+function sortManifests(values: HcrModuleAbi[]): void {
+	for (let i = 1; i < values.length; i += 1) {
+		const value = values[i];
+		let j = i - 1;
+		while (j >= 0 && values[j].moduleId > value.moduleId) {
+			values[j + 1] = values[j];
+			j -= 1;
+		}
+		values[j + 1] = value;
+	}
+}
+
+function jsonStringArray(values: string[]): JsonValue {
+	const items: JsonValue[] = [];
+	for (const value of values) items.push(jsonString(value));
+	return jsonArray(items);
+}
+
+function exportJson(value: HcrAbiExport): JsonValue {
+	return jsonObject(
+		["id", "symbol", "signature"],
+		[jsonString(value.id), jsonString(value.symbol), jsonString(value.signature)],
+	);
+}
+
+function manifestJson(value: HcrModuleAbi): JsonValue {
+	const exportValues: JsonValue[] = [];
+	for (const item of value.exports) exportValues.push(exportJson(item));
+	return jsonObject(
+		["version", "moduleId", "targetKey", "gcMode", "toolchainKey", "dependencies", "exports"],
+		[
+			jsonNumber(value.version),
+			jsonString(value.moduleId),
+			jsonString(value.targetKey),
+			jsonString(value.gcMode),
+			jsonString(value.toolchainKey),
+			jsonStringArray(value.dependencies),
+			jsonArray(exportValues),
+		],
+	);
+}
+
+export function serializeHcrAbiBundle(manifests: HcrModuleAbi[]): Result<string, string> {
+	const sorted: HcrModuleAbi[] = [];
+	for (const manifest of manifests) sorted.push(manifest);
+	sortManifests(sorted);
+	const values: JsonValue[] = [];
+	for (let i = 0; i < sorted.length; i += 1) {
+		if (i > 0 && sorted[i - 1].moduleId == sorted[i].moduleId) {
+			return Result.err(`duplicate HCR ABI module '${sorted[i].moduleId}'`);
+		}
+		values.push(manifestJson(sorted[i]));
+	}
+	const root = jsonObject(
+		["version", "modules"],
+		[jsonNumber(HCR_ABI_VERSION), jsonArray(values)],
+	);
+	return Result.ok(stringifyPretty(root, 2) + "\n");
+}
+
+function jsonField(obj: JsonValue, name: string): JsonValue {
+	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
+	for (let i = 0; i < obj.keys.length; i += 1) {
+		if (obj.keys[i] == name && i < obj.values.length) return obj.values[i];
+	}
+	return null as unknown as JsonValue;
+}
+
+function jsonIntField(obj: JsonValue, name: string): int32 {
+	const value = jsonField(obj, name);
+	if (value == null) return -1;
+	if (value.kind == JsonKind.Int) return value.intVal as int32;
+	if (value.kind == JsonKind.Number) return value.numVal as int32;
+	return -1;
+}
+
+function jsonStringField(obj: JsonValue, name: string): string {
+	const value = jsonField(obj, name);
+	if (value != null && value.kind == JsonKind.String) return value.strVal;
+	return "";
+}
+
+function parseStringArray(obj: JsonValue, name: string): Result<string[], string> {
+	const value = jsonField(obj, name);
+	if (value == null || value.kind != JsonKind.Array) return Result.err(`field '${name}' must be an array`);
+	const result: string[] = [];
+	for (const item of value.items) {
+		if (item == null || item.kind != JsonKind.String) return Result.err(`field '${name}' must contain strings`);
+		result.push(item.strVal);
+	}
+	return Result.ok(result);
+}
+
+function parseExports(obj: JsonValue): Result<HcrAbiExport[], string> {
+	const value = jsonField(obj, "exports");
+	if (value == null || value.kind != JsonKind.Array) return Result.err("field 'exports' must be an array");
+	const exports: HcrAbiExport[] = [];
+	for (const item of value.items) {
+		if (item == null || item.kind != JsonKind.Object) return Result.err("field 'exports' must contain objects");
+		const id = jsonStringField(item, "id");
+		const symbol = jsonStringField(item, "symbol");
+		const signature = jsonStringField(item, "signature");
+		if (id == "" || symbol == "" || signature == "") return Result.err("export entries require id, symbol and signature");
+		exports.push({ id, symbol, signature });
+	}
+	return Result.ok(exports);
+}
+
+export function parseHcrAbiBundle(content: string): Result<HcrModuleAbi[], string> {
+	const parsed = parseJson(content);
+	if (!parsed.ok) return Result.err("invalid JSON");
+	const root = parsed.value;
+	if (root == null || root.kind != JsonKind.Object) return Result.err("root must be an object");
+	if (jsonIntField(root, "version") != HCR_ABI_VERSION) return Result.err("unsupported bundle version");
+	const modules = jsonField(root, "modules");
+	if (modules == null || modules.kind != JsonKind.Array) return Result.err("field 'modules' must be an array");
+
+	const manifests: HcrModuleAbi[] = [];
+	for (const item of modules.items) {
+		if (item == null || item.kind != JsonKind.Object) return Result.err("field 'modules' must contain objects");
+		const version = jsonIntField(item, "version");
+		if (version != HCR_ABI_VERSION) return Result.err("unsupported module manifest version");
+		const dependencies = parseStringArray(item, "dependencies");
+		if (!dependencies.ok) return Result.err(dependencies.error);
+		const exports = parseExports(item);
+		if (!exports.ok) return Result.err(exports.error);
+		const built = buildHcrModuleAbi(
+			jsonStringField(item, "moduleId"),
+			jsonStringField(item, "targetKey"),
+			jsonStringField(item, "gcMode"),
+			jsonStringField(item, "toolchainKey"),
+			dependencies.value,
+			exports.value,
+		);
+		if (!built.ok) return Result.err(built.error);
+		manifests.push(built.value);
+	}
+	sortManifests(manifests);
+	for (let i = 1; i < manifests.length; i += 1) {
+		if (manifests[i - 1].moduleId == manifests[i].moduleId) {
+			return Result.err(`duplicate HCR ABI module '${manifests[i].moduleId}'`);
+		}
+	}
+	return Result.ok(manifests);
+}
+
+
+test "HCR ABI bundle round-trips in module order" {
+	const a = classifierTestManifest("windows-x64", "drc", "toolchain", ["logic"], []);
+	const value = createHcrAbiExport("logic", "logic_value", "func():int32");
+	const logic = classifierTestManifest("windows-x64", "drc", "toolchain", [], [value]);
+	a.moduleId = "app";
+	const encoded = serializeHcrAbiBundle([logic, a]);
+	assert encoded.ok;
+	const decoded = parseHcrAbiBundle(encoded.value);
+	assert decoded.ok;
+	assert decoded.value.length == 2;
+	assert decoded.value[0].moduleId == "app";
+	assert decoded.value[1].exports[0].signature == "func():int32";
+}
+
+test "HCR ABI bundle rejects duplicate modules" {
+	const value = classifierTestManifest("windows-x64", "drc", "toolchain", [], []);
+	const encoded = serializeHcrAbiBundle([value, value]);
+	assert !encoded.ok;
 }
 
 test "HCR ABI manifest is deterministic across discovery order" {
