@@ -11,9 +11,16 @@
 import { RaiserHostFn } from "./marshal";
 import { RaiserObjectHeap, RaiserArrayHeap } from "./value";
 
+export enum HostCapability {
+	Unsafe,
+	Pure,
+	FileRead,
+}
+
 interface HostEntry {
 	name: string;
 	fn: RaiserHostFn;
+	capability: HostCapability;
 }
 
 interface HostRegistry {
@@ -26,16 +33,21 @@ const _registry: HostRegistry = { entries: [], initialized: false };
 
 // --- Public API ---
 
-export function registerHostFn(name: string, fn: RaiserHostFn): void {
+export function registerHostFn(
+	name: string,
+	fn: RaiserHostFn,
+	capability: HostCapability = HostCapability.Unsafe,
+): void {
 	// Allow re-registration (last write wins) — Phase 5 may re-populate
 	// across compiler reruns in long-running build processes.
 	for (const entry of _registry.entries) {
 		if (entry.name == name) {
 			entry.fn = fn;
+			entry.capability = capability;
 			return;
 		}
 	}
-	const newEntry: HostEntry = { name, fn };
+	const newEntry: HostEntry = { name, fn, capability };
 	_registry.entries.push(newEntry);
 }
 
@@ -46,6 +58,15 @@ export function lookupHostFn(name: string): RaiserHostFn {
 		}
 	}
 	return null as unknown as RaiserHostFn;
+}
+
+export function hostFnAllowedInRestrictedMode(name: string): boolean {
+	for (const entry of _registry.entries) {
+		if (entry.name != name) continue;
+		return entry.capability == HostCapability.Pure
+			|| entry.capability == HostCapability.FileRead;
+	}
+	return false;
 }
 
 export function isHostRegistryInitialized(): boolean {
@@ -142,6 +163,18 @@ test "initialized flag" {
 	assert isHostRegistryInitialized() == false;
 	markHostRegistryInitialized();
 	assert isHostRegistryInitialized() == true;
+}
+
+test "restricted host access allows only classified pure and file-read hosts" {
+	_resetHostRegistryForTests();
+	const fn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(args.length);
+	registerHostFn("unsafe", fn);
+	registerHostFn("pure", fn, HostCapability.Pure);
+	registerHostFn("read", fn, HostCapability.FileRead);
+	assert !hostFnAllowedInRestrictedMode("unsafe");
+	assert hostFnAllowedInRestrictedMode("pure");
+	assert hostFnAllowedInRestrictedMode("read");
+	assert !hostFnAllowedInRestrictedMode("missing");
 }
 
 test "active host heaps publish and read back" {
