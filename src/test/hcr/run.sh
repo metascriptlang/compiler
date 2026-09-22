@@ -68,3 +68,71 @@ grep -q "invalid current HCR ABI bundle 'module.hcr.hcrabi': invalid JSON" "$TMP
 cmp -s "$TMP/module.before" "$WORK/module.hcr" || fail "corrupt bundle replaced current image"
 
 printf 'ok   hcrModuleAbi\n'
+
+IND="$TMP/indirect"
+mkdir -p "$IND"
+cp "$DIR/fixtures/indirect/app.ms" "$DIR/fixtures/indirect/logic.ms" "$DIR/fixtures/indirect/host.ms" "$IND/"
+
+failIndirect() {
+	printf 'FAIL hcrIndirect: %s\n' "$1"
+	exit 1
+}
+
+emitIndirect() {
+	rm -rf "$IND/out"
+	if ! (cd "$IND" && env NO_COLOR=1 "$MSC" build app.ms "$@" --emit=c) >"$TMP/indirect.log" 2>&1; then
+		cat "$TMP/indirect.log"
+		failIndirect "C emission failed ($*)"
+	fi
+	APP_C=$(ls "$IND"/out/debug/*appOms.c)
+	LOGIC_C=$(ls "$IND"/out/debug/*logicOms.c)
+	DISPATCH_C="$IND/out/debug/_dispatch.c"
+}
+
+emitIndirect
+if grep -q 'msHcr\|_ms_hcr' "$APP_C" "$LOGIC_C" "$DISPATCH_C"; then
+	failIndirect "a build without --hcr emitted HCR indirection"
+fi
+
+emitIndirect --hcr
+VALUE=$(sed -n 's/^int32_t \(value__[A-Za-z0-9_]*\)(void);$/\1/p' "$LOGIC_C")
+BASE=$(sed -n 's/^int32_t \(base__[A-Za-z0-9_]*\)(void);$/\1/p' "$LOGIC_C")
+PAIR=$(sed -n 's/^void \(pair__[A-Za-z0-9_]*\)(.* __result, int32_t scale);$/\1/p' "$LOGIC_C")
+[ -n "$VALUE" ] && [ -n "$BASE" ] && [ -n "$PAIR" ] || failIndirect "logic exports not found in emitted C"
+grep -qF "#define $VALUE ((__typeof__(&$VALUE))_ms_hcr_m0->current[2])" "$APP_C" ||
+	failIndirect "cross-module call to logic::value is not lowered through its table slot"
+grep -qF '_ms_hcr_m0 = msHcrHandle("logic");' "$APP_C" || failIndirect "app does not resolve the logic handle"
+grep -qF "$VALUE()" "$APP_C" || failIndirect "app call site changed shape"
+grep -qF 'msHcrPublish("logic", _ms_hcr_table, 3);' "$LOGIC_C" || failIndirect "logic does not publish its table"
+grep -qF "(void*)&$BASE, (void*)&$PAIR, (void*)&$VALUE" "$LOGIC_C" || failIndirect "logic table is not in manifest slot order"
+if grep -q "#define $BASE \|#define $VALUE " "$LOGIC_C"; then
+	failIndirect "same-module calls in logic are indirected"
+fi
+grep -qF "return ($BASE() + offset__" "$LOGIC_C" || failIndirect "same-module and private calls are not direct"
+grep -qF 'MS_HCR_EXPORT void DatInit000(void) { MsPreMainInner(); }' "$DISPATCH_C" ||
+	failIndirect "HCR image does not export its dependency-ordered DatInit"
+
+case "$(uname -s)" in
+	MINGW* | MSYS* | CYGWIN*)
+		if ! (cd "$IND" && env NO_COLOR=1 "$MSC" build app.ms --hcr --output=module.dll) >"$TMP/indirect.log" 2>&1; then
+			cat "$TMP/indirect.log"
+			failIndirect "HCR image link failed"
+		fi
+		if ! (cd "$IND" && env NO_COLOR=1 "$MSC" build host.ms --output=host.exe) >"$TMP/indirect.log" 2>&1; then
+			cat "$TMP/indirect.log"
+			failIndirect "host build failed"
+		fi
+		called=$(cd "$IND" && ./host.exe module.dll 2>&1)
+		[ "$called" = "HCR-HOST call -> 37" ] || failIndirect "call through the table returned '$called'"
+		printf 'ok   hcrIndirect\n'
+		if ! MSC="$MSC" bash "$ROOT/examples/hcrProbe/runWindows.sh" >"$TMP/reload.log" 2>&1; then
+			cat "$TMP/reload.log"
+			printf 'FAIL hcrWindowsReload: single-image reload probe failed\n'
+			exit 1
+		fi
+		printf 'ok   hcrWindowsReload\n'
+		;;
+	*)
+		printf 'ok   hcrIndirect (emission only: this runner has no host adapter for %s)\n' "$(uname -s)"
+		;;
+esac
