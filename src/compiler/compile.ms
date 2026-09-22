@@ -54,7 +54,7 @@ import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix,
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
@@ -823,6 +823,7 @@ interface CompileJob {
 	cPath: string;         // original spec, used for error reporting
 	fileFlags: string;
 	fp: string;            // precomputed fingerprint; written post-compile
+	dependencyFile: string;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -893,19 +894,20 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
 				const probeKey = fullCompileCmd(ccOption, mode, probeFlags);
+				const dependencyFile = nativeDepFile(fullPath, probeKey);
+				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
 				const probeOFile = stableOFileFp(fullPath, probeFp);
-				if (!_compiledOFiles.has(probeOFile)) {
-					_compiledOFiles.add(probeOFile);
+				if (!_compiledOFiles.has(dependencyFile)) {
+					_compiledOFiles.add(dependencyFile);
 					const fileFlags = probeFlags;
-					const cmdKey = probeKey;
 					const fp = probeFp;
 					const oFile = probeOFile;
-					if (isCompileCached(oFile, fp)) {
+					if (isCompileCached(oFile, fp, dependenciesKnown)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
 					} else {
-						jobs.push({ fullPath, oFile, cPath, fileFlags, fp });
+						jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile });
 					}
 				}
 			}
@@ -929,13 +931,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			let r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
 				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
 				// One retry absorbs it; a real compile error has a nonzero exitCode
 				// and is not retried.
-				r = compileCFile(j.fullPath, j.oFile, j.fileFlags, mode, ccOption, ccBinary);
+				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
@@ -968,6 +970,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			console.log(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			exit(1);
 		}
+		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags));
 		writeCompileCache(j.oFile, j.fp);
 		oFiles.push(j.oFile);
 		ci = ci + 1;
@@ -996,12 +999,12 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.flags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.flags, mode, ccOption, ccBinary);
+				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
 			if (r.error.errorOutput != "") console.log(r.error.errorOutput);

@@ -103,6 +103,8 @@ export function toolchainStamp(): string {
 
 let _cacheDir = "";
 let _forceRebuild = false;
+let _nativeProjectDeps: string[] = [];
+let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -117,6 +119,8 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	ensureDir(_cacheDir);
 	ensureLocalSchema();
 	_forceRebuild = forceRebuild;
+	_nativeProjectDeps = [];
+	_nativeProjectDepSet = new HashSet<string>();
 	toolchainStamp();
 }
 
@@ -178,6 +182,66 @@ function fpKey(fp: string): string {
 	return hashContent(fp).slice(0, 18);
 }
 
+export function nativeDepFile(srcPath: string, compileCmd: string): string {
+	return `${getCacheDir()}/${sanitizePath(srcPath)}.${fpKey(compileCmd)}.d`;
+}
+
+function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
+	const result: string[] = [];
+	const path = nativeDepFile(srcPath, compileCmd);
+	if (!exists(path)) return result;
+	const content = try readFile(path) catch "";
+	let colon = 0;
+	while (colon < content.length && content.charAt(colon) != ":") colon = colon + 1;
+	if (colon == content.length) return result;
+	let current = "";
+	let i = colon + 1;
+	while (i < content.length) {
+		const c = content.charAt(i);
+		if (c == "\\") {
+			if (i + 1 < content.length && content.charAt(i + 1) == "\n") {
+				i = i + 2;
+				continue;
+			}
+			if (i + 2 < content.length && content.charAt(i + 1) == "\r" && content.charAt(i + 2) == "\n") {
+				i = i + 3;
+				continue;
+			}
+			if (i + 1 < content.length) {
+				current = current + content.charAt(i + 1);
+				i = i + 2;
+				continue;
+			}
+		}
+		if (c == " " || c == "\t" || c == "\n" || c == "\r") {
+			if (current != "") {
+				result.push(current);
+				current = "";
+			}
+		} else {
+			current = current + c;
+		}
+		i = i + 1;
+	}
+	if (current != "") result.push(current);
+	return result;
+}
+
+export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
+	return nativeDependencyPaths(srcPath, compileCmd).length > 0;
+}
+
+export function registerNativeDependencies(srcPath: string, compileCmd: string): void {
+	registerNativeProjectDep(srcPath);
+	for (const path of nativeDependencyPaths(srcPath, compileCmd)) registerNativeProjectDep(path);
+}
+
+function registerNativeProjectDep(path: string): void {
+	if (_nativeProjectDepSet.has(path)) return;
+	_nativeProjectDepSet.add(path);
+	_nativeProjectDeps.push(path);
+}
+
 // Local object path keyed by source path AND fingerprint: builds with
 // different flags / gc mode / emitted C write DIFFERENT physical files and
 // never rename over each other. The old shared-by-srcPath scheme let a drc
@@ -228,7 +292,15 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // (avoids any shared module-state read-after-write races).
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
-	return `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
+	registerNativeProjectDep(srcPath);
+	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
+	const deps = nativeDependencyPaths(srcPath, compileCmd);
+	if (deps.length == 0) return result + `:dependencies-unresolved:${srcPath}`;
+	for (const path of deps) {
+		registerNativeProjectDep(path);
+		result = result + `:${path}=${hashFile(path)}`;
+	}
+	return result;
 }
 
 // ===== Global Content-Addressed Cache =====
@@ -381,14 +453,13 @@ function tryRemoveFile(path: string): void {
 // linking through it right now (the old remove-on-miss raced links into
 // FileNotFound); a miss only means "this build recompiles", and the fresh
 // object is published atomically over the stale one by the compile path.
-export function isCompileCached(oFile: string, fp: string): boolean {
+export function isCompileCached(oFile: string, fp: string, allowGlobalRestore: boolean): boolean {
 	const fpFile = oFile + ".fp";
 	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
 		if (stored == fp) return true;
 	}
-	// Local miss (or forceRebuild bypass of local) — try the global cache.
-	if (tryRestoreFromGlobal(oFile, fp)) return true;
+	if (allowGlobalRestore && tryRestoreFromGlobal(oFile, fp)) return true;
 	return false;
 }
 
@@ -410,7 +481,7 @@ export function writeCompileCache(oFile: string, fp: string): void {
 // We track: cacheVersion, outputFile, cmdline (compile+link flags+mode+compiler), depfiles (hash each).
 // Stored as simple key=value lines in out/.cache_{d|r}/project.cache.
 
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 
 // Build the project cache file path.
 function projectCacheFile(): string {
@@ -477,6 +548,15 @@ function splitLines(s: string): string[] {
 // to avoid hashing every source file twice on successful builds.
 let _cachedDepHashes: string[] = [];
 
+function storedDepPath(entry: string): string {
+	let i = entry.length - 1;
+	while (i >= 0) {
+		if (entry.charAt(i) == "=") return entry.slice(0, i);
+		i = i - 1;
+	}
+	return "";
+}
+
 // Check if the project needs rebuilding.
 // Reference-aligned: changeDetectedViaJsonBuildInstructions.
 // Returns true if anything changed (= must rebuild). Returns false if up-to-date.
@@ -528,15 +608,20 @@ export function projectCacheChanged(
 	const currentOutputHash = hashFile(outputFile);
 	if (storedOutputHash != currentOutputHash) return true;
 
-	// Reference-aligned: check depfiles — hash every source file
-	if (storedDeps.length != depPaths.length) return true;
+	if (storedDeps.length < depPaths.length) return true;
 	let di = 0;
 	while (di < depPaths.length) {
 		const path = depPaths[di];
-		const h = hashFile(path);
-		const currentEntry = `${path}=${h}`;
+		const currentEntry = `${path}=${hashFile(path)}`;
 		if (storedDeps[di] != currentEntry) return true;
-		// Cache for writeProjectCache reuse (avoid double-read)
+		_cachedDepHashes.push(currentEntry);
+		di = di + 1;
+	}
+	while (di < storedDeps.length) {
+		const path = storedDepPath(storedDeps[di]);
+		if (path == "") return true;
+		const currentEntry = `${path}=${hashFile(path)}`;
+		if (storedDeps[di] != currentEntry) return true;
 		_cachedDepHashes.push(currentEntry);
 		di = di + 1;
 	}
@@ -554,21 +639,26 @@ export function writeProjectCache(
 	mode: number,
 	flags: string
 ): void {
+	const allDeps: string[] = [];
+	const seen = new HashSet<string>();
+	for (const path of depPaths) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		allDeps.push(path);
+	}
+	for (const path of _nativeProjectDeps) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		allDeps.push(path);
+	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${outputFile}\n`;
 	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, mode, flags)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
-
-	if (_cachedDepHashes.length == depPaths.length) {
-		// Reuse hashes from projectCacheChanged — no double-read
-		for (const entry of _cachedDepHashes) {
-			content = content + `${PRE_DEP}${entry}\n`;
-		}
+	if (_cachedDepHashes.length == allDeps.length) {
+		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;
 	} else {
-		// Fresh computation (first build, or force rebuild skipped projectCacheChanged)
-		for (const path of depPaths) {
-			content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
-		}
+		for (const path of allDeps) content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
 	atomicWriteFile(projectCacheFile(), content);
 }

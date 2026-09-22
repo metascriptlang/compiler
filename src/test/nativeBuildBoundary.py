@@ -1,3 +1,4 @@
+# Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ def record(name, expected, actual):
     results.append({"case": name, "expected": expected, "actual": actual, "pass": expected == actual})
 
 
-def run_cache():
+def run_compile_cache():
     source = fixture("source", '@compile("./native.c");', "int probeValue(void) { return 11; }\n")
     assert build(source, "baseline").returncode == 0
     assert value(source) == "11"
@@ -62,6 +63,7 @@ def run_cache():
     assert build(header, "uncached-control", output="probe2", flags=("--force",), env=uncached).returncode == 0
     record("uncached diagnostic control", "22", value(header, "probe2"))
 
+def run_link_cache():
     archive = fixture("archive", '@link("./libnative.a");', "int probeValue(void) { return 17; }\n")
     for label in ("initial", "changed"):
         if label == "changed":
@@ -116,10 +118,12 @@ def run_argv():
 
 if group in ("argv", "all"):
     run_argv()
-if group in ("cache", "all"):
-    run_cache()
-if group not in ("argv", "cache", "all"):
-    raise SystemExit("group must be argv, cache, or all")
+if group in ("compile-cache", "all"):
+    run_compile_cache()
+if group in ("link-cache", "all"):
+    run_link_cache()
+if group not in ("argv", "compile-cache", "link-cache", "all"):
+    raise SystemExit("group must be argv, compile-cache, link-cache, or all")
 
 print(json.dumps({"root": str(root), "results": results}, indent=2))
 sys.exit(0 if all(item["pass"] for item in results) else 1)

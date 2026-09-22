@@ -672,7 +672,7 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
-export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const isCpp = isCppFile(cFile);
 	const command = compilerCommand(ccOption, ccBinary, isCpp);
@@ -683,6 +683,16 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	const rtDir = resolveRuntime();
 	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
 	const tmp = `${oFile}.tmp.${performance.now()}`;
+	let depTmp = "";
+	if (dependencyFile != "") {
+		ensureDir(dirname(dependencyFile));
+		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
+		args.push("-MMD");
+		args.push("-MF");
+		args.push(depTmp);
+		args.push("-MT");
+		args.push("native");
+	}
 	args.push("-c");
 	args.push(cFile);
 	args.push("-o");
@@ -692,6 +702,7 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	const r = runCc(command, args);
 	if (!r.ok) {
 		remove(tmp);
+		if (depTmp != "") remove(depTmp);
 		if (env.get("MSC_DEBUG_CC") != "") {
 			console.log(`[cc-fail] kind=${r.error.kind} exit=${r.error.exitCode} msg=${r.error.message}`);
 			console.log(`[cc-fail] ${command.path} ${args.join(" ")}`);
@@ -700,12 +711,17 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 	}
 	if (!renameReplace(tmp, oFile)) {
 		remove(tmp);
+		if (depTmp != "") remove(depTmp);
 		if (exists(oFile)) return Result.ok(null);
 		return Result.err(processError(
 			ProcessErrorKind.Unknown,
 			command.path,
 			`failed to publish object ${oFile} (target locked by a concurrent reader?)`
 		));
+	}
+	if (depTmp != "" && !renameReplace(depTmp, dependencyFile)) {
+		remove(depTmp);
+		return Result.err(processError(ProcessErrorKind.Unknown, command.path, `failed to publish dependencies ${dependencyFile}`));
 	}
 	return Result.ok(null);
 }
