@@ -98,7 +98,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 // Find the root struct type for an object literal by walking the AST.
 // Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
 // that contains it to get the declared type via sgRecords.
-function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, ctx: CheckerContext): Type | null {
+function lspFindObjectLiteralTypeAST(program: Node, line: int32, col: int32, ctx: CheckerContext): Type | null {
 	// Find the outermost ObjectLiteral ancestor at cursor position
 	const rootObj = lspFindRootObjectLiteral(program, line, col);
 	if (rootObj == null) return null;
@@ -116,7 +116,7 @@ function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, c
 // If nested `{ fmt: { | } }`, returns the outer `{ }`.
 // Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
 // then walks up to find the outermost ancestor ObjectLiteral.
-function lspFindRootObjectLiteral(root: Node, line: number, col: number): Node | null {
+function lspFindRootObjectLiteral(root: Node, line: int32, col: int32): Node | null {
 	// Find the innermost ObjectLiteral first (validated by subtree check)
 	const innermost = findEnclosingObjectLiteral(root, line, col);
 	if (innermost == null) return null;
@@ -764,7 +764,7 @@ function mk(s: Style): VNode { return { tagX: "d" }; }
 interface Sheet { btn: Style; }
 `;
 
-function completionFixtureAt(tail: string, line: number, col: number): string {
+function completionFixtureAt(tail: string, line: int32, col: int32): string {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, lspUriToPath("file:///objcomp.ms"), `${COMPLETION_FIXTURE}${tail}`);
 	const params = `{"textDocument":{"uri":"file:///objcomp.ms"},"position":{"line":${line},"character":${col}}}`;

@@ -73,17 +73,17 @@ export function drainChangedFiles(): string[][] {
 
 export interface LspCursorParams {
 	uri: string;
-	line: number;   // 1-based (parser convention)
-	col: number;    // 0-based (for text offset scanning)
-	col1: number;   // 1-based (for AST node position matching)
+	line: int32;   // 1-based (parser convention)
+	col: int32;    // 0-based (for text offset scanning)
+	col1: int32;   // 1-based (for AST node position matching)
 }
 
 export function lspExtractPosition(params: string): LspCursorParams {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const position = lspGetObjectField(params, "position");
-	const col0 = lspGetNumberField(position, "character");
-	return { uri, line: lspGetNumberField(position, "line") + 1, col: col0, col1: col0 + 1 };
+	const col0 = lspGetNumberField(position, "character") as int32;
+	return { uri, line: (lspGetNumberField(position, "line") as int32) + 1, col: col0, col1: col0 + 1 };
 }
 
 // Simple linear search for dedup (O(n^2) acceptable for typical reference counts).
