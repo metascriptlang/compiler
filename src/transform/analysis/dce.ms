@@ -385,8 +385,8 @@ function eliminateDeadBranch(node: Node): Node {
 		return d.consequent;
 	}
 	if (isFalseLiteral(d.condition)) {
-		// if (false) A else B → B (parser guarantees alternate is empty BlockStmt, not null)
-		return d.alternate;
+		const alternate = d.alternate;
+		return alternate != null ? alternate : makeBlock([], node.location);
 	}
 	return node;
 }
