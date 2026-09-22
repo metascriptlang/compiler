@@ -32,7 +32,7 @@ backend and DRC/ORC runtime.
 | Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `runWindows.sh`: body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
 | Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.sh` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Not implemented |
-| Cross-module vtable calls | Not implemented |
+| Cross-module vtable calls | Lowered inside the single HCR image by `src/transform/native/hcrIndirect.ms`, guarded by `src/test/hcr/run.sh` (`hcrIndirect`); per-module images that make the tables replaceable are not implemented |
 | Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
@@ -226,6 +226,37 @@ On 2026-09-23, Windows 11 x64,
 `HCR reload module: implementation changed (logic)`; changing `value` from `int32` to
 `int64` reported
 `HCR reload dependents: export signature changed (logic::value#0)`.
+
+S3a lowers cross-module calls through module tables inside today's single image; S3b will
+link each project module as its own image. The host owns one handle per module at a
+stable address; the handle's `current` points at the slot table of the module's current
+image, in S2 manifest slot order. Each module publishes its table and resolves the handles
+of the other project modules in its DatInit, and every DatInit runs before any Init, so
+cyclic imports see published tables. A caller reaches an export through a macro over its
+native symbol, `#define f ((__typeof__(&f))_ms_hcr_m0->current[k])`: direct calls,
+out-parameter struct returns and function values all enter the current table, while
+same-module and private calls stay direct. Publish and rollback are one pointer store.
+This is the data-table form of the reference's stable-address trampolines, which the
+rejected-foundations list above excludes as writable executable memory. A MetaScript
+function-typed struct field was measured as the alternative and rejected: it emits
+`msClosure` with an `env ?` branch per call.
+
+Exported functions of project modules are dead-code roots under `--hcr`, because the
+manifest promises every slot. The image links the project dispatcher and exports it as
+`DatInit000`/`Init000`, so dependency and standard-library inits run in load order; before
+this, a host ran only the entry module's inits. Standard-library modules are excluded from
+module identity even when the project root contains `std/`; without that,
+`examples/hcrProbe/runWindows.sh` failed its build on `main` with
+`HCR ABI cannot represent generic export 'std/core/system/index::!='`.
+
+On 2026-09-23, Windows 11 x64, source tree `6d66e6d4` plus the S3a working tree,
+`MSC=out/msc-s3a.exe bash src/test/hcr/run.sh` printed `ok   hcrModuleAbi`,
+`ok   hcrIndirect` and `ok   hcrWindowsReload`. The two-module fixture's host call
+returned `HCR-HOST call -> 37` through a plain call, an out-parameter struct return and a
+function value. The same runner on the `6d66e6d4` compiler stopped at
+`FAIL hcrIndirect: cross-module call to logic::value is not lowered through its table slot`.
+Not verified: a POSIX host run (this runner checks emission only off Windows), and
+replacing a table at runtime, which needs S3b's separate images.
 
 ## Neon Fast Refresh boundary
 
