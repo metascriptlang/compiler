@@ -1327,7 +1327,8 @@ function hcrBuildRoot(entryPath: string, projectRoot: string): string {
 	return root;
 }
 
-function hcrModuleId(modPath: string, root: string): string {
+function hcrModuleId(modPath: string, root: string, stdPath: string): string {
+	if (stdPath != "" && isUnder(modPath, stdPath)) return "";
 	if (!isUnder(modPath, root)) return "";
 	return replaceExt(relative(root, modPath), "");
 }
@@ -1422,6 +1423,7 @@ function prepareHcrBuildAbi(
 	outBinary: string,
 	opts: CliOptions,
 	compileFlags: string,
+	stdPath: string,
 ): Result<HcrBuildAbi, string> {
 	const bundlePath = outBinary + ".hcrabi";
 	const hadCurrent = exists(bundlePath);
@@ -1433,7 +1435,29 @@ function prepareHcrBuildAbi(
 		if (!parsed.ok) return Result.err(`invalid current HCR ABI bundle '${bundlePath}': ${parsed.error}`);
 		current = parsed.value;
 	}
+	const built = buildHcrCandidateAbi(graph, entryPath, opts, compileFlags, stdPath);
+	if (!built.ok) return Result.err(built.error);
+	return Result.ok({
+		bundlePath,
+		hadCurrent,
+		current,
+		candidate: built.value.candidate,
+		modulePaths: built.value.modulePaths,
+	});
+}
 
+interface HcrCandidateAbi {
+	candidate: HcrModuleAbi[];
+	modulePaths: string[];
+}
+
+function buildHcrCandidateAbi(
+	graph: ModuleGraph,
+	entryPath: string,
+	opts: CliOptions,
+	compileFlags: string,
+	stdPath: string,
+): Result<HcrCandidateAbi, string> {
 	const root = hcrBuildRoot(entryPath, opts.projectRoot);
 	const cpu = opts.targetInfo.cpu != "" ? opts.targetInfo.cpu : "host";
 	const targetKey = `${opts.targetOs}:${cpu}:${opts.targetInfo.ptrSize}:${opts.targetInfo.floatSize}`;
@@ -1441,13 +1465,13 @@ function prepareHcrBuildAbi(
 	const candidate: HcrModuleAbi[] = [];
 	const modulePaths: string[] = [];
 	for (const modPath of graph.loadOrder) {
-		const moduleId = hcrModuleId(modPath, root);
+		const moduleId = hcrModuleId(modPath, root, stdPath);
 		if (moduleId == "") continue;
 		const mod = findModule(graph, modPath);
 		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
 		const dependencies: string[] = [];
 		for (const imported of mod.imports) {
-			const dependencyId = hcrModuleId(imported.sourcePath, root);
+			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
 			if (dependencyId != "") dependencies.push(dependencyId);
 		}
 		const exports = hcrModuleExports(moduleId, modPath);
@@ -1464,7 +1488,7 @@ function prepareHcrBuildAbi(
 		candidate.push(manifest.value);
 		modulePaths.push(modPath);
 	}
-	return Result.ok({ bundlePath, hadCurrent, current, candidate, modulePaths });
+	return Result.ok({ candidate, modulePaths });
 }
 
 function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
@@ -1618,7 +1642,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	for (const path of globalLinkObjects()) projectDeps.push(path);
 	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
 	if (opts.isHcr && !opts.emitC) {
-		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0);
+		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
 		if (!prepared.ok) {
 			console.log(`${error("error")}: ${prepared.error}`);
 			exit(1);
