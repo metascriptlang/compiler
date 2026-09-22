@@ -261,7 +261,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				_lastParamLocations.push(makeLoc(typeName.line, typeName.column));
 				advance(state);
 				params.push("");
-				_lastParamTypeExprs.push(null);
+				_lastParamTypeExprs.push(null as unknown as Node);
 				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
@@ -271,7 +271,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				params.push("this");
 				_lastParamLocations.push(makeLoc(thisToken.line, thisToken.column));
 				params.push(captureOptionalType(state));
-				_lastParamTypeExprs.push(_lastTypeExpr);
+				_lastParamTypeExprs.push(_lastTypeExpr!);
 				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
@@ -279,7 +279,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			_lastParamLocations.push(makeLoc(receiverName.line, receiverName.column));
 			advance(state);
 			params.push(captureOptionalType(state));
-			_lastParamTypeExprs.push(_lastTypeExpr);
+			_lastParamTypeExprs.push(_lastTypeExpr!);
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
@@ -290,15 +290,15 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			const patResult = destToken.kind == TokenKind.LBrace ? callObjectPatternParser(state) : callArrayPatternParser(state);
 			if (!patResult.ok) { break; }
 			const slot = params.length / 2;
-			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null); }
+			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null as unknown as Node); }
 			_lastParamPatterns.push(patResult.value);
 			params.push(`${paramPrefix}${paramPatternName(slot)}`);
 			params.push(captureOptionalType(state));
-			_lastParamTypeExprs.push(_lastTypeExpr);
+			_lastParamTypeExprs.push(_lastTypeExpr!);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
 				const dIdx = (params.length - 2) / 2;
-				while (_lastDefaults.length < dIdx) { _lastDefaults.push(null); }
+				while (_lastDefaults.length < dIdx) { _lastDefaults.push(null as unknown as Node); }
 				const dResult = callExprParser(state);
 				_lastDefaults.push(dResult.ok ? dResult.value : null);
 			}
@@ -311,12 +311,12 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		params.push(`${paramPrefix}${param.value}`);
 		advance(state);
 		params.push(captureOptionalType(state));
-		_lastParamTypeExprs.push(_lastTypeExpr);
+		_lastParamTypeExprs.push(_lastTypeExpr!);
 		// Capture default value as AST node (Reference parity: store default expression)
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 			advance(state);
 			const paramIdx = (params.length - 2) / 2;
-			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null); }
+			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
 			const defResult = callExprParser(state);
 			_lastDefaults.push(defResult.ok ? defResult.value : null);
 		}

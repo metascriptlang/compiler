@@ -853,7 +853,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 
 		const fieldTypeStr = captureOptionalType(state);
 		fieldTypes.push(fieldIsOptional ? optionalizeTypeString(fieldTypeStr) : fieldTypeStr);
-		fieldTypeExprs.push(getLastTypeExpr());
+		fieldTypeExprs.push(getLastTypeExpr()!);
 
 		if (!isAtEnd(state) && (current(state).kind == TokenKind.Semicolon || current(state).kind == TokenKind.Comma)) {
 			advance(state);
@@ -1431,7 +1431,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 				advance(state);
 				const dIdx = elements.length - 1;
-				while (defaults.length < dIdx) { defaults.push(null); }
+				while (defaults.length < dIdx) { defaults.push(null as unknown as Node); }
 				const dExpr = try callExprParser(state);
 				defaults.push(dExpr);
 			}
