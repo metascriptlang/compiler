@@ -1473,6 +1473,15 @@ function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModule
 	}
 	return null as unknown as HcrModuleAbi;
 }
+function hcrBundlesMatch(current: HcrModuleAbi[], candidate: HcrModuleAbi[]): boolean {
+	if (current.length != candidate.length) return false;
+	for (const manifest of candidate) {
+		const previous = hcrManifestById(current, manifest.moduleId);
+		if (previous == null || hcrAbiFingerprint(previous) != hcrAbiFingerprint(manifest)) return false;
+	}
+	return true;
+}
+
 
 function hcrPathChanged(paths: string[], path: string): boolean {
 	for (const changed of paths) {
@@ -1617,7 +1626,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		hcrBuildAbi = prepared.value;
 	}
 	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
-	if (!projectChanged && (hcrBuildAbi == null || hcrBuildAbi.hadCurrent)) {
+	const hcrBundleCurrent = hcrBuildAbi == null
+		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
+	if (!projectChanged && hcrBundleCurrent) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
