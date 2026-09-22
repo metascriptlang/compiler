@@ -1452,7 +1452,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const arrowDefaults: Node[] = [];
 			let dpi = 0;
 			while (dpi < arrowParams.length) {
-				arrowDefaults.push(null);
+				arrowDefaults.push(null as unknown as Node);
 				dpi = dpi + 1;
 			}
 			return createNodeAt(NodeKind.ArrowFunction, {

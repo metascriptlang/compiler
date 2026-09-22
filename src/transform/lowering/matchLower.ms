@@ -392,7 +392,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 		const armBody = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc);
 
 		if (mergedInto >= 0) {
-			armGuards[mergedInto].push(caseData.caseGuard);
+			armGuards[mergedInto].push(caseData.caseGuard!);
 			armBodies[mergedInto].push(armBody);
 		} else {
 			const newGroupIdx = patternKeys.length;

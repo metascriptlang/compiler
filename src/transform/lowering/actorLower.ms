@@ -865,7 +865,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	if (methods.length > 0) {
 		const dispatchNode = emitActorDispatch(d, name, methods, loc, result);
 		result.push(dispatchNode);
-		dispatchSyms.push(dispatchNode.resolvedSym);
+		dispatchSyms.push(dispatchNode.resolvedSym!);
 		dispatchNames.push(name);
 	}
 
