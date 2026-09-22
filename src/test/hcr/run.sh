@@ -28,6 +28,14 @@ grep -q '"moduleId": "app"' "$WORK/module.hcr.hcrabi" || fail "app manifest miss
 grep -q '"moduleId": "logic"' "$WORK/module.hcr.hcrabi" || fail "logic manifest missing"
 grep -q '"id": "logic::value#0"' "$WORK/module.hcr.hcrabi" || fail "logic slot identity is not project-relative"
 
+awk 'BEGIN { changed = 0 } { if (!changed && /"gcMode": "orc"/) { sub(/"orc"/, "\"drc\""); changed = 1 } print }' "$WORK/module.hcr.hcrabi" >"$TMP/stale.hcrabi"
+mv "$TMP/stale.hcrabi" "$WORK/module.hcr.hcrabi"
+if ! (cd "$WORK" && env NO_COLOR=1 "$MSC" build app.ms --hcr --output=module.hcr) >"$TMP/stale.log" 2>&1; then
+	cat "$TMP/stale.log"
+	fail "valid stale ABI bundle recovery failed"
+fi
+grep -q 'HCR restart required: GC mode changed (drc -> orc)' "$TMP/stale.log" || fail "stale bundle classification missing"
+
 cp "$DIR/fixtures/logicBodyEdit.ms" "$WORK/logic.ms"
 if ! (cd "$WORK" && env NO_COLOR=1 "$MSC" build app.ms --hcr --verbose --output=module.hcr) >"$TMP/edit.log" 2>&1; then
 	cat "$TMP/edit.log"
