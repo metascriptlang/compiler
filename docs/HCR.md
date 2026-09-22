@@ -211,6 +211,22 @@ lowered-AST, type, symbol, flag, reachability and global-emission inputs; that n
 mechanism was rejected rather than risk serving stale native objects for the measured
 sub-percent wall-time gain.
 
+S2 writes one deterministic `<output>.hcrabi` bundle after a successful HCR link. The
+bundle contains one compile-ABI manifest per project module: project-relative module and
+slot identity, canonical exported-function signatures, project dependencies, target,
+GC/runtime and toolchain identity. Standard-library and runtime modules stay outside the
+reload set and are covered by the toolchain stamp. Persistent layouts, TypeInfo and vtable
+shape remain owned by the later packaging and DRC steps; S2 does not claim compatibility
+for them.
+
+On 2026-09-23, Windows 11 x64,
+`MSC=out/msc-hcr-s2.exe bash src/test/hcr/run.sh` returned
+`ok   hcrModuleAbi`. The cold build wrote manifests for `app` and `logic`; a body-only
+`logic` edit compiled one module and reported
+`HCR reload module: implementation changed (logic)`; changing `value` from `int32` to
+`int64` reported
+`HCR reload dependents: export signature changed (logic::value#0)`.
+
 ## Neon Fast Refresh boundary
 
 This compiler document defines the contract; implementation must be designed and committed
