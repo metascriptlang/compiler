@@ -2507,11 +2507,12 @@ export function propagateGenericParam(owner: Type, member: Type | null): void {
 // TypeKind.Lent has no producer; Sink is produced by an explicit `sink` param.
 
 export function skipModifier(t: Type | null): Type | null {
-	if (t == null) return t;
-	if (t.kind == TypeKind.Sink || t.kind == TypeKind.Lent || t.kind == TypeKind.Var) return t.typeReturn;
-	if (t.kind == TypeKind.Cursor) return t.typeReturn;
-	if (t.kind == TypeKind.Alias) return t.typeReturn;
-	return t;
+	let cur = t;
+	while (cur != null && (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Var
+			|| cur.kind == TypeKind.Cursor || cur.kind == TypeKind.Alias)) {
+		cur = cur.typeReturn;
+	}
+	return cur;
 }
 
 // ===== Generic Instantiation =====
