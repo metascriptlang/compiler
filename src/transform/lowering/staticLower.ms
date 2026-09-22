@@ -12,6 +12,14 @@ function isDataInitLiteral(init: Node): boolean {
 		|| init.kind == NodeKind.StringLiteral
 		|| init.kind == NodeKind.BooleanLiteral;
 }
+function isInlinedReadonlyScalar(member: Node): boolean {
+	if (member.kind != NodeKind.PropertyDecl) return false;
+	const d = member.data as PropertyDeclData;
+	if (!d.propIsStatic || !d.propIsReadonly || d.propInitializer == null) return false;
+	return d.propInitializer.kind == NodeKind.NumberLiteral
+		|| d.propInitializer.kind == NodeKind.BooleanLiteral;
+}
+
 
 function staticFieldSym(ownerSym: Symbol | null, qualifiedName: string): Symbol {
 	if (ownerSym == null) return null as unknown as Symbol;
@@ -56,9 +64,10 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 			out.push(staticRunBlock(declNode, (m.data as BlockStmtData).statements));
 			continue;
 		}
+		const member = bareMember(m);
+		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member)) continue;
 		body[write] = m;
 		write += 1;
-		const member = bareMember(m);
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic || pd.propInitializer == null) continue;

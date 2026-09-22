@@ -14,7 +14,7 @@
 
 import {
 	Node, NodeKind, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
-	BinaryExprData, UnaryExprData, MemberExprData, VariableDeclData, TypeAssertionData, HiddenStdConvData,
+	BinaryExprData, UnaryExprData, MemberExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../../ast/node";
 import { isIntegerType, isFloatType } from "../../checker/types";
@@ -67,6 +67,17 @@ function moduleConstInitializer(node: Node): Node {
 	if (d.declKind != DeclKind.Const || d.initializer == null) return none;
 	return d.initializer;
 }
+function readonlyStaticInitializer(node: Node): Node {
+	const none = null as unknown as Node;
+	const sym = node.resolvedSym;
+	if (sym == null || !sym.symFlags.has(SymbolFlag.Static) || sym.symFlags.has(SymbolFlag.Mutable)) return none;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.PropertyDecl || !isInlineConstantType(decl.nodeType)) return none;
+	const d = decl.data as PropertyDeclData;
+	if (!d.propIsStatic || !d.propIsReadonly || d.propInitializer == null) return none;
+	return d.propInitializer;
+}
+
 
 function enumMemberOrdinal(expr: Node): int64 {
 	if (expr == null || expr.kind != NodeKind.Identifier || expr.nodeType == null) return -1;
@@ -111,6 +122,13 @@ function constantLiteralOf(expr: Node, depth: int32): Node {
 		NodeKind.BooleanLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.Identifier => {
 			const initializer = moduleConstInitializer(expr);
+			if (initializer == null) return none;
+			const value = constantLiteralOf(initializer, depth + 1);
+			if (value == null) return none;
+			return retypedLiteral(value, expr.resolvedSym.declNode.nodeType, expr.location);
+		},
+		NodeKind.MemberExpr => {
+			const initializer = readonlyStaticInitializer(expr);
 			if (initializer == null) return none;
 			const value = constantLiteralOf(initializer, depth + 1);
 			if (value == null) return none;
@@ -439,7 +457,7 @@ function foldMember(node: Node): Node {
 			return makeNumber(cc, node.location);
 		}
 	}
-	return node;
+	return foldConstantExpression(node);
 }
 
 // ===== Tests =====
