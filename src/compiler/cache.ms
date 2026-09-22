@@ -557,6 +557,11 @@ function storedDepPath(entry: string): string {
 	return "";
 }
 
+function projectCacheMiss(cacheFile: string): boolean {
+	tryRemoveFile(cacheFile);
+	return true;
+}
+
 // Check if the project needs rebuilding.
 // Reference-aligned: changeDetectedViaJsonBuildInstructions.
 // Returns true if anything changed (= must rebuild). Returns false if up-to-date.
@@ -568,13 +573,11 @@ export function projectCacheChanged(
 	flags: string
 ): boolean {
 	_cachedDepHashes = [];
-	if (_forceRebuild) return true;
-
 	const cacheFile = projectCacheFile();
-	if (!exists(cacheFile) || !exists(outputFile)) return true;
-
+	if (_forceRebuild) return projectCacheMiss(cacheFile);
+	if (!exists(cacheFile) || !exists(outputFile)) return projectCacheMiss(cacheFile);
 	const cacheResult = readFile(cacheFile);
-	if (!cacheResult.ok) return true;
+	if (!cacheResult.ok) return projectCacheMiss(cacheFile);
 	const lines = splitLines(cacheResult.value);
 
 	// Parse header fields
@@ -600,28 +603,28 @@ export function projectCacheChanged(
 	const currentCmd = buildCmdFingerprint(ccOption, mode, flags);
 
 	// Reference-aligned: check cacheVersion, outputFile, cmdline
-	if (storedVersion != CACHE_VERSION) return true;
-	if (storedOutput != outputFile) return true;
-	if (storedCmd != currentCmd) return true;
+	if (storedVersion != CACHE_VERSION) return projectCacheMiss(cacheFile);
+	if (storedOutput != outputFile) return projectCacheMiss(cacheFile);
+	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
 
 	// Reference-aligned: check output binary modification (detect external tampering)
 	const currentOutputHash = hashFile(outputFile);
-	if (storedOutputHash != currentOutputHash) return true;
+	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
 
-	if (storedDeps.length < depPaths.length) return true;
+	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
 	let di = 0;
 	while (di < depPaths.length) {
 		const path = depPaths[di];
 		const currentEntry = `${path}=${hashFile(path)}`;
-		if (storedDeps[di] != currentEntry) return true;
+		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
 		_cachedDepHashes.push(currentEntry);
 		di = di + 1;
 	}
 	while (di < storedDeps.length) {
 		const path = storedDepPath(storedDeps[di]);
-		if (path == "") return true;
+		if (path == "") return projectCacheMiss(cacheFile);
 		const currentEntry = `${path}=${hashFile(path)}`;
-		if (storedDeps[di] != currentEntry) return true;
+		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
 		_cachedDepHashes.push(currentEntry);
 		di = di + 1;
 	}
@@ -767,6 +770,7 @@ export function invalidateCompileCache(modPath: string, fp: string): void {
 
 const PRE_LINKCMD = "linkcmd:";
 const PRE_OFILES = "ofiles:";
+const PRE_LINKINPUTS = "linkInputs:";
 
 function linkCacheFile(): string {
 	return `${getCacheDir()}/link.cache`;
@@ -778,8 +782,14 @@ function objectListKey(oFiles: string[]): string {
 	return hashContent(identity);
 }
 
+function externalInputKey(paths: string[]): string {
+	let identity = "";
+	for (const path of paths) identity = `${identity}${path.length}:${path}:${hashFile(path)}`;
+	return hashContent(identity);
+}
+
 // Check if link step can be skipped.
-export function isLinkCached(oFiles: string[], linkFlags: string, outputFile: string): boolean {
+export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): boolean {
 	if (_forceRebuild) return false;
 	const cFile = linkCacheFile();
 	if (!exists(cFile) || !exists(outputFile)) return false;
@@ -791,27 +801,32 @@ export function isLinkCached(oFiles: string[], linkFlags: string, outputFile: st
 	let storedCmd = "";
 	let storedOFiles = "";
 	let storedOutputHash = "";
+	let storedInputs = "";
 
 	for (const line of lines) {
 		let val = parseLineValue(line, PRE_LINKCMD);
 		if (val != "") { storedCmd = val; continue; }
 		val = parseLineValue(line, PRE_OFILES);
 		if (val != "") { storedOFiles = val; continue; }
+		val = parseLineValue(line, PRE_LINKINPUTS);
+		if (val != "") { storedInputs = val; continue; }
 		val = parseLineValue(line, PRE_OUTHASH);
 		if (val != "") { storedOutputHash = val; continue; }
 	}
 
 	if (storedCmd != linkFlags) return false;
 	if (storedOFiles != objectListKey(oFiles)) return false;
+	if (storedInputs != externalInputKey(externalInputs)) return false;
 	const currentOutputHash = hashFile(outputFile);
 	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
 
 // Write link cache after successful link step.
-export function writeLinkCache(oFiles: string[], linkFlags: string, outputFile: string): void {
+export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
 	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
+	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(), content);
 }

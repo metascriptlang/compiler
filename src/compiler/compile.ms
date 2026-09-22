@@ -1391,7 +1391,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	if (!projectCacheChanged(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0)) {
+	const projectDeps: string[] = [];
+	for (const path of graph.loadOrder) projectDeps.push(path);
+	for (const path of globalLinkObjects()) projectDeps.push(path);
+	if (!projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0)) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
@@ -1857,18 +1860,22 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Link all .o files into final binary (or shared library for HCR)
 	// Build link flags from global linkState (Set = deduplicated)
 	let allLink = cliLinkFlags(allFlags, opts);
-	for (const obj of globalLinkObjects()) oFiles.push(obj);
+	const externalLinkInputs: string[] = [];
+	for (const obj of globalLinkObjects()) {
+		oFiles.push(obj);
+		externalLinkInputs.push(obj);
+	}
 	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
 	let linkFlags = allLink;
 
 	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
-	if (modulesRecompiled == 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
+	if (modulesRecompiled == 0 && isLinkCached(oFiles, externalLinkInputs, linkFlags, outBinary)) {
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
-		writeProjectCache(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
 		return;
@@ -1917,7 +1924,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// Persist link cache after successful link
-	writeLinkCache(oFiles, linkFlags, outBinary);
+	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary);
 
 	if (opts.genDeps) {
 		const depsDir = outDirForMode(opts.mode);
@@ -1925,7 +1932,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// Reference-aligned: writeJsonBuildInstructions — persist project cache after successful build
-	writeProjectCache(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));

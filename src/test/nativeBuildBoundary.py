@@ -75,6 +75,14 @@ def run_link_cache():
             assert value(archive) == "17"
     record("linked archive replacement", "29", value(archive))
 
+    (archive / "native.c").write_text("int otherValue(void) { return 31; }\n")
+    assert command(archive, "cc-broken", ["clang", "-c", "native.c", "-o", "native.o"]).returncode == 0
+    assert command(archive, "ar-broken", ["ar", "rcs", "libnative.a", "native.o"]).returncode == 0
+    first_failure = build(archive, "link-failure")
+    second_failure = build(archive, "link-failure-retry")
+    record("failed link rejects stale output", True, first_failure.returncode != 0)
+    record("failed link remains invalidated", True, second_failure.returncode != 0)
+
 
 def run_argv():
     spaces = fixture("spaces", '@compile("./native.c");', "int probeValue(void) { return 31; }\n")
