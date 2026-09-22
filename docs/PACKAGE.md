@@ -242,14 +242,21 @@ own AST parser and write files; there are no lifecycle scripts and nothing execu
 deliberate — install-time execution is the top malware vector in npm-land, and the design keeps
 it structurally impossible.
 
-**Building runs package code.** MetaScript macros and decorators execute during compilation —
-in the Raiser VM, with host `fs`/`process` functions available (`src/compiler/meta/`,
-`src/raiser/hostRegistry.ms`). So the first `msc x` of a dependency executes that dependency's
-macro code on your machine before its command ever runs — the same trust position as Cargo's
-`build.rs`. `msc.lock` pins the *identity* of registry/git sources (SHA-256 integrity, commit),
-which makes builds reproducible, not audited: pinned ≠ trusted. Until dependency macro
-execution is sandboxed (an open design question), treat `msc x` on an untrusted package exactly
-as you would treat running it.
+**Building runs package compile-time code, but cached dependencies are restricted.** Macros,
+decorators and `@comptime` blocks whose canonical source path is under `~/.metascript/cache/`
+run with only pure host bridges and read-only filesystem bridges. File mutation, process and
+environment access, execution, standard I/O, clocks, archive handles, and every new or
+unclassified host bridge fail loud at `CallHost`. The capability default and dispatcher gate
+live in `src/raiser/hostRegistry.ms` and `src/raiser/vm.ms`; the cache-path boundary and
+per-invocation policy live in `src/compiler/meta/hostPolicy.ms`; `hostTable.ms` is the explicit
+allowlist.
+
+This is an integrity and execution boundary, **not a confidentiality boundary**: cached macro
+code may read any file the compiler user can read. Project-local code, `file:` dependencies and
+the compiler's own standard library are outside the cache boundary and retain full host access.
+After compilation, the package command itself also runs with the user's normal permissions.
+`msc.lock` pins registry/git source identity (integrity hash or commit); pinned still does not
+mean audited.
 
 ## Command reference
 
@@ -275,9 +282,12 @@ Publish metadata (`description`, `license`, `repository`, `homepage`, `keywords`
 
 ## Verified / not verified
 
-Measured 2026-09-22 on `msc` v0.2.55 (installed build `b201f063`; the hardening behaviours —
-marker shims, foreign-file refusal, prune on remove, `remove -g`, install listing — on a
-worktree build carrying `55a8c5ce`): `entry`/`outFile`/`optimize` builds, dep import by
-name+subpath, `file:` add/remove, `msc x` (before and after upgrade), project + global shims,
-both refusal gates, the foreign-shim refusal, `remove -g`, `publish --dry-run`, `whoami` error
-path, `msc init` scaffold.
+Measured 2026-09-22 on `msc` v0.2.55 (installed build `b201f063`; hardening behaviours on
+worktree candidates): `entry`/`outFile`/`optimize` builds, dep import by name+subpath, `file:`
+add/remove, `msc x` (before and after upgrade), project + global shims, both refusal gates, the
+foreign-shim refusal, `remove -g`, `publish --dry-run`, `whoami` error path, `msc init` scaffold.
+The macro sandbox was probed with the same dependency source under a redirected
+`~/.metascript/cache/`: before the change it wrote `/tmp/msc-sandbox-red/pwned`; after the change
+`msc check` exits 1 naming `msFsWriteFileMode` and the dependency module, and the file is absent.
+A cached macro using `msFsExists` plus a project-local macro using `msProcessPlatform` both check
+clean.
