@@ -1657,10 +1657,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
 	let isCursor = false;
-	// NodeFlag.Cursor: for-of bindings are borrows from the array (reference: cursor flag on for-loop vars)
-	if (stmt.flags.has(NodeFlag.Cursor)) {
-		isCursor = true;
-	}
 	// Cursor propagation from initializer: zero-copy bridge HiddenStdConv has NodeFlag.Cursor
 	if (d.initializer != null && d.initializer.flags.has(NodeFlag.Cursor)) {
 		isCursor = true;
