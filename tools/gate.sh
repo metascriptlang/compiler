@@ -234,7 +234,7 @@ admit() {
 
 lane_cmd() {
   case "$1" in
-    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
+    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s && python3 src/test/nativeBuildBoundary.py %s' "$BUILDER" "$CC_FLAG" "$CAND" "$CAND" ;;
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
     tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; %s test src/test/lang/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;

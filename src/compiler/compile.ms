@@ -54,7 +54,7 @@ import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix,
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, hashContent, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
@@ -893,7 +893,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				let probeFlags = allFlags;
 				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
-				const probeKey = fullCompileCmd(ccOption, mode, probeFlags);
+				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary);
 				const dependencyFile = nativeDepFile(fullPath, probeKey);
 				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
@@ -970,7 +970,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			console.log(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			exit(1);
 		}
-		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags));
+		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary));
 		writeCompileCache(j.oFile, j.fp);
 		oFiles.push(j.oFile);
 		ci = ci + 1;
@@ -1391,10 +1391,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts);
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
-	if (!projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0)) {
+	if (!projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags)) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
@@ -1753,7 +1754,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			// stable command text so ccache can dedupe across projects.
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
-			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags);
+			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags, opts.ccBinary);
 			const modFp = moduleCompileFp(cCode, compileCmd);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
@@ -1814,7 +1815,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		// fp-keyed and published atomically like any module's: two concurrent
 		// builds with different entries/configs write different dispatcher C to
 		// one fixed path otherwise, and the loser compiles the winner's dispatcher.
-		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
+		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
 		writeCSource("_dispatch", dispFp, dispatcher);
 		const dispFile = stableCFileFp("_dispatch", dispFp);
 		oSlots.push([]);
@@ -1875,7 +1876,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
-		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
 		return;
@@ -1932,7 +1933,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// Reference-aligned: writeJsonBuildInstructions — persist project cache after successful build
-	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
@@ -2144,7 +2145,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		testModFlags = appendFlag(testModFlags, quoteCcArg(`-iquote${tcd}`));
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 		if (upFlag != "") testModFlags = appendFlag(testModFlags, upFlag);
-		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags);
+		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags, opts.ccBinary);
 		const modFp = moduleCompileFp(cCode, compileCmd);
 		const oFile = stableOFileFp(p.modPath, modFp);
 
@@ -2168,7 +2169,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (opts.verbose) verboseLog("generating test dispatcher");
 	const dispatcher = genTestDispatcher(graph.loadOrder, filePath);
 	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
-	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags));
+	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);

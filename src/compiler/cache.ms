@@ -13,7 +13,7 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { exec, env, platform, argv } from "std/process";
+import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -276,8 +276,8 @@ function ensureLocalSchema(): void {
 }
 
 // Full compile command for fingerprint — includes compiler, -std, mode flags.
-export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string): string {
-	return `${getCompilerName(ccOption, "")} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
+export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string): string {
+	return `${getCompilerHash(ccOption, ccBinary)} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
 }
 
 // Fingerprint folds in VERSION and toolchainStamp(): the stamp content-hashes
@@ -488,28 +488,30 @@ function projectCacheFile(): string {
 	return `${getCacheDir()}/project.cache`;
 }
 
-// Build command line fingerprint — everything that affects the build output.
-// Cache compiler identity hash (once per build session).
-// Captures `clang --version` output to detect version upgrades.
-// Reference parity: hashes the compiler binary to detect upgrades.
-// Link flags are tracked separately in link.cache.
 let _compilerHash = "";
-function getCompilerHash(ccOption: number): string {
-	if (_compilerHash != "") return _compilerHash;
-	const name = getCompilerName(ccOption, "");
-	// New exec() captures stdout; no more tmp-file shell redirect needed.
-	const r = exec(`${name} --version 2>&1`);
-	const version = r.ok ? r.value : (r.error.output != "" ? r.error.output : r.error.errorOutput);
-	if (version.length > 0) {
-		_compilerHash = hashContent(version);
-	} else {
-		_compilerHash = name;
+let _compilerHashKey = "";
+
+function getCompilerHash(ccOption: number, ccBinary: string): string {
+	const name = getCompilerName(ccOption, ccBinary);
+	if (_compilerHash != "" && _compilerHashKey == name) return _compilerHash;
+	let path = name;
+	const args: string[] = [];
+	if (ccBinary == "" && name.endsWith(" cc")) {
+		path = name.slice(0, name.length - 3);
+		args.push("cc");
 	}
+	const resolved = findOnPath(path);
+	if (resolved != "") path = resolved;
+	args.push("--version");
+	const r = execFileCapture(path, args);
+	const version = r.ok ? r.value : r.error.errorOutput;
+	_compilerHashKey = name;
+	_compilerHash = hashContent(`${name}:${hashFile(path)}:${version}`);
 	return _compilerHash;
 }
 
-function buildCmdFingerprint(ccOption: number, mode: number, compileFlags: string): string {
-	return `${getCompilerHash(ccOption)}:${mode}:${compileFlags}:${toolchainStamp()}`;
+function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
+	return `${getCompilerHash(ccOption, ccBinary)}:${mode}:${compileFlags}:${toolchainStamp()}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.
@@ -569,6 +571,7 @@ export function projectCacheChanged(
 	depPaths: string[],
 	outputFile: string,
 	ccOption: number,
+	ccBinary: string,
 	mode: number,
 	flags: string
 ): boolean {
@@ -600,7 +603,7 @@ export function projectCacheChanged(
 		if (val != "") { storedDeps.push(val); }
 	}
 
-	const currentCmd = buildCmdFingerprint(ccOption, mode, flags);
+	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
 
 	// Reference-aligned: check cacheVersion, outputFile, cmdline
 	if (storedVersion != CACHE_VERSION) return projectCacheMiss(cacheFile);
@@ -639,6 +642,7 @@ export function writeProjectCache(
 	depPaths: string[],
 	outputFile: string,
 	ccOption: number,
+	ccBinary: string,
 	mode: number,
 	flags: string
 ): void {
@@ -656,7 +660,7 @@ export function writeProjectCache(
 	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${outputFile}\n`;
-	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, mode, flags)}\n`;
+	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, ccBinary, mode, flags)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
 	if (_cachedDepHashes.length == allDeps.length) {
 		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;

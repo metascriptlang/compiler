@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 compiler = str(Path(sys.argv[1] if len(sys.argv) > 1 else "msc").resolve())
-group = sys.argv[2] if len(sys.argv) > 2 else "argv"
+group = sys.argv[2] if len(sys.argv) > 2 else "all"
 root = Path(tempfile.mkdtemp(prefix="msc-native-boundary-", dir="/tmp")).resolve()
 results = []
 
@@ -29,8 +29,8 @@ def fixture(name, directives, native, header="", native_name="native.c"):
     return cwd
 
 
-def build(cwd, label, output="probe", flags=(), env=None):
-    return command(cwd, label, [compiler, "build", "main.ms", "--cc=clang", "--output=" + output, *flags], env)
+def build(cwd, label, output="probe", flags=(), env=None, cc="clang"):
+    return command(cwd, label, [compiler, "build", "main.ms", "--cc=" + cc, "--output=" + output, *flags], env)
 
 
 def value(cwd, output="probe"):
@@ -84,6 +84,89 @@ def run_link_cache():
     record("failed link remains invalidated", True, second_failure.returncode != 0)
 
 
+def make_archive(cwd, name, result):
+    source = name + ".c"
+    obj = name + ".o"
+    archive = name + ".a"
+    (cwd / source).write_text("int probeValue(void) { return %d; }\n" % result)
+    assert command(cwd, "cc-" + name, ["clang", "-c", source, "-o", obj]).returncode == 0
+    assert command(cwd, "ar-" + name, ["ar", "rcs", archive, obj]).returncode == 0
+    return cwd / archive
+
+
+def run_audit():
+    link_options = fixture("link options", "", "")
+    first_archive = make_archive(link_options, "first", 41)
+    second_archive = make_archive(link_options, "second", 43)
+    assert build(link_options, "first-link-option", flags=('--passL="' + str(first_archive) + '"',)).returncode == 0
+    assert value(link_options) == "41"
+    assert build(link_options, "second-link-option", flags=('--passL="' + str(second_archive) + '"',)).returncode == 0
+    record("link option change", "43", value(link_options))
+
+    configured = fixture(
+        "configured options",
+        '@compile("./native.c");',
+        "int probeValue(void) { return TARGET_ARCH + SDK_VERSION + DEPLOYMENT_TARGET; }\n",
+    )
+    (configured / "build.ms").write_text(
+        'const config = { cc: { flags: ["-DTARGET_ARCH=2", "-DSDK_VERSION=17", "-DDEPLOYMENT_TARGET=14"] } };\n'
+        "export default config;\n"
+    )
+    assert build(configured, "first-config").returncode == 0
+    assert value(configured) == "33"
+    (configured / "build.ms").write_text(
+        'const config = { cc: { flags: ["-DTARGET_ARCH=4", "-DSDK_VERSION=18", "-DDEPLOYMENT_TARGET=15"] } };\n'
+        "export default config;\n"
+    )
+    assert build(configured, "second-config").returncode == 0
+    record("configured arch SDK and deployment options", "37", value(configured))
+
+    toolchain = fixture(
+        "toolchain",
+        '@compile("./native.c");',
+        "int probeValue(void) { return TOOL_VALUE; }\n",
+    )
+    wrapper = toolchain / "cc-wrapper"
+    wrapper.write_text("#!/bin/sh\nexec clang -DTOOL_VALUE=47 \"$@\"\n")
+    wrapper.chmod(0o755)
+    assert build(toolchain, "first-toolchain", cc=str(wrapper)).returncode == 0
+    assert value(toolchain) == "47"
+    wrapper.write_text("#!/bin/sh\nexec clang -DTOOL_VALUE=49 \"$@\"\n")
+    assert build(toolchain, "second-toolchain", cc=str(wrapper)).returncode == 0
+    record("compiler binary replacement", "49", value(toolchain))
+
+    mode = fixture(
+        "mode",
+        '@compile("./native.c");',
+        "#ifdef __OPTIMIZE__\nint probeValue(void) { return 53; }\n#else\nint probeValue(void) { return 51; }\n#endif\n",
+    )
+    assert build(mode, "debug").returncode == 0
+    assert value(mode) == "51"
+    assert build(mode, "release", flags=("--release",)).returncode == 0
+    record("debug release isolation", "53", value(mode))
+
+    moved = fixture("moved source", '@compile("./native.c");', "int probeValue(void) { return 59; }\n")
+    assert build(moved, "before-remove").returncode == 0
+    (moved / "native.c").unlink()
+    removed = build(moved, "removed")
+    record("removed native source rejects stale output", True, removed.returncode != 0)
+    (moved / "renamed.c").write_text("int probeValue(void) { return 61; }\n")
+    (moved / "main.ms").write_text(
+        '@include("./api.h");\n@compile("./renamed.c");\n'
+        "extern function probeValue(): int32;\nconsole.log(probeValue());\n"
+    )
+    assert build(moved, "renamed").returncode == 0
+    record("renamed native source", "61", value(moved))
+
+    failed = fixture("failed compile", '@compile("./native.c");', "int probeValue(void) { return 67; }\n")
+    assert build(failed, "before-failure").returncode == 0
+    (failed / "native.c").write_text("int probeValue(void) { this is not C; }\n")
+    first_failure = build(failed, "compile-failure")
+    second_failure = build(failed, "compile-failure-retry")
+    record("failed compile rejects stale output", True, first_failure.returncode != 0)
+    record("failed compile remains invalidated", True, second_failure.returncode != 0)
+
+
 def run_argv():
     spaces = fixture("spaces", '@compile("./native.c");', "int probeValue(void) { return 31; }\n")
     output = "products with spaces/probe"
@@ -130,8 +213,10 @@ if group in ("compile-cache", "all"):
     run_compile_cache()
 if group in ("link-cache", "all"):
     run_link_cache()
-if group not in ("argv", "compile-cache", "link-cache", "all"):
-    raise SystemExit("group must be argv, compile-cache, link-cache, or all")
+if group in ("audit", "all"):
+    run_audit()
+if group not in ("argv", "compile-cache", "link-cache", "audit", "all"):
+    raise SystemExit("group must be argv, compile-cache, link-cache, audit, or all")
 
 print(json.dumps({"root": str(root), "results": results}, indent=2))
 sys.exit(0 if all(item["pass"] for item in results) else 1)
