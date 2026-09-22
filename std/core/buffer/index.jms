@@ -303,7 +303,7 @@ export function toBase64(this b: Buffer): string {
 export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
 	if (encoding == "hex") {
 		const h = b.toHex();
-		return h.slice(start * 2, end * 2);
+		return h.slice((start * 2) as int32, (end * 2) as int32);
 	}
 	if (encoding == "base64") {
 		return toBase64Range(b, start, end);

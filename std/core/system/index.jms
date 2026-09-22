@@ -2,6 +2,7 @@
 
 // Native JS console
 export extern class console {
+	@builtin("Echo")
 	static extern log(...values: unknown[]): void;
 	static extern error(value: string): void;
 	static extern warn(value: string): void;
