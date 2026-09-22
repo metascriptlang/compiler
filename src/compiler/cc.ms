@@ -556,9 +556,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 // Build link-phase flags (adds passL + strip on top of compile flags).
 //
 // forceExe: the caller needs an executable whatever --app / --hcr say. Only
-// cmdTest passes it — the test binary is run via execFile, so a `-shared` link
-// would hand it an artifact it cannot execute, and that branch also skips the
-// per-target system libraries the test binary still has to resolve against.
+// cmdTest passes it — the test binary is run via execFile.
 export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean = false): string {
 	// Solana: linkSolana drives ld.lld with its own flag set (linker script,
 	// entry symbol, gc-sections) — none of the cc-driver flags apply.
@@ -581,18 +579,17 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 	if (opts.strip) flags = appendFlag(flags, "-s");
 	if (!forceExe && (opts.isHcr || opts.appMode == "lib")) {
 		flags = appendFlag(flags, "-shared");
-	} else {
-		if (opts.targetOs == "linux") {
-			flags = appendFlag(flags, "-Wl,--gc-sections");
-			flags = appendFlag(flags, "-lpthread");
-		} else if (opts.targetOs == "windows") {
-			flags = appendFlag(flags, "-Wl,--gc-sections");
-			flags = appendFlag(flags, "-lws2_32");
-			flags = appendFlag(flags, "-lmswsock");
-			flags = appendFlag(flags, "-lbcrypt");
-		} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
-			flags = appendFlag(flags, "-Wl,-dead_strip");
-		}
+	}
+	if (opts.targetOs == "linux") {
+		flags = appendFlag(flags, "-Wl,--gc-sections");
+		flags = appendFlag(flags, "-lpthread");
+	} else if (opts.targetOs == "windows") {
+		flags = appendFlag(flags, "-Wl,--gc-sections");
+		flags = appendFlag(flags, "-lws2_32");
+		flags = appendFlag(flags, "-lmswsock");
+		flags = appendFlag(flags, "-lbcrypt");
+	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
+		flags = appendFlag(flags, "-Wl,-dead_strip");
 	}
 	return flags;
 }
