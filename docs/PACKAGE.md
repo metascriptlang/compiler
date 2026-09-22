@@ -190,7 +190,10 @@ operation to save you from a side effect you were just told about.
 - Two packages declaring one name is not an error until you run it: `msc x greeter:greet` picks one.
 - A registry/git command is built once into `~/.metascript/cache/bin/<pkg>@<version>/<command>`
   and executed from there afterwards; a `file:` command is rebuilt on every run, because its
-  source can change under you.
+  source can change under you. The build lands through a temp file and an atomic rename — two
+  concurrent first runs cannot hand each other a half-written binary — and the cache holds at
+  most 32 package directories (`BIN_CACHE_CAP`, `src/compiler/x.ms`), evicting the
+  least-recently-used; an evicted command simply rebuilds on its next run.
 
 Measured end to end (2026-09-22, clean scratch consumer): `msc x greet Son` → `hello v1, Son`;
 after changing the package to 2.0.0 with different output, the same invocation prints the new
