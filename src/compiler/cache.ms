@@ -195,7 +195,7 @@ function fpKey(fp: string): string {
 }
 
 export function nativeDepFile(srcPath: string, compileCmd: string): string {
-	return `${getCacheDir()}/${sanitizePath(srcPath)}.${fpKey(compileCmd)}.d`;
+	return `${getCacheDir()}/${cacheStem(srcPath)}.${fpKey(compileCmd)}.d`;
 }
 
 function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
@@ -1073,8 +1073,12 @@ test "long source paths keep bounded distinct cache names" {
 	const fp = moduleCompileFp("int main(){}", "cc -O0");
 	const cA = stableCFileFp(pathA, fp);
 	const cB = stableCFileFp(pathB, fp);
+	const dA = nativeDepFile(pathA, "cc -O0");
+	const dB = nativeDepFile(pathB, "cc -O0");
 	assert cA.length < 128;
 	assert cA != cB;
+	assert dA.length < 128;
+	assert dA != dB;
 }
 
 test "cache miss keeps the stale object in place (no remove-on-miss)" {
