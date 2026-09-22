@@ -198,9 +198,8 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const modName = mangleModuleName(g.modulePath);
-	const datInitName = g.isHcr ? "DatInit000" : `${modName}__DatInit000`;
-	const initName = g.isHcr ? "Init000" : `${modName}__Init000`;
-	const exportPrefix = g.isHcr ? "MS_HCR_EXPORT " : "";
+	const datInitName = `${modName}__DatInit000`;
+	const initName = `${modName}__Init000`;
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
@@ -220,8 +219,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const skipGuard = ost == "solana" || ost == "bare";
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
-	addLine(hdrs, `${exportPrefix}void ${datInitName}(void);`);
-	addLine(procs, `${exportPrefix}void ${datInitName}(void) {`);
+	addLine(hdrs, `void ${datInitName}(void);`);
+	addLine(procs, `void ${datInitName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
 		addLine(procs, `  if (${datInitName}_guard_) return;`);
@@ -234,8 +233,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	addNewline(procs);
 
 	// Init000: user top-level code (non-static for cross-module visibility)
-	addLine(hdrs, `${exportPrefix}void ${initName}(void);`);
-	addLine(procs, `${exportPrefix}void ${initName}(void) {`);
+	addLine(hdrs, `void ${initName}(void);`);
+	addLine(procs, `void ${initName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
 		addLine(procs, `  if (${initName}_guard_) return;`);
@@ -257,7 +256,14 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, targetOs: string, noMain: boolean, outputs: CModuleOutput[]): string {
+export function genProjectDispatcher(
+	modulePaths: string[],
+	entryPath: string,
+	targetOs: string,
+	noMain: boolean,
+	outputs: CModuleOutput[],
+	hcrImage: boolean = false,
+): string {
 	const b = createBuilder();
 	const emptyDatInits = new HashSet<string>();
 	const emptyInits = new HashSet<string>();
@@ -270,6 +276,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "#include <stdint.h>");
 	addLine(b, "#include \"runtime/drc.h\"");
 	addLine(b, "#include \"runtime/core/system.h\"");
+	if (hcrImage) addLine(b, "#include \"runtime/hcr.h\"");
 	addNewline(b);
 
 	// Forward declarations for all module init functions
@@ -321,6 +328,12 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, t
 	addLine(b, "  msOrcCollect();");
 	addLine(b, "}");
 	addNewline(b);
+
+	if (hcrImage) {
+		addLine(b, "MS_HCR_EXPORT void DatInit000(void) { MsPreMainInner(); }");
+		addLine(b, "MS_HCR_EXPORT void Init000(void) { MsMainInner(); }");
+		addNewline(b);
+	}
 
 	// Library output: the host owns the entry point and calls MsMain() — emit no
 	// main wrapper, whatever the target OS.

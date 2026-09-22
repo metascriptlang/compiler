@@ -2051,7 +2051,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
+		const dispatcher = genProjectDispatcher(
+			aliveModules,
+			entryPath,
+			opts.targetOs,
+			opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
+			moduleOutputs,
+			opts.isHcr,
+		);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -2061,25 +2068,28 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		return;
 	}
 
-	// Generate global init dispatcher and add it to the parallel batch (skip for
-	// HCR — .so has no main). No .c cache for the dispatcher; it always compiles.
 	// Its .o IS content-keyed though: two concurrent builds of different
 	// configs (drc vs orc emit different teardown in the dispatcher TU) must
 	// not rename over each other's object right before the other's link —
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
-	if (!opts.isHcr) {
-		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
-		// The dispatcher TU is a fixed input to its compile job — its .c must be
-		// fp-keyed and published atomically like any module's: two concurrent
-		// builds with different entries/configs write different dispatcher C to
-		// one fixed path otherwise, and the loser compiles the winner's dispatcher.
-		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
-		writeCSource("_dispatch", dispFp, dispatcher);
-		const dispFile = stableCFileFp("_dispatch", dispFp);
-		oSlots.push([]);
-		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
-	}
+	if (opts.verbose) verboseLog("generating dispatcher");
+	const dispatcher = genProjectDispatcher(
+		aliveModules,
+		entryPath,
+		opts.targetOs,
+		opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
+		moduleOutputs,
+		opts.isHcr,
+	);
+	// The dispatcher TU is a fixed input to its compile job — its .c must be
+	// fp-keyed and published atomically like any module's: two concurrent
+	// builds with different entries/configs write different dispatcher C to
+	// one fixed path otherwise, and the loser compiles the winner's dispatcher.
+	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
+	writeCSource("_dispatch", dispFp, dispatcher);
+	const dispFile = stableCFileFp("_dispatch", dispFp);
+	oSlots.push([]);
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
 	// results in input order from the main thread. Dispatcher failure is fatal
