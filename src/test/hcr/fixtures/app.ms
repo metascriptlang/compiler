@@ -2,5 +2,5 @@ import { value } from "./logic";
 
 @exportName("hcrObjectCacheValue")
 export function hcrObjectCacheValue(): int32 {
-	return value();
+	return value() as int32;
 }
