@@ -310,25 +310,16 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		if (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink) {
-			argMode = DrcMode.Consumed;
+			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
 		if (isActorSendHandoff && i >= 1 && cd.arguments[i] != null && cd.arguments[i].nodeType != null) {
 			const sendRc = classifyRc(cd.arguments[i].nodeType, dctx);
 			if (sendRc.needsCleanup && sendRc.rcKind == RcKind.Ref && !isAtomicRef(cd.arguments[i].nodeType)) {
-				argMode = DrcMode.Consumed;
+				argMode = DrcMode.SinkArg;
 			}
 		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
-
-		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
-		// is passed to a sink param, extract to temp with deep copy.
-		if (argMode == DrcMode.Consumed) {
-			const arg = cd.arguments[i];
-			if (arg.kind == NodeKind.ArrayAccess || arg.kind == NodeKind.MemberExpr) {
-				cd.arguments[i] = passCopyToSink(arg, dctx);
-			}
-		}
 	}
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
