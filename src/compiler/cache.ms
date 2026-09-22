@@ -150,6 +150,8 @@ function getCacheDir(): string {
 //   : → _c_   (Windows drive letter / alt data stream separator)
 //   < > " | ? * → _e_  (Windows reserved path chars — any collapses to same
 //                      escape since they should never appear in real module paths)
+// Long absolute paths are shortened below: the readable tail identifies the
+// source while a full-path hash preserves uniqueness across roots.
 function sanitizePath(path: string): string {
 	let result = "";
 	let i = 0;
@@ -168,9 +170,19 @@ function sanitizePath(path: string): string {
 	return result;
 }
 
+const CACHE_STEM_MAX = 64;
+
+function cacheStem(path: string): string {
+	const safe = sanitizePath(path);
+	if (safe.length <= CACHE_STEM_MAX) return safe;
+	const key = hashContent(path);
+	const tailLength = CACHE_STEM_MAX - key.length - 1;
+	return safe.slice(safe.length - tailLength, safe.length) + "." + key;
+}
+
 // Stable .o path keyed by sanitized source path (unique, readable).
 export function stableOFile(srcPath: string): string {
-	return `${getCacheDir()}/${sanitizePath(srcPath)}.o`;
+	return `${getCacheDir()}/${cacheStem(srcPath)}.o`;
 }
 
 // Short filename-safe key for a fingerprint.
@@ -185,14 +197,14 @@ function fpKey(fp: string): string {
 // msUnregisterCycle in the concurrent-build repro) — the atomic publish made
 // each file whole, but "whole and wrong config" still fails the link.
 export function stableOFileFp(srcPath: string, fp: string): string {
-	return `${getCacheDir()}/${sanitizePath(srcPath)}.${fpKey(fp)}.o`;
+	return `${getCacheDir()}/${cacheStem(srcPath)}.${fpKey(fp)}.o`;
 }
 
 // Per-fingerprint generated-C path — the emitted C is config-dependent too
 // (drc vs orc teardown), so a concurrent build must never swap it under a
 // running cc of another config.
 export function stableCFileFp(modPath: string, fp: string): string {
-	return `${getCacheDir()}/${sanitizePath(modPath)}.${fpKey(fp)}.c`;
+	return `${getCacheDir()}/${cacheStem(modPath)}.${fpKey(fp)}.c`;
 }
 
 // One-time migration sweep: pre-fp-keyed layouts share physical files per
@@ -937,6 +949,17 @@ test "distinct fingerprints get distinct physical objects" {
 	assert stableCFileFp(modPath, fpA) != stableCFileFp(modPath, fpB);
 	bug6_clearArtifacts(modPath, fpA);
 	bug6_clearArtifacts(modPath, fpB);
+}
+
+test "long source paths keep bounded distinct cache names" {
+	const sharedTail = "/src/test/corpus/programs/deeplyNested/sharedModule.ms";
+	const pathA = "C:/Users/example/worktrees/one/very/long/project/root" + sharedTail;
+	const pathB = "D:/Users/example/worktrees/two/very/long/project/root" + sharedTail;
+	const fp = moduleCompileFp("int main(){}", "cc -O0");
+	const cA = stableCFileFp(pathA, fp);
+	const cB = stableCFileFp(pathB, fp);
+	assert cA.length < 128;
+	assert cA != cB;
 }
 
 test "cache miss keeps the stale object in place (no remove-on-miss)" {
