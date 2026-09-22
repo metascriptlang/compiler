@@ -34,6 +34,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
+import { HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
@@ -1492,6 +1493,54 @@ function buildHcrCandidateAbi(
 	return Result.ok({ candidate, modulePaths });
 }
 
+function hcrForeignSymbols(modPath: string): HashSet<string> {
+	const foreign = new HashSet<string>();
+	const moduleExports = findModuleExports(graphRegistry, modPath);
+	if (moduleExports == null) return foreign;
+	for (const info of moduleExports.symbols) {
+		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+		addHcrForeignSymbol(foreign, info, info.nativeName, info.exportName, info.primaryFlags, info.disamb);
+		for (let i = 0; i < info.overloadTypes.length; i += 1) {
+			addHcrForeignSymbol(
+				foreign,
+				info,
+				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
+				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
+				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
+				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
+			);
+		}
+	}
+	return foreign;
+}
+
+function addHcrForeignSymbol(
+	foreign: HashSet<string>,
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): void {
+	const isImportC = (flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC);
+	const isBinding = exportName == "" && (nativeName != "" || isImportC);
+	if (info.name == "main" || isBinding) {
+		foreign.add(hcrFunctionSymbol(info, nativeName, exportName, flags, disamb));
+	}
+}
+
+function hcrIndirectModules(abi: HcrCandidateAbi): HcrIndirectModule[] {
+	const modules: HcrIndirectModule[] = [];
+	for (let i = 0; i < abi.candidate.length; i += 1) {
+		const manifest = abi.candidate[i];
+		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
+		const symbols: string[] = [];
+		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
+		modules.push({ moduleId: manifest.moduleId, symbols });
+	}
+	return modules;
+}
+
 function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
 	for (const manifest of manifests) {
 		if (manifest.moduleId == moduleId) return manifest;
@@ -1649,6 +1698,19 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			exit(1);
 		}
 		hcrBuildAbi = prepared.value;
+	}
+	let hcrModules: HcrIndirectModule[] = [];
+	const hcrModulePaths: string[] = [];
+	if (opts.isHcr) {
+		const abi: Result<HcrCandidateAbi, string> = hcrBuildAbi != null
+			? Result.ok({ candidate: hcrBuildAbi.candidate, modulePaths: hcrBuildAbi.modulePaths })
+			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath);
+		if (!abi.ok) {
+			console.log(`${error("error")}: ${abi.error}`);
+			exit(1);
+		}
+		hcrModules = hcrIndirectModules(abi.value);
+		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
 	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
@@ -1831,7 +1893,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const _tn0 = performance.now();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		tNative = tNative + (performance.now() - _tn0);
-		const hcrResult = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrLifted = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrSlot = hcrModulePaths.indexOf(modPath);
+		const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, hcrModules[hcrSlot], hcrModules) : hcrLifted;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -1884,7 +1948,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
