@@ -244,6 +244,7 @@ export function copyType(ty: CType): CType {
 	t.paramNames = ty.paramNames;
 	t.isVariadic = ty.isVariadic;
 	t.tagName = ty.tagName;
+	t.typedefName = ty.typedefName;
 	t.members = ty.members;
 	t.isComplete = ty.isComplete;
 	t.isPacked = ty.isPacked;
