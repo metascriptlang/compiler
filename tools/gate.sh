@@ -240,10 +240,10 @@ lane_cmd() {
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
     tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; %s test src/test/lang/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
-    hcr) printf 'MSC=%s src/test/hcr/run.sh' "$CAND" ;;
+    hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    guard) printf 'MSC=%s src/test/guard/run.sh' "$CAND" ;;
+    guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
   esac
 }
 
