@@ -83,7 +83,15 @@ app.ms    -> [Parse] -> [Check] -> [MacroExpand] -> [Transform] -> [Analyze] -> 
 
 Macros live in **phases 1-3 only**. Fully type-checked MetaScript, never reaches C/JS codegen. The Raiser VM is dynamically typed at runtime, but the source was already validated by the checker — same model as TypeScript (and Haxe).
 
-`std/meta/node.ms` is the **source of truth** for `Node`, `NodeKind`, `NodeData`, all `*Data` type aliases, `Type`, `TypeKind`, `Symbol`, `SymbolKind`. The compiler's `src/ast/node.ms` re-exports from it via `export * from "../../std/meta/node"`. Macro authors import from `std/meta` (which re-exports `./node` plus compile-time builtins like `currentFile`, `readFile`, `error`).
+`std/meta/node.ms` is the **source of truth** for `Node`, `NodeKind`, `NodeData`, all `*Data` type aliases, `Type`, `TypeKind`, `Symbol`, `SymbolKind`. The compiler's `src/ast/node.ms` re-exports from it via `export * from "../../std/meta/node"`. Macro authors import from `std/meta`, which re-exports `./node` plus the compile-time queries below. `currentFile`, `readFile`, `exec` and `error` are declared there but not exported: `import { currentFile } from "std/meta"` fails with `Module 'std/meta' has no export 'currentFile'` (measured 2026-09-24). Compile-time file access goes through `std/fs`.
+
+### Build inputs and build settings (measured 2026-09-24, `src/test/nativeBuildBoundary.py` group `comptime-cache`)
+
+- **A file read at compile time is a build input.** Every `readFile` path a `@comptime` block or macro touches enters the project cache, whether the read succeeded or not. Editing, creating or removing the file rebuilds; an unchanged tree stays `Up to date`.
+- **`-d:name=value` is part of the build identity.** Changing a value rebuilds, so a `when (tier == 2)` branch and a compile-time `define` read never go stale.
+- **`define(name)`** returns the `-d:` value of `name`, or `""` when it is not set.
+- **`expansionFile()`** returns the absolute path of the module being expanded: in a macro body, the file that calls the macro, not the file that declares it; in a `@comptime` block, that block's own file. A macro resolves a path its caller wrote relative to that caller with `join(dirname(expansionFile()), path)`, whatever directory msc runs from.
+- `define` and `expansionFile` exist only at compile time. Calling either from runtime code is not diagnosed yet: the C build fails in `std/meta/index.ms` on an undeclared `msMetaDefine`, and the JS build succeeds and breaks when the call runs.
 
 This direction (std/meta → src/ast) means the AST type definitions ship with the compiler distribution — `src/` is not deployed.
 
