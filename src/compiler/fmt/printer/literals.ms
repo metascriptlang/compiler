@@ -170,7 +170,7 @@ function skipTemplate(source: string, pos: int32): int32 {
 
 function skipBlanks(source: string, from: int32): int32 {
 	let pos = from;
-	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "	".code)) pos = pos + 1;
+	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "\t".code)) pos = pos + 1;
 	return pos;
 }
 
@@ -191,8 +191,7 @@ export function writtenInitializer(source: string, line: int32, column: int32, n
 			if (depth == 0) break;
 			depth = depth - 1;
 		}
-		if (depth == 0 && (ch == ",".code || ch == "
-".code || ch == "".code)) break;
+		if (depth == 0 && (ch == ",".code || ch == "\n".code || ch == "\r".code)) break;
 		end = end + 1;
 	}
 	return source.byteSlice(eq + 1, end).trim();
