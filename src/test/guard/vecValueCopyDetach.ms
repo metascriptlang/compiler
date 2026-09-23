@@ -22,7 +22,7 @@ struct Pod { val: int32; }
 
 function main(): void {
     const v: Vec<uint8> = [1, 2, 3];
-    const c = v;
+    let c = v;
     c[0] = 9;
     if (v[0] != 1) { exit(1); }
     if (c[0] != 9) { exit(2); }
@@ -30,11 +30,11 @@ function main(): void {
     const e2 = e;
     if (e2.length != 0) { exit(3); }
 	const vn: Vec<number> = [1, 2];
-	const cn = vn;
+	let cn = vn;
 	cn[0] = 7;
 	if (vn[0] != 1) { exit(4); }
 	const vp: Vec<Pod> = [{ val: 1 }];
-	const cp = vp;
+	let cp = vp;
 	cp[0].val = 9;
 	if (vp[0].val != 1) { exit(5); }
 	if (cp[0].val != 9) { exit(6); }
