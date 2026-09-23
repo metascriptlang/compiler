@@ -85,7 +85,7 @@ function isPunct(ch: int32): boolean {
 
 // ===== Token construction =====
 
-function newToken(s: ScanState, kind: CTokenKind, start: int32, startLine: int32, startCol: int32: CToken {
+function newToken(s: ScanState, kind: CTokenKind, start: int32, startLine: int32, startCol: int32): CToken {
 	const tok: CToken = {
 		kind,
 		next: null,
