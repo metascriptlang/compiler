@@ -13,3 +13,7 @@ test "fmt: comments inside an import list are stable" {
 test "fmt: comments inside a re-export list stay in place" {
 	assert assertFmtLossless("export {\n\tsendText, sendJson,\n\t// Phase 4\n\tsetHeader, end,\n} from \"./server\";\n");
 }
+
+test "fmt: a comment before the only re-exported name stays inside the list" {
+	assert assertFmtLossless("export {\n\t// Typed CRUD via the class\n\tSurreal,\n} from \"./typed\";\n");
+}

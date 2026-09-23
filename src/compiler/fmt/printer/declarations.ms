@@ -24,7 +24,7 @@ function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): 
 	const inner: Token[] = [];
 	const rest: Token[] = [];
 	for (const c of node.comments) {
-		if (c.line >= firstLine && c.line < endLine) inner.push(c); else rest.push(c);
+		if ((c.line > node.location.line || c.line >= firstLine) && c.line < endLine) inner.push(c); else rest.push(c);
 	}
 	if (inner.length == 0) return null;
 	node.comments = rest;
