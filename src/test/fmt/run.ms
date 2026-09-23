@@ -39,11 +39,16 @@ function roots(): string[] {
 }
 
 registerCoreParsers();
+const explicitRoots = env.get("MSFMT_ROOTS") != "";
 const files: string[] = [];
 for (const root of roots()) {
 	if (!exists(root) || !isDir(root)) {
-		console.log("missing root " + root);
-		exit(2);
+		if (explicitRoots || root == "src" || root == "std") {
+			console.log("missing root " + root);
+			exit(2);
+		}
+		console.log("skipped " + root + ": not checked out");
+		continue;
 	}
 	collect(root, files);
 }
