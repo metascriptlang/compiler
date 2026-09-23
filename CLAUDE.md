@@ -25,7 +25,7 @@ msc test src/utils/string.ms          # one file (+ its deps)
 msc run src/test/corpus/run.ms                 # parity (C↔JS) + RSS
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
-src/test/guard/run.sh                          # lifecycle guards (proven-red)
+msc run src/test/guard/run.ms --target=raiser   # lifecycle guards (proven-red)
 
 MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: docs/TESTING.md
 

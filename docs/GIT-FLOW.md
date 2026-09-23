@@ -63,7 +63,7 @@ msc build src/index.ms --gc=drc --danger --output=msc
 msc test src/index.ms
 msc run src/test/corpus/run.ms
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
-src/test/guard/run.sh
+msc run src/test/guard/run.ms --target=raiser
 ```
 
 Then check the self-host fixpoint on emitted C. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:

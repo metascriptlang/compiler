@@ -38,7 +38,7 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 | Inner loop — any compiler edit | `msc test src/index.ms`, or `msc test <file>` for that file plus its transitive dep tests |
 | Same, under the cycle collector | `msc test src/index.ms --gc=orc` |
 | Touched codegen / DRC / runtime / transform | + `msc run src/test/corpus/run.ms` |
-| Touched DRC hooks, lifetimes, ownership | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` and `src/test/guard/run.sh` |
+| Touched DRC hooks, lifetimes, ownership | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` and `msc run src/test/guard/run.ms --target=raiser` |
 | Touched `std/` or anything users compile against | rebuild + `tools/sync-local-binary.sh` first, then re-run the above |
 
 - **A compiler reads `std/` and `runtime/` from beside its own binary** — `./msc` is the candidate with this repo's trees, `msc` on `PATH` is the last published build with `~/.metascript/`.
