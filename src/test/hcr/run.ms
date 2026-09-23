@@ -149,6 +149,8 @@ interface Emitted {
 	app: string;
 	logic: string;
 	dispatch: string;
+	appImage: string;
+	core: string;
 }
 
 function emitIndirect(dir: string, extra: string[]): Emitted {
@@ -160,11 +162,16 @@ function emitIndirect(dir: string, extra: string[]): Emitted {
 	const debug = `${dir}/out/debug`;
 	let app = "";
 	let logic = "";
+	let appImage = "";
 	for (const e of readDir(debug)) {
+		if (e.startsWith("_hcrimage_")) {
+			if (e.endsWith("appOms.c")) appImage = read(`${debug}/${e}`);
+			continue;
+		}
 		if (e.endsWith("appOms.c")) app = read(`${debug}/${e}`);
 		if (e.endsWith("logicOms.c")) logic = read(`${debug}/${e}`);
 	}
-	return { app, logic, dispatch: read(`${debug}/_dispatch.c`) };
+	return { app, logic, dispatch: read(`${debug}/_dispatch.c`), appImage, core: read(`${debug}/_hcrcore.c`) };
 }
 
 // The name between `prefix` and `suffix` on a whole line, when it is one identifier.
@@ -187,7 +194,7 @@ function declName(text: string, prefix: string, stem: string, suffixStart: strin
 function indirect(): void {
 	const tag = "hcrIndirect";
 	const dir = freshDir(`${TMP}/indirect`);
-	for (const f of ["app.ms", "logic.ms", "host.ms"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
+	for (const f of ["app.ms", "logic.ms", "shapes.ms", "host.ms"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
 
 	const plain = emitIndirect(dir, []);
 	for (const c of [plain.app, plain.logic, plain.dispatch]) {
@@ -198,29 +205,66 @@ function indirect(): void {
 	const value = declName(hcr.logic, "int32_t ", "value__", "(", "(void);");
 	const base = declName(hcr.logic, "int32_t ", "base__", "(", "(void);");
 	const pair = declName(hcr.logic, "void ", "pair__", "(", " __result, int32_t scale);");
-	need(tag, value != "" && base != "" && pair != "", "logic exports not found in emitted C");
-	need(tag, hcr.app.contains(`#define ${value} ((__typeof__(&${value}))_ms_hcr_m0->current[2])`),
+	const tick = declName(hcr.logic, "int32_t ", "tick__", "(", "(void);");
+	need(tag, value != "" && base != "" && pair != "" && tick != "", "logic exports not found in emitted C");
+	need(tag, hcr.app.contains(`#define ${value} ((__typeof__(&${value}))_ms_hcr_m0->current[3])`),
 		"cross-module call to logic::value is not lowered through its table slot");
 	need(tag, hcr.app.contains("_ms_hcr_m0 = msHcrHandle(\"logic\");"), "app does not resolve the logic handle");
 	need(tag, hcr.app.contains(`${value}()`), "app call site changed shape");
-	need(tag, hcr.logic.contains("msHcrPublish(\"logic\", _ms_hcr_table, 3);"), "logic does not publish its table");
-	need(tag, hcr.logic.contains(`(void*)&${base}, (void*)&${pair}, (void*)&${value}`), "logic table is not in manifest slot order");
+	need(tag, hcr.logic.contains("msHcrPublish(\"logic\", _ms_hcr_table, 4);"), "logic does not publish its table");
+	need(tag, hcr.logic.contains(`(void*)&${base}, (void*)&${pair}, (void*)&${tick}, (void*)&${value}`), "logic table is not in manifest slot order");
 	need(tag, !hcr.logic.contains(`#define ${base} `) && !hcr.logic.contains(`#define ${value} `), "same-module calls in logic are indirected");
 	need(tag, hcr.logic.contains(`return (${base}() + offset__`), "same-module and private calls are not direct");
-	need(tag, hcr.dispatch.contains("MS_HCR_EXPORT void DatInit000(void) { MsPreMainInner(); }"),
-		"HCR image does not export its dependency-ordered DatInit");
+	need(tag, hcr.appImage.contains("msHcrCoreInit();"), "the app image DatInit does not initialize the core image first");
+	need(tag, hcr.appImage.contains("MS_HCR_EXPORT void DatInit000(void) {"), "the app image does not export DatInit000");
+	need(tag, hcr.core.contains("void msHcrCoreInit(void) {"), "the core dispatcher does not define msHcrCoreInit");
+	let typeInfoMacro = false;
+	for (const line of lines(hcr.app)) {
+		if (line.contains("#define Square__") && line.contains("TypeInfo (*_ms_hcr_ti")) typeInfoMacro = true;
+	}
+	need(tag, typeInfoMacro, "app does not reach the shapes TypeInfo through the registry");
+	need(tag, hcr.app.contains("msHcrTypeInfo(\"shapes\", \"Square__"), "app does not resolve the shapes TypeInfo by owner and name");
+	sharedVariable();
 
 	if (platform != "windows") {
 		console.log(`ok   hcrIndirect (emission only: this runner has no host adapter for ${platform})`);
 		return;
 	}
-	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=module.dll"], "HCR image link failed");
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g1/module.dll"], "HCR image link failed");
+	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.shapes.dll"]) {
+		need(tag, exists(`${dir}/g1/${image}`), `per-module image g1/${image} missing`);
+	}
+	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/logic.ms`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g2/module.dll"], "HCR rebuild after the logic edit failed");
 	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "host build failed");
-	const called = execFileResult(`${dir}/host.exe`, ["module.dll"], dir);
-	const said = both(called).trim();
-	need(tag, said == "HCR-HOST call -> 37", `call through the table returned '${said}'`);
+	const called = execFileResult(`${dir}/host.exe`,
+		["g1/module.logic.dll", "g1/module.shapes.dll", "g1/module.dll", "--", "g2/module.logic.dll"], dir);
+	const want = [
+		"HCR-HOST gen1 hcrIndirectValue -> 37",
+		"HCR-HOST gen1 hcrShapeValue -> 9",
+		"HCR-HOST gen1 hcrErrorValue -> 1",
+		"HCR-HOST gen1 hcrTickValue -> 1",
+		"HCR-HOST reloaded g2/module.logic.dll",
+		"HCR-HOST gen2 hcrIndirectValue -> 163",
+		"HCR-HOST gen2 hcrShapeValue -> 9",
+		"HCR-HOST gen2 hcrErrorValue -> 1",
+		"HCR-HOST gen2 hcrTickValue -> 11",
+	];
+	if (lines(both(called).trim()).join("\n") != want.join("\n")) {
+		console.log(both(called));
+		failWith(tag, "the unrebuilt app did not reach the reloaded logic image through its table");
+	}
 	console.log("ok   hcrIndirect");
 	windowsReload();
+}
+
+function sharedVariable(): void {
+	const dir = freshDir(`${TMP}/sharedVariable`);
+	for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/sharedVariable/${f}`, `${dir}/${f}`);
+	const r = msc(dir, ["build", "app.ms", "--hcr", "--emit=c"]);
+	need("hcrIndirect", !succeeded(r), "an exported variable shared across module images was accepted");
+	need("hcrIndirect", both(r).contains("HCR cannot share exported variable 'logic::LIMIT' with module 'app' across module images"),
+		"shared exported variable diagnostic missing");
 }
 
 // ---- hcrWindowsReload: single-image LoadLibrary reload, four generations ----
