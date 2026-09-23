@@ -86,6 +86,30 @@ function freshDir(path: string): string {
 	return path;
 }
 
+function sharedLibraryExt(): string {
+	if (platform == "windows") return ".dll";
+	if (platform == "darwin") return ".dylib";
+	return ".so";
+}
+
+function coreLinkClang(): void {
+	const tag = "hcrCoreLinkClang";
+	if (platform == "windows") {
+		console.log(`skip ${tag}: clang on Windows targets msvc, which --hcr does not build`);
+		return;
+	}
+	if (!succeeded(execFileResult("clang", ["--version"], ROOT))) {
+		console.log(`skip ${tag}: no clang on PATH`);
+		return;
+	}
+	const work = freshDir(`${TMP}/clang`);
+	copy(`${FIXTURES}/app.ms`, `${work}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${work}/logic.ms`);
+	mustBuild(tag, work, ["build", "app.ms", "--hcr", "--output=module.hcr", "--cc=clang"], "cold build with --cc=clang failed");
+	need(tag, exists(`${work}/module.core${sharedLibraryExt()}`), `core image module.core${sharedLibraryExt()} missing`);
+	console.log(`ok   ${tag}`);
+}
+
 // ---- hcrModuleAbi: per-module object cache and ABI bundle classification ----
 
 function moduleAbi(): void {
@@ -98,6 +122,7 @@ function moduleAbi(): void {
 	const bundle = `${work}/module.hcr.hcrabi`;
 
 	mustBuild(tag, work, hcrBuild, "cold build failed");
+	need(tag, exists(`${work}/module.core${sharedLibraryExt()}`), `core image module.core${sharedLibraryExt()} missing`);
 	need(tag, exists(bundle), "HCR ABI bundle missing");
 	const manifest = read(bundle);
 	need(tag, manifest.contains("\"moduleId\": \"app\""), "app manifest missing");
@@ -414,4 +439,5 @@ function windowsReload(): void {
 console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 moduleAbi();
+coreLinkClang();
 indirect();

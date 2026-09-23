@@ -1581,6 +1581,23 @@ function hcrImagePath(outBinary: string, moduleId: string): string {
 	return `${hcrImageStem(outBinary)}.${moduleId.replaceAll("/", ".")}${hcrImageExt(outBinary)}`;
 }
 
+function hcrCoreImagePath(outBinary: string, targetOs: string): string {
+	const stem = `${hcrImageStem(outBinary)}.core`;
+	if (targetOs == "windows") return `${stem}.dll`;
+	if (targetOs == "linux") return `${stem}.so`;
+	if (targetOs == "darwin" || targetOs == "macos") return `${stem}.dylib`;
+	return "";
+}
+
+test "HCR core image takes the target's shared-library extension, not the output's" {
+	assert hcrCoreImagePath("out/module.hcr", "macos") == "out/module.core.dylib";
+	assert hcrCoreImagePath("out/module.hcr", "darwin") == "out/module.core.dylib";
+	assert hcrCoreImagePath("out/module.hcr", "linux") == "out/module.core.so";
+	assert hcrCoreImagePath("out/module.hcr", "windows") == "out/module.core.dll";
+	assert hcrCoreImagePath("out/module.dll", "windows") == "out/module.core.dll";
+	assert hcrCoreImagePath("out/app", "linux") == "out/app.core.so";
+}
+
 function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
 	if (isLinkCached(objects, externalInputs, flags, image, image)) return;
 	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary);
@@ -1610,7 +1627,7 @@ function linkHcrImages(
 	const externalInputs: string[] = [];
 	for (const obj of globalLinkObjects()) externalInputs.push(obj);
 
-	const core = `${hcrImageStem(outBinary)}.core${hcrImageExt(outBinary)}`;
+	const core = hcrCoreImagePath(outBinary, opts.targetOs);
 	let coreFlags = linkFlags;
 	let imageFlags = linkFlags;
 	let coreInput = core;
