@@ -10,13 +10,14 @@ RULES=(
   'build,suite,guard|^src/test/guard/'
   'build,suite,corpus|^src/test/corpus/'
   'build,suite,corpus|^(src/(codegen|analyzer|transform)|runtime)/'
+  'build,suite,corpus|^src/raiser/|^src/compiler/meta/hostTable\.ms$'
   'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
 )
 DEFAULT_LANES="build suite"
 ORDER="tools build suite hcr tests suite-orc corpus san guard"
 LADDER="build suite hcr tests suite-orc corpus san guard"
 KNOWN_LANES="suite hcr suite-orc tests corpus san guard"
-SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$'
+SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$'
 
 usage() {
   cat <<'USAGE'
@@ -355,7 +356,7 @@ narrow_for() {
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm"
+    lanes_csv="c,drc,js,esm,raiser"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }
