@@ -3,7 +3,7 @@
 import { Node, NodeKind, AssertStmtData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary, makeBlock, makeExprStmt, makeIf, makeString, makeNumber, runtimeRef } from "../util";
+import { makeCall, makeUnary, makeBlock, makeExprStmt, makeIf, makeString, makeNumber, runtimeRef } from "../util";
 
 export function lowerAssert(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
@@ -14,7 +14,7 @@ export function lowerAssert(program: Node, ctx: TransformContext): Node {
 			? d.assertMessageExpr
 			: makeString(d.assertMessage.length > 0 ? d.assertMessage : d.assertSource, loc);
 		const text = makeCall(runtimeRef("msStringToCString", loc), [message], loc);
-		const fail = makeCall(runtimeRef("msAssertFail", loc), [text, makeIdent("__FILE__", loc), makeNumber(loc.line, loc)], loc);
+		const fail = makeCall(runtimeRef("msAssertFail", loc), [text, runtimeRef("__FILE__", loc), makeNumber(loc.line, loc)], loc);
 		return makeIf(makeUnary("!", d.assertExpr, loc), makeBlock([makeExprStmt(fail, loc)], loc), null, loc);
 	});
 }

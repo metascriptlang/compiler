@@ -4,7 +4,7 @@
 import { Node, NodeKind, HiddenStdConvData, CallExprData, IdentifierData, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent } from "../util";
+import { makeCall, runtimeRef, isRuntimeProcSym } from "../util";
 
 function inverseOf(fn: string): string {
 	return match (fn) {
@@ -17,9 +17,7 @@ function inverseOf(fn: string): string {
 function peelInverse(call: Node, fn: string): Node {
 	if (call.kind != NodeKind.CallExpr) return call;
 	const cd = call.data as CallExprData;
-	if (cd.callee.kind != NodeKind.Identifier) return call;
-	const innerName = (cd.callee.data as IdentifierData).name;
-	if (innerName != inverseOf(fn)) return call;
+	if (!isRuntimeProcSym(cd.callee.resolvedSym, inverseOf(fn))) return call;
 	if (cd.arguments.length != 1) return call;
 	return cd.arguments[0];
 }
@@ -52,7 +50,7 @@ export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 		const inner = peelInverse(d.convExpr, fn);
 		if (inner != d.convExpr) return inner;
 
-		const result = makeCall(makeIdent(fn, loc), [d.convExpr], loc);
+		const result = makeCall(runtimeRef(fn, loc), [d.convExpr], loc);
 		result.nodeType = d.convType;
 		return result;
 	});
