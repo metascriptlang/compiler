@@ -210,6 +210,12 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 			? writtenInitializer(options.source, d.memberLocations[i].line, d.memberLocations[i].column, d.enumMembers[i])
 			: "";
 		const baseText = d.enumMembers[i] + (init != "" ? " = " + init : "") + ",";
+		for (let j = 0; j < inline.length; j += 1) {
+			if (inline[j] != null && inline[j].line < memberLine) {
+				members.push(docText(inline[j].value));
+				inline[j] = null as unknown as Token;
+			}
+		}
 		// Find a comment whose line matches this member.
 		let attached: Token = null as unknown as Token;
 		for (let j = 0; j < inline.length; j += 1) {
@@ -227,6 +233,9 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 		} else {
 			members.push(docText(baseText));
 		}
+	}
+	for (const c of inline) {
+		if (c != null) members.push(docText(c.value));
 	}
 	return docGroup([
 		docText("enum " + d.enumName + " {"),
