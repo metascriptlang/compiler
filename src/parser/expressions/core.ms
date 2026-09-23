@@ -2,8 +2,8 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd } from "../context";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
+import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -11,7 +11,7 @@ import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseJsxRoot } from "./jsx";
-import { parseExprList, parseCallExpr } from "./call";
+import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
@@ -173,12 +173,22 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 		}
 
 		advance(state);
+		const afterOperator: Token[] = [];
+		const beforeOperator: Token[] = [];
+		for (const c of takePendingComments(state)) {
+			if (c.line > op.line || (c.line == op.line && c.column > op.column)) afterOperator.push(c); else beforeOperator.push(c);
+		}
+		state.pendingComments = beforeOperator;
 		// Right-associative operators (**, =, +=, etc.) use prec instead of prec+1
 		let nextPrec = prec + 1;
 		if (isRightAssociative(op.kind)) {
 			nextPrec = prec;
 		}
 		const right = try parseExprWithPrec(state, nextPrec);
+		if (afterOperator.length > 0) {
+			for (const c of right.comments) afterOperator.push(c);
+			right.comments = afterOperator;
+		}
 		const data: NodeData = {
 			operator: op.value,
 			left,
@@ -329,6 +339,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
 		if (current(state).kind == TokenKind.RParen) { advance(state); }
+		expr.flags = expr.flags.incl(NodeFlag.Parenthesized);
 		return Result.ok(expr);
 	}
 
@@ -406,6 +417,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			advance(state);
 			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
 			const newNode = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token);
+			newNode.comments = takeListEndComments();
 			if (newTypeArg != "") newNode.typeArg = newTypeArg;
 			return Result.ok(newNode);
 		}
@@ -578,7 +590,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.LBracket) {
 		advance(state);
 		const elems = try parseExprList(state, TokenKind.RBracket, parseExprWithPrec);
-		return Result.ok(createNode(NodeKind.ArrayLiteral, { elements: elems }, token));
+		const arrayNode = createNode(NodeKind.ArrayLiteral, { elements: elems }, token);
+		arrayNode.comments = takeListEndComments();
+		return Result.ok(arrayNode);
 	}
 
 	// Object literal: { key: value, ... } or { key, ... } (shorthand)

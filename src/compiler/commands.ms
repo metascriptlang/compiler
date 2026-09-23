@@ -22,6 +22,7 @@ import { error, success, bold, cyan, dim, green, red, path } from "../utils/colo
 // Formatter imports
 import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
 import { formatNode } from "./fmt/printer/index";
+import { checkLossless } from "./fmt/lossless";
 import { FmtSection, ResolveSection, defaultResolveSection } from "./buildConfig";
 
 // -- dump-tokens --
@@ -158,6 +159,11 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 		exit(1);
 	}
 	const formatted = printed.value;
+	const kept = checkLossless(source, formatted);
+	if (!kept.ok) {
+		console.log(error("fmt refused") + ": " + kept.error + " in " + path(filePath));
+		exit(1);
+	}
 
 	if (formatted != source) {
 		if (opts.fmtCheck) {

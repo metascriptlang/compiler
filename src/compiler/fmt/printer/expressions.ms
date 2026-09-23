@@ -1,13 +1,13 @@
 // Expression Printers — binary, unary, call, member, literals (object/array), etc.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData,
+	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -17,9 +17,12 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { flagHas, buildParamList, paramListInParens } from "./statements";
+import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
+import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
+	const template = rawTemplateAt(node, options);
+	if (template != "") return docText(template);
 	const d = node.data as BinaryExprData;
 	return docGroup([
 		printBinaryOperand(d.left, d.operator, false, options),
@@ -35,8 +38,9 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // Lower-precedence non-binary kinds (TypeAssertion, ConditionalExpr,
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
-	if (child == null) return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion) {
+	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight
+		&& (parentOp == "|" || parentOp == "&" || parentOp == "<")) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -86,7 +90,19 @@ function isRightAssocOp(op: string): boolean {
 
 export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as UnaryExprData;
-	return docGroup([docText(d.unaryOp), printAtom(d.operand, options)]);
+	const isWord = d.unaryOp == "typeof" || d.unaryOp == "void" || d.unaryOp == "delete";
+	const op = isWord ? d.unaryOp + " " : d.unaryOp;
+	if (!isWord && d.operand != null && bindsInsideUnary(d.unaryOp, d.operand)) {
+		return docGroup([docText(op), callPrintNode(d.operand, options)]);
+	}
+	return docGroup([docText(op), printAtom(d.operand, options)]);
+}
+
+function bindsInsideUnary(op: string, operand: Node): boolean {
+	if (operand.kind == NodeKind.TypeAssertion) return true;
+	if (operand.kind != NodeKind.UnaryExpr) return false;
+	const inner = (operand.data as UnaryExprData).unaryOp;
+	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
 }
 
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
@@ -96,14 +112,35 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	const callParts: Doc[] = [printAtom(d.callee, options), docText("(")];
-	if (args.length > 0) {
-		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
-		callParts.push(docIndent(argParts));
-		callParts.push(docSoftLine());
-	}
+	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
+	const callParts: Doc[] = [printAtom(d.callee, options), docText(typeArgs + "(")];
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
+}
+
+function innerComments(node: Node): Token[] {
+	const inner: Token[] = [];
+	const outer: Token[] = [];
+	for (const c of node.comments) {
+		if (c.line > node.location.line || (c.line == node.location.line && c.column > node.location.column)) {
+			inner.push(c);
+		} else {
+			outer.push(c);
+		}
+	}
+	node.comments = outer;
+	return inner;
+}
+
+function listBody(items: Doc[], trailing: boolean, endComments: Token[]): Doc[] {
+	if (items.length == 0 && endComments.length == 0) return [];
+	const body = docCommaSepList(items, trailing);
+	for (const c of endComments) {
+		body.push(docHardLine());
+		body.push(docText(c.value));
+	}
+	return [docIndent(body), docSoftLine()];
 }
 
 export function printMemberExpr(node: Node, options: FormatOptions): Doc {
@@ -126,10 +163,14 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 // This list grows test-by-test; only kinds proven needed by a roundtrip
 // test go in. See src/test/fmt/cases/.
 function printAtom(node: Node, options: FormatOptions): Doc {
-	if (node != null && needsAtomParens(node.kind)) {
+	if (node != null && needsAtomParens(node.kind) && !isNonNullAssertion(node) && !node.flags.has(NodeFlag.Parenthesized) && rawTemplateAt(node, options) == "") {
 		return docGroup([docText("("), callPrintNode(node, options), docText(")")]);
 	}
 	return callPrintNode(node, options);
+}
+
+function isNonNullAssertion(node: Node): boolean {
+	return node.kind == NodeKind.TypeAssertion && (node.data as TypeAssertionData).asType == "!";
 }
 
 function needsAtomParens(kind: NodeKind): boolean {
@@ -222,10 +263,17 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 			prop.comments = remaining;
 		}
 		let entryDoc: Doc;
-		if (d.keys[i] != "") {
+		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
+		if (d.keys[i] == "...") {
+			entryDoc = callPrintNode(prop, options);
+		} else if (writtenKey != "") {
+			entryDoc = docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
+		} else if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
+			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 			const isShorthand = prop != null && prop.kind == NodeKind.Identifier
-				&& (prop.data as { name: string }).name == d.keys[i];
+				&& (prop.data as { name: string }).name == d.keys[i]
+				&& (keyLoc == null || (keyLoc.line == prop.location.line && keyLoc.column == prop.location.column));
 			if (isShorthand) {
 				entryDoc = docText(d.keys[i]);
 			} else {
@@ -247,11 +295,8 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	}
 	// Collect trailing comments on the object node (before closing brace)
 	const trailingComments: Doc[] = [];
-	if (node.comments.length > 0) {
-		for (const comment of node.comments) {
-			trailingComments.push(docText(comment.value));
-		}
-		node.comments = [];
+	for (const comment of innerComments(node)) {
+		trailingComments.push(docText(comment.value));
 	}
 
 	// When forced to break, separators must not be wrapped in a group
@@ -289,31 +334,50 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 
 export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayLiteralData;
-	if (d.elements.length == 0) return docText("[]");
+	const endComments = innerComments(node);
+	if (d.elements.length == 0 && endComments.length == 0) return docText("[]");
 	const elems: Doc[] = [];
 	for (const el of d.elements) {
 		elems.push(callPrintNode(el, options));
 	}
-	const elemParts = docCommaSepList(elems, wantsTrailingComma(options, CommaContext.Collection));
-	return docGroup([
-		docText("["),
-		docIndent(elemParts),
-		docSoftLine(),
-		docText("]"),
-	]);
+	const parts: Doc[] = [docText("[")];
+	for (const p of listBody(elems, wantsTrailingComma(options, CommaContext.Collection), endComments)) parts.push(p);
+	parts.push(docText("]"));
+	return docGroup(parts);
+}
+
+function writtenArrowBody(body: Node, options: FormatOptions): Node {
+	if (body.kind != NodeKind.BlockStmt) return body;
+	const at = sourceByteAt(options.source, body.location.line, body.location.column);
+	if (at == "{".code || at == -1) return body;
+	const stmts = (body.data as BlockStmtData).statements;
+	const last = stmts.length > 0 ? stmts[stmts.length - 1] : null;
+	if (last == null || last.kind != NodeKind.ReturnStmt) return body;
+	for (let i = 0; i < stmts.length - 1; i += 1) {
+		if (!isParamPatternDecl(stmts[i])) return body;
+	}
+	const arg = (last.data as ReturnStmtData).argument;
+	return arg != null ? arg : body;
 }
 
 export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrowFunctionData;
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
-	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
+		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
+		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
+	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
+	if (bare) {
+		parts.push(params[0]);
+	} else {
+		for (const p of paramListInParens(params, options)) parts.push(p);
+	}
 	if (d.arrowReturnType != "") {
 		parts.push(docText(": " + d.arrowReturnType));
 	}
 	parts.push(docText(" => "));
-	parts.push(callPrintNode(d.arrowBody, options));
+	parts.push(callPrintNode(writtenArrowBody(d.arrowBody, options), options));
 	return docGroup(parts);
 }
 
@@ -345,19 +409,17 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	}
 	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
 	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(typeArgs + "(")];
-	if (args.length > 0) {
-		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
-		newParts.push(docIndent(argParts));
-		newParts.push(docSoftLine());
-	}
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) newParts.push(p);
 	newParts.push(docText(")"));
 	return docGroup(newParts);
 }
 
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
+	const inner = d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
+	if (d.asType == "!") return docGroup([inner, docText("!")]);
 	return docGroup([
-		printAtom(d.asExpr, options),
+		inner,
 		docText(" as " + d.asType),
 	]);
 }
@@ -366,7 +428,7 @@ export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchExprData;
 	const cases: Doc[] = [];
 	for (const c of d.matchCases) {
-		cases.push(printMatchCase(c, options));
+		cases.push(wrapNodeComments(c, printMatchCase(c, options)));
 	}
 	return docGroup([
 		docText("match ("),
@@ -437,9 +499,10 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	const elements: Doc[] = [];
 	for (let i = 0; i < d.patternElements.length; i += 1) {
 		if (i > 0) elements.push(docText(", "));
-		const isRest = d.hasRestElement && i == d.patternElements.length - 1;
-		if (isRest) elements.push(docText("..."));
-		elements.push(callPrintNode(d.patternElements[i], options));
+		const el = d.patternElements[i];
+		const hole = el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
+			&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
+		if (!hole) elements.push(callPrintNode(el, options));
 		if (i < d.patternDefaults.length && d.patternDefaults[i] != null) {
 			elements.push(docText(" = "));
 			elements.push(callPrintNode(d.patternDefaults[i], options));
@@ -454,8 +517,6 @@ export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	const props: Doc[] = [];
 	for (let i = 0; i < d.patternProps.length; i += 1) {
 		if (i > 0) props.push(docText(", "));
-		const isRest = d.hasRestProp && i == d.patternProps.length - 1;
-		if (isRest) props.push(docText("..."));
 		props.push(callPrintNode(d.patternProps[i], options));
 	}
 	return docGroup([docText("{ "), docGroup(props), docText(" }")]);
@@ -500,7 +561,7 @@ export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [docText(head)];
 	// FunctionExprData has no defaults field — pass empty array.
 	const noDefaults: Node[] = [];
-	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options);
+	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.funcExprReturnType != "") {
 		parts.push(docText(": " + d.funcExprReturnType));

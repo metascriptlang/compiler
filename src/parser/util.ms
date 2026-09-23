@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { callExprParser, callObjectPatternParser, callArrayPatternParser } from "./statements/callbacks";
@@ -322,7 +322,11 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		}
 		if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 	}
-	if (current(state).kind == TokenKind.RParen) { advance(state); }
+	if (current(state).kind == TokenKind.RParen) {
+		advance(state);
+	} else {
+		addError(state, `Expected ')' after the parameters of '${fnName}' at line ${current(state).line}`);
+	}
 	return params;
 }
 

@@ -86,7 +86,14 @@ export function takePendingComments(state: ParserState): Token[] {
 		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
-	const comments = state.pendingComments;
+	const comments: Token[] = [];
+	for (const c of state.pendingComments) {
+		let seen = false;
+		for (const k of comments) {
+			if (k.line == c.line && k.column == c.column) seen = true;
+		}
+		if (!seen) comments.push(c);
+	}
 	state.pendingComments = [];
 	return comments;
 }

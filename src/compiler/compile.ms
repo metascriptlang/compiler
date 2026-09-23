@@ -891,6 +891,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 						if (exists(candidate)) { fullPath = candidate; break; }
 					}
 				}
+				fullPath = normalize(fullPath);
 				if (!exists(fullPath)) {
 					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
@@ -951,7 +952,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
 			// stderr and the join loop only reports the exit code.
-			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
+			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
@@ -1016,7 +1017,7 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
-			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
+			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}

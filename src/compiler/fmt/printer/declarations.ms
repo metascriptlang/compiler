@@ -1,10 +1,10 @@
 // Declaration Printers — class, interface, enum, import, export, etc.
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, SourceLocation,
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
-	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
+	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData,
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -15,7 +15,21 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments } from "./statements";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+
+function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
+	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
+	const firstLine = locs.length > 0 ? locs[0].line : node.location.line;
+	const inner: Token[] = [];
+	const rest: Token[] = [];
+	for (const c of node.comments) {
+		if ((c.line > node.location.line || c.line >= firstLine) && c.line < endLine) inner.push(c); else rest.push(c);
+	}
+	if (inner.length == 0) return null;
+	node.comments = rest;
+	return commentedList(names, locs, inner, "{", "}");
+}
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -39,7 +53,10 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 			}
 		}
 		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
-		if (names.length == 1) {
+		const commented = commentedSpecifiers(names, d.nameLocations, node);
+		if (commented != null) {
+			parts.push(commented);
+		} else if (names.length == 1) {
 			parts.push(docText("{ "));
 			parts.push(names[0]);
 			parts.push(docText(" }"));
@@ -86,13 +103,17 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	// stray `import` keyword (`export import { ... } from ...`), so we
 	// build the re-export form directly.
 	if (!isDefault && d.exportedDecl != null && d.exportedDecl.kind == NodeKind.ImportDecl) {
-		return printReExport(d.exportedDecl, options);
+		return printReExport(d.exportedDecl, node, options);
 	}
 	// Forward inner-body comments to the inner decl so its printer can
 	// pair them with members/fields. The parser attaches body comments to
 	// the OUTER ExportDecl (the wrapping node), but the inner printer
 	// (printEnumDecl, printStructLikeDecl, etc.) is what needs them.
 	if (d.exportedDecl != null) {
+		if (d.exportedDecl.location.endLine == 0) {
+			d.exportedDecl.location.endLine = node.location.endLine;
+			d.exportedDecl.location.endColumn = node.location.endColumn;
+		}
 		const innerStart = d.exportedDecl.location.line;
 		const remaining: Token[] = [];
 		for (const c of node.comments) {
@@ -108,7 +129,7 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	return docGroup([docText(prefix), callPrintNode(d.exportedDecl, options)]);
 }
 
-function printReExport(inner: Node, options: FormatOptions): Doc {
+function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	const id = inner.data as ImportDeclData;
 	let q = "\"";
 	if (options.singleQuote) q = "'";
@@ -129,7 +150,10 @@ function printReExport(inner: Node, options: FormatOptions): Doc {
 				names.push(docText(id.importNames[i]));
 			}
 		}
-		if (names.length == 1) {
+		const commented = commentedSpecifiers(names, id.nameLocations, outer);
+		if (commented != null) {
+			parts.push(commented);
+		} else if (names.length == 1) {
 			parts.push(docText("{ "));
 			parts.push(names[0]);
 			parts.push(docText(" }"));
@@ -155,10 +179,29 @@ function printReExport(inner: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function aliasWithInnerComments(node: Node, options: FormatOptions): string {
+	const loc = node.location;
+	if (loc.endLine == 0) return "";
+	const inner: Token[] = [];
+	const rest: Token[] = [];
+	for (const c of node.comments) {
+		const after = c.line > loc.line || (c.line == loc.line && c.column > loc.column);
+		const before = c.line < loc.endLine || (c.line == loc.endLine && c.column < loc.endColumn);
+		if (after && before) inner.push(c); else rest.push(c);
+	}
+	if (inner.length == 0) return "";
+	const text = sourceSpan(options.source, loc.line, loc.column, loc.endLine, loc.endColumn);
+	if (text == "") return "";
+	node.comments = rest;
+	return text;
+}
+
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
+	const verbatim = aliasWithInnerComments(node, options);
+	if (verbatim != "") return docText(verbatim);
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
-	const head = "type " + d.aliasName + wrapGenerics(d.aliasGenericParams);
+	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {
 		// Discriminated union: type X<...> = match (disc: Enum) { ... }
 		// Use docIndent so the layout engine respects useTabs/tabWidth.
@@ -205,7 +248,16 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	const members: Doc[] = [];
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const memberLine = i < d.memberLocations.length ? d.memberLocations[i].line : 0;
-		const baseText = d.enumMembers[i] + ",";
+		const init = i < d.memberLocations.length
+			? writtenInitializer(options.source, d.memberLocations[i].line, d.memberLocations[i].column, d.enumMembers[i])
+			: "";
+		const baseText = d.enumMembers[i] + (init != "" ? " = " + init : "") + ",";
+		for (let j = 0; j < inline.length; j += 1) {
+			if (inline[j] != null && inline[j].line < memberLine) {
+				members.push(docText(inline[j].value));
+				inline[j] = null as unknown as Token;
+			}
+		}
 		// Find a comment whose line matches this member.
 		let attached: Token = null as unknown as Token;
 		for (let j = 0; j < inline.length; j += 1) {
@@ -224,6 +276,9 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 			members.push(docText(baseText));
 		}
 	}
+	for (const c of inline) {
+		if (c != null) members.push(docText(c.value));
+	}
 	return docGroup([
 		docText("enum " + d.enumName + " {"),
 		docIndent([docHardLine(), docJoin(members, docHardLine())]),
@@ -232,10 +287,17 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-function printStructLikeDecl(node: Node, keyword: string): Doc {
+function unoptionalized(type: string): string {
+	const suffix = ") | null";
+	if (type.startsWith("(") && type.endsWith(suffix)) return type.byteSlice(1, type.byteLength - suffix.byteLength);
+	return type;
+}
+
+function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
-	const generics = wrapGenerics(getGenericDecl(d.interfaceName));
-	if (d.interfaceFields.length == 0) return docText(keyword + " " + d.interfaceName + generics + " {}");
+	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, getGenericDecl(d.interfaceName)) + extendsClause;
+	if (d.interfaceFields.length == 0) return docText(head + " {}");
 
 	// Field source positions are stored on node.paramLocations
 	// (parser repurposes that slot — see declaration.ms parseInterfaceLikeDecl).
@@ -276,8 +338,11 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 			standaloneIdx = standaloneIdx + 1;
 		}
 		let field = d.interfaceFields[i];
+		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
+		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field, d.interfaceFieldTypes[i]);
+		if (optional) field = field + "?";
 		if (d.interfaceFieldTypes[i] != "") {
-			field = field + ": " + d.interfaceFieldTypes[i];
+			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
 		// Find a trailing comment for this field.
 		let attached: Token = null as unknown as Token;
@@ -288,13 +353,14 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 				break;
 			}
 		}
+		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		if (attached != null) {
 			fields.push(docGroup([
-				docText(field + ";"),
+				docText(field + sep),
 				docLineSuffix([docText(" " + attached.value)]),
 			]));
 		} else {
-			fields.push(docText(field + ";"));
+			fields.push(docText(field + sep));
 		}
 	}
 	// Any standalone comments after the last field — emit at end of body.
@@ -303,7 +369,7 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 		standaloneIdx = standaloneIdx + 1;
 	}
 	return docGroup([
-		docText(keyword + " " + d.interfaceName + generics + " {"),
+		docText(head + " {"),
 		docIndent([docHardLine(), docJoin(fields, docHardLine())]),
 		docHardLine(),
 		docText("}"),
@@ -311,16 +377,16 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
-	return printStructLikeDecl(node, "interface");
+	return printStructLikeDecl(node, "interface", options);
 }
 
 export function printStructDecl(node: Node, options: FormatOptions): Doc {
-	return printStructLikeDecl(node, "struct");
+	return printStructLikeDecl(node, "struct", options);
 }
 
 export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ClassDeclData;
-	const generics = wrapGenerics(getGenericDecl(d.className));
+	const generics = genericsFor(options, d.nameLocation, d.className, getGenericDecl(d.className));
 	const parts: Doc[] = [docText("class " + d.className + generics)];
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));
@@ -334,11 +400,7 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 		distributeBodyComments(node, d.classBody);
 		const members: Doc[] = [];
 		for (const m of d.classBody) {
-			if (m.kind == NodeKind.BlockStmt) {
-				members.push(wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)])));
-			} else {
-				members.push(callPrintNode(m, options));
-			}
+			members.push(printBodyMember(m, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
 		parts.push(docHardLine());
@@ -387,6 +449,13 @@ function distributeBodyComments(containerNode: Node, children: Node[]): void {
 	containerNode.comments = remaining;
 }
 
+function printBodyMember(m: Node, options: FormatOptions): Doc {
+	if (m.kind == NodeKind.BlockStmt) {
+		return wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)]));
+	}
+	return callPrintNode(m, options);
+}
+
 export function printActorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ActorDeclData;
 	const parts: Doc[] = [docText("actor " + d.actorName)];
@@ -395,7 +464,7 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 		distributeBodyComments(node, d.actorBody);
 		const members: Doc[] = [];
 		for (const m of d.actorBody) {
-			members.push(callPrintNode(m, options));
+			members.push(printBodyMember(m, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
 		parts.push(docHardLine());
@@ -406,7 +475,23 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 
 export function printExternDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExternDeclData;
-	const parts: Doc[] = [docText("extern " + d.externName)];
+	const keyword = match (d.externKind) {
+		ExternKind.Function => "function",
+		ExternKind.Class => "class",
+		ExternKind.Interface => "interface",
+		ExternKind.Struct => "struct",
+		ExternKind.Const => "const",
+		ExternKind.Var => "var",
+		ExternKind.Let => "let",
+		ExternKind.Type => "type",
+		ExternKind.Enum => "enum",
+		ExternKind.Macro => "macro",
+		ExternKind.Invalid => "",
+	};
+	const parts: Doc[] = [docText("extern " + keyword + " " + d.externName)];
+	if (d.externType != "") {
+		parts.push(docText(": " + d.externType));
+	}
 	if (d.nativeName != "") {
 		parts.push(docText(" from \"" + d.nativeName + "\""));
 	}
@@ -419,6 +504,17 @@ export function printExternDecl(node: Node, options: FormatOptions): Doc {
 export function printDecoratedDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DecoratedDeclData;
 	const parts: Doc[] = [];
+	const exportFirst = d.decoratedNode.kind == NodeKind.ExportDecl && !d.decoratedNode.flags.has(NodeFlag.ExportDefault)
+		&& sourceByteAt(options.source, node.location.line, node.location.column) == "e".code;
+	if (exportFirst) {
+		parts.push(docText("export "));
+		for (const dec of d.decorators) {
+			parts.push(callPrintNode(dec, options));
+			parts.push(docText(" "));
+		}
+		parts.push(callPrintNode((d.decoratedNode.data as ExportDeclData).exportedDecl, options));
+		return docGroup(parts);
+	}
 	for (const dec of d.decorators) {
 		parts.push(callPrintNode(dec, options));
 		parts.push(docHardLine());
@@ -484,9 +580,11 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propVisibility != "") parts.push(docText(d.propVisibility + " "));
 	if (d.propIsStatic) parts.push(docText("static "));
 	if (d.propIsReadonly) parts.push(docText("readonly "));
-	parts.push(docText(d.propName));
+	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
+	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
+	parts.push(docText(optional ? d.propName + "?" : d.propName));
 	if (d.propType != "") {
-		parts.push(docText(": " + d.propType));
+		parts.push(docText(": " + (optional && !keptType ? unoptionalized(d.propType) : d.propType)));
 	}
 	if (d.propInitializer != null) {
 		parts.push(docText(" = "));
@@ -511,7 +609,7 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
-	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options);
+	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
 	const parts: Doc[] = [docText("constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	parts.push(docText(" "));
@@ -532,13 +630,23 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "")
-		+ d.methodName + wrapGenerics(flagGet(d.methodFlags, "gen"));
+		+ writtenName(options, d.nameLocation, d.methodName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
-	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
+	const paramComments = paramListComments(node, d.methodBody);
+	if (paramComments.length > 0 && node.paramLocations != null) {
+		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
+	} else {
+		for (const p of paramListInParens(params, options)) parts.push(p);
+	}
 	if (d.methodReturnType != "") {
 		parts.push(docText(": " + d.methodReturnType));
+	}
+	if (isSynthesized(node, d.methodBody)) {
+		if (d.nativeName != "") parts.push(docText(" from \"" + d.nativeName + "\""));
+		parts.push(docText(";"));
+		return docGroup(parts);
 	}
 	parts.push(docText(" "));
 	parts.push(callPrintNode(d.methodBody, options));

@@ -1,10 +1,10 @@
 // Control Flow Statements - if, while, for, break, continue, return
 // Uses callback injection via util.ms to avoid circular imports
 
-import { TokenKind } from "../../lexer/token";
+import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd } from "../context";
-import { isIdentLike, captureOptionalType, getLastTypeExpr } from "../util";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments } from "../context";
+import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind } from "./validation";
@@ -27,6 +27,13 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 // ===== If Statement =====
 // syntax: 'if' '(' expr ')' (block | stmt) ('else' (ifStmt | block | stmt))?
 
+function withLeading(node: Node, leading: Token[]): Node {
+	if (leading.length == 0) return node;
+	for (const c of node.comments) leading.push(c);
+	node.comments = leading;
+	return node;
+}
+
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
 	advance(state);
@@ -44,19 +51,22 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
+		const beforeElse = takePendingComments(state);
 		advance(state);
 		if (current(state).kind == TokenKind.If) {
+			const elseIf = try parseIfStmt(state);
 			return Result.ok(createNode(NodeKind.IfStmt, {
 				condition,
 				consequent,
-				alternate: try parseIfStmt(state),
+				alternate: withLeading(elseIf, beforeElse),
 			}, ifToken));
 		}
 
+		const elseBody = try parseBodyOrStmt(state);
 		return Result.ok(createNode(NodeKind.IfStmt, {
 			condition,
 			consequent,
-			alternate: try parseBodyOrStmt(state),
+			alternate: withLeading(elseBody, beforeElse),
 		}, ifToken));
 	}
 
@@ -205,8 +215,8 @@ export function parseForStmt(state: ParserState): NodeResult {
 		}
 
 		advance(state);
-		const initType = captureOptionalType(state);
-		const initTypeExpr = getLastTypeExpr();
+		const declType = captureOptionalType(state);
+		const declTypeExpr = getLastTypeExpr();
 
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' in for init at line ${current(state).line}`);
@@ -215,12 +225,12 @@ export function parseForStmt(state: ParserState): NodeResult {
 		advance(state);
 		const initNode = createNode(NodeKind.VariableDecl, {
 			declName: varName.value,
-			declType: initType,
+			declType,
 			initializer: try callExprParser(state),
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
-		initNode.typeExpr = initTypeExpr;
+		initNode.typeExpr = declTypeExpr;
 		stampEnd(state, initNode);
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);

@@ -290,6 +290,13 @@ test "jsx parse accepts valid forms" {
 	assert parseOk("<a b=\"c\" {...d}>{e}</a>");
 }
 
+test "jsx parse template interpolation in attribute, arrow body and child" {
+	assert (exprNode("<x title={`n=${n}`} k=\"v\"/>").data as JSXElementData).jsxAttrs.length == 2;
+	assert parseOk("<x on={(): string => { return `n=${n}`; }}/>");
+	assert parseOk("<x on={(): string => { const e = <y>{`d ${n} ${ {k: n}.k }`}</y>; return `n=${n}`; }}/>");
+	assert (exprNode("<p>a{`x${ `in${n}` }y`}b</p>").data as JSXElementData).jsxChildren.length == 3;
+}
+
 test "jsx parse empty element" {
 	const d = exprNode("<a></a>").data as JSXElementData;
 	assert !d.jsxSelfClosing;

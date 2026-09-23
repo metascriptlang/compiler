@@ -3,10 +3,11 @@
 
 import { Token, TokenKind } from "./token";
 
-// JSX lexer mode stack frame (docs/JSX-ROADMAP.md "Architecture decision").
+// Lexer mode stack frame (docs/JSX-ROADMAP.md "Architecture decision").
 // Tag = inside `<… >` opening tag; Children = between `>` and `</`; Closing = inside `</…>`;
-// Brace = inside an `{expr}` container (normal code, tracks nesting to know when to pop).
-export enum JsxMode { Tag, Children, Closing, Brace }
+// Brace = inside an `{expr}` container or a `{` nested in any frame (normal code, tracks
+// nesting to know when to pop); Template = inside a template's `${…}`, whose `}` resumes it.
+export enum JsxMode { Tag, Children, Closing, Brace, Template }
 
 export interface LexerState {
 	source: string;
@@ -15,15 +16,13 @@ export interface LexerState {
 	column: int32;
 	tokens: Token[];
 	comments: Token[]; // Added for comment preservation
-	templateDepth: int32;
-	braceStack: int32[];
 	lastToken: TokenKind;
 	jsxStack: JsxMode[];
 	lexError: string;
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof, jsxStack: [], lexError: "" };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], lastToken: TokenKind.Eof, jsxStack: [], lexError: "" };
 }
 
 export function setLexError(s: LexerState, message: string): void {

@@ -77,7 +77,11 @@ export function hashString(s: string): int64 {
 
 // Hash for number keys — Knuth multiplicative hash.
 export function hashNumber(n: number): int64 {
-	let bits = (n as int64) & (0xFFFFFFFF as int64);
+	return hashBits((n as int64) & (0xFFFFFFFF as int64));
+}
+
+function hashBits(low32: int64): int64 {
+	let bits = low32;
 	if (bits == (0 as int64)) bits = 314159265 as int64;
 	// Unsigned mixing: bits reaches 2^32-1 and the
 	// product exceeds INT64_MAX, which traps under overflow checks. Nim keeps
@@ -127,13 +131,30 @@ test "reference hashing routes through the one mixing site" {
 
 // Overloaded hash — type-dispatched hash(x: int) and hash(x: string).
 // Extension methods: monomorphization resolves via UFCS based on K's concrete type.
-// int32 needs its own entry because UFCS matches `this` exactly — int32 does
-// not transparently widen to number during extension-method lookup. Without
-// this, `Map<int32, V>`'s `key.hash()` fails to resolve and codegen emits raw
-// member access on a primitive int (invalid C).
+// Every scalar key type needs its own entry because UFCS matches `this` exactly —
+// a scalar does not transparently widen to number during extension-method
+// lookup. Without one, `Map<K, V>`'s `key.hash()` fails to resolve.
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
+export function hash(this f: float32): int64 { return hashNumber(f as number); }
+export function hash(this b: boolean): int64 { return hashNumber(b ? 1 : 0); }
+export function hash(this c: char): int64 { return hashNumber(c as number); }
+export function hash(this i: int8): int64 { return hashNumber(i as number); }
+export function hash(this i: int16): int64 { return hashNumber(i as number); }
 export function hash(this i: int32): int64 { return hashNumber(i as number); }
+export function hash(this i: uint8): int64 { return hashNumber(i as number); }
+export function hash(this i: uint16): int64 { return hashNumber(i as number); }
+export function hash(this i: uint32): int64 { return hashNumber(i as number); }
+export function hash(this i: int64): int64 { return hashBits((i ^ (i >> (32 as int64))) & (0xFFFFFFFF as int64)); }
+export function hash(this u: uint64): int64 { return hashBits(((u ^ (u >> (32 as uint64))) & (0xFFFFFFFF as uint64)) as int64); }
+
+test "64-bit keys hash their high half" {
+	const low = 7 as uint64;
+	assert low.hash() != (low | ((1 as uint64) << (32 as uint64))).hash();
+	assert low.hash() != (low | ((1 as uint64) << (40 as uint64))).hash();
+	assert (7 as int64).hash() != ((7 as int64) | ((1 as int64) << (33 as int64))).hash();
+	assert low.hash() == (7 as int64).hash();
+}
 // Reference identity folds to 32 bits in C, then shares hashNumber's avalanche —
 // one Knuth site for every key type, so the unsigned-mixing fix cannot be half
 // applied again.

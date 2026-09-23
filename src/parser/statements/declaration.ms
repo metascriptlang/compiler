@@ -2318,3 +2318,7 @@ test "generic extends" { assert programOk("class List<T> extends Base<T> {}"); }
 test "multi generic" { assert programOk("class HashMap<K, V> { lookup(k: K): V {} }"); }
 
 test "implements" { assert programOk("class Foo implements Bar {}"); }
+
+test "a parameter list without its closing paren is an error" { assert !programOk("function f(a: int32, b: int32: int32 { return a; }"); }
+
+test "a method parameter list without its closing paren is an error" { assert !programOk("class C { m(a: int32: void {} }"); }

@@ -26,6 +26,7 @@ import { Node, NodeKind,
 } from "../../ast/node";
 import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
+import { checkLossless } from "../../compiler/fmt/lossless";
 
 export function fmt(source: string): string {
 	const parsed = parseSource(source);
@@ -418,6 +419,24 @@ export function assertFmtContains(source: string, expected: string): boolean {
 		console.log("source:    " + source);
 		console.log("formatted: " + formatted);
 		console.log("expected:  " + expected);
+		return false;
+	}
+	return true;
+}
+
+export function assertFmtLossless(source: string): boolean {
+	resetAllSideChannels();
+	const formatted = fmt(source);
+	if (formatted === "") {
+		console.log("FMT FAILED");
+		console.log("source: " + source);
+		return false;
+	}
+	const kept = checkLossless(source, formatted);
+	if (!kept.ok) {
+		console.log("FMT LOSSY: " + kept.error);
+		console.log("source:    " + source);
+		console.log("formatted: " + formatted);
 		return false;
 	}
 	return true;

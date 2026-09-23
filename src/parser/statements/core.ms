@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind, Token } from "../../lexer/token";
-import { Node, NodeKind, FunctionDeclData, BlockStmtData, ProgramData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, ProgramData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments } from "../context";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
@@ -268,6 +268,8 @@ function blockStatements(node: Node): Node[] {
 // the same) but only the first true one is selected; later conditions are parsed for
 // their tokens and not consulted, mirroring semWhen's early return.
 export function parseWhenChain(state: ParserState): NodesResult {
+	const before = takePendingComments(state);
+	const whenToken = current(state);
 	advance(state); // consume 'when'
 	const firstCond = try parseWhenHead(state);
 	const firstBlock = try parseBlockStmt(state);
@@ -288,6 +290,16 @@ export function parseWhenChain(state: ParserState): NodesResult {
 			break;
 		}
 	}
+	const endToken = state.tokens[state.position - 1];
+	const endLine = endToken.line as int32;
+	const endColumn = (endToken.column + 1) as int32;
+	const span: Token = { kind: TokenKind.When, value: "", line: whenToken.line, column: whenToken.column, rawValue: `${endLine}:${endColumn}` };
+	before.push(span);
+	for (const c of takePendingComments(state)) {
+		if (c.line > endLine || (c.line == endLine && c.column >= endColumn)) before.push(c);
+	}
+	state.pendingComments = before;
+	for (const s of chosen) s.flags = s.flags.incl(NodeFlag.WhenPicked);
 	return Result.ok(chosen);
 }
 
@@ -312,13 +324,16 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 		stmts.push(s);
 	}
 
+	const dangling = takePendingComments(state);
 	const closeToken = current(state);
 	if (closeToken.kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' at line ${closeToken.line}`);
 	}
 	advance(state); // consume '}'
 
-	return Result.ok(createNode(NodeKind.BlockStmt, { statements: stmts }, token));
+	const block = createNode(NodeKind.BlockStmt, { statements: stmts }, token);
+	block.comments = dangling;
+	return Result.ok(block);
 }
 
 // ===== Expression Statement Parser =====
