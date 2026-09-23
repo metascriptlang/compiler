@@ -1484,7 +1484,7 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCName(rm);
-		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : mangle(elem.typeName);
 	}
 	if (elem.kind == TypeKind.GenericInstance) {
 		let instName = elem.typeName;
