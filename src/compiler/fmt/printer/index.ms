@@ -149,7 +149,8 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		},
 	};
 
-	const declDoc = node.flags.has(NodeFlag.ExternC) ? docGroup([docText("extern "), innerDoc]) : innerDoc;
+	const groupDoc = node.flags.has(NodeFlag.Parenthesized) ? docGroup([docText("("), innerDoc, docText(")")]) : innerDoc;
+	const declDoc = node.flags.has(NodeFlag.ExternC) ? docGroup([docText("extern "), groupDoc]) : groupDoc;
 	return wrapNodeComments(node, declDoc);
 }
 
