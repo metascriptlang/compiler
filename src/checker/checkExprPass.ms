@@ -1821,7 +1821,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (srcType != null && isSlotUnion(srcType) && targetType.kind != TypeKind.Union
 				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, targetType) >= 0) {
 				node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, targetType), asType: d.asType };
-				node.nodeType = targetType;
+				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
 				return;
 			}
 			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
