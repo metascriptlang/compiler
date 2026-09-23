@@ -86,3 +86,4 @@ import "./cases/exportDecorator";
 import "./cases/specifierComments";
 import "./cases/listComments";
 import "./cases/trailingLineComment";
+import "./cases/elseComments";

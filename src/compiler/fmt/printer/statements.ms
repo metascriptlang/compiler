@@ -237,7 +237,20 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 			if (altData.statements.length == 0) { isEmpty = true; }
 		}
 		if (!isEmpty) {
-			parts.push(docText(" else "));
+			const beforeElse: Token[] = [];
+			const kept: Token[] = [];
+			for (const c of d.alternate.comments) {
+				if (c.line < d.alternate.location.line) beforeElse.push(c); else kept.push(c);
+			}
+			d.alternate.comments = kept;
+			for (const c of beforeElse) {
+				parts.push(docHardLine());
+				parts.push(docText(c.value));
+			}
+			const braceless = bracelessStatement(d.consequent, options);
+			const elseOnOwnLine = beforeElse.length > 0
+				|| (braceless != null && d.alternate.location.line > braceless.location.line);
+			parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
 			parts.push(d.alternate.kind == NodeKind.IfStmt
 				? callPrintNode(d.alternate, options)
 				: printBody(d.alternate, options));
