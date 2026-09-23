@@ -22,6 +22,25 @@ function bug135Spray(): int32 {
 	return v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v09 + v10 + v11 + v12;
 }
 
+function bug135NewSpray(): int32 {
+	let m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000 = new Map<uint64, int32>();
+	m0000.set(1 as uint64, 12);
+	return m0000.size as int32;
+}
+
 test "bug135helper: explicit type args bind in their own module" {
 	assert bug135Spray() == 12;
+	assert bug135NewSpray() == 1;
 }

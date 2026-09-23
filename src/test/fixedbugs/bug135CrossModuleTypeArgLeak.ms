@@ -23,3 +23,14 @@ test "bug135: a sibling module's type args never reach this Result.err" {
 	assert !r.ok;
 	assert r.error.msg == "leak";
 }
+
+function bug135Ok(): Result<int32, Bug135Err> {
+	const n: int32 = 3;
+	return Result.ok(n);
+}
+
+test "bug135: a sibling module's new-expression type args never reach this Result.ok" {
+	const r = bug135Ok();
+	assert r.ok;
+	assert r.value == 3;
+}
