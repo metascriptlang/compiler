@@ -117,8 +117,11 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
 	const inner: Token[] = [];
 	const outer: Token[] = [];
+	const loc = node.location;
 	for (const c of node.comments) {
-		if (c.line > node.location.line || (c.line == node.location.line && c.column > node.location.column)) {
+		const afterOpen = c.line > loc.line || (c.line == loc.line && c.column > loc.column);
+		const beforeClose = loc.endLine == 0 || c.line < loc.endLine || (c.line == loc.endLine && c.column < loc.endColumn);
+		if (afterOpen && beforeClose) {
 			inner.push(c);
 		} else {
 			outer.push(c);
