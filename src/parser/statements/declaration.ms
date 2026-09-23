@@ -744,6 +744,12 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected '{' after enum name at line ${current(state).line}`);
 	}
 
+	return parseEnumBody(state, nameToken, enumToken);
+}
+
+// Parse `{ A, B = 2, C = -1 }` after the enum name, from the `{`. An initializer is an integer
+// literal, optionally negated; a member without one takes the previous value plus one.
+function parseEnumBody(state: ParserState, nameToken: Token, anchor: Token): NodeResult {
 	advance(state);
 	const members: string[] = [];
 	const memberLocs: SourceLocation[] = [];
@@ -758,16 +764,16 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		members.push(member.value);
 		memberLocs.push(makeLocFromToken(member));
 		advance(state);
-		// Optional value: A = 1 — parse number literal
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 			advance(state);
+			const negative = current(state).kind == TokenKind.Minus;
+			if (negative) advance(state);
 			const valTok = current(state);
-			if (valTok.kind == TokenKind.Number) {
-				nextValue = parseFloat(valTok.value);
-				advance(state);
-			} else {
-				skipDefaultValue(state);
+			if (valTok.kind != TokenKind.Number) {
+				return Result.err(`Enum member '${member.value}' needs an integer literal initializer at line ${valTok.line}`);
 			}
+			nextValue = negative ? -parseFloat(valTok.value) : parseFloat(valTok.value);
+			advance(state);
 		}
 		values.push(nextValue);
 		nextValue = nextValue + 1;
@@ -788,7 +794,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		enumValues: values,
 		nameLocation: makeLocFromToken(nameToken),
 		memberLocations: memberLocs,
-	}, enumToken));
+	}, anchor));
 }
 
 // ===== Interface Declaration =====
@@ -1686,36 +1692,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 
 	// Extern enum with body: parse as EnumDecl with ExternC flag.
 	if (externKind == ExternKind.Enum && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
-		advance(state); // skip {
-		const members: string[] = [];
-		const memberLocs: SourceLocation[] = [];
-		const values: number[] = [];
-		let nextValue: number = 0;
-		while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-			const member = current(state);
-			if (!isPropertyName(member)) break;
-			members.push(member.value);
-			memberLocs.push(makeLocFromToken(member));
-			advance(state);
-			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
-				advance(state);
-				if (current(state).kind == TokenKind.Number) {
-					nextValue = parseFloat(current(state).value);
-					advance(state);
-				}
-			}
-			values.push(nextValue);
-			nextValue = nextValue + 1;
-			if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) advance(state);
-		}
-		if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) advance(state);
-		const enumNode = createNode(NodeKind.EnumDecl, {
-			enumName: nameToken.value,
-			enumMembers: members,
-			enumValues: values,
-			nameLocation: makeLocFromToken(nameToken),
-			memberLocations: memberLocs,
-		}, externToken);
+		const enumNode = try parseEnumBody(state, nameToken, externToken);
 		enumNode.flags = enumNode.flags.incl(NodeFlag.ExternC);
 		return Result.ok(enumNode);
 	}
