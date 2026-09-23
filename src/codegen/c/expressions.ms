@@ -720,16 +720,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// Built-in numeric constants → C99 macros
 		if (d.name == "NaN") { ctx.results.push("NAN"); return; }
 		if (d.name == "Infinity") { ctx.results.push("INFINITY"); return; }
-		// MetaScript has no undefined — emit as NULL or {0} for value types
-		if (d.name == "undefined") {
-			if (node.nodeType != null && isNilableValueType(node.nodeType)) {
-				const cType = getTypeDesc(g, node.nodeType);
-				ctx.results.push(`(${cType}){0}`);
-				return;
-			}
-			ctx.results.push(cNullLiteral());
-			return;
-		}
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (d.name.startsWith("$sink_") && p != null) {
 			let alreadySeen = false;
