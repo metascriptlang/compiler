@@ -248,6 +248,10 @@ export function registerNativeDependencies(srcPath: string, compileCmd: string):
 	for (const path of nativeDependencyPaths(srcPath, compileCmd)) registerNativeProjectDep(path);
 }
 
+export function registerCompileTimeRead(path: string): void {
+	registerNativeProjectDep(path);
+}
+
 function registerNativeProjectDep(path: string): void {
 	if (_nativeProjectDepSet.has(path)) return;
 	_nativeProjectDepSet.add(path);

@@ -61,7 +61,8 @@ import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisab
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
-import { join } from "std/fs/path";
+import { join, resolve } from "std/fs/path";
+import { registerCompileTimeRead } from "../cache";
 import { IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 
@@ -131,9 +132,11 @@ function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
-	const r = readFile(unboxString(args[0]));
+	const path = unboxString(args[0]);
+	const r = readFile(path);
 	if (r.ok) {
 		_lastFsErrno = 0;
+		registerCompileTimeRead(resolve(path, cwd()));
 		return boxString(r.value);
 	}
 	_setFsErrno(r.error.kind);
