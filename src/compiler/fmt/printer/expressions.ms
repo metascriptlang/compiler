@@ -39,7 +39,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
 	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !(isRight && opPrecedence(parentOp) == 5)) {
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !(isRight && opPrecedence(parentOp) == 5)) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -131,10 +131,14 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 // This list grows test-by-test; only kinds proven needed by a roundtrip
 // test go in. See src/test/fmt/cases/.
 function printAtom(node: Node, options: FormatOptions): Doc {
-	if (node != null && needsAtomParens(node.kind) && !node.flags.has(NodeFlag.Parenthesized) && rawTemplateAt(node, options) == "") {
+	if (node != null && needsAtomParens(node.kind) && !isNonNullAssertion(node) && !node.flags.has(NodeFlag.Parenthesized) && rawTemplateAt(node, options) == "") {
 		return docGroup([docText("("), callPrintNode(node, options), docText(")")]);
 	}
 	return callPrintNode(node, options);
+}
+
+function isNonNullAssertion(node: Node): boolean {
+	return node.kind == NodeKind.TypeAssertion && (node.data as TypeAssertionData).asType == "!";
 }
 
 function needsAtomParens(kind: NodeKind): boolean {
@@ -364,6 +368,7 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
 	const inner = d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
+	if (d.asType == "!") return docGroup([inner, docText("!")]);
 	return docGroup([
 		inner,
 		docText(" as " + d.asType),

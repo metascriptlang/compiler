@@ -65,3 +65,4 @@ import "./cases/tryClauses";
 import "./cases/paramModifiers";
 import "./cases/groupingParens";
 import "./cases/bracelessLoops";
+import "./cases/nonNullAssertion";
