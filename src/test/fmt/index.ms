@@ -60,3 +60,4 @@ import "./cases/callTypeArgs";
 import "./cases/bracelessBodyComment";
 import "./cases/numberSpelling";
 import "./cases/objectShorthand";
+import "./cases/forInitType";
