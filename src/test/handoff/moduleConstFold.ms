@@ -38,3 +38,28 @@ test "module const handoff: a readonly scalar static is inlined without storage"
 		}
 	}
 }
+
+function keepsStaticStorage(source: string, owner: string, name: string): boolean {
+	const program = fullPipeline(source);
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.ClassDecl || (stmt.data as ClassDeclData).className != owner) continue;
+		for (const member of (stmt.data as ClassDeclData).classBody) {
+			if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propName == name) return true;
+		}
+	}
+	return false;
+}
+
+test "module const handoff: a readonly static a static block assigns keeps its storage" {
+	const source = "class K { static readonly frozen: int32 = 0; static { K.frozen = 7; } } function read(): int32 { return K.frozen; }";
+	assert keepsStaticStorage(source, "K", "frozen");
+	const value = foldedReturn(source, "read");
+	assert value == null || value.kind != NodeKind.NumberLiteral;
+}
+
+test "module const handoff: a readonly bool static a static block assigns is not folded" {
+	const source = "class K { static readonly on: boolean = false; static { K.on = true; } } function read(): boolean { return K.on; }";
+	assert keepsStaticStorage(source, "K", "on");
+	const value = foldedReturn(source, "read");
+	assert value == null || value.kind != NodeKind.BooleanLiteral;
+}
