@@ -44,6 +44,25 @@ function fight208(fail: boolean): Result<uint64, FightError208> {
 	return Result.ok(value + 100);
 }
 
+async function loadLater208(fail: boolean): Promise<Result<uint64, AccountError208>> {
+	return load208(fail);
+}
+
+async function feedLater208(fail: boolean): Promise<Result<uint64, PetError208>> {
+	const value = try (await loadLater208(fail));
+	return Result.ok(value + 5);
+}
+
+function feedInferred208(fail: boolean) {
+	const value = try load208(fail);
+	return Result.ok(value) as Result<uint64, PetError208>;
+}
+
+function feedGeneric208<E>(fail: boolean, fallback: E): Result<uint64, E> {
+	const value = try load208(fail);
+	return Result.ok(value);
+}
+
 test "bug208: try with the same error type passes the error through" {
 	const ok = reload208(false);
 	assert ok.ok && ok.value == 8;
@@ -70,4 +89,28 @@ test "bug208: a converted try inside a function reached by another converted try
 	assert ok.ok && ok.value == 114;
 	const err = fight208(true);
 	assert !err.ok && err.error == FightError208.Pet;
+}
+
+test "bug208: an async try converts through its converter" {
+	const ok = await feedLater208(false);
+	assert ok.ok && ok.value == 12;
+	const err = await feedLater208(true);
+	assert !err.ok && err.error == PetError208.Account;
+}
+
+test "bug208: a try in a function without a return annotation converts once the return is inferred" {
+	const err = feedInferred208(true);
+	assert !err.ok && err.error == PetError208.Account;
+	const ok = feedInferred208(false);
+	assert ok.ok && ok.value == 7;
+	const arrow = (fail: boolean) => { const value = try load208(fail); return Result.ok(value) as Result<uint64, PetError208>; };
+	const viaArrow = arrow(true);
+	assert !viaArrow.ok && viaArrow.error == PetError208.Account;
+}
+
+test "bug208: a try in a generic function converts per instance" {
+	const err = feedGeneric208<PetError208>(true, PetError208.Dead);
+	assert !err.ok && err.error == PetError208.Account;
+	const same = feedGeneric208<AccountError208>(true, AccountError208.MissingSigner);
+	assert !same.ok && same.error == AccountError208.WrongOwner;
 }
