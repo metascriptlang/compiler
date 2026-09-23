@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isBodyless } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -557,7 +557,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	if (d.methodReturnType != "") {
 		parts.push(docText(": " + d.methodReturnType));
 	}
-	if (isBodyless(node, d.methodBody)) {
+	if (isSynthesized(node, d.methodBody)) {
 		if (d.nativeName != "") parts.push(docText(" from \"" + d.nativeName + "\""));
 		parts.push(docText(";"));
 		return docGroup(parts);

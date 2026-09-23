@@ -357,7 +357,7 @@ export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TryCatchStmtData;
 	const parts: Doc[] = [docText("try "), callPrintNode(d.tryBody, options)];
-	if (d.catchBody != null) {
+	if (d.hasCatchClause) {
 		parts.push(docText(" catch"));
 		if (d.catchName != "") {
 			parts.push(docText(" (" + d.catchName + ")"));
@@ -365,7 +365,7 @@ export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" "));
 		parts.push(callPrintNode(d.catchBody, options));
 	}
-	if (d.finallyBody != null) {
+	if (d.finallyBody != null && !isSynthesized(node, d.finallyBody)) {
 		parts.push(docText(" finally "));
 		parts.push(callPrintNode(d.finallyBody, options));
 	}
@@ -470,7 +470,7 @@ export function flagGet(flags: string, name: string): string {
 	return "";
 }
 
-export function isBodyless(decl: Node, body: Node): boolean {
+export function isSynthesized(decl: Node, body: Node): boolean {
 	return body.location.line == decl.location.line && body.location.column == decl.location.column;
 }
 
@@ -494,7 +494,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.fnReturnType));
 	}
 
-	if (isBodyless(node, d.fnBody)) {
+	if (isSynthesized(node, d.fnBody)) {
 		if (d.nativeName != "") {
 			parts.push(docText(" from \"" + d.nativeName + "\""));
 		}
