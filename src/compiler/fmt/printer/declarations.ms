@@ -605,7 +605,7 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
-	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options);
+	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
 	const parts: Doc[] = [docText("constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	parts.push(docText(" "));
@@ -629,7 +629,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ writtenName(options, d.nameLocation, d.methodName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
-	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options);
+	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.methodReturnType != "") {
 		parts.push(docText(": " + d.methodReturnType));

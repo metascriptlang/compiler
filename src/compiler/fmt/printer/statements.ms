@@ -5,13 +5,13 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation,
+	DestructuringDeclData, SourceLocation, IdentifierData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawGenericsAt, sourceByteAt } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -66,9 +66,16 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 function unpicked(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
-		if (!s.flags.has(NodeFlag.WhenPicked)) out.push(s);
+		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s)) out.push(s);
 	}
 	return out;
+}
+
+export function isParamPatternDecl(s: Node): boolean {
+	if (s.kind != NodeKind.DestructuringDecl) return false;
+	const init = (s.data as DestructuringDeclData).destrInit;
+	return init != null && init.kind == NodeKind.Identifier && (init.data as IdentifierData).name.startsWith("_destr")
+		&& init.location.line == s.location.line && init.location.column == s.location.column;
 }
 
 export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
@@ -453,10 +460,14 @@ export function printContinueStmt(node: Node): Doc {
 // `defaults` may be shorter than `names`/`types` (or contain null entries) —
 // missing defaults emit just the bare param. Pass an empty array to suppress
 // defaults entirely (e.g. macro decls don't have defaults).
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions): Doc[] {
+export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		let p = spellParamModifiers(names[i]);
+		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
+			const pattern = rawBalancedAt(options.source, locs[i].line, locs[i].column);
+			if (pattern != "") p = pattern;
+		}
 		if (i < types.length && types[i] != "") {
 			p = p + ": " + types[i];
 		}
@@ -590,7 +601,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	prefixAt(names, flagGet(d.fnFlags, "ref"), "ref ");
 	prefixAt(names, flagGet(d.fnFlags, "out"), "out ");
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
-	const params = buildParamList(names, types, defaults, options);
+	const params = buildParamList(names, types, defaults, options, node.paramLocations);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 
 	if (d.fnReturnType != "") {

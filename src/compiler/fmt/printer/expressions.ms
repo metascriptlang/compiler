@@ -7,7 +7,7 @@ import {
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData,
+	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -18,7 +18,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, wrapNodeComments } from "./statements";
+import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -346,6 +346,20 @@ export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function writtenArrowBody(body: Node, options: FormatOptions): Node {
+	if (body.kind != NodeKind.BlockStmt) return body;
+	const at = sourceByteAt(options.source, body.location.line, body.location.column);
+	if (at == "{".code || at == -1) return body;
+	const stmts = (body.data as BlockStmtData).statements;
+	const last = stmts.length > 0 ? stmts[stmts.length - 1] : null;
+	if (last == null || last.kind != NodeKind.ReturnStmt) return body;
+	for (let i = 0; i < stmts.length - 1; i += 1) {
+		if (!isParamPatternDecl(stmts[i])) return body;
+	}
+	const arg = (last.data as ReturnStmtData).argument;
+	return arg != null ? arg : body;
+}
+
 export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrowFunctionData;
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
@@ -353,7 +367,7 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
-	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options);
+	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations);
 	if (bare) {
 		parts.push(params[0]);
 	} else {
@@ -363,7 +377,7 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.arrowReturnType));
 	}
 	parts.push(docText(" => "));
-	parts.push(callPrintNode(d.arrowBody, options));
+	parts.push(callPrintNode(writtenArrowBody(d.arrowBody, options), options));
 	return docGroup(parts);
 }
 
@@ -544,7 +558,7 @@ export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [docText(head)];
 	// FunctionExprData has no defaults field — pass empty array.
 	const noDefaults: Node[] = [];
-	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options);
+	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.funcExprReturnType != "") {
 		parts.push(docText(": " + d.funcExprReturnType));
