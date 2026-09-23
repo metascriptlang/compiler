@@ -273,34 +273,59 @@ function indirect(): void {
 function engine(): void {
 	const tag = "hcrEngine";
 	const dir = freshDir(`${TMP}/engine`);
-	for (const f of ["app.ms", "host.ms", "hostCalls.h"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
-	copy(`${FIXTURES}/indirect/shapes.ms`, `${dir}/shapes.ms`);
-	const generations = [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"], ["logicExportEdit.ms", "g3"], ["logicLayoutEdit.ms", "g4"]];
+	for (const f of ["app.ms", "host.ms", "hostCalls.h", "handlerMisuse.ms"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	const misuse = msc(dir, ["build", "handlerMisuse.ms", "--hcr", "--emit=c"]);
+	need(tag, !succeeded(misuse), "misused reload handlers were accepted");
+	for (const diagnostic of [
+		"@beforeReload handlers take no parameters",
+		"@afterReload handlers return void",
+		"@beforeReload names the handler's C symbol itself; drop @exportName",
+	]) {
+		need(tag, both(misuse).contains(diagnostic), `missing diagnostic: ${diagnostic}`);
+	}
+	const generations = [
+		["logic.ms", "lifecycle.ms", "g1"],
+		["logicBodyEdit.ms", "lifecycle.ms", "g2"],
+		["logicExportEdit.ms", "lifecycle.ms", "g3"],
+		["logicLayoutEdit.ms", "lifecycle.ms", "g4"],
+		["logic.ms", "lifecycleThrowingEdit.ms", "g5"],
+	];
 	for (const g of generations) {
 		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
-		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module.dll`], `HCR build of ${g[0]} failed`);
+		copy(`${FIXTURES}/engine/${g[1]}`, `${dir}/lifecycle.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[2]}/module.dll`], `HCR build of ${g[0]} + ${g[1]} failed`);
 	}
 	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.dll.hcrabi"]) copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.lifecycle.dll", "module.dll.hcrabi"]) {
+		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	}
 	const ran = execFileResult(`${dir}/host.exe`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-ENGINE ")) seen.push(line);
 	}
 	const want = [
-		"HCR-ENGINE start: value 10 tick 1",
+		"HCR-ENGINE start: value 10 tick 1 version 1",
 		"HCR-ENGINE unchanged: no change",
+		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE body edit: reloaded logic",
-		"HCR-ENGINE after body edit: value 73 tick 11",
+		"HCR-ENGINE after body edit: value 73 tick 11 version 1",
 		"HCR-ENGINE truncated image: pending logic (cannot load run/module.logic.dll (error 193))",
 		"HCR-ENGINE same truncated image: pending logic (run/module.logic.dll is not a loadable image yet)",
+		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE complete image: reloaded logic",
-		"HCR-ENGINE after complete image: value 10 tick 12",
+		"HCR-ENGINE after complete image: value 10 tick 12 version 1",
+		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v2: after reload",
+		"HCR-ENGINE after-reload handler throws: rejected lifecycle (the after-reload handler of module 'lifecycle' threw; rolled back lifecycle)",
+		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
 		"HCR-ENGINE added export, app not rebuilt: rejected (module 'app' was built against another export ABI of 'logic'; rebuild it)",
-		"HCR-ENGINE after rejection: value 10 tick 13",
+		"HCR-ENGINE after rejection: value 10 tick 14 version 1",
 		"HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)",
-		"HCR-ENGINE after layout rejection: value 10 tick 14",
+		"HCR-ENGINE after layout rejection: value 10 tick 15 version 1",
 		"HCR-ENGINE core changed: restart required (the core image changed (runtime, standard library or toolchain))",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
