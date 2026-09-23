@@ -196,11 +196,24 @@ function getFlatWidth(doc: Doc): int32 {
 }
 
 export function formatDoc(doc: Doc, options: FormatOptions): string {
+	return formatDocAt(doc, options, "");
+}
+
+function indentWidth(prefix: string, options: FormatOptions): int32 {
+	let w = 0;
+	for (let i = 0; i < prefix.byteLength; i += 1) {
+		w = w + (prefix.byteAt(i) == "\t".code ? options.tabWidth : 1);
+	}
+	return w;
+}
+
+export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string): string {
 	// Propagate break markers before rendering (Prettier/Biome parity)
 	propagateBreaks(doc);
 
 	let result = "";
-	let column = 0;
+	const baseWidth = indentWidth(baseIndent, options);
+	let column = baseWidth;
 	const lineSuffixes: Doc[] = [];
 	// Track group break decisions by ID for cross-group IfBreak
 	const groupModes: int32[] = []; // groupId → MODE_FLAT or MODE_BREAK
@@ -259,8 +272,8 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 			if (cmd.mode == MODE_BREAK) {
 				if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
 				const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
-				result = result + "\n" + indentStr;
-				column = cmd.indent * options.tabWidth;
+				result = result + "\n" + baseIndent + indentStr;
+				column = baseWidth + cmd.indent * options.tabWidth;
 			} else {
 				// Flat mode: soft line = nothing, regular line = space
 				if (!(d.data as { isSoft: boolean }).isSoft) {
@@ -274,8 +287,8 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 		if (d.kind == DocKind.HardLine) {
 			if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
 			const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
-			result = result + "\n" + indentStr;
-			column = cmd.indent * options.tabWidth;
+			result = result + "\n" + baseIndent + indentStr;
+			column = baseWidth + cmd.indent * options.tabWidth;
 			continue;
 		}
 
