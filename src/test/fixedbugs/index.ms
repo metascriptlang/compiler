@@ -230,3 +230,5 @@ import "./bug204_generic_distinct_param";
 import "./bug205_generic_distinct_param_mismatch";
 import "./bug206_sized_array_length";
 import "./bug207_enum_instance_extension";
+import "./bug208_try_converts_error";
+import "./bug209_try_error_type_mismatch";
