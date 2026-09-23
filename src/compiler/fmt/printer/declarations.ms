@@ -357,11 +357,7 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 		distributeBodyComments(node, d.classBody);
 		const members: Doc[] = [];
 		for (const m of d.classBody) {
-			if (m.kind == NodeKind.BlockStmt) {
-				members.push(wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)])));
-			} else {
-				members.push(callPrintNode(m, options));
-			}
+			members.push(printBodyMember(m, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
 		parts.push(docHardLine());
@@ -410,6 +406,13 @@ function distributeBodyComments(containerNode: Node, children: Node[]): void {
 	containerNode.comments = remaining;
 }
 
+function printBodyMember(m: Node, options: FormatOptions): Doc {
+	if (m.kind == NodeKind.BlockStmt) {
+		return wrapNodeComments(m, docGroup([docText("static "), printBlock(m, options)]));
+	}
+	return callPrintNode(m, options);
+}
+
 export function printActorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ActorDeclData;
 	const parts: Doc[] = [docText("actor " + d.actorName)];
@@ -418,7 +421,7 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 		distributeBodyComments(node, d.actorBody);
 		const members: Doc[] = [];
 		for (const m of d.actorBody) {
-			members.push(callPrintNode(m, options));
+			members.push(printBodyMember(m, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
 		parts.push(docHardLine());

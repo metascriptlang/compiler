@@ -81,3 +81,4 @@ import "./cases/undefinedLiteral";
 import "./cases/staticLocal";
 import "./cases/leftAssertion";
 import "./cases/patternRest";
+import "./cases/actorStaticBlock";
