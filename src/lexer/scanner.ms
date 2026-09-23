@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { TokenKind, identToKeyword } from "./token";
-import { LexerState, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";
+import { LexerState, JsxMode, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";
 import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./chars";
 
 // ===== Number Scanning =====
@@ -304,7 +304,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		if (ch == "$".code && peekAt(s, 1) == "{".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			skip(s, 2);
-			s.templateDepth += 1;
+			s.jsxStack.push(JsxMode.Template);
 			addToken(s, isContinuation ? TokenKind.TemplateMiddle : TokenKind.TemplateHead, val, startLine, startCol);
 			return;
 		}
@@ -526,12 +526,7 @@ export function scanPunctuation(s: LexerState): boolean {
 		"{".code => { advanceChar(s); addToken(s, TokenKind.LBrace, "{", startLine, startCol); return true; },
 		"}".code => {
 			advanceChar(s);
-			if (s.templateDepth > 0) {
-				s.templateDepth -= 1;
-				scanTemplateContinuation(s);
-			} else {
-				addToken(s, TokenKind.RBrace, "}", startLine, startCol);
-			}
+			addToken(s, TokenKind.RBrace, "}", startLine, startCol);
 			return true;
 		},
 		"[".code => { advanceChar(s); addToken(s, TokenKind.LBracket, "[", startLine, startCol); return true; },

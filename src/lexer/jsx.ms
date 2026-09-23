@@ -8,7 +8,7 @@
 import { LexerState, JsxMode, peek, peekAt, advanceChar, addToken } from "./state";
 import { TokenKind } from "./token";
 import { isLetter, isDigit, isWhitespace, isNewline } from "./chars";
-import { scanString } from "./scanner";
+import { scanString, scanTemplateContinuation } from "./scanner";
 
 // `<` begins JSX only in expression position. This mirrors Babel's `beforeExpr` flag.
 // `Eof` covers start-of-input. Comparison/closing-generic `Gt` deliberately excluded so
@@ -21,7 +21,8 @@ function isExprPositionToken(k: TokenKind): boolean {
 		| TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.Question | TokenKind.QuestionQuestion
 		| TokenKind.Colon | TokenKind.Comma | TokenKind.Semicolon
 		| TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace
-		| TokenKind.Arrow | TokenKind.Return | TokenKind.Yield | TokenKind.Case => true,
+		| TokenKind.Arrow | TokenKind.Return | TokenKind.Yield | TokenKind.Case
+		| TokenKind.TemplateHead | TokenKind.TemplateMiddle => true,
 		_ => false,
 	};
 }
@@ -153,6 +154,19 @@ function scanJsxBrace(s: LexerState): boolean {
 	return false;
 }
 
+function scanTemplateInterp(s: LexerState): boolean {
+	const ch = peek(s);
+	if (ch == "<".code && isJsxStart(s)) { emitTagStart(s); return true; }
+	if (ch == "{".code) { emitBraceOpen(s); return true; }
+	if (ch == "}".code) {
+		advanceChar(s);
+		s.jsxStack.pop();
+		scanTemplateContinuation(s);
+		return true;
+	}
+	return false;
+}
+
 // Returns true when the JSX modes fully handled this iteration (caller continues the lex loop).
 export function scanJsx(s: LexerState): boolean {
 	const n = s.jsxStack.length;
@@ -166,5 +180,6 @@ export function scanJsx(s: LexerState): boolean {
 	if (top == JsxMode.Children) { return scanJsxChildren(s); }
 	if (top == JsxMode.Tag) { return scanJsxTag(s); }
 	if (top == JsxMode.Closing) { return scanJsxClosing(s); }
+	if (top == JsxMode.Template) { return scanTemplateInterp(s); }
 	return scanJsxBrace(s);
 }
