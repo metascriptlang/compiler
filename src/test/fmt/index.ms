@@ -89,3 +89,4 @@ import "./cases/trailingLineComment";
 import "./cases/elseComments";
 import "./cases/forOfPattern";
 import "./cases/paramPatterns";
+import "./cases/objectPropertyComments";
