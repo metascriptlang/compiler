@@ -34,7 +34,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr, walkNode } from "../walker";
-import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef } from "../util";
+import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -86,7 +86,7 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 	if (node == null || node.kind != NodeKind.CallExpr) return { closure: null, timeout: null };
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
-	if (sym == null || (sym.builtinKind != "PromiseSpawn" && sym.nativeName != "msSpawn")) return { closure: null, timeout: null };
+	if (sym == null || (sym.builtinKind != "PromiseSpawn" && !isRuntimeProcSym(sym, "msSpawn"))) return { closure: null, timeout: null };
 	if (cd.arguments.length < 1) return { closure: null, timeout: null };
 	const closure = cd.arguments[0];
 	let timeout: Node | null = null;

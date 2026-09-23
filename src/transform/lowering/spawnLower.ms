@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionDa
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef } from "../util";
+import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -99,14 +99,8 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.CallExpr) return node;
 		const cd = node.data as CallExprData;
-		// Check for spawn builtin (builtinKind or nativeName)
-		let isSpawn = false;
 		const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
-		if (sym != null) {
-			if (sym.builtinKind == "PromiseSpawn" || sym.nativeName == "msSpawn") {
-				isSpawn = true;
-			}
-		}
+		const isSpawn = sym != null && (sym.builtinKind == "PromiseSpawn" || isRuntimeProcSym(sym, "msSpawn"));
 		if (!isSpawn || cd.arguments.length < 1) return node;
 
 		let closureArg = cd.arguments[0];

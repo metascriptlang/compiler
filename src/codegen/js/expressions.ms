@@ -407,14 +407,9 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// msPrintln / console.log → console.log (strings are native)
-	const isMsPrintln = d.callee.kind == NodeKind.Identifier && (d.callee.data as IdentifierData).name == "msPrintln";
-	const isConsoleLog = d.callee.kind == NodeKind.MemberExpr
-		&& (d.callee.data as MemberExprData).property == "log"
-		&& (d.callee.data as MemberExprData).object.kind == NodeKind.Identifier
-		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name == "console";
-	if (isMsPrintln || isConsoleLog) {
-		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
+	// console.log (Echo builtin) → console.log (strings are native)
+	if (sym != null && sym.builtinKind == "Echo") {
+		markNamed(gen, calleeOriginNode(d.callee), "console.log");
 		emit(gen, "console.log(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
