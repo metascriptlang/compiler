@@ -289,6 +289,7 @@ function engine(): void {
 		["logicExportEdit.ms", "lifecycle.ms", "g3"],
 		["logicLayoutEdit.ms", "lifecycle.ms", "g4"],
 		["logic.ms", "lifecycleThrowingEdit.ms", "g5"],
+		["logic.ms", "lifecycleLayoutEdit.ms", "g6"],
 	];
 	for (const g of generations) {
 		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
@@ -327,6 +328,8 @@ function engine(): void {
 		"HCR-ENGINE after rejection: value 10 tick 14 version 1",
 		"HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)",
 		"HCR-ENGINE after layout rejection: value 10 tick 15 version 1",
+		"HCR-ENGINE class layout changed: restart required lifecycle (the layout of type 'Probe' in module 'lifecycle' changed)",
+		"HCR-ENGINE after class layout rejection: value 10 tick 16 version 1",
 		"HCR-ENGINE core changed: restart required (the core image changed (runtime, standard library or toolchain))",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {

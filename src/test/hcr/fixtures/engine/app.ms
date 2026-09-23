@@ -63,6 +63,12 @@ place("g4", "module.dll.hcrabi");
 report("state layout changed");
 show("after layout rejection");
 
+place("g1", "module.logic.dll");
+place("g6", "module.lifecycle.dll");
+place("g6", "module.dll.hcrabi");
+report("class layout changed");
+show("after class layout rejection");
+
 place("g2", "module.core.dll");
 place("g2", "module.dll.hcrabi");
 report("core changed");
