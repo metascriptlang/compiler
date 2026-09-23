@@ -34,7 +34,7 @@ export class MovedVar {
 }
 
 export class BorrowRead {
-	readName: string;
+	readSym: Symbol;
 	readNode: Node;
 	preStmtIdx: int32;
 }
