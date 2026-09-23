@@ -49,3 +49,4 @@ import "./cases/tryExprAtom";
 import "./cases/methodDefaults";
 import "./cases/headerComment";
 import "./cases/jsx";
+import "./cases/multilineStmtGap";
