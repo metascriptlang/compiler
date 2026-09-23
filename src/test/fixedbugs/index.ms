@@ -229,3 +229,4 @@ import "./bug212Float32ConstFold";
 import "./bug204_generic_distinct_param";
 import "./bug205_generic_distinct_param_mismatch";
 import "./bug206_sized_array_length";
+import "./bug207_enum_instance_extension";
