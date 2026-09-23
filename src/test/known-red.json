@@ -22,11 +22,6 @@
   },
   "guard": {},
   "san": {
-    "253-duVariantWiden [san]": {"since":"52ae61ea","note":"DRC ledger leak: Tag alloc=25008 destroy=25004; measured 2026-09-21"},
-    "254-duSinkPayload [san]": {"since":"52ae61ea","note":"DRC ledger leak: Alpha alloc=10007 destroy=10003; measured 2026-09-21"},
-    "258-narrowedUnionArg [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=75006 destroy=25002; measured 2026-09-21"},
-    "259-narrowedUnionMemberRead [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=50003 destroy=25001; measured 2026-09-21"},
-    "260-liftedFnUnionVariantHooks [san]": {"since":"52ae61ea","note":"DRC ledger leak: Circle alloc=75004 destroy=25001; measured 2026-09-21"},
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "781-httpServerHeaders [san]": {"since":"e5f0ec68","note":"DRC ledger leak: msStringArrayRefCell alloc=5 destroy=2; reproduced on a control built from main 8be46044 and at 28c4843d; measured 2026-09-23"},
