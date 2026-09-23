@@ -1099,6 +1099,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					openStaticReceiverScope(ctx, classType.sym);
 				}
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
+					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
+				}
 				if (pd.propIsStatic) closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
 			}

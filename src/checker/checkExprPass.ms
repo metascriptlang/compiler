@@ -1461,7 +1461,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
 				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-				node.nodeType = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType); return;
+				const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+				node.nodeType = constructed; return;
 			} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
 				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
@@ -1533,6 +1534,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					&& varIdx < objExpected.typeChildren.length)
 					? objExpected.typeChildren[varIdx]
 					: null;
+				if (variant != null && variant.kind == TypeKind.Ref) {
+					recheckLiteralAs(ctx, node, variant);
+					return;
+				}
 				for (let fi = 0; fi < d.properties.length; fi += 1) {
 					const key = fi < d.keys.length ? d.keys[fi] : "";
 					const fieldExpected = (variant != null && key != "")
@@ -2574,7 +2579,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, recheckLiteralAs, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

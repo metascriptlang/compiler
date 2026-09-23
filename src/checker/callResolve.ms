@@ -21,7 +21,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { unionHasMemberOfKind, skipModifier, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -1467,11 +1467,13 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 				convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 				d.arguments[pi] = convNode;
 			}
-			if (paramType.kind == TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
-				const uw = widenVariantToUnion(d.arguments[pi], paramType, argTypes[pi]);
+			const paramValue = skipModifier(paramType);
+			if (paramValue != null && paramValue.kind == TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
+				const argNow = d.arguments[pi].nodeType != null ? d.arguments[pi].nodeType! : argTypes[pi];
+				const uw = widenVariantToUnion(d.arguments[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) d.arguments[pi] = uw;
 			}
-			if (paramType.kind != TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
+			if (paramValue != null && paramValue.kind != TypeKind.Union && pi < d.arguments.length && argTypes[pi] != null) {
 				const pj = narrowUnionToVariant(d.arguments[pi], argTypes[pi]);
 				if (pj != null as unknown as Node) d.arguments[pi] = pj;
 			}
@@ -1715,8 +1717,9 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			const arg = cd.arguments[ai];
 			if (arg == null || arg.nodeType == null) continue;
 			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
-			if (formal != null && formal.kind == TypeKind.Union) {
-				const uw = widenVariantToUnion(arg, formal, arg.nodeType);
+			const formalValue = skipModifier(formal);
+			if (formalValue != null && formalValue.kind == TypeKind.Union) {
+				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
 			const adoptedGen = tryAdoptAnonStruct(arg, formal, arg.nodeType);
@@ -2096,11 +2099,12 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
 			continue;
 		}
-		if (substituted.kind == TypeKind.Union && arg.nodeType != null) {
-			const uw = widenVariantToUnion(arg, substituted, arg.nodeType);
+		const substitutedValue = skipModifier(substituted);
+		if (substitutedValue != null && substitutedValue.kind == TypeKind.Union && arg.nodeType != null) {
+			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;
-				if (pi < argTypes.length) argTypes[pi] = substituted;
+				if (pi < argTypes.length) argTypes[pi] = substitutedValue;
 			}
 			continue;
 		}
@@ -2800,6 +2804,11 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
+export function recheckLiteralAs(ctx: CheckerContext, node: Node, variant: Type): void {
+	node.nodeType = null;
+	callCheckExpr(ctx, node, variant);
+}
+
 export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null): Type {
 	if (unionType == null) return inferredType();
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
@@ -2874,6 +2883,11 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 
 	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[variantIdx];
+		if (variant.kind == TypeKind.Ref) {
+			recheckLiteralAs(ctx, node, variant);
+			const retyped = node.nodeType as Type | null;
+			return retyped != null ? retyped : variant;
+		}
 		// Validate remaining fields match this variant
 		// Use stampType (preserves Ref wrapper) so codegen knows to heap-allocate
 		node.nodeType = stampType != null ? stampType : unionType;

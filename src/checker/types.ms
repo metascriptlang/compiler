@@ -697,7 +697,7 @@ export function findUnionVariant(unionType: Type | null, fieldNames: string[], f
 	if (unionType == null || unionType.typeChildren == null || fieldNames.length == 0) return -1;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
-		const variant = unionType.typeChildren[vi];
+		const variant = peelToStruct(unionType.typeChildren[vi]);
 		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
 			let allFound = true;
 			let ti = 0;
@@ -755,7 +755,7 @@ export function isAmbiguousVariant(unionType: Type | null, matchedIdx: number, f
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		if (vi != matchedIdx) {
-			const variant = unionType.typeChildren[vi];
+			const variant = peelToStruct(unionType.typeChildren[vi]);
 			if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
 				let allFound = true;
 				let ti = 0;
@@ -2477,7 +2477,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	// heap), so the box-site must pick the per-type <Name>ArrayDestroy walker — never the
 	// free-only fallback (else every inner buffer leaks).
 	if (elem.kind == TypeKind.Array) return true;
-	if (elem.kind == TypeKind.Tuple) {
+	if (elem.kind == TypeKind.Tuple || (elem.kind == TypeKind.Union && elem.typeName == "")) {
 		for (const child of elem.typeChildren) {
 			if (arrayElementNeedsCleanup(child)) return true;
 		}

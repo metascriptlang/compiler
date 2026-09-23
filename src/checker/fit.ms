@@ -919,11 +919,9 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	if (vi < 0) vi = structuralMemberIndex(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
-	// A union slot holds the variant BY VALUE, so a ref operand is READ and
-	// copied, never consumed: handing the pointer to the conversion makes the
-	// analyzer sink it (wasMoved) and the heap cell is then destroyed by
-	// nobody. Spelling the deref keeps the ref owned by its own scope and
-	// routes the payload through the ordinary value-copy path.
+	// A by-value slot READS a ref operand and copies it, never consumes it:
+	// handing the pointer to the conversion makes the analyzer sink it
+	// (wasMoved) and the heap cell is then destroyed by nobody.
 	let operand = expr;
 	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType);
 	if (thunk != null as unknown as Node) operand = thunk;
@@ -1011,6 +1009,7 @@ export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type): Node {
 	const vi = tagUnionMemberSlot(declared, exprType);
 	if (vi < 0) return null as unknown as Node;
+	expr.nodeType = declared;
 	return hiddenSlotConv(expr, declared.typeChildren[vi], vi);
 }
 
