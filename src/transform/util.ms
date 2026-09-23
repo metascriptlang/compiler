@@ -2,9 +2,9 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, HiddenStdConvData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
@@ -588,6 +588,12 @@ export function makeHiddenStdConv(inner: Node, targetType: Type, loc: SourceLoca
 	const n = createNode(NodeKind.HiddenStdConv, { convExpr: inner, convType: targetType }, syntheticToken(loc));
 	n.nodeType = targetType;
 	return n;
+}
+
+export function isByteViewConv(node: Readonly<Node>): boolean {
+	if (node.kind != NodeKind.HiddenStdConv) return false;
+	const d = node.data as HiddenStdConvData;
+	return d.convType.kind == TypeKind.Array && isStringLike(d.convExpr.nodeType);
 }
 
 export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLocation): Node {

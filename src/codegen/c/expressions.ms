@@ -23,7 +23,7 @@ import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
-import { isRuntimeProcSym } from "../../transform/util";
+import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
 // Same-module the class symbol carries its ClassDecl directly; imported symbols
@@ -1861,15 +1861,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
-		// Zero-copy string ↔ uint8[] bridge (same memory layout): string is a
-		// fat value (msString), arrays are pointers (msUint8Array*) — each
-		// direction needs its own cast shape.
-		if (node.flags.has(NodeFlag.Cursor)) {
-			if (d.convType.kind == TypeKind.Array) {
-				ctx.results.push(`((${targetC}*)&(${inner}))`);
-			} else {
-				ctx.results.push(`*((${targetC}*)(${inner}))`);
-			}
+		// Zero-copy string → uint8[] bridge (same memory layout): string is a
+		// fat value (msString), arrays are pointers (msUint8Array*).
+		if (isByteViewConv(node)) {
+			ctx.results.push(`((${targetC}*)&(${inner}))`);
 			return;
 		}
 		// Variant struct → discriminated union: construct with tag + variant slot.

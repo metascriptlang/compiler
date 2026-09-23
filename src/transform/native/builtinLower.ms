@@ -12,7 +12,7 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
@@ -278,9 +278,9 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	return node;
 }
 
-// Zero-copy string → uint8[] borrow: rewrite call to HiddenStdConv with Cursor flag
-// (bit-cast, same memory layout; Cursor tells DRC to skip destroy on the result).
-// The reverse direction (AsString) is NOT intercepted: a Cursor borrow escaping the
+// Zero-copy string → uint8[] borrow: rewrite call to a HiddenStdConv, which
+// isByteViewConv reads as a bit-cast view (DRC skips destroy on the result).
+// The reverse direction (AsString) is NOT intercepted: a borrow escaping the
 // array's scope dangles (bug065), so the call falls through to the plain extern
 // msAsString — a copying kernel (cstrToNimstr shape) returning a fresh owned string.
 function rewriteZeroCopyBridge(node: Node): Node {
@@ -289,9 +289,7 @@ function rewriteZeroCopyBridge(node: Node): Node {
 	const receiver = cd.arguments[0];
 	const loc = node.location;
 	const targetType = createArray(createPrimitive(TypeKind.Uint8));
-	const conv = makeHiddenStdConv(receiver, targetType, loc);
-	conv.flags = conv.flags.incl(NodeFlag.Cursor);
-	return conv;
+	return makeHiddenStdConv(receiver, targetType, loc);
 }
 
 function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext): Node {
