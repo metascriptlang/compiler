@@ -305,6 +305,93 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	return fut;
 }
 
+#define MS_FS_WATCH_BUFFER 65536
+#define MS_FS_WATCH_STATUS_OVERFLOW 0x0000010C
+
+static _Thread_local DWORD _msFsWatchLastError = 0;
+
+int32_t msFsWatchLastError(void) {
+	return (int32_t)_msFsWatchLastError;
+}
+
+int32_t msFsWatchOpen(msIoEngine* e, msString path) {
+	_msFsWatchLastError = 0;
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
+	WCHAR* wide = (WCHAR*)malloc(((size_t)wideLen + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
+	wide[wideLen] = 0;
+	HANDLE dir = CreateFileW(wide, FILE_LIST_DIRECTORY,
+	                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+	                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+	free(wide);
+	if (dir == INVALID_HANDLE_VALUE) {
+		_msFsWatchLastError = GetLastError();
+		return -1;
+	}
+	if (CreateIoCompletionPort(dir, e->iocp, 0, 0) == NULL) {
+		_msFsWatchLastError = GetLastError();
+		CloseHandle(dir);
+		return -1;
+	}
+	return (int32_t)(intptr_t)dir;
+}
+
+void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
+	msIoRequest* req = allocRequest(e);
+	req->op = MS_IO_WATCH;
+	req->fd = handle;
+	req->buf = (char*)malloc(MS_FS_WATCH_BUFFER);
+	req->len = MS_FS_WATCH_BUFFER;
+	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	req->fut = fut;
+	msIocpOv* iov = allocOv(e, req);
+	BOOL armed = ReadDirectoryChangesW((HANDLE)(intptr_t)handle, req->buf, MS_FS_WATCH_BUFFER, recursive != 0,
+	                                   FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+	                                   FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
+	                                   NULL, &iov->ov, NULL);
+	if (!armed) {
+		_msFsWatchLastError = GetLastError();
+		free(req->buf);
+		req->buf = NULL;
+		msFutureCompleteT(fut, MS_EMPTY_STRING);
+		freeRequest(e, req);
+		freeOv(e, iov);
+	}
+	return fut;
+}
+
+void msFsWatchClose(int32_t handle) {
+	CloseHandle((HANDLE)(intptr_t)handle);
+}
+
+static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
+	if (status == MS_FS_WATCH_STATUS_OVERFLOW || (status == 0 && bytes == 0)) return msStringNew("*", 1);
+	if (status != 0) return MS_EMPTY_STRING;
+	size_t cap = 256, used = 0;
+	char* out = (char*)malloc(cap);
+	DWORD offset = 0;
+	for (;;) {
+		const FILE_NOTIFY_INFORMATION* info = (const FILE_NOTIFY_INFORMATION*)(buf + offset);
+		int wideLen = (int)(info->FileNameLength / sizeof(WCHAR));
+		int utf8Len = WideCharToMultiByte(CP_UTF8, 0, info->FileName, wideLen, NULL, 0, NULL, NULL);
+		if (used + (size_t)utf8Len + 2 > cap) {
+			while (used + (size_t)utf8Len + 2 > cap) cap *= 2;
+			out = (char*)realloc(out, cap);
+		}
+		if (used > 0) out[used++] = '\n';
+		WideCharToMultiByte(CP_UTF8, 0, info->FileName, wideLen, out + used, utf8Len, NULL, NULL);
+		for (int i = 0; i < utf8Len; i++) {
+			if (out[used + (size_t)i] == '\\') out[used + (size_t)i] = '/';
+		}
+		used += (size_t)utf8Len;
+		if (info->NextEntryOffset == 0) break;
+		offset += info->NextEntryOffset;
+	}
+	msString result = msStringNew(out, (int64_t)used);
+	free(out);
+	return result;
+}
+
 /* ===== Process Completions ===== */
 
 /* No-op: closesocket() queues ABORTED packet to the IOCP. */
@@ -381,6 +468,13 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		case MS_IO_CLOSE: {
 			closesocket((SOCKET)(intptr_t)req->fd);
 			msFutureCompleteVoid(req->fut);
+			break;
+		}
+		case MS_IO_WATCH: {
+			msString changes = watchChanges(req->buf, bytes, entries[i].Internal);
+			free(req->buf);
+			req->buf = NULL;
+			msFutureCompleteT((msFuture_msString*)req->fut, changes);
 			break;
 		}
 		}
