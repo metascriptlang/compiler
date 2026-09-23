@@ -6,7 +6,7 @@
 // check prints what would change; no-binary syncs the support trees only.
 // Env: MSC_INSTALL_DIR overrides the destination.
 import { argv, cwd, env, execFileResult, exit, platform } from "std/process";
-import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, removeAll, writeFile } from "std/fs";
+import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, removeAll, rename, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -121,8 +121,11 @@ if (syncBinary) {
 		console.log(`would: copy ${built} → ${installed}`);
 	} else {
 		const backup = `${installed}.bak-${modifiedTime(installed)}`;
-		if (exists(installed) && !copyFile(installed, backup).ok) die(`cannot back up ${installed} to ${backup}`);
-		if (!copyFile(built, installed).ok) die(`cannot install ${installed}`);
+		if (exists(installed) && !rename(installed, backup).ok) die(`cannot move ${installed} aside to ${backup}`);
+		if (!copyFile(built, installed).ok) {
+			if (exists(backup)) rename(backup, installed);
+			die(`cannot install ${installed}`);
+		}
 		if (!windows) chmod(installed, 493);
 		// A second, extension-less binary beside msc.exe shadows it in POSIX shells.
 		if (windows && exists(`${DEST}/bin/msc`)) removeAll(`${DEST}/bin/msc`);
