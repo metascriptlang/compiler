@@ -59,7 +59,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 
 	const innerDoc = match (node.kind) {
 		// ===== Literals =====
-		NodeKind.NumberLiteral => printNumberLiteral(node),
+		NodeKind.NumberLiteral => printNumberLiteral(node, options),
 		NodeKind.StringLiteral => printStringLiteral(node, options),
 		NodeKind.BooleanLiteral => printBooleanLiteral(node),
 		NodeKind.NullLiteral => docText("null"),
