@@ -416,7 +416,7 @@ void msPoolShutdown(void) {
 
 #ifdef _WIN32
 	for (int i = 0; i < gPool->workerCount; i++) {
-		WaitForSingleObject(gPool->workers[i], INFINITE);
+		if (GetThreadId(gPool->workers[i]) != GetCurrentThreadId()) WaitForSingleObject(gPool->workers[i], INFINITE);
 		CloseHandle(gPool->workers[i]);
 	}
 	free(gPool->workers);
@@ -424,7 +424,7 @@ void msPoolShutdown(void) {
 	DeleteCriticalSection(&gPool->cs);
 #else
 	for (int i = 0; i < gPool->workerCount; i++) {
-		pthread_join(gPool->workers[i], NULL);
+		if (!pthread_equal(gPool->workers[i], pthread_self())) pthread_join(gPool->workers[i], NULL);
 	}
 	free(gPool->workers);
 	free(gPool->queue);
