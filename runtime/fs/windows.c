@@ -76,12 +76,51 @@ double msFsExists(msString path) {
 	return (_stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
 }
 
+/* POSIX realpath resolves symlinks; _fullpath only normalizes the spelling.
+ * The final path comes from the opened file itself. When it names the same
+ * spelling up to case, no link was crossed and the caller's spelling stays. */
+static char* _msFsFinalPath(const char* full) {
+	int wlen = MultiByteToWideChar(CP_UTF8, 0, full, -1, NULL, 0);
+	if (wlen <= 0) return NULL;
+	wchar_t* wfull = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)wlen);
+	if (wfull == NULL) return NULL;
+	MultiByteToWideChar(CP_UTF8, 0, full, -1, wfull, wlen);
+	HANDLE h = CreateFileW(wfull, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	free(wfull);
+	if (h == INVALID_HANDLE_VALUE) return NULL;
+	DWORD need = GetFinalPathNameByHandleW(h, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	wchar_t* wfinal = need > 0 ? (wchar_t*)malloc(sizeof(wchar_t) * (size_t)(need + 1)) : NULL;
+	DWORD got = wfinal != NULL ? GetFinalPathNameByHandleW(h, wfinal, need + 1, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) : 0;
+	CloseHandle(h);
+	if (got == 0 || got > need) { if (wfinal) free(wfinal); return NULL; }
+	const wchar_t* w = wfinal;
+	wchar_t* unc = NULL;
+	if (wcsncmp(w, L"\\\\?\\UNC\\", 8) == 0) {
+		unc = (wchar_t*)malloc(sizeof(wchar_t) * (wcslen(w) - 6 + 1));
+		if (unc == NULL) { free(wfinal); return NULL; }
+		unc[0] = L'\\';
+		wcscpy(unc + 1, w + 7);
+		w = unc;
+	} else if (wcsncmp(w, L"\\\\?\\", 4) == 0) {
+		w = w + 4;
+	}
+	int ulen = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+	char* out = ulen > 0 ? (char*)malloc((size_t)ulen) : NULL;
+	if (out != NULL) WideCharToMultiByte(CP_UTF8, 0, w, -1, out, ulen, NULL, NULL);
+	if (unc) free(unc);
+	free(wfinal);
+	return out;
+}
+
 msString msFsRealPath(msString path) {
 	char* full = _fullpath(NULL, msStringToCString(path), 0);
 	if (!full) return MS_EMPTY_STRING;
 	struct _stat st;
 	if (_stat(full, &st) != 0) { free(full); return MS_EMPTY_STRING; }
-	msString result = msStringFromCStr(full);
+	char* final = _msFsFinalPath(full);
+	msString result = msStringFromCStr(final != NULL && _stricmp(final, full) != 0 ? final : full);
+	if (final) free(final);
 	free(full);
 	return result;
 }
