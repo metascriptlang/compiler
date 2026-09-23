@@ -2,6 +2,7 @@
 
 import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
+import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
 import { Node, ProgramData, SymbolKind, Type } from "../ast/node";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
@@ -169,14 +170,14 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 // Report graph-level errors (e.g., missing entry) and circular dep warnings.
 function reportGraphErrors(graph: ModuleGraph): void {
 	for (const err of graph.errors) {
-		console.log(red("graph error: ") + err);
+		printDiag(red("graph error: ") + err);
 	}
 	for (const dep of graph.circularDeps) {
 		let circMsg = `circular import: ${dep.fromPath} <-> ${dep.toPath}`;
 		if (dep.importLine > 0) {
 			circMsg = circMsg + ` (line ${dep.importLine})`;
 		}
-		console.log(yellow("warning: ") + circMsg);
+		printDiag(yellow("warning: ") + circMsg);
 	}
 }
 
@@ -189,6 +190,10 @@ function getSourceLine(source: string, lineNum: number): string {
 	return lines[idx];
 }
 
+function printDiag(line: string): void {
+	writeStderr(line + "\n");
+}
+
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
 	// Header: "error: message" or "warning: message"
@@ -197,7 +202,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 		true => bold(yellow("warning")),
 		false => bold(red("error")),
 	};
-	console.log(levelStr + ": " + bold(e.message));
+	printDiag(levelStr + ": " + bold(e.message));
 
 	// Location: "  --> file:line:col"
 	if (e.line > 0) {
@@ -205,7 +210,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 		if (e.column > 0) {
 			locStr = `${locStr}:${e.column}`;
 		}
-		console.log(locStr);
+		printDiag(locStr);
 
 		// Source line + caret
 		const srcLine = getSourceLine(source, e.line);
@@ -213,9 +218,9 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 			const lineNumStr = e.line.toString();
 			const pad = "   ";
 			// Separator: "   |"
-			console.log(blue(pad + " |"));
+			printDiag(blue(pad + " |"));
 			// Source:    "42 | source code here"
-			console.log(blue(lineNumStr + " | ") + srcLine);
+			printDiag(blue(lineNumStr + " | ") + srcLine);
 			// Caret:    "   |     ^^^"
 			if (e.column > 0) {
 				let caretPad = "";
@@ -224,14 +229,14 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 					caretPad = caretPad + " ";
 					ci = ci + 1;
 				}
-				console.log(blue(pad + " | ") + caretPad + green("^"));
+				printDiag(blue(pad + " | ") + caretPad + green("^"));
 			}
 		}
 	} else {
 		// No line info — show file only
-		console.log(`  ${bold(cyan("-->"))} ${modPath}`);
+		printDiag(`  ${bold(cyan("-->"))} ${modPath}`);
 	}
-	console.log("");
+	printDiag("");
 }
 
 // Report per-module errors without exiting (for non-fatal type errors).
@@ -412,7 +417,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 		}
 	}
 	if (graphErrors > 0) {
-		console.log(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
 		exit(1);
 	}
 	return graph;
@@ -530,7 +535,7 @@ function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 function parseOrExit(source: string, modPath: string): Node {
 	const pr = parseSource(source);
 	if (!pr.ok) {
-		console.log(`${error("parse error")} [${modPath}]: ${pr.error}`);
+		printDiag(`${error("parse error")} [${modPath}]: ${pr.error}`);
 		exit(1);
 	}
 	return pr.value;
@@ -691,7 +696,7 @@ interface CBuildState {
 function flagArgsOrExit(flags: string): string[] {
 	const parsed = splitCcFlags(flags);
 	if (parsed.ok) return parsed.value;
-	console.log(`${error("error")}: ${parsed.error}`);
+	printDiag(`${error("error")}: ${parsed.error}`);
 	exit(1);
 	return [];
 }
@@ -886,7 +891,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					}
 				}
 				if (!exists(fullPath)) {
-					console.log(`${error("error")}: @compile cannot find: ${fullPath}`);
+					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
 				}
 				// Mark C++ at directive-resolution time (main thread, sequential)
@@ -945,7 +950,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
 			// stderr and the join loop only reports the exit code.
-			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
@@ -970,7 +975,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				ci = ci + 1;
 				continue;
 			}
-			console.log(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			exit(1);
 		}
 		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary));
@@ -1010,7 +1015,7 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
-			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
@@ -1595,11 +1600,11 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 
 	const encoded = serializeHcrAbiBundle(state.candidate);
 	if (!encoded.ok) {
-		console.log(`${error("error")}: cannot serialize HCR ABI bundle: ${encoded.error}`);
+		printDiag(`${error("error")}: cannot serialize HCR ABI bundle: ${encoded.error}`);
 		exit(1);
 	}
 	if (!atomicWriteFile(state.bundlePath, encoded.value)) {
-		console.log(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
+		printDiag(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
 		exit(1);
 	}
 	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
@@ -1640,7 +1645,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
 			if (sbfClang == "") {
-				console.log(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
+				printDiag(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
 				console.log(`  System clang carries ${bold("bpf")}/${bold("bpfel")} (Linux kernel BPF) — a different ABI, not this.`);
 				console.log(`  Install Anza platform-tools (${bold("cargo build-sbf")} fetches it to ~/.cache/solana),`);
 				console.log(`  or point at one: ${bold("MSC_SBF_CLANG=/path/to/platform-tools/llvm/bin/clang")}`);
@@ -1649,7 +1654,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			opts.ccBinary = sbfClang;
 		}
 		if (resolveSbfLinker() == "") {
-			console.log(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
+			printDiag(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			exit(1);
 		}
@@ -1694,7 +1699,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (opts.isHcr && !opts.emitC) {
 		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
 		if (!prepared.ok) {
-			console.log(`${error("error")}: ${prepared.error}`);
+			printDiag(`${error("error")}: ${prepared.error}`);
 			exit(1);
 		}
 		hcrBuildAbi = prepared.value;
@@ -1706,7 +1711,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			? Result.ok({ candidate: hcrBuildAbi.candidate, modulePaths: hcrBuildAbi.modulePaths })
 			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath);
 		if (!abi.ok) {
-			console.log(`${error("error")}: ${abi.error}`);
+			printDiag(`${error("error")}: ${abi.error}`);
 			exit(1);
 		}
 		hcrModules = hcrIndirectModules(abi.value);
@@ -1767,7 +1772,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) {
-			console.log(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
+			printDiag(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
 			continue;
 		}
 		// The graph-checker phase (loadAndCheckGraph → checkModuleGraph) already
@@ -1906,7 +1911,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
 			}
 			exit(1);
 		}
@@ -1940,7 +1945,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Gate: stop before codegen if any type errors (standard compiler parity).
 	// All three reference compilers NEVER proceed to codegen with type errors.
 	if (totalCheckerErrors > 0) {
-		console.log(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
+		printDiag(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
 		exit(1);
 	}
 
@@ -2023,11 +2028,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -2173,14 +2178,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
-			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			exit(1);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
 			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
 				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
 			} else {
-				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+				printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
 			}
 		}
@@ -2239,22 +2244,22 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (opts.appMode == "staticlib") {
 		const arRes = archiveStatic(oFiles, outBinary);
 		if (!arRes.ok) {
-			console.log(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
-			if (arRes.error.errorOutput != "") console.log(arRes.error.errorOutput);
+			printDiag(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
+			if (arRes.error.errorOutput != "") printDiag(arRes.error.errorOutput);
 			exit(1);
 		}
 	} else if (opts.targetOs == "solana") {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
-			console.log(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			exit(1);
 		}
 	} else {
 		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (!linkRes.ok) {
-			console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+			printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			exit(1);
 		}
 	}
@@ -2403,7 +2408,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
 			}
 			exit(1);
 		}
@@ -2448,11 +2453,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -2521,11 +2526,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
-			console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		}
 		cji = cji + 1;
@@ -2552,15 +2557,15 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linkRes.ok) {
-		console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-		if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+		printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 		exit(1);
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
-	if (runCode > 128) console.log(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
+	if (runCode > 128) printDiag(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
 
@@ -2982,7 +2987,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
 	// into live code is visible here as a "cannot evaluate" line.
 	for (const e of takeRaiserCompileErrors()) {
-		console.log(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+		printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
@@ -3004,7 +3009,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	if (!ranOk) {
 		if (ctx.lastError != "") {
-			console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
+			printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
 		}
 		exit(1);
 	}
