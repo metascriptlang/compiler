@@ -27,7 +27,7 @@
 // GUARD-BALANCE Leaf
 // GUARD-BALANCE Branch
 // GUARD-BALANCE Plain
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 class Leaf {
 	n: number;

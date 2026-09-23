@@ -33,7 +33,7 @@
 // Two nullable-fn fields of DIFFERENT arity are required; a single field or a
 // non-nullable field does not collide. No RC balance directive — the signal is
 // build-failure / wrong-value-throw, not a lifecycle count.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 interface Cell {
 	getter: (() => number) | null;

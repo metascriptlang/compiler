@@ -889,7 +889,7 @@ function buildOneJob(job: Readonly<BuildJob>): int32 {
 	return retried ? BUILD_OK_RETRIED : BUILD_OK;
 }
 
-// same infra signatures guard/run.sh retries on — a toolchain race is not a verdict
+// same infra signatures guard/run.ms retries on — a toolchain race is not a verdict
 function nativeBuildOk(output: string): boolean {
 	return output.contains("Built") || output.contains("Up to date");
 }

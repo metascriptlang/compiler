@@ -31,7 +31,7 @@
 // SHAPE: enum-disc match type — its variants have DIFFERENT layouts, so the
 //   collapse is observable. A bool-disc DU cannot serve here: both variants
 //   carry `ok` at the same offset, so a leaked narrow still emits valid C.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 enum FmK { Alpha, Beta }
 type FmEnumDU = match (kind: FmK) { FmK.Alpha => { a: int32 }, FmK.Beta => { b: string } };
