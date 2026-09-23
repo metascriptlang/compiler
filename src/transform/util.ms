@@ -8,7 +8,7 @@ import { createFunction, createStruct, createArray, createPtr, numberType, int32
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
-import { IdentCache, getIdentId, findIdentId, createIdentCache } from "../checker/idents";
+import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -175,6 +175,7 @@ let _runtimeIdentCache: IdentCache | null = null;
 
 export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): void {
 	_compilerFuncs = declared;
+	if (_runtimeIdentCache == identCache) return;
 	_runtimeIdentCache = identCache;
 	_runtimeSyms = new HashMap<string, Symbol>();
 }
@@ -193,12 +194,9 @@ export function runtimeProcSym(procName: string): Symbol {
 
 export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
 	if (sym == null) return false;
-	let runtimeSym = _compilerFuncs.get(procName);
-	if (runtimeSym == null) runtimeSym = _runtimeSyms.get(procName);
-	if (sym == runtimeSym) return true;
-	if (sym.nameId == 0 || !hasFlag(sym, SymbolFlag.ImportC)) return false;
-	if (runtimeSym != null) return sym.nameId == runtimeSym.nameId;
-	return _runtimeIdentCache != null && sym.nameId == findIdentId(_runtimeIdentCache, procName);
+	const declared = _compilerFuncs.get(procName);
+	if (declared != null) return sym == declared;
+	return sym == _runtimeSyms.get(procName);
 }
 
 export function isRuntimeProcCall(node: Node, procName: string): boolean {
@@ -711,11 +709,11 @@ test "a runtime proc query mints no symbol" {
 	const sameName = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
 	setFlag(sameName, SymbolFlag.ImportC);
 	sameName.nameId = getIdentId(cache, "msProbeAccess");
-	assert isRuntimeProcSym(sameName, "msProbeAccess");
+	assert !isRuntimeProcSym(sameName, "msProbeAccess");
 	assert _runtimeSyms.size == 0;
 	const minted = runtimeProcSym("msProbeAccess");
 	assert isRuntimeProcSym(minted, "msProbeAccess");
-	assert isRuntimeProcSym(sameName, "msProbeAccess");
+	assert !isRuntimeProcSym(sameName, "msProbeAccess");
 	assert _runtimeSyms.size == 1;
 	_compilerFuncs = savedFuncs;
 	_runtimeSyms = savedSyms;
