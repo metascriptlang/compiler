@@ -474,8 +474,6 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	const elements: Doc[] = [];
 	for (let i = 0; i < d.patternElements.length; i += 1) {
 		if (i > 0) elements.push(docText(", "));
-		const isRest = d.hasRestElement && i == d.patternElements.length - 1;
-		if (isRest) elements.push(docText("..."));
 		elements.push(callPrintNode(d.patternElements[i], options));
 		if (i < d.patternDefaults.length && d.patternDefaults[i] != null) {
 			elements.push(docText(" = "));
@@ -491,8 +489,6 @@ export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	const props: Doc[] = [];
 	for (let i = 0; i < d.patternProps.length; i += 1) {
 		if (i > 0) props.push(docText(", "));
-		const isRest = d.hasRestProp && i == d.patternProps.length - 1;
-		if (isRest) props.push(docText("..."));
 		props.push(callPrintNode(d.patternProps[i], options));
 	}
 	return docGroup([docText("{ "), docGroup(props), docText(" }")]);
