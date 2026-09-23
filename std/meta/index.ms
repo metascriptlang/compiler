@@ -30,6 +30,10 @@ extern function msMetaDefine(name: string): string;
 
 export function define(name: string): string { return msMetaDefine(name); }
 
+extern function msMetaExpansionFile(): string;
+
+export function expansionFile(): string { return msMetaExpansionFile(); }
+
 export function childCount(n: Node): number { return msNodeChildCount(n); }
 export function childAt(n: Node, i: number): Node { return msNodeChildAt(n, i); }
 

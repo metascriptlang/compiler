@@ -171,8 +171,15 @@ function hostDefine(args: RaiserValue[]): RaiserValue {
 	return boxString(definedValue(getParserDefines(), unboxString(args[0])));
 }
 
+function hostExpansionFile(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null) return boxString("");
+	return boxString(ctx.modulePath);
+}
+
 export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaDefine", hostDefine, HostCapability.Pure);
+	registerHostFn("msMetaExpansionFile", hostExpansionFile, HostCapability.Pure);
 	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);
 	registerHostFn("msMetaGetType", hostGetType, HostCapability.Pure);
 	registerHostFn("msMetaGetImpl", hostGetImpl, HostCapability.Pure);
