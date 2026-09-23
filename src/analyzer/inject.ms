@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef, isByteViewConv,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -158,7 +158,7 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// Zero-copy / implicit conversions (`HiddenStdConv`/`HiddenSubConv`) are transparent
 		// for ownership too — Nim's p() recurses nkHiddenStdConv/nkHiddenSubConv/nkConv
 		// (injectdestructors.nim:1028). A fresh RC call under a conv still produces an owned
-		// value; the conv's NodeFlag.Cursor only marks the RESULT as a borrow, not the inner call.
+		// value; a byte-view conv only makes the RESULT a borrow, not the inner call.
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
 		// `!x` / `-x` / `~x` (UnaryExpr) — transparent for ownership like the wrappers above:
 		// the operator consumes the operand's VALUE, but a fresh RC call nested inside the
@@ -1657,8 +1657,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
 	let isCursor = false;
-	// Cursor propagation from initializer: zero-copy bridge HiddenStdConv has NodeFlag.Cursor
-	if (d.initializer != null && d.initializer.flags.has(NodeFlag.Cursor)) {
+	if (d.initializer != null && isByteViewConv(d.initializer)) {
 		isCursor = true;
 	}
 	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
