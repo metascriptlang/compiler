@@ -342,7 +342,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		OVERLAPPED* lpOv = entries[i].lpOverlapped;
 		if (lpOv == NULL) continue;
 
-		msIocpOv* iov = CONTAINING_RECORD(lpOv, msIocpOv, ov);
+		msIocpOv* iov = (msIocpOv*)lpOv;
 		msIoRequest* req = iov->req;
 		DWORD bytes = entries[i].dwNumberOfBytesTransferred;
 
