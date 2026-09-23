@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2995,7 +2995,7 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 		// pointer buffer only, never per-element decref, else shared actors double-free.
 		TypeKind.Ref | TypeKind.Ptr => (elemT.sym != null && elemT.sym.symbolKind == SymbolKind.Actor)
 			? "msNumberArrayDestroy"
-			: "msRefArrayDestroy",
+			: (isAtomicRef(elemT) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy"),
 		TypeKind.Function => "msClosureArrayDestroy",
 		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
 		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF AN-24), selected once
@@ -3018,9 +3018,9 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 // per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
 // counted and inert element families scrambled the shared cell's destroyer.
 export function refArrayCellName(destroyFn: string, arrCType: string): string {
-	return (destroyFn == "msNumberArrayDestroy" && arrCType == "msRefArray")
-		? "msPtrArrayRefCell"
-		: arrCType + "RefCell";
+	if (destroyFn == "msNumberArrayDestroy" && arrCType == "msRefArray") return "msPtrArrayRefCell";
+	if (destroyFn == "msAtomicRefArrayDestroy" && arrCType == "msRefArray") return "msAtomicArrayRefCell";
+	return arrCType + "RefCell";
 }
 
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
