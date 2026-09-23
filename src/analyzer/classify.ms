@@ -353,7 +353,6 @@ export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {
 	let owns = false;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return false;
-		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return false;
 		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 		if (classifyType(c, ctx).needsCleanup) owns = true;
 	}

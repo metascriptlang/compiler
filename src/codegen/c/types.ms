@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, inlineVariantStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { getGenericDecl } from "../../parser/context";
 import { monoTypeKey } from "../../monomorphize/registry";
@@ -1279,16 +1279,13 @@ function genUnionType(g: CGen, t: Type): string {
 		// Primitive/string variants (float32 | string) carry the raw C type as
 		// payload — no per-variant struct typedef. Null is tag-only ("").
 		const rawVariant = t.typeChildren[vi];
-		const structVariant = peelToStruct(rawVariant);
+		const structVariant = inlineVariantStruct(rawVariant);
 		if (isPrimitiveUnionMember(rawVariant) || structVariant == null || structVariant.kind != TypeKind.Struct) {
 			canonicalNames.push(rawVariant.kind == TypeKind.Null ? "" : getTypeDesc(g, rawVariant));
 			allFieldTypes.push([]);
 			vi += 1;
 			continue;
 		}
-		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
-		// Without peel, variant.typeNames is empty and the variant struct emits
-		// no fields, breaking discriminated unions of named interfaces.
 		const variant = structVariant;
 		const varName = `${name}_v${vi}`;
 
@@ -1341,8 +1338,7 @@ function genUnionType(g: CGen, t: Type): string {
 	// Phase 1b: Emit named variant structs (skip duplicates that reuse a canonical name)
 	vi = 0;
 	while (vi < t.typeChildren.length) {
-		// Same Ref-peel as Phase 1a — interface variants are Ref<Struct>.
-		const variant = peelToStruct(t.typeChildren[vi]);
+		const variant = inlineVariantStruct(t.typeChildren[vi]);
 		const varName = `${name}_v${vi}`;
 		const fieldTypes = allFieldTypes[vi];
 

@@ -8,7 +8,7 @@ import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatc
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 
@@ -897,8 +897,7 @@ function structuralMemberIndex(formal: Type, exprType: Type): int32 {
 }
 
 function slotHoldsStructByValue(member: Type): boolean {
-	const s = peelToStruct(member);
-	return s != null && s.kind == TypeKind.Struct;
+	return inlineVariantStruct(member) != null;
 }
 
 export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
@@ -989,7 +988,11 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	if (exprType.kind == TypeKind.Union) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
-	return projectTagUnionMember(expr, declared, exprType);
+	let operand = expr;
+	while (operand.kind == NodeKind.TypeAssertion) {
+		operand = (operand.data as TypeAssertionData).asExpr;
+	}
+	return projectTagUnionMember(operand, declared, exprType);
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
@@ -1012,8 +1015,9 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type): Node {
-	if (carrier.typeReturn == null || narrowed.typeReturn == null) return null as unknown as Node;
-	const vi = tagUnionMemberSlot(carrier.typeReturn, narrowed.typeReturn);
+	const payload = isMaybeType(narrowed) ? narrowed.typeReturn : unwrapRefNullUnion(narrowed);
+	if (carrier.typeReturn == null || payload == null) return null as unknown as Node;
+	const vi = tagUnionMemberSlot(carrier.typeReturn, payload);
 	if (vi < 0) return null as unknown as Node;
 	return hiddenSlotConv(expr, narrowed, vi);
 }

@@ -1122,6 +1122,16 @@ export function peelToStruct(t: Type | null): Type | null {
 	return cur;
 }
 
+export function inlineVariantStruct(member: Type | null): Type | null {
+	let cur = member;
+	let _g = 0;
+	while (cur != null && cur.kind == TypeKind.Alias && cur.typeReturn != null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		cur = cur.typeReturn;
+	}
+	return cur != null && cur.kind == TypeKind.Struct ? cur : null;
+}
+
 // Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.
 // Used by checkers and codegen for generic match-type aliases like
 // `MyResult<T, E> = Ref<MyData<T, E>>` where the chain is GI → Ref → GI → Union.

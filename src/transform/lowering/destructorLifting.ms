@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { getGenericDecl } from "../../parser/context";
 import { mangleMonoName } from "../../monomorphize/registry";
@@ -811,7 +811,7 @@ function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBu
 function isTaggedUnion(t: Type): boolean {
 	if (t.kind != TypeKind.Union) return false;
 	for (let vi = 0; vi < t.typeChildren.length; vi += 1) {
-		const v = peelToStruct(t.typeChildren[vi]);
+		const v = inlineVariantStruct(t.typeChildren[vi]);
 		if (v != null && v.kind == TypeKind.Struct) return true;
 	}
 	return false;
@@ -826,10 +826,8 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	if (objType.kind == TypeKind.Union) {
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
-		// Probe each variant's fields. Peel Ref/Ptr — interface variants are
-		// Ref<Struct> in the C backend.
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
-			const variant = peelToStruct(objType.typeChildren[vi]);
+			const variant = inlineVariantStruct(objType.typeChildren[vi]);
 			if (isScalarVariant(objType.typeChildren[vi], variant)) {
 				const visited: NameSet = createNameSet();
 				fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
@@ -998,11 +996,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
-		// Without peel, Phase 1a/1b skipped variant.typeNames (empty on Ref) and
-		// no per-variant Destroy helpers were emitted, leaving the wrapper hook
-		// (`<Union>Destroy`) calling undefined helpers at link time.
-		const variant = peelToStruct(objType.typeChildren[vi]);
+		const variant = inlineVariantStruct(objType.typeChildren[vi]);
 		const scalar = isScalarVariant(objType.typeChildren[vi], variant);
 		if ((variant != null && variant.typeNames != null) || scalar) {
 			// Generate per-variant arm body
@@ -1128,11 +1122,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		// Peel Ref/Ptr for the same reason buildVariantDispatch does: interface
-		// variants are Ref<Struct>, whose typeNames is empty. Reading it raw
-		// skipped every arm, so the sink's field-assign chain came out empty and
-		// the hook stopped after the tag copy — the payload never moved.
-		const variant = peelToStruct(objType.typeChildren[vi]);
+		const variant = inlineVariantStruct(objType.typeChildren[vi]);
 		const armBuf = newBuf();
 		if (isScalarVariant(objType.typeChildren[vi], variant)) {
 			buildScalarArmBody(hook, s1, s2, "v" + vi.toString(), objType.typeChildren[vi], lctx, armBuf, loc);
@@ -1704,7 +1694,6 @@ function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): stri
 	let allPrimitive = true;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return "";
-		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return "";
 		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 	}
 	if (allPrimitive) return "";

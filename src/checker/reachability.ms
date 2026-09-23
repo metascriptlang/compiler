@@ -13,7 +13,7 @@ import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule, aliveSetHas, 
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { isMaybeType, unwrapRefNullUnion } from "./types";
+import { isMaybeType, unwrapRefNullUnion, inlineVariantStruct } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
@@ -263,8 +263,11 @@ function markUnionHookEdges(t: Type): void {
 }
 
 function markTypeInfoEdge(node: Node, modulePath: string): void {
-	let t = node.nodeType;
-	if (t == null) return;
+	if (node.nodeType != null) markTypeInfoOfType(node.nodeType);
+}
+
+function markTypeInfoOfType(ty: Type): void {
+	let t = ty;
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
@@ -288,6 +291,9 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 	}
 	if (t.kind == TypeKind.Union) {
 		markUnionHookEdges(t);
+		for (const member of t.typeChildren) {
+			if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) markTypeInfoOfType(member);
+		}
 	}
 	const tn = t.typeName;
 	if (tn.length == 0) return;

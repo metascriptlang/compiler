@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, inlineVariantStruct, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, ensureDrcProto } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -87,6 +87,10 @@ function resolveSinkLent(t: Type | null): Type | null {
 }
 
 // Unwrap Ptr/Ref/Sink/Lent to expose the inner Union for variant→union pointer casts.
+function variantSlotAccess(u: Type, vi: number): string {
+	return inlineVariantStruct(u.typeChildren[vi]) != null ? "." : "->";
+}
+
 function unwrapPointerLikeForVariant(t: Type | null): Type | null {
 	if (t == null) return null;
 	const k = t.kind;
@@ -1504,7 +1508,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) == d.property) {
 				const dt = objType.typeExtra;
 				if (dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String)) {
-					ctx.results.push(`${obj}${acc}v0.${field}`);
+					ctx.results.push(`${obj}${acc}v0${variantSlotAccess(objType, 0)}${field}`);
 					return;
 				}
 				ctx.results.push(`${obj}${acc}_tag`);
@@ -1517,7 +1521,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (!isDiscriminatedUnion(objType)) {
 				const strDisc = findSharedStringDiscriminant(objType);
 				if (strDisc != "" && strDisc == d.property) {
-					ctx.results.push(`${obj}${acc}v0.${field}`);
+					ctx.results.push(`${obj}${acc}v0${variantSlotAccess(objType, 0)}${field}`);
 					return;
 				}
 			}
@@ -1538,7 +1542,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 			if (varIdx < 0) varIdx = findVariantByFieldName(objType, d.property);
 			if (varIdx >= 0) {
-				ctx.results.push(`${obj}${acc}v${varIdx}.${field}`);
+				ctx.results.push(`${obj}${acc}v${varIdx}${variantSlotAccess(mainDeclTy != null ? mainDeclTy : objType, varIdx)}${field}`);
 				return;
 			}
 		}
@@ -1570,7 +1574,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (isDiscriminatedUnion(declTy) && getDiscriminantName(declTy) == d.property) {
 					const ddt = declTy.typeExtra;
 					if (ddt != null && (ddt.kind == TypeKind.Boolean || ddt.kind == TypeKind.String)) {
-						discSuffix = `v0.${field}`;
+						discSuffix = `v0${variantSlotAccess(declTy, 0)}${field}`;
 					} else {
 						discSuffix = "_tag";
 					}
@@ -1586,7 +1590,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
-					const chainTail = discSuffix != "" ? discSuffix : `v${declVarIdx}.${field}`;
+					const chainTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
 					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}${chainTail}`);
 					return;
 				}
@@ -1625,7 +1629,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				const ptrType = idSym != null && isPointerType(idSym.symbolType);
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
-					const identTail = discSuffix != "" ? discSuffix : `v${declVarIdx}.${field}`;
+					const identTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
 					ctx.results.push(`${cName}${acc2}${identTail}`);
 					return;
 				}
@@ -1869,6 +1873,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`((${targetC}*)&(${inner}))`);
 			return;
 		}
+		if (kind == NodeKind.HiddenSubConv && node.variantSlot > 0 && !isMaybeType(d.convType)
+			&& unwrapRefNullUnion(d.convType) != null && d.convExpr.nodeType != null && isMaybeType(d.convExpr.nodeType)) {
+			const rvi = node.variantSlot - 1;
+			const srcC = getTypeDesc(g, d.convExpr.nodeType);
+			g.labels += 1;
+			const tmp = `_mnarrow${g.labels}_`;
+			emitProcLocalsLine(p, `${srcC} ${tmp};`);
+			emitStmtsLine(p, `${tmp} = ${inner};`);
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseVariantError(${tmp}.value._tag, ${rvi});`);
+			ctx.results.push(`(${tmp}.present ? ${tmp}.value.v${rvi} : (${targetC})NULL)`);
+			return;
+		}
 		// Variant struct → discriminated union: construct with tag + variant slot.
 		// C layouts differ (variant = small struct, union = tagged union with all
 		// variant slots) — a raw cast silently misaligns fields.
@@ -1895,11 +1911,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(inner);
 			return;
 		}
-		// Union → member projection (narrowUnionToVariant): stamped slot + non-union
-		// target selects the active slot from the union lvalue the inner expression
-		// still renders as. A pointer-surface member is re-materialized as a heap
-		// cell: the by-value slot has no out-of-band RC header, so `&slot` would
-		// let refcounting stomp neighbouring union bytes.
 		const projSlot = node.variantSlot;
 		// Maybe<A> → Maybe<A|B> (widenMaybePayload): the carrier keeps its shape
 		// and the payload moves into a tagged slot, so the whole carrier is
@@ -1936,24 +1947,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {
 			const pvi = projSlot - 1;
-			const memberValue = unwrapPointerLikeForVariant(d.convType);
-			if (memberValue != null && memberValue != d.convType && memberValue.kind == TypeKind.Struct) {
-				const cName = getTypeDesc(g, memberValue);
-				ensureTypeInfoDef(g, cName, memberValue);
-				g.labels += 1;
-				const tmp = `_proj${g.labels}_`;
-				emitProcLocalsLine(p, `${cName}* ${tmp};`);
-				emitStmtsLine(p, `${tmp} = ${genAllocTyped(g, cName)};`);
-				if (memberValue.typeName != "" && hasAsgnFlag(memberValue)) {
-					const hookName = hookBaseCName(memberValue.typeName, memberValue, g.checkerCtx) + "Copy";
-					ensureDrcProto(g, hookName, null);
-					emitStmtsLine(p, `${hookName}(${tmp}, &((${inner}).v${pvi}));`);
-				} else {
-					emitStmtsLine(p, `*${tmp} = (${inner}).v${pvi};`);
-				}
-				ctx.results.push(tmp);
-				return;
-			}
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
 		}
@@ -2010,6 +2003,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
 			let isClassObj = false;
+			let refVariant: Type | null = null;
 			let unionWrapName = "";
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
@@ -2146,6 +2140,15 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 							unionWrapIdx = varIdx;
 						}
 					}
+					if (unionWrapIdx >= 0 && litType.kind == TypeKind.Union) {
+						const member = litType.typeChildren[unionWrapIdx];
+						if (member != null && member.kind == TypeKind.Ref && member.typeReturn != null
+								&& inlineVariantStruct(member) == null) {
+							cType = getTypeDesc(g, member.typeReturn);
+							isClassObj = true;
+							refVariant = member.typeReturn;
+						}
+					}
 				} else if (litType.kind == TypeKind.Ref && litType.typeReturn != null) {
 					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated.
 					// litType is the unwrapped form — bare Ref<T> here, even when node.nodeType
@@ -2171,7 +2174,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
-					const innerStruct = (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					const innerStruct = refVariant != null ? refVariant
+						: (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
 					ensureTypeInfoDef(g, cType, innerStruct);
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
