@@ -56,7 +56,7 @@ import {
 	readFile, writeFile, appendFile, chmod,
 	mkdir, rmdir, remove, rename, symlink, readDir,
 } from "std/fs";
-import { cwd, platform, env, exec, argv, execFile, execFileCapture } from "std/process";
+import { cwd, platform, env, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
@@ -317,13 +317,13 @@ function _bridgeMsProcessExecFile(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
-	const r = execFileCapture(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]));
-	if (r.ok) {
-		_resetSpawnStateOk(r.value);
-	} else {
-		const e = r.error;
-		_setSpawnStateErr(e.kind, e.output, e.errorOutput, e.exitCode, e.signal);
-	}
+	const r = execFileResult(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]));
+	_spawnStdout = r.output;
+	_spawnStderr = r.errorOutput;
+	_spawnExitCode = r.exitCode;
+	_spawnSignal = r.signal;
+	_spawnOk = r.started ? 1 : 0;
+	_spawnPipeOk = r.pipeOk ? 1 : 0;
 	return boxString(_spawnStdout);
 }
 

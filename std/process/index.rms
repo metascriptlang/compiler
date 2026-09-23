@@ -85,6 +85,29 @@ export function execFileCapture(path: string, args: string[] = [], cwd: string =
 	return Result.ok(stdoutText);
 }
 
+export interface ExecFileResult {
+	started: boolean;
+	pipeOk: boolean;
+	exitCode: int32;
+	signal: int32;
+	output: string;
+	errorOutput: string;
+}
+
+// Like execFileCapture, but a child that ran reports every stream and status
+// whatever its exit code — `started` is false only when it never ran.
+export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
+	return {
+		started: msProcSpawnGetOk() != 0,
+		pipeOk: msProcSpawnGetPipeOk() != 0,
+		exitCode: msProcSpawnGetExitCode(),
+		signal: msProcSpawnGetSignal(),
+		output: stdoutText,
+		errorOutput: msProcSpawnGetStderr(),
+	};
+}
+
 export class env {
 	static get(name: string): string {
 		return msProcessGetEnv(name);
