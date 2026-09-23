@@ -3,8 +3,8 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
-import { skipOptionalType, isIdentLike } from "../util";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd } from "../context";
+import { isIdentLike, captureOptionalType, getLastTypeExpr } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind } from "./validation";
@@ -205,8 +205,8 @@ export function parseForStmt(state: ParserState): NodeResult {
 		}
 
 		advance(state);
-		// Optional type annotation
-		skipOptionalType(state);
+		const initType = captureOptionalType(state);
+		const initTypeExpr = getLastTypeExpr();
 
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' in for init at line ${current(state).line}`);
@@ -215,11 +215,13 @@ export function parseForStmt(state: ParserState): NodeResult {
 		advance(state);
 		const initNode = createNode(NodeKind.VariableDecl, {
 			declName: varName.value,
-			declType: "",
+			declType: initType,
 			initializer: try callExprParser(state),
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
+		initNode.typeExpr = initTypeExpr;
+		stampEnd(state, initNode);
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 		}
@@ -247,8 +249,10 @@ export function parseForStmt(state: ParserState): NodeResult {
 	}
 
 	// C-style for with expression init: for (i = 0; ...)
+	const exprInitToken = current(state);
 	const exprInit = try callExprParser(state);
-	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, forToken);
+	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, exprInitToken);
+	stampEnd(state, exprInitNode);
 	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 	}
