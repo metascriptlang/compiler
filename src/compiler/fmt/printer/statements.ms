@@ -407,7 +407,7 @@ export function printContinueStmt(node: Node): Doc {
 export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
-		let p = names[i];
+		let p = spellParamModifiers(names[i]);
 		if (i < types.length && types[i] != "") {
 			p = p + ": " + types[i];
 		}
@@ -470,6 +470,31 @@ export function flagGet(flags: string, name: string): string {
 	return "";
 }
 
+function spellParamModifiers(name: string): string {
+	let rest = name;
+	let spelled = "";
+	let more = true;
+	while (more) {
+		more = false;
+		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "]]) {
+			if (rest.startsWith(code) && rest.byteLength > code.byteLength) {
+				spelled = spelled + word;
+				rest = rest.byteSlice(code.byteLength, rest.byteLength);
+				more = true;
+			}
+		}
+	}
+	return spelled + rest;
+}
+
+function prefixAt(names: string[], positions: string, word: string): void {
+	if (positions == "") return;
+	for (const p of positions.split(",")) {
+		const i = p.parseInt() as int32;
+		if (i >= 0 && i < names.length) names[i] = word + names[i];
+	}
+}
+
 export function isSynthesized(decl: Node, body: Node): boolean {
 	return body.location.line == decl.location.line && body.location.column == decl.location.column;
 }
@@ -487,7 +512,26 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 		+ d.fnName + wrapGenerics(flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
-	const params = buildParamList(d.params, d.fnParamTypes, d.fnDefaults, options);
+	const names: string[] = [];
+	const types: string[] = [];
+	const defaults: Node[] = [];
+	const staticType = flagGet(d.fnFlags, "sext");
+	if (staticType != "") {
+		names.push("this typeof " + staticType);
+		types.push("");
+		defaults.push(null as unknown as Node);
+	}
+	for (let i = 0; i < d.params.length; i += 1) {
+		names.push(d.params[i]);
+		types.push(i < d.fnParamTypes.length ? d.fnParamTypes[i] : "");
+		defaults.push(i < d.fnDefaults.length ? d.fnDefaults[i] : null as unknown as Node);
+	}
+	prefixAt(names, flagGet(d.fnFlags, "sink"), "sink ");
+	prefixAt(names, flagGet(d.fnFlags, "rdonly"), "readonly ");
+	prefixAt(names, flagGet(d.fnFlags, "ref"), "ref ");
+	prefixAt(names, flagGet(d.fnFlags, "out"), "out ");
+	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
+	const params = buildParamList(names, types, defaults, options);
 	for (const p of paramListInParens(params, options)) parts.push(p);
 
 	if (d.fnReturnType != "") {

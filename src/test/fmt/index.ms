@@ -62,3 +62,4 @@ import "./cases/numberSpelling";
 import "./cases/objectShorthand";
 import "./cases/forInitType";
 import "./cases/tryClauses";
+import "./cases/paramModifiers";
