@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, isUnknownType, peelTransparentInstance, setRepr } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -78,7 +78,7 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(node);
+	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node));
 	return node;
 }
 
@@ -205,6 +205,51 @@ function getArrayMacroName(elemType: Type | null): string {
 	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return "msRefArrayAccess";
 	// Value-type struct elements use per-type array typedefs
 	return "msArrayAccess";
+}
+
+// ===== Element Eviction =====
+// The runtime's eviction helpers hardcode the element release, so the ELEMENT
+// type picks the helper — the same selection getArrayMacroName makes for arr[i]
+// and lowerLengthAssign makes for `arr.length = n`. std binds `setLength` to
+// msGenericArraySetLen, which lowers len and releases nothing, so a counted
+// element needs the msRefArray family whether or not its rc is atomic; an
+// atomic cell is born at MS_RC_INCREMENT, so it needs the atomic twin on top.
+// The counted-element test mirrors classify.ms classifyArray — Actor handles,
+// `unknown` and nested ref-arrays keep their own families.
+export function evictHelperName(nativeName: string, elemType: Type | null): string {
+	if (elemType == null) return "";
+	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
+	if (bare == null) return "";
+	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr) return "";
+	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return "";
+	if (isUnknownType(bare)) return "";
+	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return "";
+	const atomic = isAtomicRef(bare);
+	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : "msRefArraySetLen";
+	if (nativeName == "msRefArraySplice") return atomic ? "msAtomicRefArraySplice" : "";
+	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : "";
+	return "";
+}
+
+function rewriteArrayEvictCall(node: Node): Node {
+	const d = node.data as CallExprData;
+	if (d.arguments.length == 0) return node;
+	let sym = node.resolvedSym;
+	if (sym == null) sym = d.callee.resolvedSym;
+	if (sym == null || sym.nativeName == "") return node;
+	// A `from "&name"` clause keeps its address-of prefix in nativeName.
+	const native = sym.nativeName.startsWith("&") ? sym.nativeName.slice(1, sym.nativeName.length) : sym.nativeName;
+	const recvT = d.arguments[0].nodeType != null ? peelTransparentInstance(d.arguments[0].nodeType) : null;
+	if (recvT == null) return node;
+	const arrT = (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array)
+		? recvT.typeReturn
+		: recvT;
+	if (arrT.kind != TypeKind.Array) return node;
+	const helper = evictHelperName(native, arrT.typeReturn);
+	if (helper == "") return node;
+	const call = makeCall(runtimeRef(helper, node.location), d.arguments, node.location);
+	call.nodeType = node.nodeType;
+	return call;
 }
 
 // ===== Property Remapping =====

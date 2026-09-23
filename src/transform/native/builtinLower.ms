@@ -25,6 +25,7 @@ import {
 import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
+import { evictHelperName } from "./nativeLower";
 
 // ===== Main Entry Point =====
 
@@ -397,8 +398,12 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 			fn = "msNumberArraySetLen";
 		} else if (elemType.kind == TypeKind.String) {
 			fn = "msStringArraySetLen";
-		} else if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) {
-			fn = "msRefArraySetLen";
+		} else {
+			// One source of truth for the ref family (atomic cells, Actor handles,
+			// `unknown` and nested ref-arrays included): nativeLower, which makes the
+			// same choice for `setLength` and `splice`.
+			const refFn = evictHelperName("msGenericArraySetLen", elemType);
+			if (refFn != "") fn = refFn;
 		}
 	}
 
