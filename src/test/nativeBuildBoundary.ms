@@ -276,6 +276,17 @@ function runArgv(): void {
 	record("quoted flag value", "0", `${quotedResult}`);
 	if (quotedResult == 0) record("quoted flag value executable", "4", value(quoted));
 
+	const leading = fixture("compiler words", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
+	const ccWords = windows ? `${homeDir()}/.metascript/zig/zig.exe cc` : "clang";
+	const firstWords = build(leading, "compiler-words", "probe", [], `${ccWords} -DTOOL_VALUE=71`);
+	record("compiler command with leading arguments", "0", `${firstWords}`);
+	if (firstWords == 0) record("compiler command leading argument reaches cc", "71", value(leading));
+	const secondWords = build(leading, "compiler-words-changed", "probe", [], `${ccWords} -DTOOL_VALUE=73`);
+	record("changed leading argument rebuilds", "0", `${secondWords}`);
+	if (secondWords == 0) record("changed leading argument executable", "73", value(leading));
+	const libWords = build(leading, "compiler-words-lib", "products/probeLib", ["--app=lib"], `${ccWords} -DTOOL_VALUE=79`);
+	record("shared library with leading compiler arguments", "0", `${libWords}`);
+
 	const response = fixture("response file", "@compile(\"./native.c\");", "int probeValue(void) { return 47; }\n");
 	const flagPrefix = windows ? "--passL=-LC:/tmp/native-boundary-" : "--passL=-L/tmp/native-boundary-";
 	const flagCount: int32 = windows ? 820 : 900;
