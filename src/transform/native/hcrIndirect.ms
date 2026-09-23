@@ -23,6 +23,7 @@ export function lowerHcrIndirection(
 	const pd = program.data as ProgramData;
 	const loc = program.location;
 	const emitted: Node[] = [makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc)];
+	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrModuleId000(void) { return ${cString(own.moduleId)}; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrAbiKey000(void) { return ${cString(own.abiKey)}; }`, loc));
 	emitted.push(makeEmitStmt(importsFunction(own), loc));
 
