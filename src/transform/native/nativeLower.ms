@@ -9,6 +9,7 @@
 //   arr[i]    on Span         →  CallExpr("msSpanAccess", [arr, i])
 //   s[i]      on string       →  CallExpr("msStringCharAccess", [s, i])
 //   x.length  on array/string →  x.len  (property mutation)
+//   x.length  on SizedArray   →  NumberLiteral(size)
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
@@ -230,8 +231,12 @@ function rewriteMemberExpr(node: Node): Node {
 			result.nodeType = node.nodeType;
 			return result;
 		}
-		if (objType.kind == TypeKind.Array || objType.kind == TypeKind.SizedArray ||
-			objType.kind == TypeKind.Span) {
+		if (objType.kind == TypeKind.SizedArray) {
+			const result = makeNumber(objType.typeValue, node.location);
+			if (node.nodeType != null) result.nodeType = node.nodeType;
+			return result;
+		}
+		if (objType.kind == TypeKind.Array || objType.kind == TypeKind.Span) {
 			d.property = "len";
 		}
 		return node;
