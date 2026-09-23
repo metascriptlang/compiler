@@ -22,7 +22,7 @@
 
 function id(s: string): string { return s; }
 
-function main(): number {
+function main(): int32 {
 	let failures = 0;
 
 	// Tail trim writes the terminator at the new end.

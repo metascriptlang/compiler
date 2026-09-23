@@ -24,7 +24,7 @@
 
 function id(s: string): string { return s; }
 
-function main(): number {
+function main(): int32 {
 	let failures = 0;
 
 	// The char door itself — a 1-byte literal, the case the rewrite exists for.

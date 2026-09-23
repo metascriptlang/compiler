@@ -37,7 +37,7 @@ function pick(arena: JoinNode[], i: int32, mode: int32): JoinNode | null {
 	return r;
 }
 
-function main(): number {
+function main(): int32 {
 	const arena: JoinNode[] = [];
 	const root = new JoinNode();
 	root.id = 0;
