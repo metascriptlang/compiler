@@ -1,4 +1,7 @@
 import { assertFmtPreservesAst, assertFmtIdempotent, fmt } from "../roundtrip";
+import { NodeKind, createNodeAt, makeLoc } from "../../../ast/node";
+import { formatNode } from "../../../compiler/fmt/printer/index";
+import { defaultFormatOptions } from "../../../compiler/fmt/options";
 
 const REPRO = "function f(title: string): Node {\n\treturn <view style={{ padding: 8 }}><text>{title}</text></view>;\n}\n";
 
@@ -47,5 +50,7 @@ test "fmt jsx: bare attribute stays bare and braced true stays braced" {
 }
 
 test "fmt fails loud on a node kind it cannot print" {
-	assert fmt("const q = quote { x + 1 };\n") == "";
+	const inner = createNodeAt(NodeKind.Identifier, { name: "x" }, makeLoc(1, 1));
+	const hidden = createNodeAt(NodeKind.HiddenDeref, { expr: inner }, makeLoc(1, 1));
+	assert !formatNode(hidden, defaultFormatOptions()).ok;
 }
