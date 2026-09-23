@@ -40,7 +40,7 @@ export function fmt(source: string): string {
 // Structural fingerprint: kind-tree + key scalars, ignoring positions and
 // comments. Two ASTs with identical fingerprints are semantically the same
 // program.
-export function astShape(node: Node): string {
+export function astShape(node: Node | null): string {
 	if (node === null) return "null";
 	const k = NodeKind[node.kind];
 	return match (node.kind) {
