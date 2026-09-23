@@ -84,3 +84,4 @@ import "./cases/patternRest";
 import "./cases/actorStaticBlock";
 import "./cases/exportDecorator";
 import "./cases/specifierComments";
+import "./cases/listComments";

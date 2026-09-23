@@ -114,13 +114,33 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 
 	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
 	const callParts: Doc[] = [printAtom(d.callee, options), docText(typeArgs + "(")];
-	if (args.length > 0) {
-		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
-		callParts.push(docIndent(argParts));
-		callParts.push(docSoftLine());
-	}
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
+}
+
+function innerComments(node: Node): Token[] {
+	const inner: Token[] = [];
+	const outer: Token[] = [];
+	for (const c of node.comments) {
+		if (c.line > node.location.line || (c.line == node.location.line && c.column > node.location.column)) {
+			inner.push(c);
+		} else {
+			outer.push(c);
+		}
+	}
+	node.comments = outer;
+	return inner;
+}
+
+function listBody(items: Doc[], trailing: boolean, endComments: Token[]): Doc[] {
+	if (items.length == 0 && endComments.length == 0) return [];
+	const body = docCommaSepList(items, trailing);
+	for (const c of endComments) {
+		body.push(docHardLine());
+		body.push(docText(c.value));
+	}
+	return [docIndent(body), docSoftLine()];
 }
 
 export function printMemberExpr(node: Node, options: FormatOptions): Doc {
@@ -275,11 +295,8 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	}
 	// Collect trailing comments on the object node (before closing brace)
 	const trailingComments: Doc[] = [];
-	if (node.comments.length > 0) {
-		for (const comment of node.comments) {
-			trailingComments.push(docText(comment.value));
-		}
-		node.comments = [];
+	for (const comment of innerComments(node)) {
+		trailingComments.push(docText(comment.value));
 	}
 
 	// When forced to break, separators must not be wrapped in a group
@@ -317,18 +334,16 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 
 export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayLiteralData;
-	if (d.elements.length == 0) return docText("[]");
+	const endComments = innerComments(node);
+	if (d.elements.length == 0 && endComments.length == 0) return docText("[]");
 	const elems: Doc[] = [];
 	for (const el of d.elements) {
 		elems.push(callPrintNode(el, options));
 	}
-	const elemParts = docCommaSepList(elems, wantsTrailingComma(options, CommaContext.Collection));
-	return docGroup([
-		docText("["),
-		docIndent(elemParts),
-		docSoftLine(),
-		docText("]"),
-	]);
+	const parts: Doc[] = [docText("[")];
+	for (const p of listBody(elems, wantsTrailingComma(options, CommaContext.Collection), endComments)) parts.push(p);
+	parts.push(docText("]"));
+	return docGroup(parts);
 }
 
 export function printArrowFunction(node: Node, options: FormatOptions): Doc {
@@ -380,11 +395,7 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	}
 	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
 	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(typeArgs + "(")];
-	if (args.length > 0) {
-		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
-		newParts.push(docIndent(argParts));
-		newParts.push(docSoftLine());
-	}
+	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) newParts.push(p);
 	newParts.push(docText(")"));
 	return docGroup(newParts);
 }
