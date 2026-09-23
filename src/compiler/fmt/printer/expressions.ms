@@ -499,7 +499,10 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	const elements: Doc[] = [];
 	for (let i = 0; i < d.patternElements.length; i += 1) {
 		if (i > 0) elements.push(docText(", "));
-		elements.push(callPrintNode(d.patternElements[i], options));
+		const el = d.patternElements[i];
+		const hole = el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
+			&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
+		if (!hole) elements.push(callPrintNode(el, options));
 		if (i < d.patternDefaults.length && d.patternDefaults[i] != null) {
 			elements.push(docText(" = "));
 			elements.push(callPrintNode(d.patternDefaults[i], options));

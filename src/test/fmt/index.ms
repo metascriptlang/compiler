@@ -92,3 +92,4 @@ import "./cases/paramPatterns";
 import "./cases/objectPropertyComments";
 import "./cases/paramComments";
 import "./cases/bareBlockComment";
+import "./cases/fieldSeparatorsAndHoles";

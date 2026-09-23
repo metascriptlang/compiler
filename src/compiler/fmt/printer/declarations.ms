@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { sourceByteAt, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
@@ -330,13 +330,14 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 				break;
 			}
 		}
+		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		if (attached != null) {
 			fields.push(docGroup([
-				docText(field + ";"),
+				docText(field + sep),
 				docLineSuffix([docText(" " + attached.value)]),
 			]));
 		} else {
-			fields.push(docText(field + ";"));
+			fields.push(docText(field + sep));
 		}
 	}
 	// Any standalone comments after the last field — emit at end of body.
