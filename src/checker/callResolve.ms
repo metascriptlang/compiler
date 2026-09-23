@@ -541,7 +541,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
-		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)) {
+		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
+				&& expected.typeName == id.name) {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
