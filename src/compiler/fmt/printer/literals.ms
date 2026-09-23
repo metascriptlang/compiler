@@ -161,12 +161,28 @@ function skipTemplate(source: string, pos: int32): int32 {
 	return end;
 }
 
+function skipBlanks(source: string, from: int32): int32 {
+	let pos = from;
+	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "	".code)) pos = pos + 1;
+	return pos;
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
-	let pos = start + name.byteLength;
-	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "	".code)) pos = pos + 1;
+	const pos = skipBlanks(source, start + name.byteLength);
 	return pos < source.byteLength && source.byteAt(pos) == "?".code;
+}
+
+export function writtenTypeAfterOptional(source: string, line: int32, column: int32, name: string, type: string): boolean {
+	const start = sourceOffset(source, line, column - 1);
+	if (start < 0) return false;
+	let pos = skipBlanks(source, start + name.byteLength);
+	if (pos >= source.byteLength || source.byteAt(pos) != "?".code) return false;
+	pos = skipBlanks(source, pos + 1);
+	if (pos >= source.byteLength || source.byteAt(pos) != ":".code) return false;
+	pos = skipBlanks(source, pos + 1);
+	return source.byteSlice(pos, pos + type.byteLength) == type;
 }
 
 export function rawObjectKeyAt(source: string, line: int32, column: int32): string {

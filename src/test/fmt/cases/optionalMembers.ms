@@ -11,3 +11,7 @@ test "fmt: an optional field already typed with null keeps its spelling" {
 test "fmt: an optional class property keeps its question mark" {
 	assert assertFmtLossless("class C {\n\tlabel?: string;\n\tn: int32 = 0;\n}\n");
 }
+
+test "fmt: an optional parenthesized function type with null keeps its parentheses" {
+	assert assertFmtLossless("interface Props {\n\tonPress?: ((e: int32) => void) | null;\n}\n");
+}

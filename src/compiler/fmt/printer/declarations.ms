@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { writtenOptional } from "./literals";
+import { writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -285,9 +285,10 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		}
 		let field = d.interfaceFields[i];
 		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
+		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field, d.interfaceFieldTypes[i]);
 		if (optional) field = field + "?";
 		if (d.interfaceFieldTypes[i] != "") {
-			field = field + ": " + (optional ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
+			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
 		// Find a trailing comment for this field.
 		let attached: Token = null as unknown as Token;
@@ -511,9 +512,10 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propIsStatic) parts.push(docText("static "));
 	if (d.propIsReadonly) parts.push(docText("readonly "));
 	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
+	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
 	parts.push(docText(optional ? d.propName + "?" : d.propName));
 	if (d.propType != "") {
-		parts.push(docText(": " + (optional ? unoptionalized(d.propType) : d.propType)));
+		parts.push(docText(": " + (optional && !keptType ? unoptionalized(d.propType) : d.propType)));
 	}
 	if (d.propInitializer != null) {
 		parts.push(docText(" = "));
