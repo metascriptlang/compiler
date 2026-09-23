@@ -16,7 +16,7 @@ import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
 import { writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -573,7 +573,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "")
-		+ d.methodName + genericsFor(options, d.nameLocation, d.methodName, flagGet(d.methodFlags, "gen"));
+		+ writtenName(options, d.nameLocation, d.methodName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options);

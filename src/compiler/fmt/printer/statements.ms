@@ -466,6 +466,11 @@ export function paramListInParens(params: Doc[], options: FormatOptions): Doc[] 
 
 // `<T, U>` if non-empty, else `""`. Centralises the generic-clause emit
 // pattern used by TypeAlias/Function/Method/Class/Interface decls.
+export function writtenName(options: FormatOptions, loc: SourceLocation, name: string): string {
+	if (loc == null || sourceByteAt(options.source, loc.line, loc.column) != "`".code) return name;
+	return "`" + name + "`";
+}
+
 export function genericsFor(options: FormatOptions, loc: SourceLocation, name: string, names: string): string {
 	const raw = loc != null ? rawGenericsAt(options.source, loc.line, loc.column, name) : "";
 	return raw != "" ? raw : wrapGenerics(names);
@@ -545,7 +550,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const head = (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (node.flags.has(NodeFlag.Converter) ? "converter" : "function") + (isGen ? "*" : "") + " "
-		+ d.fnName + genericsFor(options, d.nameLocation, d.fnName, flagGet(d.fnFlags, "gen"));
+		+ writtenName(options, d.nameLocation, d.fnName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.fnName), flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
 	const names: string[] = [];
