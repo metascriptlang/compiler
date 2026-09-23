@@ -18,7 +18,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens } from "./statements";
+import { flagHas, buildParamList, paramListInParens, wrapNodeComments } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -402,7 +402,7 @@ export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchExprData;
 	const cases: Doc[] = [];
 	for (const c of d.matchCases) {
-		cases.push(printMatchCase(c, options));
+		cases.push(wrapNodeComments(c, printMatchCase(c, options)));
 	}
 	return docGroup([
 		docText("match ("),

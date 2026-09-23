@@ -98,10 +98,31 @@ export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
 
 export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
-	if (d.statements.length == 0) return docText("{}");
+	const inner: Token[] = [];
+	const outer: Token[] = [];
+	for (const c of node.comments) {
+		if (c.line > node.location.line || (c.line == node.location.line && c.column > node.location.column)) {
+			inner.push(c);
+		} else {
+			outer.push(c);
+		}
+	}
+	node.comments = outer;
+	if (d.statements.length == 0 && inner.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
 	for (const s of d.statements) {
 		stmts.push(callPrintNode(s, options));
+	}
+	for (const c of inner) {
+		stmts.push(docText(c.value));
+	}
+	if (inner.length > 0) {
+		return docGroup([
+			docText("{"),
+			docIndent([docHardLine(), docJoin(stmts, docHardLine())]),
+			docHardLine(),
+			docText("}"),
+		]);
 	}
 
 	// Single-statement block can stay inline (`{ stmt }`) when it fits

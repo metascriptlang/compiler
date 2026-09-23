@@ -70,3 +70,4 @@ import "./cases/assertionOperands";
 import "./cases/bareArrowParam";
 import "./cases/objectKeys";
 import "./cases/optionalMembers";
+import "./cases/matchAndBlockComments";
