@@ -1,4 +1,4 @@
-// bug204 — a method-form call never checked its arguments
+// bug205 — a method-form call never checked its arguments
 //
 // Symptom:    `"x".extAt(pf)` with `pf: number` and `"x".extAt("s")` compiled, while `plainAt("x", pf)`
 //             was refused; Raiser read the wrong byte and C died in clang.
@@ -23,26 +23,26 @@ function errorOf(body: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug204: a plain call narrowing its argument is refused" {
+test "bug205: a plain call narrowing its argument is refused" {
 	assert errorOf("plainAt(\"xy\", pf);").indexOf("narrowing") >= 0;
 }
 
-test "bug204: an extension call narrowing its argument is refused" {
+test "bug205: an extension call narrowing its argument is refused" {
 	assert errorOf("\"xy\".extAt(pf);").indexOf("narrowing") >= 0;
 }
 
-test "bug204: an extension call with a mismatched argument is refused" {
+test "bug205: an extension call with a mismatched argument is refused" {
 	assert errorOf("\"xy\".extAt(\"s\");").indexOf("Argument type mismatch") >= 0;
 }
 
-test "bug204: a class method call narrowing its argument is refused" {
+test "bug205: a class method call narrowing its argument is refused" {
 	assert errorOf("new C().at(pf);").indexOf("narrowing") >= 0;
 }
 
-test "bug204: an overloaded extension call narrowing its argument is refused" {
+test "bug205: an overloaded extension call narrowing its argument is refused" {
 	assert errorOf("\"xy\".pick(pf);").indexOf("narrowing") >= 0;
 }
 
-test "bug204: method-form calls with matching arguments compile" {
+test "bug205: method-form calls with matching arguments compile" {
 	assert errorOf("\"xy\".extAt(pi); new C().at(pi); \"xy\".pick(pi); console.log(pf);") == "";
 }

@@ -1,4 +1,4 @@
-// bug206 — a type parameter dropped the Readonly view it was bound to
+// bug207 — a type parameter dropped the Readonly view it was bound to
 //
 // Symptom:    `id(ro)` and `pushG(xs, ro)` were refused for `ro: Readonly<N>`, while `first(ros).k = 5`
 //             wrote through a `Readonly<N>[]` and `return first(ros)` turned the view back into `N`.
@@ -20,22 +20,22 @@ function errorOf(body: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug206: a view passes through a generic identity" {
+test "bug207: a view passes through a generic identity" {
 	assert errorOf("function u(ro: Readonly<N>): int32 { const r = id(ro); return r.k; }") == "";
 }
 
-test "bug206: a view pushes into an array of views through a generic" {
+test "bug207: a view pushes into an array of views through a generic" {
 	assert errorOf("function u(ro: Readonly<N>): int32 { const xs: Readonly<N>[] = []; pushG(xs, ro); return xs.length; }") == "";
 }
 
-test "bug206: a generic result read from an array of views stays read-only" {
+test "bug207: a generic result read from an array of views stays read-only" {
 	assert errorOf("function u(ros: Readonly<N>[]): void { first(ros).k = 5; }").indexOf("cannot write through") >= 0;
 }
 
-test "bug206: a generic result read from an array of views does not convert back" {
+test "bug207: a generic result read from an array of views does not convert back" {
 	assert errorOf("function u(ros: Readonly<N>[]): N { return first(ros); }").indexOf("never converts back") >= 0;
 }
 
-test "bug206: a mutable instance after a view instance stays writable" {
+test "bug207: a mutable instance after a view instance stays writable" {
 	assert errorOf("function u(ro: Readonly<N>): int32 { return id(ro).k; }\nfunction p(n: N): int32 { const r = id(n); r.k = 5; return r.k; }") == "";
 }

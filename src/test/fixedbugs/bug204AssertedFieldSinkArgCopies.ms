@@ -1,4 +1,4 @@
-// bug203 — a field read under a type assertion, passed to a sink parameter, was not copied
+// bug204 — a field read under a type assertion, passed to a sink parameter, was not copied
 //
 // Symptom:    `xs.push(b.p!)` and `xs.push(b.p as Thing)` pushed `(*b).p` with no incref; once `b`
 //             was destroyed the array held a freed object (`plain=123`, `bang=11100`).
@@ -63,18 +63,18 @@ function increfsIn(fn: string): number {
 	return countIncrefs(body);
 }
 
-test "bug203: a field read under ! passed to a sink parameter increfs" {
+test "bug204: a field read under ! passed to a sink parameter increfs" {
 	assert increfsIn("viaBang") == 1, "viaBang increfs: " + increfsIn("viaBang").toString();
 }
 
-test "bug203: a field read under as passed to a sink parameter increfs" {
+test "bug204: a field read under as passed to a sink parameter increfs" {
 	assert increfsIn("viaAs") == 1, "viaAs increfs: " + increfsIn("viaAs").toString();
 }
 
-test "bug203: a bare field read passed to a sink parameter keeps one incref" {
+test "bug204: a bare field read passed to a sink parameter keeps one incref" {
 	assert increfsIn("bare") == 1, "bare increfs: " + increfsIn("bare").toString();
 }
 
-test "bug203: a borrowed param under ! passed to a sink parameter keeps one incref" {
+test "bug204: a borrowed param under ! passed to a sink parameter keeps one incref" {
 	assert increfsIn("fromParam") == 1, "fromParam increfs: " + increfsIn("fromParam").toString();
 }
