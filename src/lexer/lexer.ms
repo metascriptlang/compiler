@@ -237,6 +237,16 @@ test "template interpolation tokens" {
 	assert lexKindAt("`${x}`", 2) == TokenKind.TemplateTail;
 }
 
+test "template interpolation ends at its own brace, not the first one" {
+	assert lexKindAt("`${ {a: 1}.a }`", 5) == TokenKind.RBrace;
+	assert lexKindAt("`${ {a: 1}.a }`", 8) == TokenKind.TemplateTail;
+	assert lexKindAt("`v=${ f(() => { return 1; }) }`", 10) == TokenKind.RBrace;
+	assert lexKindAt("`v=${ f(() => { return 1; }) }`", 12) == TokenKind.TemplateTail;
+	assert lexKindAt("`a${ `b${c}` }d`", 3) == TokenKind.TemplateTail;
+	assert lexKindAt("`a${ `b${c}` }d`", 4) == TokenKind.TemplateTail;
+	assert lexValAt("`a${ `b${c}` }d`", 4) == "d";
+}
+
 test "keywords" {
 	assert lexFirst("const") == TokenKind.Const;
 	assert lexFirst("let") == TokenKind.Let;
@@ -599,4 +609,14 @@ test "jsx starts after return and inside array literal" {
 	assert lexKindAt("[<a/>, <b/>]", 1) == TokenKind.JsxTagStart;
 	assert lexKindAt("[<a/>, <b/>]", 5) == TokenKind.Comma;
 	assert lexKindAt("[<a/>, <b/>]", 6) == TokenKind.JsxTagStart;
+}
+
+test "jsx template interpolation brace stays inside the container" {
+	// <x t={`n=${n}`}/> → JsxTagStart x t = { Head n Tail } / >
+	assert lexKindAt("<x t={`n=${n}`}/>", 7) == TokenKind.TemplateTail;
+	assert lexKindAt("<x t={`n=${n}`}/>", 8) == TokenKind.RBrace;
+	assert lexKindAt("<x t={`n=${n}`}/>", 9) == TokenKind.Slash;
+	assert lexKindAt("<p>{`${ <b/> }`}</p>", 5) == TokenKind.JsxTagStart;
+	assert lexKindAt("<p>{`${ <b/> }`}</p>", 9) == TokenKind.TemplateTail;
+	assert lexKindAt("<p>{`${ <b/> }`}</p>", 11) == TokenKind.JsxClose;
 }
