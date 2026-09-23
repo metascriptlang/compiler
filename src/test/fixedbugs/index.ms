@@ -232,3 +232,5 @@ import "./bug206_sized_array_length";
 import "./bug207_enum_instance_extension";
 import "./bug208_try_converts_error";
 import "./bug209_try_error_type_mismatch";
+import "./bug210_const_binding_write";
+import "./bug211_writable_bindings";
