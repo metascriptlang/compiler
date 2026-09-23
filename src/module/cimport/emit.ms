@@ -76,9 +76,13 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 				if (!t.base.isComplete) return "Ptr<void>";
 				return `Ptr<${t.base.tagName}>`;
 			}
+			const inner = cTypeToMs(t.base);
+			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) {
+				if (!t.base.isComplete) return "Ptr<void>";
+				return `Ptr<${inner}>`;
+			}
 			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
 			// borrow-promotion); mutable → Ptr<T>.
-			const inner = cTypeToMs(t.base);
 			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
@@ -100,25 +104,40 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 	};
 }
 
-function emitParams(t: CType): string {
+function isOutHandle(p: CType): boolean {
+	if (p.kind != CTypeKind.Ptr || p.base == null || p.base.isConst) return false;
+	const handle = p.base;
+	if (handle.kind != CTypeKind.Ptr || handle.base == null) return false;
+	const k = handle.base.kind;
+	return k == CTypeKind.Struct || k == CTypeKind.Union || k == CTypeKind.Void;
+}
+
+function nullablePointer(p: CType, ms: string): string {
+	return p.kind == CTypeKind.Ptr && ms.startsWith("Ptr<") ? `${ms} | null` : ms;
+}
+
+function emitParams(t: CType, outHandles: boolean): string {
 	let result = "";
 	for (let i = 0; i < t.params.length; i += 1) {
 		if (i > 0) result = result + ", ";
 		const pName = i < t.paramNames.length && t.paramNames[i] != "" ? t.paramNames[i] : `p${i}`;
-		result = result + `${pName}: ${cTypeToMs(t.params[i])}`;
+		const p = t.params[i];
+		result = outHandles && isOutHandle(p)
+			? result + `out ${pName}: ${cTypeToMs(p.base)}`
+			: result + `${pName}: ${nullablePointer(p, cTypeToMs(p))}`;
 	}
 	return result;
 }
 
 function emitFuncType(t: CType): string {
-	return "(" + emitParams(t) + ") => " + cTypeToMs(t.returnType);
+	return "(" + emitParams(t, false) + ") => " + cTypeToMs(t.returnType);
 }
 
 // ===== Emit Declarations =====
 
 function emitFunction(obj: Obj, prefix: string): string {
 	const t = obj.type;
-	let params = emitParams(t);
+	let params = emitParams(t, true);
 	if (t.isVariadic) {
 		if (params != "") params = params + ", ";
 		params = params + "...args: unknown[]";
@@ -352,6 +371,23 @@ test "opaque struct-pointer typedef maps to Ptr<void> not unknown" {
 	const ms = translateCHeader("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);", [], false);
 	assert ms.indexOf("OpaqueRef = Ptr<void>") >= 0;
 	assert ms.indexOf("unknown") < 0;
+}
+
+test "handle written through a pointer param binds as out" {
+	const ms = translateCHeader("typedef struct Impl* H;\nstruct S;\nint mk(H* out);\nint mk2(struct S** out);\nint mk3(void** out);\nint argv(char** v);\nint ro(const H* h);", [], false);
+	assert ms.indexOf("mk(out out: H)") >= 0;
+	assert ms.indexOf("mk2(out out: Ptr<void>)") >= 0;
+	assert ms.indexOf("mk3(out out: Ptr<void>)") >= 0;
+	assert ms.indexOf("argv(v: Ptr<cstring> | null)") >= 0;
+	assert ms.indexOf("out h") < 0;
+}
+
+test "struct pointer param is a nullable Ptr, const or not" {
+	const ms = translateCHeader("typedef struct { int a; } A;\nstruct B { int b; };\nint f(const A* a, A* m, const struct B* b);\nint g(const float* v);", [], false);
+	assert ms.indexOf("a: Ptr<A> | null") >= 0;
+	assert ms.indexOf("m: Ptr<A> | null") >= 0;
+	assert ms.indexOf("b: Ptr<B> | null") >= 0;
+	assert ms.indexOf("v: Borrow<float32>") >= 0;
 }
 
 test "emit with name filter" {
