@@ -30,7 +30,7 @@ import {
 	isEmptyBlock,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { makeSymbol } from "../../checker/symbol";
+import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
@@ -779,6 +779,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// Build IteratorResult<T> type for stamping yield/return literals
 	const iterResultType = buildIterResultType(returnNodeType);
 	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	setFlag(stateSym, SymbolFlag.StateMachine);
 	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
 
 	// 3. Rewrite return statements

@@ -208,6 +208,7 @@ export enum SymbolFlag {
 	WasMovedOp,
 	BeforeReload,
 	AfterReload,
+	StateMachine,
 }
 
 // ===== Symbol =====
