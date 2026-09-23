@@ -741,7 +741,10 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	let closuresOk = true;
 	let i = 0;
 	for (const prop of od.properties) {
-		const snippet = genExpr(g, p, prop);
+		const sv = prop.kind == NodeKind.StringLiteral ? (prop.data as StringLiteralData).value : "";
+		const snippet = prop.kind == NodeKind.StringLiteral
+			? msStringPoolRef(internString(g.stringPool, sv), cStringByteLen(sv))
+			: genExpr(g, p, prop);
 		if (prop.kind == NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
 		if (braced.length > 0) braced = braced + ", ";
 		braced = braced + "." + mangleFieldName(od.keys[i]) + " = " + snippet;
