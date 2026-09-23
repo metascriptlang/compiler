@@ -312,13 +312,16 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 		stmts.push(s);
 	}
 
+	const dangling = takePendingComments(state);
 	const closeToken = current(state);
 	if (closeToken.kind != TokenKind.RBrace) {
 		return Result.err(`Expected '}' at line ${closeToken.line}`);
 	}
 	advance(state); // consume '}'
 
-	return Result.ok(createNode(NodeKind.BlockStmt, { statements: stmts }, token));
+	const block = createNode(NodeKind.BlockStmt, { statements: stmts }, token);
+	block.comments = dangling;
+	return Result.ok(block);
 }
 
 // ===== Expression Statement Parser =====
