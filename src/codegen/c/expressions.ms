@@ -2970,16 +2970,6 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 		}
 	}
 
-	// Resolve callee function type for out-param ABI shim
-	// Extern functions define their own C signatures, so only apply shim for
-	// explicit out params (Var<T>), not general ccg-introduced types.
-	let fnType: Type = null as unknown as Type;
-	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-		fnType = sym.symbolType;
-	}
-	let paramTypes: Type[] = null as unknown as Type[];
-	if (fnType != null) paramTypes = fnType.typeChildren;
-
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
 		const firstArg = genExpr(g, p, args[0]);
@@ -2987,37 +2977,10 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 		let result = `${cName}(${recvSnippet}`;
 		let i = 1;
 		while (i < args.length) {
-			let arg = genExpr(g, p, args[i]);
-			if (paramTypes != null && i < paramTypes.length && paramTypes[i] != null && paramTypes[i].kind == TypeKind.Var) {
-				arg = safeAddrOf(g, p, arg, args[i], paramTypes[i]);
-			}
-			result = result + `, ${arg}`;
+			result = result + `, ${genExpr(g, p, args[i])}`;
 			i = i + 1;
 		}
 		return result + ")";
-	}
-	// Apply out-param shim (Var<T> → &arg)
-	if (paramTypes != null) {
-		let hasOutParam = false;
-		let i = 0;
-		while (i < paramTypes.length) {
-			if (paramTypes[i] != null && paramTypes[i].kind == TypeKind.Var) { hasOutParam = true; }
-			i += 1;
-		}
-		if (hasOutParam) {
-			let result = cName + "(";
-			i = 0;
-			while (i < args.length) {
-				if (i > 0) result = result + ", ";
-				let arg = genExpr(g, p, args[i]);
-				if (i < paramTypes.length && paramTypes[i] != null && paramTypes[i].kind == TypeKind.Var) {
-					arg = safeAddrOf(g, p, arg, args[i], paramTypes[i]);
-				}
-				result = result + arg;
-				i += 1;
-			}
-			return result + ")";
-		}
 	}
 	return `${cName}(${joinArgs(g, p, args)})`;
 }
