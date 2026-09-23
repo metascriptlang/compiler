@@ -161,6 +161,14 @@ function skipTemplate(source: string, pos: int32): int32 {
 	return end;
 }
 
+export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
+	const start = sourceOffset(source, line, column - 1);
+	if (start < 0) return false;
+	let pos = start + name.byteLength;
+	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "	".code)) pos = pos + 1;
+	return pos < source.byteLength && source.byteAt(pos) == "?".code;
+}
+
 export function rawObjectKeyAt(source: string, line: int32, column: int32): string {
 	const pos = sourceOffset(source, line, column - 1);
 	if (pos < 0) return "";

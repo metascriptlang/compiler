@@ -15,6 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
+import { writtenOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -232,7 +233,13 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-function printStructLikeDecl(node: Node, keyword: string): Doc {
+function unoptionalized(type: string): string {
+	const suffix = ") | null";
+	if (type.startsWith("(") && type.endsWith(suffix)) return type.byteSlice(1, type.byteLength - suffix.byteLength);
+	return type;
+}
+
+function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
 	const head = keyword + " " + d.interfaceName + wrapGenerics(getGenericDecl(d.interfaceName)) + extendsClause;
@@ -277,8 +284,10 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 			standaloneIdx = standaloneIdx + 1;
 		}
 		let field = d.interfaceFields[i];
+		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
+		if (optional) field = field + "?";
 		if (d.interfaceFieldTypes[i] != "") {
-			field = field + ": " + d.interfaceFieldTypes[i];
+			field = field + ": " + (optional ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
 		// Find a trailing comment for this field.
 		let attached: Token = null as unknown as Token;
@@ -312,11 +321,11 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
-	return printStructLikeDecl(node, "interface");
+	return printStructLikeDecl(node, "interface", options);
 }
 
 export function printStructDecl(node: Node, options: FormatOptions): Doc {
-	return printStructLikeDecl(node, "struct");
+	return printStructLikeDecl(node, "struct", options);
 }
 
 export function printClassDecl(node: Node, options: FormatOptions): Doc {
@@ -501,9 +510,10 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propVisibility != "") parts.push(docText(d.propVisibility + " "));
 	if (d.propIsStatic) parts.push(docText("static "));
 	if (d.propIsReadonly) parts.push(docText("readonly "));
-	parts.push(docText(d.propName));
+	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
+	parts.push(docText(optional ? d.propName + "?" : d.propName));
 	if (d.propType != "") {
-		parts.push(docText(": " + d.propType));
+		parts.push(docText(": " + (optional ? unoptionalized(d.propType) : d.propType)));
 	}
 	if (d.propInitializer != null) {
 		parts.push(docText(" = "));

@@ -69,3 +69,4 @@ import "./cases/nonNullAssertion";
 import "./cases/assertionOperands";
 import "./cases/bareArrowParam";
 import "./cases/objectKeys";
+import "./cases/optionalMembers";
