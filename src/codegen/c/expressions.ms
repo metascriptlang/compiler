@@ -589,6 +589,14 @@ function emitStringArrayLocal(g: CGen, p: CProc, ctx: ExprEvalCtx, cc: number, p
 	return tmpName;
 }
 
+function pushUnloweredNew(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void {
+	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
+	const tk = node.nodeType != null ? (node.nodeType.kind as number).toString() : "null";
+	const argc = (node.data as NewExprData).newArguments.length;
+	addCGenError(g, "internal: new with " + argc.toString() + " argument(s) of type kind=" + tk + " reached codegen unlowered in " + g.modulePath + " proc " + pn, node.location.line, node.location.column);
+	ctx.results.push("MS_NIL");
+}
+
 // Comma-join top N results from the stack, then remove them.
 function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	let s = "";
@@ -1074,6 +1082,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				} else {
 					ctx.results.push(`${genAllocTyped(g, cType)}`);
 				}
+			} else {
+				pushUnloweredNew(g, ctx, node);
 			}
 			// Positional args>0 on a ctor-less Ref type used to be emitted inline
 			// here; newExprLower now materializes it (alloc + `_init` + field
@@ -1107,6 +1117,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		if (d.newArguments.length == 0) {
 			// No-arg new without constructor: allocate with zero-init
 			ctx.results.push(`${genAllocTyped(g, calleeName)}`);
+		} else {
+			pushUnloweredNew(g, ctx, node);
 		}
 		// Positional args>0 fallback used to emit field-by-field assignments
 		// here; newExprLower materializes it in the shared transform now, so
