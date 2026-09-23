@@ -197,6 +197,26 @@ export function writtenInitializer(source: string, line: int32, column: int32, n
 	return source.byteSlice(eq + 1, end).trim();
 }
 
+export function rawGenericsAt(source: string, line: int32, column: int32, name: string): string {
+	const start = sourceOffset(source, line, column - 1);
+	if (start < 0) return "";
+	const open = skipBlanks(source, start + name.byteLength);
+	if (open >= source.byteLength || source.byteAt(open) != "<".code) return "";
+	let depth = 0;
+	let end = open;
+	while (end < source.byteLength) {
+		const ch = source.byteAt(end);
+		if (ch == "\"".code || ch == "'".code) { end = skipQuoted(source, end); continue; }
+		if (ch == "<".code) depth = depth + 1;
+		if (ch == ">".code && !(end > 0 && source.byteAt(end - 1) == "=".code)) {
+			depth = depth - 1;
+			if (depth == 0) return source.byteSlice(open, end + 1);
+		}
+		end = end + 1;
+	}
+	return "";
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;

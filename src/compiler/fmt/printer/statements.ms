@@ -5,13 +5,13 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData,
+	DestructuringDeclData, SourceLocation,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt } from "./literals";
+import { rawGenericsAt, sourceByteAt } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -466,6 +466,11 @@ export function paramListInParens(params: Doc[], options: FormatOptions): Doc[] 
 
 // `<T, U>` if non-empty, else `""`. Centralises the generic-clause emit
 // pattern used by TypeAlias/Function/Method/Class/Interface decls.
+export function genericsFor(options: FormatOptions, loc: SourceLocation, name: string, names: string): string {
+	const raw = loc != null ? rawGenericsAt(options.source, loc.line, loc.column, name) : "";
+	return raw != "" ? raw : wrapGenerics(names);
+}
+
 export function wrapGenerics(names: string): string {
 	return names != "" ? "<" + names + ">" : "";
 }
@@ -540,7 +545,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const head = (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (node.flags.has(NodeFlag.Converter) ? "converter" : "function") + (isGen ? "*" : "") + " "
-		+ d.fnName + wrapGenerics(flagGet(d.fnFlags, "gen"));
+		+ d.fnName + genericsFor(options, d.nameLocation, d.fnName, flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
 	const names: string[] = [];

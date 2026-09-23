@@ -74,3 +74,4 @@ import "./cases/matchAndBlockComments";
 import "./cases/whenChain";
 import "./cases/enumValues";
 import "./cases/enumComments";
+import "./cases/genericClauses";

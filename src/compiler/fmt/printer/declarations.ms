@@ -16,7 +16,7 @@ import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
 import { writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -159,7 +159,7 @@ function printReExport(inner: Node, options: FormatOptions): Doc {
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
-	const head = "type " + d.aliasName + wrapGenerics(d.aliasGenericParams);
+	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {
 		// Discriminated union: type X<...> = match (disc: Enum) { ... }
 		// Use docIndent so the layout engine respects useTabs/tabWidth.
@@ -254,7 +254,7 @@ function unoptionalized(type: string): string {
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
-	const head = keyword + " " + d.interfaceName + wrapGenerics(getGenericDecl(d.interfaceName)) + extendsClause;
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, getGenericDecl(d.interfaceName)) + extendsClause;
 	if (d.interfaceFields.length == 0) return docText(head + " {}");
 
 	// Field source positions are stored on node.paramLocations
@@ -343,7 +343,7 @@ export function printStructDecl(node: Node, options: FormatOptions): Doc {
 
 export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ClassDeclData;
-	const generics = wrapGenerics(getGenericDecl(d.className));
+	const generics = genericsFor(options, d.nameLocation, d.className, getGenericDecl(d.className));
 	const parts: Doc[] = [docText("class " + d.className + generics)];
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));
@@ -573,7 +573,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "")
-		+ d.methodName + wrapGenerics(flagGet(d.methodFlags, "gen"));
+		+ d.methodName + genericsFor(options, d.nameLocation, d.methodName, flagGet(d.methodFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options);
