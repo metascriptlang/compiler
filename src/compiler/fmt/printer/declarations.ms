@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -206,7 +206,10 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	const members: Doc[] = [];
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const memberLine = i < d.memberLocations.length ? d.memberLocations[i].line : 0;
-		const baseText = d.enumMembers[i] + ",";
+		const init = i < d.memberLocations.length
+			? writtenInitializer(options.source, d.memberLocations[i].line, d.memberLocations[i].column, d.enumMembers[i])
+			: "";
+		const baseText = d.enumMembers[i] + (init != "" ? " = " + init : "") + ",";
 		// Find a comment whose line matches this member.
 		let attached: Token = null as unknown as Token;
 		for (let j = 0; j < inline.length; j += 1) {

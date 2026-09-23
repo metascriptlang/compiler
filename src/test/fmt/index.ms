@@ -72,3 +72,4 @@ import "./cases/objectKeys";
 import "./cases/optionalMembers";
 import "./cases/matchAndBlockComments";
 import "./cases/whenChain";
+import "./cases/enumValues";

@@ -174,6 +174,30 @@ function skipBlanks(source: string, from: int32): int32 {
 	return pos;
 }
 
+export function writtenInitializer(source: string, line: int32, column: int32, name: string): string {
+	const start = sourceOffset(source, line, column - 1);
+	if (start < 0) return "";
+	const eq = skipBlanks(source, start + name.byteLength);
+	if (eq >= source.byteLength || source.byteAt(eq) != "=".code) return "";
+	let end = eq + 1;
+	let depth = 0;
+	while (end < source.byteLength) {
+		const ch = source.byteAt(end);
+		if (ch == "\"".code || ch == "'".code) { end = skipQuoted(source, end); continue; }
+		if (ch == "`".code) { end = skipTemplate(source, end); continue; }
+		if (ch == "/".code && end + 1 < source.byteLength && (source.byteAt(end + 1) == "/".code || source.byteAt(end + 1) == "*".code)) break;
+		if (ch == "(".code || ch == "[".code || ch == "{".code) depth = depth + 1;
+		if (ch == ")".code || ch == "]".code || ch == "}".code) {
+			if (depth == 0) break;
+			depth = depth - 1;
+		}
+		if (depth == 0 && (ch == ",".code || ch == "
+".code || ch == "".code)) break;
+		end = end + 1;
+	}
+	return source.byteSlice(eq + 1, end).trim();
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
