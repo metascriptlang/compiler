@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, or all");
 	exit(2);
 }
 
@@ -297,10 +297,84 @@ function runArgv(): void {
 	if (responseResult == 0) record("response file executable", "47", value(response, "products with spaces/response probe"));
 }
 
+function builtValue(dir: string, code: number): string {
+	return code == 0 ? value(dir) : "build failed";
+}
+
+function comptimeRead(exported: string, name: string, file: string): string {
+	return `import { readFile } from "std/fs";\n\n${exported}const ${name}: string = @comptime {\n\tconst r = readFile("${file}");\n\tif (!r.ok) return "missing";\n\treturn r.value;\n};\n`;
+}
+
+function comptimeFixture(dir: string): void {
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/lib.ms`, comptimeRead("export ", "SECOND", "second.txt"));
+	put(`${dir}/main.ms`, `${comptimeRead("", "FIRST", "first.txt")}import { SECOND } from "./lib";\n\nconsole.log(FIRST + SECOND);\n`);
+}
+
+function runComptimeCache(): void {
+	const reads = `${root}/comptime`;
+	comptimeFixture(reads);
+	put(`${reads}/first.txt`, "a");
+	put(`${reads}/second.txt`, "b");
+	need(build(reads, "baseline") == 0, "comptime baseline");
+	need(value(reads) == "ab", "comptime baseline value");
+	put(`${reads}/first.txt`, "c");
+	record("compile-time read edit in the entry module", "cb", builtValue(reads, build(reads, "entry-read-change")));
+	put(`${reads}/second.txt`, "d");
+	record("compile-time read edit in an imported module", "cd", builtValue(reads, build(reads, "imported-read-change")));
+	need(remove(`${reads}/first.txt`).ok, "remove first.txt");
+	record("compile-time read of a removed file", "missingd", builtValue(reads, build(reads, "read-removed")));
+	put(`${reads}/first.txt`, "");
+	record("compile-time read of a file created empty", "d", builtValue(reads, build(reads, "read-created-empty")));
+
+	const outside = `${root}/comptime-outside`;
+	comptimeFixture(`${outside}/app`);
+	put(`${outside}/first.txt`, "a");
+	put(`${outside}/second.txt`, "b");
+	const outsideArgs: string[] = ["build", "app/main.ms", `--output=probe`];
+	if (!windows) outsideArgs.push("--cc=clang");
+	need(command(outside, "outside-baseline", compiler, outsideArgs).code == 0, "outside baseline");
+	need(value(outside) == "ab", "outside baseline value");
+	put(`${outside}/first.txt`, "e");
+	record("compile-time read edit with the build run outside the source directory", "eb", builtValue(outside, command(outside, "outside-change", compiler, outsideArgs).code));
+
+	const host = `${root}/expansion`;
+	ensureDir(`${host}/tool`);
+	ensureDir(`${host}/pkg/src`);
+	ensureDir(`${host}/app`);
+	put(`${host}/app/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${host}/tool/text.ms`, "import { Node, NodeKind, stringValue, expansionFile } from \"std/meta\";\nimport { readFile } from \"std/fs\";\nimport { dirname, join } from \"std/fs/path\";\n\nexport macro includeText(p: Node): Node {\n\tconst r = readFile(join(dirname(expansionFile()), stringValue(p)));\n\treturn { kind: NodeKind.StringLiteral, line: p.line, column: p.column, value: r.ok ? r.value : \"missing\" };\n}\n");
+	put(`${host}/pkg/src/greet.ms`, "import { includeText } from \"../../tool/text\";\n\nexport const GREETING: string = includeText(\"./greeting.txt\");\n");
+	put(`${host}/pkg/src/greeting.txt`, "hi");
+	put(`${host}/app/main.ms`, "import { expansionFile } from \"std/meta\";\nimport { GREETING } from \"../pkg/src/greet\";\n\nconst SELF: string = @comptime { return expansionFile(); };\nconsole.log(GREETING + \":\" + (SELF.endsWith(\"/app/main.ms\") ? \"self\" : SELF));\n");
+	record("macro reads a file beside its expansion site", "hi:self", builtValue(`${host}/app`, build(`${host}/app`, "expansion-first")));
+	put(`${host}/pkg/src/greeting.txt`, "yo");
+	record("macro read beside its expansion site after an edit", "yo:self", builtValue(`${host}/app`, build(`${host}/app`, "expansion-change")));
+
+	const branch = `${root}/define-branch`;
+	ensureDir(branch);
+	put(`${branch}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${branch}/main.ms`, "when (tier == 2) {\n\tconsole.log(\"two\");\n} else {\n\tconsole.log(\"other\");\n}\n");
+	need(build(branch, "branch-first", "probe", ["-d:tier=1"]) == 0, "define branch baseline");
+	need(value(branch) == "other", "define branch baseline value");
+	record("when branch after a -d: value change", "two", builtValue(branch, build(branch, "branch-change", "probe", ["-d:tier=2"])));
+
+	const defines = `${root}/defines`;
+	ensureDir(defines);
+	put(`${defines}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${defines}/main.ms`, "import { define } from \"std/meta\";\n\nconst OUT: string = @comptime { return define(\"probeOut\"); };\nwhen (tier == 2) {\n\tconsole.log(\"two:\" + OUT);\n} else {\n\tconsole.log(\"other:\" + OUT);\n}\n");
+	record("build with -d:tier=1 -d:probeOut=x", "other:x", builtValue(defines, build(defines, "define-first", "probe", ["-d:tier=1", "-d:probeOut=x"])));
+	record("build with -d:tier=2 -d:probeOut=x", "two:x", builtValue(defines, build(defines, "define-when-change", "probe", ["-d:tier=2", "-d:probeOut=x"])));
+	record("build with -d:tier=2 -d:probeOut=y", "two:y", builtValue(defines, build(defines, "define-value-change", "probe", ["-d:tier=2", "-d:probeOut=y"])));
+	record("build with -d:tier=2", "two:", builtValue(defines, build(defines, "define-removed", "probe", ["-d:tier=2"])));
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
+if (group == "comptime-cache" || group == "all") runComptimeCache();
 
 let failures = 0;
 console.log(`root ${root}`);
