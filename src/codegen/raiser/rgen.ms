@@ -26,6 +26,7 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	globalSymbolKey,
+	routineKey,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -300,6 +301,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + fd.fnName, index: funcIdx });
 				if (fnNode.resolvedSym != null && fnNode.resolvedSym.modulePath != "") {
 					globalFuncMap.items.push({ name: fnNode.resolvedSym.modulePath + ":" + fnNode.resolvedSym.name, index: funcIdx });
+					globalFuncMap.items.push({ name: routineKey(fnNode.resolvedSym), index: funcIdx });
 				}
 				projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 				funcIdx += 1;
