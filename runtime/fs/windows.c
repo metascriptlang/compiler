@@ -247,3 +247,39 @@ double msFsRename(msString oldPath, msString newPath) {
 }
 
 /* end of windows.c */
+
+double msFsSymlink(msString target, msString path) {
+	_msFsLastErrno = 0;
+	const char* targetUtf8 = msStringToCString(target);
+	const char* pathUtf8 = msStringToCString(path);
+	const int targetWLen = MultiByteToWideChar(CP_UTF8, 0, targetUtf8, -1, NULL, 0);
+	const int pathWLen = MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, NULL, 0);
+	if (targetWLen <= 0 || pathWLen <= 0) {
+		_msFsLastErrno = ERROR_INVALID_PARAMETER;
+		return 0.0;
+	}
+	wchar_t* targetW = (wchar_t*)malloc((size_t)targetWLen * sizeof(wchar_t));
+	wchar_t* pathW = (wchar_t*)malloc((size_t)pathWLen * sizeof(wchar_t));
+	if (targetW == NULL || pathW == NULL) {
+		if (targetW != NULL) free(targetW);
+		if (pathW != NULL) free(pathW);
+		_msFsLastErrno = ERROR_NOT_ENOUGH_MEMORY;
+		return 0.0;
+	}
+	MultiByteToWideChar(CP_UTF8, 0, targetUtf8, -1, targetW, targetWLen);
+	MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, pathW, pathWLen);
+	for (wchar_t* p = targetW; *p; p++) {
+		if (*p == L'/') *p = L'\\';
+	}
+	/* A relative target resolves against the link's directory, as on POSIX. */
+	DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+	DWORD attrs = GetFileAttributesW(targetW);
+	if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+		flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+	}
+	BOOL ok = CreateSymbolicLinkW(pathW, targetW, flags);
+	if (!ok) _msFsLastErrno = (int)GetLastError();
+	free(targetW);
+	free(pathW);
+	return ok ? 1.0 : 0.0;
+}

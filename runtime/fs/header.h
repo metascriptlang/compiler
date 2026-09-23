@@ -72,6 +72,9 @@ double msFsRemove(msString path);
 /* Rename/move a file or directory. Returns 1.0/0.0. */
 double msFsRename(msString oldPath, msString newPath);
 
+/* Create `path` as a symbolic link to `target`. Returns 1.0/0.0. */
+double msFsSymlink(msString target, msString path);
+
 #ifdef __cplusplus
 }
 #endif

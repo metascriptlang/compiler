@@ -206,4 +206,11 @@ double msFsRename(msString oldPath, msString newPath) {
 	return 0.0;
 }
 
+double msFsSymlink(msString target, msString path) {
+	_msFsLastErrno = 0;
+	if (symlink(msStringToCString(target), msStringToCString(path)) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
+}
+
 /* end of posix.c */

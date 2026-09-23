@@ -21,6 +21,7 @@ extern function msFsMkdir(path: string): number from "msFsMkdir";
 extern function msFsRmdir(path: string): number from "msFsRmdir";
 extern function msFsRemove(path: string): number from "msFsRemove";
 extern function msFsRename(oldPath: string, newPath: string): number from "msFsRename";
+extern function msFsSymlink(target: string, path: string): number from "msFsSymlink";
 extern function msFsReadDirEntries(path: string): string from "msFsReadDirEntries";
 
 export function readFile(path: string): Result<string, IoError> {
@@ -89,6 +90,13 @@ export function removeAll(path: string): Result<void, IoError> {
 		return rmdir(path);
 	}
 	return remove(path);
+}
+
+export function symlink(target: string, path: string): Result<void, IoError> {
+	if (msFsSymlink(target, path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "symlink failed"));
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {

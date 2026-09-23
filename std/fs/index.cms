@@ -4,7 +4,7 @@ import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
 	msFsIsExecutable, msFsRealPath,
 	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
-	msFsChmod, msFsReadDirEntries,
+	msFsChmod, msFsReadDirEntries, msFsSymlink,
 } from "runtime/fs/header.h";
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
@@ -91,6 +91,13 @@ export function removeAll(path: string): Result<void, IoError> {
 		return rmdir(path);
 	}
 	return remove(path);
+}
+
+export function symlink(target: string, path: string): Result<void, IoError> {
+	if (msFsSymlink(target, path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "symlink failed"));
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {

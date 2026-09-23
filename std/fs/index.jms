@@ -10,7 +10,7 @@
 
 @import("node:fs", {
 	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, accessSync,
-	mkdirSync, rmdirSync, unlinkSync, renameSync, readdirSync, chmodSync, realpathSync,
+	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
 });
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
@@ -26,6 +26,7 @@ extern function mkdirSync(path: string): void;
 extern function rmdirSync(path: string): void;
 extern function unlinkSync(path: string): void;
 extern function renameSync(oldPath: string, newPath: string): void;
+extern function symlinkSync(target: string, path: string): void;
 extern function readdirSync(path: string): string[];
 extern function chmodSync(path: string, mode: int32): void;
 
@@ -156,6 +157,17 @@ export function removeAll(path: string): Result<void, IoError> {
 		return rmdir(path);
 	}
 	return remove(path);
+}
+
+export function symlink(target: string, path: string): Result<void, IoError> {
+	try {
+		symlinkSync(target, path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "symlink failed"));
+	}
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
