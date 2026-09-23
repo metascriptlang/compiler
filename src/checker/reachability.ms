@@ -11,7 +11,7 @@ import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule, aliveSetHas, aliveSetHasModule } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
+import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapRefNullUnion, inlineVariantStruct } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
@@ -294,6 +294,16 @@ function markTypeInfoOfType(ty: Type): void {
 		for (const member of t.typeChildren) {
 			if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) markTypeInfoOfType(member);
 		}
+	}
+	if (t.kind == TypeKind.Struct && (isAnonTypeName(t.typeName) || t.typeName.startsWith("__anon")) && t.typeNames.length > 0) {
+		const an = isAnonTypeName(t.typeName) ? anonTypeName(t) : t.typeName;
+		for (const hn of [an + "Destroy", an + "Trace"]) {
+			const h = nameIndexLookup(hn);
+			if (h != "") {
+				markAndWalk(h, hn);
+			}
+		}
+		return;
 	}
 	const tn = t.typeName;
 	if (tn.length == 0) return;

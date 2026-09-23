@@ -827,21 +827,21 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// or miss) count as generic here.
 	const bareOrigin = typeCacheGet(g.typeCache, "bare:" + className);
 	const isQualifiedNamed = bareOrigin != "" && bareOrigin != className;
-	const isGeneric = !isQualifiedNamed && className.indexOf("__", 0) >= 0;
+	const sharedName = (!isQualifiedNamed && className.indexOf("__", 0) >= 0) || className.startsWith("msAnon_");
 	// The declaring module owns the definition even when DCE dropped the decl
 	// arm (interface used only inside one function) — declaredThings alone
 	// misses that case and the extern would resolve to nothing.
 	let ownSym = objType != null ? objType.sym : null;
 	if (ownSym == null && objType != null && objType.typeReturn != null) ownSym = objType.typeReturn.sym;
 	const isDeclaringModule = ownSym != null && ownSym.modulePath == g.modulePath;
-	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || isGeneric || isDeclaringModule;
+	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || sharedName || isDeclaringModule;
 	if (!isOwner) {
 		ensureTypeInfo(g, className);
 		return;
 	}
 	// Owning module: emit definition + DatInit assignment.
-	// Generics use weak linkage — multiple modules may emit, linker deduplicates.
-	if (isGeneric) {
+	// Generics and structural anonymous shapes use weak linkage — multiple modules may emit, linker deduplicates.
+	if (sharedName) {
 		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
 	} else if (isCompilerGen) {
 		// $-generated types (lambda envs) are only ever referenced in the module
@@ -858,7 +858,8 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
-	} else if (isGeneric && genHasDestroyHook(className)) {
+		if (sharedName) ensureDrcProto(g, destroyHook, destroySym);
+	} else if (sharedName && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
 		// objType resolved here. Consult the global destroy-hook registry by hook name.

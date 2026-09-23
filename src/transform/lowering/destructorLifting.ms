@@ -2112,6 +2112,11 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				// undefined symbols. DU-variant payloads excluded (classify defers them
 				// to the DU machinery; a stray unstamped copy just makes a dead def).
 				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, false, lctx, node.location);
+			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
+				&& node.nodeType.typeReturn.kind == TypeKind.Struct
+				&& isAnonTypeName(node.nodeType.typeReturn.typeName)
+				&& node.nodeType.typeReturn.typeNames.length > 0) {
+				ensureHooks(anonTypeName(node.nodeType.typeReturn), node.nodeType.typeReturn, node.nodeType, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName != ""
 				&& hasAsgnFlag(node.nodeType)
 				&& !isAllStringLiteralUnion(node.nodeType)
