@@ -742,8 +742,9 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 // targets keep reference/aliasing semantics and stay rejected; extra-field
 // (prefix) matches stay rejected — the C copy would drop fields the js
 // identity keeps, a built-in parity split.
-export function isAnonStructAdoption(source: Type | null, target: Type | null): boolean {
-	if (source == null || target == null) return false;
+export function isAnonStructAdoption(sourceIn: Type | null, target: Type | null): boolean {
+	if (sourceIn == null || target == null) return false;
+	const source = sourceIn.kind == TypeKind.Ref && sourceIn.typeReturn != null ? sourceIn.typeReturn : sourceIn;
 	if (source.kind != TypeKind.Struct || target.kind != TypeKind.Struct) return false;
 	if (!isAnonLiteralName(source.typeName)) return false;
 	if (target.typeName == "" || isAnonLiteralName(target.typeName)) return false;

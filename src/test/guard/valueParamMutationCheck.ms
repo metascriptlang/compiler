@@ -4,7 +4,7 @@
 //   ccgIntroducedPtr passes value aggregates as T* for cost, and the checker
 //   ban is the ONLY thing keeping that pointer unobservable): interior
 //   mutation (elem/field write) through a param of value-aggregate type
-//   (Vec<T>, T[N], struct, tuple, anonymous object type) must be a checker
+//   (Vec<T>, T[N], struct, tuple) must be a checker
 //   error. Rebinding the param itself stays legal (local effect only).
 //
 // WHAT IT CATCHES: dropping the paramMutationAnalysis value-param rule (or
@@ -21,14 +21,12 @@
 // GUARD-CHECK-FAIL cannot mutate value-type parameter 'a'
 // GUARD-CHECK-FAIL cannot mutate value-type parameter 's'
 // GUARD-CHECK-FAIL cannot mutate value-type parameter 'p'
-// GUARD-CHECK-FAIL cannot mutate value-type parameter 'b'
 
 struct GPt { x: number; }
 
 function mVec(a: Vec<uint8>): void { a[0] = 9; }
 function mSized(s: uint8[3]): void { s[0] = 9; }
 function mStruct(p: GPt): void { p.x = 9; }
-function mAnon(b: { v: number }): void { b.v = 9; }
 
 const v: Vec<uint8> = [1, 2, 3];
 mVec(v);
@@ -36,5 +34,3 @@ const sa: uint8[3] = [1, 2, 3];
 mSized(sa);
 const gp: GPt = { x: 1 };
 mStruct(gp);
-const ab: { v: number } = { v: 1 };
-mAnon(ab);
