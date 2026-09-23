@@ -75,35 +75,17 @@ export function hashString(s: string): int64 {
 	return h;
 }
 
-// Nim's hashWangYi1 (hashes.nim:100-178) with its 64-bit-only hiXorLo fallback:
-// the full 128-bit product of two uint64, high half XOR low half. Mixing stays
-// unsigned — a signed multiply here overflows, which is UB and traps under zig
-// cc's debug checks. Every key type reaches this one site.
-function hiXorLo(a: uint64, b: uint64): uint64 {
-	const lo32 = 0xFFFFFFFF as uint64;
-	const s = 32 as uint64;
-	const aH = a >> s;
-	const aL = a & lo32;
-	const bH = b >> s;
-	const bL = b & lo32;
-	const rHH = aH * bH;
-	const rHL = aH * bL;
-	const rLH = aL * bH;
-	const rLL = aL * bL;
-	const t = rLL + (rHL << s);
-	let c = t < rLL ? (1 as uint64) : (0 as uint64);
-	const lo = t + (rLH << s);
-	if (lo < t) c = c + (1 as uint64);
-	const hi = rHH + (rHL >> s) + (rLH >> s) + c;
-	return hi ^ lo;
-}
+// Nim's hashWangYi1 (hashes.nim:166) on its gcc/clang path: hiXorLo is the full
+// 128-bit product of two uint64, high half XOR low half (msHiXorLo in
+// runtime/core/system.h). Every key type reaches this one mixing site.
+extern function msHiXorLo(a: uint64, b: uint64): uint64;
 
 // 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
 export function hashWangYi1(x: uint64): int64 {
 	const p0 = 0xa0761d6478bd642f as uint64;
 	const p1 = 0xe7037ed1a0b428db as uint64;
 	const p58 = (0xeb44accab455d165 as uint64) ^ (8 as uint64);
-	const h = hiXorLo(hiXorLo(p0, x ^ p1), p58) as int64;
+	const h = msHiXorLo(msHiXorLo(p0, x ^ p1), p58) as int64;
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
