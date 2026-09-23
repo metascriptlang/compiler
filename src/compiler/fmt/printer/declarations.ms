@@ -16,7 +16,7 @@ import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
 	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
@@ -28,27 +28,7 @@ function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): 
 	}
 	if (inner.length == 0) return null;
 	node.comments = rest;
-	const lines: Doc[] = [];
-	let ci = 0;
-	for (let i = 0; i < names.length; i += 1) {
-		const line = i < locs.length ? locs[i].line : 0;
-		while (ci < inner.length && inner[ci].line < line) {
-			lines.push(docText(inner[ci].value));
-			ci += 1;
-		}
-		const lastOnLine = i + 1 >= names.length || (i + 1 < locs.length && locs[i + 1].line != line);
-		const entry: Doc[] = [names[i], docText(",")];
-		while (lastOnLine && ci < inner.length && inner[ci].line == line) {
-			entry.push(docLineSuffix([docText(" " + inner[ci].value)]));
-			ci += 1;
-		}
-		lines.push(docGroup(entry));
-	}
-	while (ci < inner.length) {
-		lines.push(docText(inner[ci].value));
-		ci += 1;
-	}
-	return docGroup([docText("{"), docIndent([docHardLine(), docJoin(lines, docHardLine())]), docHardLine(), docText("}")]);
+	return commentedList(names, locs, inner, "{", "}");
 }
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -630,7 +610,12 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	const paramComments = paramListComments(node, d.methodBody);
+	if (paramComments.length > 0 && node.paramLocations != null) {
+		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
+	} else {
+		for (const p of paramListInParens(params, options)) parts.push(p);
+	}
 	if (d.methodReturnType != "") {
 		parts.push(docText(": " + d.methodReturnType));
 	}

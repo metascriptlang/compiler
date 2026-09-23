@@ -557,6 +557,60 @@ function spellParamModifiers(name: string): string {
 	return spelled + rest;
 }
 
+export function commentedList(items: Doc[], locs: SourceLocation[], inner: Token[], open: string, close: string): Doc {
+	const lines: Doc[] = [];
+	let ci = 0;
+	for (let i = 0; i < items.length; i += 1) {
+		const line = i < locs.length ? locs[i].line : 0;
+		while (ci < inner.length && inner[ci].line < line) {
+			lines.push(docText(inner[ci].value));
+			ci += 1;
+		}
+		const lastOnLine = i + 1 >= items.length || (i + 1 < locs.length && locs[i + 1].line != line);
+		const entry: Doc[] = [items[i], docText(",")];
+		while (lastOnLine && ci < inner.length && inner[ci].line == line) {
+			entry.push(docLineSuffix([docText(" " + inner[ci].value)]));
+			ci += 1;
+		}
+		lines.push(docGroup(entry));
+	}
+	while (ci < inner.length) {
+		lines.push(docText(inner[ci].value));
+		ci += 1;
+	}
+	return docGroup([docText(open), docIndent([docHardLine(), docJoin(lines, docHardLine())]), docHardLine(), docText(close)]);
+}
+
+export function paramListComments(node: Node, body: Node): Token[] {
+	if (body == null || isSynthesized(node, body)) return [];
+	const inner: Token[] = [];
+	takeSignatureComments(node, node, body, inner);
+	takeSignatureComments(body, node, body, inner);
+	if (body.kind == NodeKind.BlockStmt) {
+		const stmts = (body.data as BlockStmtData).statements;
+		if (stmts.length > 0) takeSignatureComments(stmts[0], node, body, inner);
+	}
+	for (let i = 1; i < inner.length; i += 1) {
+		const c = inner[i];
+		let j = i - 1;
+		while (j >= 0 && (inner[j].line > c.line || (inner[j].line == c.line && inner[j].column > c.column))) {
+			inner[j + 1] = inner[j];
+			j -= 1;
+		}
+		inner[j + 1] = c;
+	}
+	return inner;
+}
+
+function takeSignatureComments(holder: Node, decl: Node, body: Node, into: Token[]): void {
+	const rest: Token[] = [];
+	for (const c of holder.comments) {
+		const beforeBody = c.line < body.location.line || (c.line == body.location.line && c.column < body.location.column);
+		if (c.line > decl.location.line && beforeBody) into.push(c); else rest.push(c);
+	}
+	holder.comments = rest;
+}
+
 function prefixAt(names: string[], positions: string, word: string): void {
 	if (positions == "") return;
 	for (const p of positions.split(",")) {
@@ -602,7 +656,12 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	prefixAt(names, flagGet(d.fnFlags, "out"), "out ");
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
 	const params = buildParamList(names, types, defaults, options, node.paramLocations);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	const paramComments = paramListComments(node, d.fnBody);
+	if (paramComments.length > 0 && node.paramLocations != null && staticType == "") {
+		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
+	} else {
+		for (const p of paramListInParens(params, options)) parts.push(p);
+	}
 
 	if (d.fnReturnType != "") {
 		parts.push(docText(": " + d.fnReturnType));
