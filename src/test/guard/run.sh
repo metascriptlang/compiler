@@ -13,6 +13,8 @@
 #   // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
 #   // GUARD-BALANCE-ORC <MangledType>  same, but under orc only (cycle leaks are by-design under drc/ARC)
 #   // GUARD-JS                      also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
+#   // GUARD-OS <os>                 one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
+#                                    build must fail with every tag, else it must link (nothing is run)
 # The double-destroy abort needs no directive — it is name-agnostic.
 #
 # Env: MSC=<path to msc> (default: msc)   GUARD_GC="drc orc" (default both)
@@ -59,6 +61,35 @@ for ms in "$DIR"/*.ms; do
   checkfails=$(grep -E '^// GUARD-CHECK-FAIL ' "$ms" | sed -E 's|^// GUARD-CHECK-FAIL ||')
   wantjs=$(grep -cE '^// GUARD-JS' "$ms" || true)
   testbal=$(grep -oE '// *GUARD-TEST-BALANCE +[A-Za-z0-9_]+' "$ms" | awk '{print $NF}')
+  os=$(grep -oE '^// GUARD-OS +[a-z]+' "$ms" | awk '{print $NF}')
+  if [ -n "$os" ]; then
+    if [ -n "$balance$balanceOrc$testbal" ] || [ "$wantjs" != "0" ]; then
+      echo "FAIL $name [$os]: GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-JS/GUARD-TEST-BALANCE"
+      fail=1; continue
+    fi
+    oslog="$TMP/$name.$os.build"
+    if ( cd "$WORK" && "$MSC" build "$ms" --os="$os" --output="$TMP/$name.$os" ) >"$oslog" 2>&1; then
+      if [ -n "$checkfails" ]; then
+        echo "FAIL $name [$os]: compiled clean — a checker rule was dropped"; fail=1
+      else
+        echo "ok   $name [$os]"
+      fi
+      continue
+    fi
+    if [ -z "$checkfails" ]; then
+      echo "FAIL $name [$os]: build error"; grep -E '^(ld\.lld: )?error' "$oslog" | head -3
+      fail=1; continue
+    fi
+    ok=1
+    while IFS= read -r want; do
+      [ -z "$want" ] && continue
+      if ! grep -qF "$want" "$oslog"; then
+        echo "FAIL $name [$os]: missing diagnostic: $want"; ok=0; fail=1
+      fi
+    done <<<"$checkfails"
+    [ $ok -eq 1 ] && echo "ok   $name [$os]"
+    continue
+  fi
   for gc in $MODES; do
     bin="$TMP/$name.$gc"
     if [ -n "$checkfails" ]; then

@@ -12,6 +12,8 @@
 //   // GUARD-BALANCE-ORC <MangledType>  same, but under orc only (cycle leaks are by-design under drc/ARC)
 //   // GUARD-CHECK-FAIL <substr>     build MUST fail and the log MUST carry every substr
 //   // GUARD-JS                      also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
+//   // GUARD-OS <os>                 one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
+//                                    build must fail with every tag, else it must link (nothing is run)
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
@@ -104,6 +106,7 @@ interface Probe {
 	balanceOrc: string[];
 	checkfails: string[];
 	wantJs: boolean;
+	os: string;
 }
 
 // First whitespace-separated word after a directive marker — mangled type
@@ -120,6 +123,7 @@ function parseDirectives(probe: Probe, src: string): void {
 	const ORC = "// GUARD-BALANCE-ORC";
 	const CHECK = "// GUARD-CHECK-FAIL ";
 	const JS = "// GUARD-JS";
+	const OS = "// GUARD-OS ";
 	// A CRLF source leaves a trailing \r on every split line; riding into the
 	// directive token it breaks the log contains() match against LF diagnostics.
 	for (const rawLine of src.split("\n")) {
@@ -136,6 +140,7 @@ function parseDirectives(probe: Probe, src: string): void {
 			probe.checkfails.push(line.slice(CHECK.length, line.length));
 		}
 		if (line.indexOf(JS) == 0) { probe.wantJs = true; }
+		if (line.indexOf(OS) == 0) { probe.os = firstWordAfter(line.slice(OS.length, line.length)); }
 	}
 }
 
@@ -158,7 +163,7 @@ function discoverProbes(): Probe[] {
 		const probe: Probe = {
 			name: e.slice(0, e.length - 3),
 			path: ROOT + "/" + GUARD_DIR + e,
-			balance: [], balanceOrc: [], checkfails: [], wantJs: false,
+			balance: [], balanceOrc: [], checkfails: [], wantJs: false, os: "",
 		};
 		parseDirectives(probe, readFileOr(GUARD_DIR + e, ""));
 		probes.push(probe);
@@ -178,8 +183,8 @@ function isToolchainRace(log: string): boolean {
 		|| log.contains("failed to deduplicate literals");
 }
 
-function buildCmd(probePath: string, gc: string, binPath: string, js: boolean): string {
-	const target = js ? " --target=js" : " --gc=" + gc + " --passC=\"-DMS_DRC_LEDGER\"";
+function buildCmd(probePath: string, gc: string, binPath: string, js: boolean, os: string): string {
+	const target = js ? " --target=js" : os != "" ? " --os=" + os : " --gc=" + gc + " --passC=\"-DMS_DRC_LEDGER\"";
 	return "cd " + quote(WORK) + " && " + quote(MSC) + " build " + quote(probePath) + target + " --output=" + quote(binPath);
 }
 
@@ -196,7 +201,7 @@ function maybeQuote(p: string): string {
 }
 
 function buildProbe(probe: Probe, gc: string, binPath: string, logPath: string, js: boolean): boolean {
-	const cmd = buildCmd(probe.path, gc, binPath, js);
+	const cmd = buildCmd(probe.path, gc, binPath, js, probe.os);
 	let r = runCapture(cmd);
 	writeFile(logPath, logText(r));
 	if (!r.ok && isToolchainRace(logText(r))) {
@@ -389,6 +394,39 @@ function runJsLane(probe: Probe, t: Tally): void {
 	ok(t, tag);
 }
 
+// // GUARD-OS <os>: the invariant lives in a freestanding build whose binary
+// the host cannot run, so the lane only builds: an errorcheck probe must fail
+// with every tag, any other probe must link.
+function runOsLane(probe: Probe, t: Tally): void {
+	const tag = probe.name + " [" + probe.os + "]";
+	const bin = BIN_DIR + "/" + probe.name + "." + probe.os;
+	const buildLog = LOG_DIR + "/" + probe.name + "." + probe.os + ".build";
+
+	if (probe.balance.length > 0 || probe.balanceOrc.length > 0 || probe.wantJs) {
+		fail(t, tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-JS");
+		return;
+	}
+	const built = buildProbe(probe, "", bin, buildLog, false);
+	const log = readFileOr(buildLog, "");
+	if (probe.checkfails.length == 0) {
+		if (built) { ok(t, tag); return; }
+		const errs = firstErrorLines(log);
+		fail(t, tag, "build error" + (errs == "" ? "" : ": " + errs));
+		return;
+	}
+	if (built) {
+		fail(t, tag, "compiled clean — a checker rule was dropped");
+		return;
+	}
+	for (const want of probe.checkfails) {
+		if (!log.contains(want)) {
+			fail(t, tag, "missing diagnostic: " + want);
+			return;
+		}
+	}
+	ok(t, tag);
+}
+
 function lastTextLine(text: string): string {
 	let last = "";
 	for (const line of text.split("\n")) { if (line.trim() != "") { last = line.trim(); } }
@@ -412,6 +450,10 @@ function main(): void {
 	const t: Tally = { passes: 0, fails: 0 };
 
 	for (const probe of discoverProbes()) {
+		if (probe.os != "") {
+			runOsLane(probe, t);
+			continue;
+		}
 		for (const gc of modes) {
 			runGcLane(probe, gc, t);
 		}
