@@ -6,6 +6,10 @@ import { FormatOptions } from "../options";
 import { Doc, docNil, docText } from "../doc";
 import { formatDoc } from "../layout";
 import { registerNodePrinter } from "./callbacks";
+import {
+	printJsxElement, printJsxFragment, printJsxText, printJsxExpressionContainer,
+	printJsxAttribute, printJsxSpreadAttribute,
+} from "./jsx";
 
 import {
 	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
@@ -125,6 +129,14 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.ObjectPattern => printObjectPattern(node, options),
 		NodeKind.ObjectPatternProp => printObjectPatternProp(node, options),
 		NodeKind.DestructuringDecl => printDestructuringDecl(node, options),
+
+		// ===== JSX =====
+		NodeKind.JSXElement => printJsxElement(node, options),
+		NodeKind.JSXFragment => printJsxFragment(node, options),
+		NodeKind.JSXText => printJsxText(node),
+		NodeKind.JSXExpressionContainer => printJsxExpressionContainer(node, options),
+		NodeKind.JSXAttribute => printJsxAttribute(node, options),
+		NodeKind.JSXSpreadAttribute => printJsxSpreadAttribute(node, options),
 
 		_ => {
 			unprintedKinds.push(node.kind.toString());

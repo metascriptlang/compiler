@@ -22,6 +22,7 @@ import { Node, NodeKind,
 	ForStmtData, ForOfStmtData, DoWhileStmtData, BlockStmtData, FunctionDeclData,
 	VariableDeclData, ImportDeclData, ProgramData, ThrowStmtData, TryCatchStmtData,
 	FunctionExprData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
@@ -314,6 +315,32 @@ export function astShape(node: Node | null): string {
 			return k + "{" + shapeList(d.programStmts) + "}";
 		},
 
+		NodeKind.JSXElement => {
+			const d = node.data as JSXElementData;
+			const sc = d.jsxSelfClosing ? "/" : "";
+			return k + "[" + d.jsxTag + sc + "](" + shapeList(d.jsxAttrs) + "|" + shapeList(d.jsxChildren) + ")";
+		},
+		NodeKind.JSXFragment => {
+			const d = node.data as JSXFragmentData;
+			return k + "(" + shapeList(d.jsxFragChildren) + ")";
+		},
+		NodeKind.JSXText => {
+			const d = node.data as JSXTextData;
+			return k + "[" + d.jsxText + "]";
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d = node.data as JSXExpressionContainerData;
+			return k + "(" + astShape(d.jsxExpr) + ")";
+		},
+		NodeKind.JSXAttribute => {
+			const d = node.data as JSXAttributeData;
+			return k + "[" + d.jsxAttrName + "](" + astShape(d.jsxAttrValue) + ")";
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d = node.data as JSXSpreadAttributeData;
+			return k + "(" + astShape(d.jsxSpreadArg) + ")";
+		},
+
 		// Fallback: kind only — sufficient for kinds we don't yet decompose.
 		// Tests exercising un-decomposed kinds may need this list extended.
 		_ => k,
@@ -391,6 +418,25 @@ export function assertFmtContains(source: string, expected: string): boolean {
 		console.log("source:    " + source);
 		console.log("formatted: " + formatted);
 		console.log("expected:  " + expected);
+		return false;
+	}
+	return true;
+}
+
+export function assertFmtIdempotent(source: string): boolean {
+	resetAllSideChannels();
+	const once = fmt(source);
+	if (once === "") {
+		console.log("FMT FAILED");
+		console.log("source: " + source);
+		return false;
+	}
+	resetAllSideChannels();
+	const twice = fmt(once);
+	if (twice !== once) {
+		console.log("FMT NOT IDEMPOTENT");
+		console.log("once:  " + once);
+		console.log("twice: " + twice);
 		return false;
 	}
 	return true;
