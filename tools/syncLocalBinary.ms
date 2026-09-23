@@ -120,7 +120,8 @@ if (syncBinary) {
 	if (check) {
 		console.log(`would: copy ${built} → ${installed}`);
 	} else {
-		if (exists(installed)) copyFile(installed, `${installed}.bak-${modifiedTime(installed)}`);
+		const backup = `${installed}.bak-${modifiedTime(installed)}`;
+		if (exists(installed) && !copyFile(installed, backup).ok) die(`cannot back up ${installed} to ${backup}`);
 		if (!copyFile(built, installed).ok) die(`cannot install ${installed}`);
 		if (!windows) chmod(installed, 493);
 		// A second, extension-less binary beside msc.exe shadows it in POSIX shells.
