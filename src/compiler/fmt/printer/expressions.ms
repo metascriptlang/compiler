@@ -17,9 +17,12 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
+import { rawTemplateAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
+	const template = rawTemplateAt(node, options);
+	if (template != "") return docText(template);
 	const d = node.data as BinaryExprData;
 	return docGroup([
 		printBinaryOperand(d.left, d.operator, false, options),
@@ -35,7 +38,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // Lower-precedence non-binary kinds (TypeAssertion, ConditionalExpr,
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
-	if (child == null) return callPrintNode(child, options);
+	if (child == null || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
 	if (child.kind == NodeKind.TypeAssertion) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
@@ -127,7 +130,7 @@ export function printMemberExpr(node: Node, options: FormatOptions): Doc {
 // This list grows test-by-test; only kinds proven needed by a roundtrip
 // test go in. See src/test/fmt/cases/.
 function printAtom(node: Node, options: FormatOptions): Doc {
-	if (node != null && needsAtomParens(node.kind)) {
+	if (node != null && needsAtomParens(node.kind) && rawTemplateAt(node, options) == "") {
 		return docGroup([docText("("), callPrintNode(node, options), docText(")")]);
 	}
 	return callPrintNode(node, options);

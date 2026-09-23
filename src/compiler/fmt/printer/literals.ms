@@ -52,17 +52,8 @@ function escapeString(s: string, quote: number): string {
 // If the preceding character is `}` (close of `${...}` interpolation) or
 // `\`` itself, we're inside a template — fall through to re-escape.
 function extractRawStringToken(source: string, line: int32, col: int32): string {
-	if (source == "") return "";
-	// Find the byte offset of the target line:col in source
-	let currentLine = 1;
-	let pos = 0;
-	while (pos < source.byteLength && currentLine < line) {
-		if (source.byteAt(pos) == "\n".code) currentLine = currentLine + 1;
-		pos = pos + 1;
-	}
-	// pos is now at the start of the target line; advance by column (0-based)
-	pos = pos + col;
-	if (pos >= source.byteLength) return "";
+	const pos = sourceOffset(source, line, col);
+	if (pos < 0) return "";
 	// Expect a quote character at this position
 	const quote = source.byteAt(pos);
 	if (quote != "\"".code && quote != "'".code) return "";
@@ -83,8 +74,75 @@ function extractRawStringToken(source: string, line: int32, col: int32): string 
 	return source.byteSlice(pos, end);
 }
 
+let lineStarts: int32[] = [];
+
+export function indexSourceLines(source: string): void {
+	lineStarts = [0];
+	for (let i = 0; i < source.byteLength; i += 1) {
+		if (source.byteAt(i) == "\n".code) lineStarts.push(i + 1);
+	}
+}
+
+function sourceOffset(source: string, line: int32, col: int32): int32 {
+	if (source == "" || line < 1 || line > lineStarts.length) return -1;
+	const pos = lineStarts[line - 1] + col;
+	return pos < source.byteLength ? pos : -1;
+}
+
+function skipQuoted(source: string, pos: int32): int32 {
+	const quote = source.byteAt(pos);
+	let end = pos + 1;
+	while (end < source.byteLength) {
+		const ch = source.byteAt(end);
+		if (ch == "\\".code) { end = end + 2; continue; }
+		end = end + 1;
+		if (ch == quote) break;
+	}
+	return end;
+}
+
+function skipInterpolation(source: string, pos: int32): int32 {
+	let depth = 1;
+	let end = pos;
+	while (end < source.byteLength) {
+		const ch = source.byteAt(end);
+		if (ch == "\"".code || ch == "'".code) { end = skipQuoted(source, end); continue; }
+		if (ch == "`".code) { end = skipTemplate(source, end); continue; }
+		if (ch == "{".code) depth = depth + 1;
+		if (ch == "}".code) {
+			depth = depth - 1;
+			if (depth == 0) return end + 1;
+		}
+		end = end + 1;
+	}
+	return end;
+}
+
+function skipTemplate(source: string, pos: int32): int32 {
+	let end = pos + 1;
+	while (end < source.byteLength) {
+		const ch = source.byteAt(end);
+		if (ch == "\\".code) { end = end + 2; continue; }
+		if (ch == "`".code) return end + 1;
+		if (ch == "$".code && end + 1 < source.byteLength && source.byteAt(end + 1) == "{".code) {
+			end = skipInterpolation(source, end + 2);
+			continue;
+		}
+		end = end + 1;
+	}
+	return end;
+}
+
+export function rawTemplateAt(node: Node, options: FormatOptions): string {
+	const pos = sourceOffset(options.source, node.location.line, node.location.column - 1);
+	if (pos < 0 || options.source.byteAt(pos) != "`".code) return "";
+	return options.source.byteSlice(pos, skipTemplate(options.source, pos));
+}
+
 export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as StringLiteralData;
+	const template = rawTemplateAt(node, options);
+	if (template != "") return docText(template);
 	let q = "\"";
 	if (options.singleQuote) { q = "'"; }
 	// Prettier pattern: extract raw token from source (preserves original escapes exactly).

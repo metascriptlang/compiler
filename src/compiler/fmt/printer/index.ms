@@ -12,7 +12,7 @@ import {
 } from "./jsx";
 
 import {
-	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	indexSourceLines, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
 	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
@@ -46,6 +46,7 @@ export function formatNode(node: Node, options: FormatOptions): Result<string, s
 
 export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string): Result<string, string> {
 	unprintedKinds = [];
+	indexSourceLines(options.source);
 	const out = formatDocAt(printNode(node, options), options, baseIndent);
 	if (unprintedKinds.length > 0) {
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
