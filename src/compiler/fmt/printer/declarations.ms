@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag,
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
-	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
+	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData,
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, printBlock, wrapNodeComments, isBodyless } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -407,7 +407,23 @@ export function printActorDecl(node: Node, options: FormatOptions): Doc {
 
 export function printExternDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExternDeclData;
-	const parts: Doc[] = [docText("extern " + d.externName)];
+	const keyword = match (d.externKind) {
+		ExternKind.Function => "function",
+		ExternKind.Class => "class",
+		ExternKind.Interface => "interface",
+		ExternKind.Struct => "struct",
+		ExternKind.Const => "const",
+		ExternKind.Var => "var",
+		ExternKind.Let => "let",
+		ExternKind.Type => "type",
+		ExternKind.Enum => "enum",
+		ExternKind.Macro => "macro",
+		ExternKind.Invalid => "",
+	};
+	const parts: Doc[] = [docText("extern " + keyword + " " + d.externName)];
+	if (d.externType != "") {
+		parts.push(docText(": " + d.externType));
+	}
 	if (d.nativeName != "") {
 		parts.push(docText(" from \"" + d.nativeName + "\""));
 	}
@@ -540,6 +556,11 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.methodReturnType != "") {
 		parts.push(docText(": " + d.methodReturnType));
+	}
+	if (isBodyless(node, d.methodBody)) {
+		if (d.nativeName != "") parts.push(docText(" from \"" + d.nativeName + "\""));
+		parts.push(docText(";"));
+		return docGroup(parts);
 	}
 	parts.push(docText(" "));
 	parts.push(callPrintNode(d.methodBody, options));

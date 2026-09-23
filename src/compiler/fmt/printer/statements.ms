@@ -476,6 +476,10 @@ export function flagGet(flags: string, name: string): string {
 	return "";
 }
 
+export function isBodyless(decl: Node, body: Node): boolean {
+	return body.location.line == decl.location.line && body.location.column == decl.location.column;
+}
+
 export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as FunctionDeclData;
 	// fnFlags carries: "async", "generator", "async_generator", "extern",
@@ -496,8 +500,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(": " + d.fnReturnType));
 	}
 
-	// Extern functions have no body — emit `;` only.
-	if (isExtern) {
+	if (isBodyless(node, d.fnBody)) {
 		if (d.nativeName != "") {
 			parts.push(docText(" from \"" + d.nativeName + "\""));
 		}

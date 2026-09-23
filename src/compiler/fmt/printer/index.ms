@@ -1,9 +1,9 @@
 // Printer — transforms MetaScript AST → Doc IR
 // Implementation logic follows Biome/Prettier standards (2026).
 
-import { Node, NodeKind } from "../../../ast/node";
+import { Node, NodeKind, NodeFlag } from "../../../ast/node";
 import { FormatOptions } from "../options";
-import { Doc, docNil, docText } from "../doc";
+import { Doc, docNil, docText, docGroup } from "../doc";
 import { formatDocAt } from "../layout";
 import { registerNodePrinter } from "./callbacks";
 import {
@@ -148,7 +148,8 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		},
 	};
 
-	return wrapNodeComments(node, innerDoc);
+	const declDoc = node.flags.has(NodeFlag.ExternC) ? docGroup([docText("extern "), innerDoc]) : innerDoc;
+	return wrapNodeComments(node, declDoc);
 }
 
 // Automatically register on module load
