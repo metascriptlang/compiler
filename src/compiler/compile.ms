@@ -14,7 +14,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
@@ -1196,6 +1196,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 
 	// Phase 2 — backend transform + codegen
+	let anyTopLevelAwait = false;
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
@@ -1219,6 +1220,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap);
+		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;
@@ -1242,6 +1244,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 		output = output + ` } from "${extImportKeys[ei]}";\n`;
 	}
+	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
+	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle;
 
