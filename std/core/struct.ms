@@ -75,34 +75,49 @@ export function hashString(s: string): int64 {
 	return h;
 }
 
-// Hash for number keys — Knuth multiplicative hash.
-export function hashNumber(n: number): int64 {
-	return hashBits((n as int64) & (0xFFFFFFFF as int64));
+// Nim's hashWangYi1 (hashes.nim:100-178) with its 64-bit-only hiXorLo fallback:
+// the full 128-bit product of two uint64, high half XOR low half. Mixing stays
+// unsigned — a signed multiply here overflows, which is UB and traps under zig
+// cc's debug checks. Every key type reaches this one site.
+function hiXorLo(a: uint64, b: uint64): uint64 {
+	const lo32 = 0xFFFFFFFF as uint64;
+	const s = 32 as uint64;
+	const aH = a >> s;
+	const aL = a & lo32;
+	const bH = b >> s;
+	const bL = b & lo32;
+	const rHH = aH * bH;
+	const rHL = aH * bL;
+	const rLH = aL * bH;
+	const rLL = aL * bL;
+	const t = rLL + (rHL << s);
+	let c = t < rLL ? (1 as uint64) : (0 as uint64);
+	const lo = t + (rLH << s);
+	if (lo < t) c = c + (1 as uint64);
+	const hi = rHH + (rHL >> s) + (rLH >> s) + c;
+	return hi ^ lo;
 }
 
-function hashBits(low32: int64): int64 {
-	let bits = low32;
-	if (bits == (0 as int64)) bits = 314159265 as int64;
-	// Unsigned mixing: bits reaches 2^32-1 and the
-	// product exceeds INT64_MAX, which traps under overflow checks. Nim keeps
-	// hash mixing in uint64 and casts to the signed Hash last (hashes.nim).
-	const mixed = ((bits as uint64) * (2654435761 as uint64)) & (0xFFFFFFFF as uint64);
-	const h = mixed as int64;
+// 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
+export function hashWangYi1(x: uint64): int64 {
+	const p0 = 0xa0761d6478bd642f as uint64;
+	const p1 = 0xe7037ed1a0b428db as uint64;
+	const p58 = (0xeb44accab455d165 as uint64) ^ (8 as uint64);
+	const h = hiXorLo(hiXorLo(p0, x ^ p1), p58) as int64;
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
 
-// Knuth's constant times a full 32-bit key exceeds INT64_MAX, so mixing the
-// hash with signed arithmetic is undefined behaviour and traps under zig cc's
-// debug UB checks. Not theoretical: the second copy of this multiply (in the C
-// runtime, fed by an ASLR'd pointer) made neon's reconcile tests fail ~1 run in
-// 3 for weeks. The two copies are now one — hence the routing assertion below,
-// which is what keeps them from drifting apart again.
-test "hashNumber mixes without signed overflow at the 32-bit boundary" {
-	assert hashNumber(4294967295.0) == (1640531535 as int64);
-	assert hashNumber(4294967294.0) == (3281063070 as int64);
-	assert hashNumber(2147483648.0) == (2147483648 as int64);
-	assert hashNumber(0.0) == (125188177 as int64);
+extern function msPtrBits(p: unknown): uint64;
+extern function msFloat64Bits(d: number): uint64;
+
+export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
+
+test "hashWangYi1 matches Nim's 128-bit product" {
+	assert hashWangYi1(0 as uint64) == (-5940405725068231575 as int64);
+	assert hashWangYi1(7 as uint64) == (-7855962892973491642 as int64);
+	assert hashWangYi1(0xFFFFFFFFFFFFFFFF as uint64) == (8231874320669540605 as int64);
+	assert hashWangYi1(0x100000000 as uint64) == (6449840086436371110 as int64);
 	const m = new Map<number, string>();
 	m.set(4294967295.0, "hi");
 	m.set(4294967294.0, "lo");
@@ -113,14 +128,8 @@ test "hashNumber mixes without signed overflow at the 32-bit boundary" {
 test "reference hashing routes through the one mixing site" {
 	const a = new Map<number, string>();
 	const b = new Map<number, string>();
-	// The pointer path must BE hashNumber(fold), not a second private mix — a
-	// reintroduced copy would drift from this equality even while both "work".
-	assert a.hash() == hashNumber(msPtrFold(a) as number);
-	assert b.hash() == hashNumber(msPtrFold(b) as number);
-	// Fold is 32-bit, so the mixed result stays inside the masked range and can
-	// never carry the overflowed high bits that used to trap.
-	assert a.hash() >= (0 as int64) && a.hash() <= (0xFFFFFFFF as int64);
-	assert msPtrFold(a) >= (0 as int64) && msPtrFold(a) <= (0xFFFFFFFF as int64);
+	assert a.hash() == hashWangYi1(msPtrBits(a));
+	assert b.hash() == hashWangYi1(msPtrBits(b));
 	assert a.hash() == a.hash(), "stable for one identity";
 	const seen = new Map<unknown, string>();
 	seen.set(a, "A");
@@ -134,32 +143,32 @@ test "reference hashing routes through the one mixing site" {
 // Every scalar key type needs its own entry because UFCS matches `this` exactly —
 // a scalar does not transparently widen to number during extension-method
 // lookup. Without one, `Map<K, V>`'s `key.hash()` fails to resolve.
+// Nim: ordinals hash as hashWangYi1(uint64(ord(x))), floats by their bits.
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
+export function hash(this f: float64): int64 { return hashNumber(f as number); }
 export function hash(this f: float32): int64 { return hashNumber(f as number); }
-export function hash(this b: boolean): int64 { return hashNumber(b ? 1 : 0); }
-export function hash(this c: char): int64 { return hashNumber(c as number); }
-export function hash(this i: int8): int64 { return hashNumber(i as number); }
-export function hash(this i: int16): int64 { return hashNumber(i as number); }
-export function hash(this i: int32): int64 { return hashNumber(i as number); }
-export function hash(this i: uint8): int64 { return hashNumber(i as number); }
-export function hash(this i: uint16): int64 { return hashNumber(i as number); }
-export function hash(this i: uint32): int64 { return hashNumber(i as number); }
-export function hash(this i: int64): int64 { return hashBits((i ^ (i >> (32 as int64))) & (0xFFFFFFFF as int64)); }
-export function hash(this u: uint64): int64 { return hashBits(((u ^ (u >> (32 as uint64))) & (0xFFFFFFFF as uint64)) as int64); }
+export function hash(this b: boolean): int64 { return hashWangYi1(b ? (1 as uint64) : (0 as uint64)); }
+export function hash(this c: char): int64 { return hashWangYi1(c as uint64); }
+export function hash(this i: int8): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: int16): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: int32): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: int64): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: uint8): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
+export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
+export function hash(this u: uint64): int64 { return hashWangYi1(u); }
+export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u)); }
 
-test "64-bit keys hash their high half" {
+test "scalar keys hash like Nim's ordinals and floats" {
 	const low = 7 as uint64;
 	assert low.hash() != (low | ((1 as uint64) << (32 as uint64))).hash();
-	assert low.hash() != (low | ((1 as uint64) << (40 as uint64))).hash();
-	assert (7 as int64).hash() != ((7 as int64) | ((1 as int64) << (33 as int64))).hash();
 	assert low.hash() == (7 as int64).hash();
+	assert (7 as int32).hash() == low.hash();
+	assert (-1 as int32).hash() == (-1 as int64).hash();
+	assert (0.0).hash() == (-0.0).hash();
+	assert (1.0).hash() != (1.5).hash();
 }
-// Reference identity folds to 32 bits in C, then shares hashNumber's avalanche —
-// one Knuth site for every key type, so the unsigned-mixing fix cannot be half
-// applied again.
-extern function msPtrFold(p: unknown): int64;
-export function hash(this u: unknown): int64 { return hashNumber(msPtrFold(u) as number); }
 
 // ===== DRY note =====
 // The four implementations below (HashMap, HashSet, Map, Set) share ~350 lines

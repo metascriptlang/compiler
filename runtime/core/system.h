@@ -476,20 +476,12 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
    race means memory may already be corrupt, so unwinding past it is unsafe). */
 _Noreturn void msMapFatal(msString msg);
 
-/* Reference identity for Map<unknown, _> keys (JS Map / Java Object.hashCode
-   parity): XOR-fold the address to 32 bits. Map's `key === key` equality
-   provides the matching pointer comparison.
-
-   FOLD ONLY — the avalanche step belongs to std's hashNumber, which every other
-   key type already goes through. Keeping a second copy of Knuth's constant here
-   is what let one copy be fixed and the other stay wrong: this one multiplied in
-   SIGNED int64 (2^32-1 * 2654435761 overflows INT64_MAX), which is undefined
-   behaviour and trapped nondeterministically under zig cc's debug UB checks —
-   nondeterministically because the folded value comes from an ASLR'd pointer. */
-static inline int64_t msPtrFold(const void* p) {
-	uint64_t a = (uint64_t)(uintptr_t)p;
-	return (int64_t)(uint32_t)((a >> 32) ^ (a & 0xFFFFFFFFULL));
-}
+/* Raw bits for std's hash (std/core/struct.ms): the address of a Map<unknown, _>
+   key and the IEEE pattern of a float key. BITS ONLY — the avalanche step is
+   std's hashWangYi1, the one mixing site; a second copy here is what once let
+   one copy be fixed and the other stay wrong. */
+static inline uint64_t msPtrBits(const void* p) { return (uint64_t)(uintptr_t)p; }
+static inline uint64_t msFloat64Bits(double d) { uint64_t u; memcpy(&u, &d, sizeof u); return u; }
 
 /* ===== Bounds-Checked Array Access ===== */
 /* GCC statement expression returning lvalue via dereferenced-pointer trick.

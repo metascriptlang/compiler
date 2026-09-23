@@ -48,5 +48,5 @@ test "a set hashes by its value, not by its address" {
 	const c = compileToCWithStd(PRELUDE + "console.log(s.hash());");
 	assert c.ok;
 	assert c.value.contains("msSetHashWord(");
-	assert !c.value.contains("msPtrFold");
+	assert !c.value.contains("msPtrBits");
 }
