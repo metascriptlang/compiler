@@ -740,7 +740,7 @@ export function propagatedErrorConverter(ctx: CheckerContext, site: Node, srcTyp
 	return conv;
 }
 
-export function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
+function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
 	for (const conv of ctx.runtimeConverters) {
 		ensureShaped(conv, ctx);
 		const fnType = conv.symbolType;

@@ -34,7 +34,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, checkPropagatedErrorAgainst } from "./callResolve";
 import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -914,6 +914,8 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
+	const savedReturnTries = ctx.inferredReturnTries;
+	ctx.inferredReturnTries = [];
 
 	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
 
@@ -931,8 +933,10 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 				const rsd = rs.data as ReturnStmtData;
 				if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, storedReturn);
 			}
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, storedReturn, d.fnName);
 		} else {
 			sym.symbolType.typeReturn = voidType();
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), d.fnName);
 		}
 	}
 
@@ -954,6 +958,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	ctx.inferredReturn = savedReturn;
 	ctx.inferredReturnStmts = savedReturnStmts;
+	ctx.inferredReturnTries = savedReturnTries;
 	sym.state = SymbolState.Checked;
 }
 

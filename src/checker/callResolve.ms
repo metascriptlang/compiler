@@ -9,8 +9,8 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
-import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, convertsBetween, propagatedErrorConverter } from "./fit";
+import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -732,24 +732,43 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 
 function checkPropagatedError(ctx: CheckerContext, node: Node, argType: Type | null): void {
 	const fn = ctx.currentFunction;
-	if (argType == null || !isResult(argType) || fn == null || fn.symbolType == null
-		|| fn.symbolType.kind != TypeKind.Function || fn.symbolType.typeReturn == null) return;
+	if (argType == null || !isResult(argType)) return;
+	if (fn == null || fn.symbolType == null) {
+		addError(ctx, "'try' without 'catch' returns its error, but module top-level code cannot return — add 'catch' or move it into a function returning a Result",
+			node.location.line, node.location.column);
+		return;
+	}
+	if (fn.symbolType.kind != TypeKind.Function || fn.symbolType.typeReturn == null || isUnresolvedType(fn.symbolType.typeReturn)) {
+		ctx.inferredReturnTries.push(node);
+		return;
+	}
 	let retType: Type | null = fn.symbolType.typeReturn;
 	if (hasFlag(fn, SymbolFlag.Async)) retType = awaitedType(retType);
-	if (retType == null || !isResult(retType)) return;
+	checkPropagatedErrorAgainst(ctx, node, retType, fn.name);
+}
+
+export function checkPropagatedErrorAgainst(ctx: CheckerContext, node: Node, retType: Type | null, fnName: string): void {
+	const argType = (node.data as TryExprData).tryArg.nodeType;
+	if (argType == null || !isResult(argType) || retType == null || isUnresolvedType(retType) || retType.kind == TypeKind.Error) return;
+	if (!isResult(retType)) {
+		addError(ctx, "'try' without 'catch' returns its error, but '" + fnName + "' returns '" + typeDisplayName(retType)
+			+ "', not a Result — add 'catch' or make '" + fnName + "' return a Result", node.location.line, node.location.column);
+		return;
+	}
 	const fromErr = getResultErrType(argType);
 	const toErr = getResultErrType(retType);
 	if (fromErr == null || toErr == null || isUnresolvedType(fromErr) || isUnresolvedType(toErr)
 		|| fromErr.kind == TypeKind.Error || toErr.kind == TypeKind.Error
 		|| hasGenericParams(fromErr) || hasGenericParams(toErr)) return;
 	if (isAssignable(fromErr, toErr)) return;
+	const reported = errorCount(ctx);
 	const conv = propagatedErrorConverter(ctx, node, fromErr, toErr);
 	if (conv != null) {
 		node.resolvedSym = conv;
 		return;
 	}
-	if (convertsBetween(ctx, fromErr, toErr)) return;
-	addError(ctx, "'try' propagates error type '" + typeDisplayName(fromErr) + "' but '" + fn.name + "' returns error type '"
+	if (errorCount(ctx) > reported) return;
+	addError(ctx, "'try' propagates error type '" + typeDisplayName(fromErr) + "' but '" + fnName + "' returns error type '"
 		+ typeDisplayName(toErr) + "' — declare a converter from '" + typeDisplayName(fromErr) + "' to '" + typeDisplayName(toErr)
 		+ "' or handle the error", node.location.line, node.location.column);
 }

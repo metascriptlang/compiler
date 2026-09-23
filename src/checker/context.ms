@@ -1125,6 +1125,7 @@ export class CheckerContext {
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	inferredReturnStmts: Node[];  // ReturnStmts pending refit once the joined inferred return is known
+	inferredReturnTries: Node[];
 	includeDirectives: string; // accumulated @include args, newline-separated
 	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
 	compileDirectives: string; // accumulated @compile args, newline-separated
@@ -1203,6 +1204,7 @@ export function createContext(): CheckerContext {
 		jsxMacroArgDepth: 0,
 		inferredReturn: inferredType(),
 		inferredReturnStmts: [],
+		inferredReturnTries: [],
 		includeDirectives: "",
 		jsImportRegistry: [],
 		compileDirectives: "",
