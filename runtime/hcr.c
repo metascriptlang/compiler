@@ -17,7 +17,9 @@ typedef struct MsHcrEntry {
 typedef struct MsHcrTypeEntry {
 	struct MsHcrTypeEntry* next;
 	char* key;
+	char* moduleId;
 	msTypeInfo info;
+	msTypeInfo saved;
 } MsHcrTypeEntry;
 
 static MsHcrEntry* msHcrEntries = NULL;
@@ -63,7 +65,10 @@ void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount) 
 	handle->current = table;
 }
 
-void msHcrStageBegin(void) { msHcrStaging = 1; }
+void msHcrStageBegin(void) {
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) entry->saved = entry->info;
+	msHcrStaging = 1;
+}
 
 void msHcrStageEnd(void) { msHcrStaging = 0; }
 
@@ -124,9 +129,16 @@ void* msHcrTypeInfo(const char* moduleId, const char* typeName) {
 		abort();
 	}
 	entry->key = key;
+	entry->moduleId = msHcrCopy(moduleId, "TypeInfo owner");
 	entry->next = msHcrTypes;
 	msHcrTypes = entry;
 	return &entry->info;
+}
+
+void msHcrRestoreTypeInfos(const char* moduleId) {
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (strcmp(entry->moduleId, moduleId) == 0) entry->info = entry->saved;
+	}
 }
 
 void msHcrLaunch(const char* dir, const char* stem) {

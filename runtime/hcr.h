@@ -47,6 +47,7 @@ void msHcrCommit(const char* moduleId);
 void msHcrRollback(const char* moduleId);
 void msHcrDiscard(const char* moduleId);
 void* msHcrTypeInfo(const char* moduleId, const char* typeName);
+void msHcrRestoreTypeInfos(const char* moduleId);
 void msHcrCoreInit(void);
 
 #endif

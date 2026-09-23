@@ -3531,6 +3531,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		return alignOfStruct(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Union) {
+		if (unwrapRefNullUnion(t) != null) return ps;
 		return alignOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
@@ -3595,6 +3596,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		return sizeOfStruct(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Union) {
+		if (unwrapRefNullUnion(t) != null) return ps;
 		return sizeOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {

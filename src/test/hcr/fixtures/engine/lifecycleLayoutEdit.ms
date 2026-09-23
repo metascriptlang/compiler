@@ -14,9 +14,11 @@ export function version(): int32 {
 
 export class Probe {
 	tag: int32;
+	label: string;
 
 	constructor(tag: int32) {
 		this.tag = tag;
+		this.label = `probe-${tag}`;
 	}
 
 	scaled(): int32 {

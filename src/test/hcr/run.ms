@@ -289,6 +289,7 @@ function engine(): void {
 		["logicExportEdit.ms", "lifecycle.ms", "g3"],
 		["logicLayoutEdit.ms", "lifecycle.ms", "g4"],
 		["logic.ms", "lifecycleThrowingEdit.ms", "g5"],
+		["logic.ms", "lifecycleLayoutEdit.ms", "g6"],
 	];
 	for (const g of generations) {
 		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
@@ -319,13 +320,23 @@ function engine(): void {
 		"HCR-ENGINE complete image: reloaded logic",
 		"HCR-ENGINE after complete image: value 10 tick 12 version 1",
 		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v1: after reload",
+		"HCR-ENGINE lifecycle rebuilt: reloaded lifecycle",
+		"HCR-ENGINE probe from the first generation: instanceof true true scaled 70",
+		"HCR-ENGINE lifecycle v1: destroy probe 8",
+		"HCR-ENGINE lifecycle v1: before reload",
 		"HCR-ENGINE lifecycle v2: after reload",
 		"HCR-ENGINE after-reload handler throws: rejected lifecycle (the after-reload handler of module 'lifecycle' threw; rolled back lifecycle)",
 		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
+		"HCR-ENGINE probe after rollback: instanceof true true scaled 70",
+		"HCR-ENGINE lifecycle v1: destroy probe 8",
+		"HCR-ENGINE lifecycle v1: destroy probe 7",
 		"HCR-ENGINE added export, app not rebuilt: rejected (module 'app' was built against another export ABI of 'logic'; rebuild it)",
 		"HCR-ENGINE after rejection: value 10 tick 14 version 1",
 		"HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)",
 		"HCR-ENGINE after layout rejection: value 10 tick 15 version 1",
+		"HCR-ENGINE class layout changed: restart required lifecycle (the layout of type 'Probe' in module 'lifecycle' changed)",
+		"HCR-ENGINE after class layout rejection: value 10 tick 16 version 1",
 		"HCR-ENGINE core changed: restart required (the core image changed (runtime, standard library or toolchain))",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {

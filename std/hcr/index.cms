@@ -27,6 +27,7 @@ extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msH
 extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
 extern function hcrCallStatus(raw: unknown): int32 from "msHcrWinCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
+extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 
 export enum HcrReloadKind {
 	NoChange,
@@ -48,6 +49,8 @@ interface HcrImage {
 	key: string;
 	importIds: string[];
 	importKeys: string[];
+	typeNames: string[];
+	typeKeys: string[];
 	state: unknown;
 }
 
@@ -126,8 +129,9 @@ function describe(handle: unknown): HcrImage {
 	const idRaw = symbolOf(handle, "HcrModuleId000");
 	const keyRaw = symbolOf(handle, "HcrAbiKey000");
 	const importsRaw = symbolOf(handle, "HcrImports000");
-	const image: HcrImage = { handle, moduleId: "", key: "", importIds: [], importKeys: [], state: hcrNull() };
-	if (hcrIsNull(idRaw) != 0 || hcrIsNull(keyRaw) != 0 || hcrIsNull(importsRaw) != 0) return image;
+	const typeKeysRaw = symbolOf(handle, "HcrTypeKeys000");
+	const image: HcrImage = { handle, moduleId: "", key: "", importIds: [], importKeys: [], typeNames: [], typeKeys: [], state: hcrNull() };
+	if (hcrIsNull(idRaw) != 0 || hcrIsNull(keyRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
 	image.moduleId = msHcrCallText(idRaw);
 	image.key = msHcrCallText(keyRaw);
 	const count = msHcrImportCount(importsRaw);
@@ -135,12 +139,17 @@ function describe(handle: unknown): HcrImage {
 		image.importIds.push(msHcrImportId(importsRaw, i));
 		image.importKeys.push(msHcrImportKey(importsRaw, i));
 	}
+	const typeCount = msHcrImportCount(typeKeysRaw);
+	for (let i: int32 = 0; i < typeCount; i += 1) {
+		image.typeNames.push(msHcrImportId(typeKeysRaw, i));
+		image.typeKeys.push(msHcrImportKey(typeKeysRaw, i));
+	}
 	return image;
 }
 
 function copyLoad(source: string): HcrLoad {
 	const dir = `${copyRoot}/${generation}`;
-	const empty: HcrImage = { handle: hcrNull(), moduleId: "", key: "", importIds: [], importKeys: [], state: hcrNull() };
+	const empty: HcrImage = { handle: hcrNull(), moduleId: "", key: "", importIds: [], importKeys: [], typeNames: [], typeKeys: [], state: hcrNull() };
 	if (msHcrMakeDir(dir) == 0) return { image: empty, error: hcrLastError() };
 	const copy = `${dir}/${baseName(source)}`;
 	const copyError = msHcrCopyImage(source, copy);
@@ -267,6 +276,15 @@ function keyMismatch(candidates: HcrCandidate[]): string {
 	return "";
 }
 
+function changedType(item: HcrCandidate): string {
+	const previous = item.module.image;
+	for (let i = 0; i < item.image.typeNames.length; i += 1) {
+		const at = previous.typeNames.indexOf(item.image.typeNames[i]);
+		if (at >= 0 && previous.typeKeys[at] != item.image.typeKeys[i]) return item.image.typeNames[i];
+	}
+	return "";
+}
+
 export function reload(): HcrReloadResult {
 	if (!started) return result(HcrReloadKind.Rejected, [], "the program was not started by an HCR host");
 	const bundle = msHcrFileIdentity(bundlePath());
@@ -333,6 +351,17 @@ export function reload(): HcrReloadResult {
 		return result(HcrReloadKind.Rejected, [], mismatch);
 	}
 
+	for (const item of candidates) {
+		const changed = item.isNew ? "" : changedType(item);
+		if (changed != "") {
+			release(candidates);
+			forgetAfter(known);
+			bundleIdentity = bundle;
+			return result(HcrReloadKind.RestartRequired, [item.module.moduleId],
+				`the layout of type '${changed}' in module '${item.module.moduleId}' changed`);
+		}
+	}
+
 	const states: unknown[] = [];
 	for (const item of candidates) {
 		const previous = item.isNew ? hcrNull() : item.module.image.state;
@@ -386,6 +415,7 @@ export function reload(): HcrReloadResult {
 		const item = candidates[i];
 		if (item.isNew) continue;
 		if (committed[i]) msHcrRollback(item.module.moduleId);
+		msHcrRestoreTypeInfos(item.module.moduleId);
 		item.module.image = previousImages[i];
 		item.module.identity = previousIdentities[i];
 	}

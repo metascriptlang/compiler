@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, SymbolKind, Type, VariableDeclData } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, SymbolKind, Type, VariableDeclData } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
@@ -62,7 +62,7 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
-import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
@@ -1686,6 +1686,26 @@ function hcrTypeInfoNames(program: Node | null, modPath: string): string[] {
 	return names;
 }
 
+function hcrTypeLayoutKeys(program: Node | null): string[] {
+	const pairs: string[] = [];
+	if (program == null) return pairs;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let decl = stmt;
+		if (decl.kind == NodeKind.ExportDecl) {
+			const exported = decl.data as ExportDeclData;
+			if (exported.exportedDecl != null) decl = exported.exportedDecl;
+		}
+		let name = "";
+		if (decl.kind == NodeKind.ClassDecl) name = (decl.data as ClassDeclData).className;
+		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
+		else if (decl.kind == NodeKind.StructDecl) name = (decl.data as StructDeclData).interfaceName;
+		if (name == "" || name.startsWith("$") || decl.resolvedSym == null) continue;
+		pairs.push(name);
+		pairs.push(hcrLayoutKey(decl.resolvedSym.symbolType));
+	}
+	return pairs;
+}
+
 function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	const names: string[] = [];
 	if (program == null) return names;
@@ -1727,6 +1747,7 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 			moduleId: manifest.moduleId,
 			symbols,
 			typeInfos: [],
+			typeKeys: [],
 			abiKey: hcrExportKey(manifest),
 			imports,
 			beforeReload: [],
@@ -2047,6 +2068,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const path = hcrModulePaths[i];
 		const program = programByPath.has(path) ? programByPath.get(path) : null;
 		hcrModules[i].typeInfos = hcrTypeInfoNames(program, path);
+		hcrModules[i].typeKeys = hcrTypeLayoutKeys(program);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}

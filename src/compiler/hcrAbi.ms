@@ -54,6 +54,18 @@ export function hcrSignatureKey(t: Type | null): string {
 	return monoTypeKey(t);
 }
 
+export function hcrLayoutKey(t: Type | null): string {
+	let body = t;
+	while (body != null && body.kind == TypeKind.Ref) body = body.typeReturn;
+	if (body == null) return "null";
+	let key = monoTypeKey(body) + "{";
+	for (let i = 0; i < body.typeNames.length; i += 1) {
+		if (i > 0) key = key + ",";
+		key = key + body.typeNames[i] + ":" + (i < body.typeChildren.length ? monoTypeKey(body.typeChildren[i]) : "void");
+	}
+	return key + "}";
+}
+
 export function hcrExportId(moduleId: string, symbol: string): string {
 	return `${moduleId}::${symbol}`;
 }

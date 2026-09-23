@@ -35,6 +35,7 @@ backend and DRC/ORC runtime.
 | Cross-module vtable calls | Lowered by `src/transform/native/hcrIndirect.ms` and replaced at runtime by publishing a reloaded image's table, guarded by `src/test/hcr/run.ms` (`hcrIndirect`) |
 | Full transactional current/old/candidate module registry | Windows x64: `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); POSIX loader not implemented (the engine aborts loud) |
 | `@beforeReload` / `@afterReload` lifecycle handlers | Implemented on Windows x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
+| TypeInfo across reloads | Windows x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
@@ -427,8 +428,78 @@ HCR-ENGINE core changed: restart required (the core image changed (runtime, stan
 The same runner stops at `HCR: run/module.dll is not an HCR module image` on a compiler
 without `HcrModuleId000`, and prints `after rollback: ... version 2` when the engine skips
 `msHcrRollback`. Not verified: a module that first appears during a reload (written, no
-fixture), POSIX and macOS loaders, reload latency (S6), and `instanceof` on an object of a
-previous generation.
+fixture), POSIX and macOS loaders, and reload latency (S6).
+
+### TypeInfo across reloads (S5)
+
+A class's TypeInfo lives in the core registry (`msHcrTypeInfo`, keyed by owning module and
+class), so every generation of every image shares one address. Objects keep that address in
+their header, and `instanceof` compares against it. An accepted reload rewrites the entry's
+contents from the new image's `DatInit000`: old objects then run the new methods and the new
+destroy hook, exactly once. nimhcr does the same (`genTypeInfoAuxBase` registers the TypeInfo
+through `hcrRegisterGlobal`, which returns the existing global, and the type-init code
+overwrites it).
+
+Two gaps were measured before the fix. The fixture had four generations of a `shapes` module,
+and a `Square` built in generation 1 was kept alive:
+
+| case | before (`73bf8ce8`) | after |
+|---|---|---|
+| candidate with another destroy hook, rejected by its after-handler | tables back on v1, object destroyed by `destroy v2` | `destroy v1` |
+| field added to the base class `Shape` | `reloaded shapes version 4`; the g1 object destroyed by v4 code reading `label` past its allocation | `restart required shapes (the layout of type 'Shape' in module 'shapes' changed)` |
+| body edit | `instanceof true`, `area 1025` (new code), one destroy | unchanged |
+
+- **Rollback restores TypeInfo.** `msHcrStageBegin` saves every registry entry, and the
+  engine calls `msHcrRestoreTypeInfos` for each rolled-back module. This is cr.h's section
+  backup (`cr_plugin_sections_backup` / `cr_plugin_sections_reload`) applied to TypeInfo alone,
+  and it is sound there because a TypeInfo holds no reference counts. Lifted state still is
+  not restored. Staging TypeInfo contents in a draft copy was rejected: S4 rolls back only
+  after commit, so the new tables are already live while after-handlers run, and a draft would
+  not give a stronger guarantee than that. It would also need every `base` pointer relocated
+  at commit.
+- **A layout change is a restart.** Each image exports `HcrTypeKeys000`, which gives the
+  name and `hcrLayoutKey` of every top-level class, interface and struct. The key lists the
+  fields in order with their `monoTypeKey`, and a class's fields include the inherited ones,
+  so a base-class edit changes every subclass's key. Before any handover, a candidate whose
+  key differs from the loaded image's for the same type answers `RestartRequired` and names
+  the type. The rule is the lifted state's structural hash (`_MS_STRUCT_HASH`) extended to
+  heap types, and cr.h's `CR_SAFE` section-size check applied to classes. nimhcr leaves this
+  open (`nimhcr.nim`: "changing memory layout of types - detecting this..?"). RCC++ migrates
+  instead: `ObjectFactorySystem::ProtectedObjectSwapper` serializes every tracked object into
+  a newly constructed one. That needs every object reachable by ID, while MetaScript
+  references are raw pointers to fixed-size allocations. Accepting a layout change when no
+  object of the type is alive would need a live counter on the DRC allocation path; with
+  Neon's widget tree alive across frames, it would rarely apply.
+
+On 2026-09-24, Windows 11 x64, tree `8e86371d` with candidate `out/msc-s5b.exe` built from the
+compiler sources of `7d8b5c42`,
+`MSC=out/msc-s5b.exe out/msc-s5b.exe run src/test/hcr/run.ms --target=raiser` printed `ok` for
+all four cases, with these lines from `hcrEngine`:
+
+```
+HCR-ENGINE lifecycle rebuilt: reloaded lifecycle
+HCR-ENGINE probe from the first generation: instanceof true true scaled 70
+HCR-ENGINE after-reload handler throws: rejected lifecycle (the after-reload handler of module 'lifecycle' threw; rolled back lifecycle)
+HCR-ENGINE probe after rollback: instanceof true true scaled 70
+HCR-ENGINE lifecycle v1: destroy probe 7
+HCR-ENGINE class layout changed: restart required lifecycle (the layout of type 'Probe' in module 'lifecycle' changed)
+```
+
+Each pin was proven red by removing the mechanism it guards:
+
+| mechanism removed | output |
+|---|---|
+| restore on rollback (runtime of `73bf8ce8`) | `lifecycle v2: destroy probe 7` |
+| the layout check | `class layout changed: reloaded lifecycle,logic` |
+| registry reuse during a reload | `instanceof true false` (an object built by the new code, checked by the unrebuilt app) |
+
+Not verified:
+- TypeInfo that stays per image: generic instances (weak) and lambda environments (static).
+  Objects of those types reach their image's destroy hook, which does no harm while every
+  generation stays loaded, but a purge must account for them.
+- A struct passed by value through an export: its layout key covers the declaring module,
+  but no fixture exercises one.
+- Destroy counts under the DRC ledger or ASan (this host has no `libasan`).
 
 ## Neon Fast Refresh boundary
 
