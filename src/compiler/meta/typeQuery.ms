@@ -7,6 +7,9 @@ import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHe
 import { mapTypeToAst, nodeToValue, boundSymAt, registerBoundType, boundTypeAt } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
+import { boxString, unboxString } from "../../raiser/marshal";
+import { definedValue } from "../defines";
+import { getParserDefines } from "../../parser/context";
 
 export function stillDecoratedMessage(name: string): string {
 	return `'${name}' is still being decorated - its type is not available until its decorators finish`;
@@ -163,7 +166,13 @@ function hostSymKind(args: RaiserValue[]): RaiserValue {
 	return raiserInt(sym.symbolKind as int64);
 }
 
+function hostDefine(args: RaiserValue[]): RaiserValue {
+	if (args.length < 1) return boxString("");
+	return boxString(definedValue(getParserDefines(), unboxString(args[0])));
+}
+
 export function registerTypeQueryHostFns(): void {
+	registerHostFn("msMetaDefine", hostDefine, HostCapability.Pure);
 	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);
 	registerHostFn("msMetaGetType", hostGetType, HostCapability.Pure);
 	registerHostFn("msMetaGetImpl", hostGetImpl, HostCapability.Pure);
