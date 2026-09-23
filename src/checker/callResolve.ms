@@ -1756,6 +1756,14 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			if (fFormal == null || !hasGenericParams(fFormal)) continue;
 			const fSub = applySubstitutions(fFormal, argBindings);
 			if (hasGenericParams(fSub)) {
+				if (callNode != null && callNode.kind == NodeKind.CallExpr && argTypes[fi] != null
+						&& !isAssignable(argTypes[fi], fFormal)) {
+					const mcd = callNode.data as CallExprData;
+					const argLoc = fi < mcd.arguments.length && mcd.arguments[fi] != null ? mcd.arguments[fi].location : callNode.location;
+					addError(ctx, "Argument type mismatch in '" + getCalleeName(mcd.callee) + "' arg " + String(fi)
+						+ ": got " + typeDisplayName(argTypes[fi]) + ", expected " + typeDisplayName(fFormal), argLoc.line, argLoc.column);
+					return errorType();
+				}
 				const unboundP = findFirstGenericParamName(fSub);
 				const pLine = callNode != null ? callNode.location.line : 0;
 				const pCol = callNode != null ? callNode.location.column : 0;
