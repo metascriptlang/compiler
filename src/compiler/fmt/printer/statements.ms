@@ -549,7 +549,7 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const isGen = flagHas(d.fnFlags, "generator") || flagHas(d.fnFlags, "async_generator");
 	const head = (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
-		+ (node.flags.has(NodeFlag.Converter) ? "converter" : "function") + (isGen ? "*" : "") + " "
+		+ (node.flags.has(NodeFlag.Converter) ? "converter" : flagHas(d.fnFlags, "template") ? "template" : "function") + (isGen ? "*" : "") + " "
 		+ writtenName(options, d.nameLocation, d.fnName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.fnName), flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];

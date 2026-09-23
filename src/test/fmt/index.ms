@@ -76,3 +76,4 @@ import "./cases/enumValues";
 import "./cases/enumComments";
 import "./cases/genericClauses";
 import "./cases/operatorNames";
+import "./cases/templateRoutine";
