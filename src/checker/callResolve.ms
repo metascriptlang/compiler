@@ -1421,9 +1421,9 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 				d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
 				argTypes[pi] = paramType;
 			}
-			const literalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
-				&& d.arguments[pi].kind == NodeKind.ObjectLiteral && hasGenericParams(paramType);
-			if (!literalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
+			const formalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
+				&& hasGenericParams(paramType);
+			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
 				if (promotesToNullablePtr(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
 						+ " — a struct value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
