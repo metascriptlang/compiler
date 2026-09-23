@@ -287,8 +287,11 @@ export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ForOfStmtData;
 	let binding = "let";
 	if (d.forOfIsConst) { binding = "const"; }
+	const target = d.forOfPattern != null ? callPrintNode(d.forOfPattern, options) : docText(d.forOfBinding);
 	return docGroup([
-		docText("for (" + binding + " " + d.forOfBinding + " of "),
+		docText("for (" + binding + " "),
+		target,
+		docText(" of "),
 		callPrintNode(d.forOfIterable, options),
 		docText(") "),
 		printBody(d.forOfBody, options),

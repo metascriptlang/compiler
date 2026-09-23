@@ -87,3 +87,4 @@ import "./cases/specifierComments";
 import "./cases/listComments";
 import "./cases/trailingLineComment";
 import "./cases/elseComments";
+import "./cases/forOfPattern";
