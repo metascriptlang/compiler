@@ -89,6 +89,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if ((isPointerShapedRepr(source) && isScalarRepr(target))
 		|| (isScalarRepr(source) && isPointerShapedRepr(target))) return true;
+	if (isStructIntoPtr(source, target)) return true;
 	if (source.kind == TypeKind.Array && target.kind == TypeKind.Ref
 		&& target.typeReturn != null && target.typeReturn.kind == TypeKind.Array) return true;
 	if (source.kind == TypeKind.Ref && source.typeReturn != null
@@ -134,6 +135,13 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		return false;
 	}
 	return false;
+}
+
+export function isStructIntoPtr(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ptr;
 }
 
 function isPointerShapedRepr(t: Type | null): boolean {
