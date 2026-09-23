@@ -263,6 +263,7 @@ export enum NodeFlag {
 	Converter,    // parser: MacroDecl is a converter — compiler-invoked at settled type boundaries
 	StaticStorage, // parser: VariableDecl declared `static` inside a body — storage at module scope (reference: global storage flag)
 	ProtocolCall,
+	Parenthesized, // parser: the expression was written inside grouping parentheses
 }
 
 // ===== Node Kind Enum =====
