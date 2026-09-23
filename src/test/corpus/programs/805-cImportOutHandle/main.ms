@@ -10,7 +10,7 @@
 
 import {
 	corpus805New, corpus805Value, corpus805Free, corpus805NewRaw, corpus805RawValue, corpus805RawFree,
-	Corpus805Handle, Corpus805Config,
+	Corpus805Handle, Corpus805Config, Corpus805Raw,
 } from "./handle.h";
 
 let a: Corpus805Handle;
@@ -18,7 +18,7 @@ const ra = corpus805New(null, a);
 const cfg: Corpus805Config = { base: 42 };
 let b: Corpus805Handle;
 const rb = corpus805New(cfg, b);
-let raw: Ptr<void>;
+let raw: Ptr<Corpus805Raw>;
 const rr = corpus805NewRaw(raw);
 console.log(`${ra},${corpus805Value(a)}|${rb},${corpus805Value(b)}|${rr},${corpus805RawValue(raw)}`);
 corpus805Free(a);
