@@ -528,6 +528,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 // ===== Standard Conversion Check (standard reference implementation parity) =====
 // Returns true when source needs an explicit cast to target in C codegen.
 // Used by checker to insert HiddenStdConv nodes at call argument positions.
+export function promotesToNullablePtr(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Struct || target.kind != TypeKind.Union) return false;
+	const ptr = nonNullMemberOfNullable(target);
+	return ptr != null && ptr.kind == TypeKind.Ptr && ptr.typeReturn != null && isAssignable(source, ptr.typeReturn);
+}
+
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
@@ -540,6 +546,8 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	// Variant struct → discriminated union: different C layouts require
 	// proper construction (tag + variant slot), not a raw cast.
 	if (target.kind == TypeKind.Union && target.typeChildren != null && source.kind == TypeKind.Struct) {
+		const nullablePtr = nonNullMemberOfNullable(target);
+		if (nullablePtr != null && nullablePtr.kind == TypeKind.Ptr) return promotesToNullablePtr(source, target);
 		return true;
 	}
 	// Array/SizedArray/String to Span coercion requires struct initializer

@@ -12,6 +12,7 @@
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr, peelToStructOrUnion } from "../../checker/types";
+import { promotesToNullablePtr } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -70,7 +71,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			}
 
 			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
-			if (targetType.kind == TypeKind.Borrow) {
+			if (targetType.kind == TypeKind.Borrow || promotesToNullablePtr(d.convExpr.nodeType, targetType)) {
 				const loc = node.location;
 				const addr = makeHiddenAddr(d.convExpr, loc);
 				addr.nodeType = targetType;
