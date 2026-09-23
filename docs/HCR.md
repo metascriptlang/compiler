@@ -29,17 +29,17 @@ backend and DRC/ORC runtime.
 | `--hcr` and module-global state lifting | Implemented |
 | Structural hash rejecting changed `_GlobalState` layout | Implemented |
 | Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
-| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `runWindows.sh`: body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
-| Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.sh` proves a body-only edit recompiles only the changed module |
+| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `src/test/hcr/run.ms` (`hcrWindowsReload`): body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
+| Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Not implemented |
-| Cross-module vtable calls | Lowered inside the single HCR image by `src/transform/native/hcrIndirect.ms`, guarded by `src/test/hcr/run.sh` (`hcrIndirect`); per-module images that make the tables replaceable are not implemented |
+| Cross-module vtable calls | Lowered inside the single HCR image by `src/transform/native/hcrIndirect.ms`, guarded by `src/test/hcr/run.ms` (`hcrIndirect`); per-module images that make the tables replaceable are not implemented |
 | Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 `src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
-`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.sh`, and the
+`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.ms`, and the
 `--hcr` branch in the compiler build driver.
 
 ## Architecture decision
