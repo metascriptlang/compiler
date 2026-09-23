@@ -145,6 +145,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			const n = arrayCTypeName(t);
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
+		if (isAtomicRef(elem)) {
+			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);
+		}
 		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 	}
 	// Closure element (function type) — msClosureArray stores msClosure structs
