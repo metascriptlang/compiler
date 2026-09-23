@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
@@ -110,6 +110,10 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	// the OUTER ExportDecl (the wrapping node), but the inner printer
 	// (printEnumDecl, printStructLikeDecl, etc.) is what needs them.
 	if (d.exportedDecl != null) {
+		if (d.exportedDecl.location.endLine == 0) {
+			d.exportedDecl.location.endLine = node.location.endLine;
+			d.exportedDecl.location.endColumn = node.location.endColumn;
+		}
 		const innerStart = d.exportedDecl.location.line;
 		const remaining: Token[] = [];
 		for (const c of node.comments) {
@@ -175,8 +179,27 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function aliasWithInnerComments(node: Node, options: FormatOptions): string {
+	const loc = node.location;
+	if (loc.endLine == 0) return "";
+	const inner: Token[] = [];
+	const rest: Token[] = [];
+	for (const c of node.comments) {
+		const after = c.line > loc.line || (c.line == loc.line && c.column > loc.column);
+		const before = c.line < loc.endLine || (c.line == loc.endLine && c.column < loc.endColumn);
+		if (after && before) inner.push(c); else rest.push(c);
+	}
+	if (inner.length == 0) return "";
+	const text = sourceSpan(options.source, loc.line, loc.column, loc.endLine, loc.endColumn);
+	if (text == "") return "";
+	node.comments = rest;
+	return text;
+}
+
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
+	const verbatim = aliasWithInnerComments(node, options);
+	if (verbatim != "") return docText(verbatim);
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
 	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {

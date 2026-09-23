@@ -94,3 +94,4 @@ import "./cases/paramComments";
 import "./cases/bareBlockComment";
 import "./cases/fieldSeparatorsAndHoles";
 import "./cases/operandComments";
+import "./cases/aliasComments";
