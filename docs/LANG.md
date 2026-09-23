@@ -2302,7 +2302,8 @@ This means:
 
 #### Nullable Pointers
 
-`Ref<T>` and `Ptr<T>` are inherently nullable — a null pointer is the zero value. No `Maybe<T>` wrapper is needed:
+A bare `Ref<T>` or `Ptr<T>` does not accept `null`; nullability is opted into with `| null`, and
+the result needs no `Maybe<T>` wrapper:
 
 ```typescript
 const node: Ref<TreeNode> | null = findNode(tree, key);
@@ -2312,7 +2313,22 @@ if (node !== null) {
 }
 ```
 
-The compiler collapses `Ref<T> | null` and `Ptr<T> | null` to bare `Ref<T>` / `Ptr<T>` (null is representable as the zero pointer).
+`Ref<T> | null` and `Ptr<T> | null` are laid out as a bare `T*`, with null as the zero pointer, but
+the checker keeps them apart from the bare types. Measured 2026-09-24 (wt/c-ffi build over main
+`1b21109c`), with `struct P` and `class N`:
+
+| form | bare `Ptr<P>` / `Ref<N>` | `Ptr<P> \| null` / `Ref<N> \| null` |
+|---|---|---|
+| `const q: T = null;` | error | ok |
+| `f(null)` for `function f(p: T)` | error | ok |
+
+An uninitialized `let q: Ptr<P>;` is accepted. Not measured: `Cursor<T>`, which accepts null by design.
+
+A struct value passed to a `Ptr<S> | null` parameter is passed by address, as a `Borrow<S>` argument
+is (corpus 806: the callee reads the caller's value and writes land in the caller's local); a
+struct of another type is refused. Nothing checks that the callee does not keep the pointer past
+the call. The same value as the initializer of a `Ptr<S> | null` variable is not covered and
+fails in the C compiler (measured 2026-09-24).
 
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
