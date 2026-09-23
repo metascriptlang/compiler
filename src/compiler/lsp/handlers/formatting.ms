@@ -7,7 +7,8 @@ import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
-import { FmtPos, formatStatementEdit, innermostStatement, lineOffset } from "../../fmt/edit";
+import { FmtPos, formatStatementEdit, innermostStatement, lineOffset, applyEdit } from "../../fmt/edit";
+import { checkLossless } from "../../fmt/lossless";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource } from "./shared";
@@ -62,7 +63,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			const parseResult = parseSource(source);
 			if (parseResult.ok) {
 				const printed = formatNode(parseResult.value, options);
-				_codeActionFmtResult = printed.ok ? printed.value : "";
+				_codeActionFmtResult = printed.ok && checkLossless(source, printed.value).ok ? printed.value : "";
 			} else {
 				_codeActionFmtResult = "";
 			}
@@ -102,6 +103,8 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const printed = formatNode(program, options);
 	if (!printed.ok) return lspErrorResponse(id, -32603, printed.error);
 	const formatted = printed.value;
+	const kept = checkLossless(source, formatted);
+	if (!kept.ok) return lspErrorResponse(id, -32603, "fmt refused: " + kept.error);
 	const t4 = performance.now();
 
 	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t4 - t2}ms source=${source.byteLength}b\n`);
@@ -147,6 +150,8 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const edit = formatStatementEdit(stmt, source, getFormatOptions(db, path));
 	if (!edit.ok) return lspErrorResponse(id, -32603, edit.error);
 	const e = edit.value;
+	const kept = checkLossless(source, applyEdit(source, e));
+	if (!kept.ok) return lspErrorResponse(id, -32603, "fmt refused: " + kept.error);
 	const startOffset = lineOffset(source, e.start.line) + e.start.column - 1;
 	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
 	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
