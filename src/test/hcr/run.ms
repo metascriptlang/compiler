@@ -1,0 +1,285 @@
+// HCR runner: msc run src/test/hcr/run.ms --target=raiser, from the recompiler root.
+// Env: MSC=<path to msc> (default: ./msc, else installed msc).
+import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
+import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
+
+function slashes(p: string): string {
+	return p.replaceAll("\\", "/");
+}
+
+const ROOT = slashes(cwd());
+
+function resolveMsc(): string {
+	const explicit = slashes(env.get("MSC"));
+	if (explicit != "") {
+		if (explicit.indexOf("/") < 0) return explicit;
+		return explicit.startsWith("/") || explicit.indexOf(":") >= 0 ? explicit : `${ROOT}/${explicit}`;
+	}
+	if (exists("./msc") || exists("./msc.exe")) return `${ROOT}/msc`;
+	return "msc";
+}
+
+const MSC = resolveMsc();
+env.set("NO_COLOR", "1");
+const FIXTURES = `${ROOT}/src/test/hcr/fixtures`;
+const TMP = `${ROOT}/out/hcr`;
+
+function lines(text: string): string[] {
+	const out: string[] = [];
+	for (const raw of text.split("\n")) out.push(raw.endsWith("\r") ? raw.slice(0, raw.length - 1) : raw);
+	return out;
+}
+
+function both(r: ExecFileResult): string {
+	return r.output + r.errorOutput;
+}
+
+function succeeded(r: ExecFileResult): boolean {
+	return r.started && r.pipeOk && r.exitCode == 0 && r.signal == 0;
+}
+
+function read(path: string): string {
+	const r = readFile(path);
+	return r.ok ? r.value : "";
+}
+
+function put(path: string, content: string): void {
+	if (!writeFile(path, content).ok) {
+		console.log(`FAIL hcrRunner: cannot write ${path}`);
+		exit(1);
+	}
+}
+
+function copy(from: string, to: string): void {
+	if (!copyFile(from, to).ok) {
+		console.log(`FAIL hcrRunner: cannot copy ${from} -> ${to}`);
+		exit(1);
+	}
+}
+
+function failWith(tag: string, why: string): void {
+	console.log(`FAIL ${tag}: ${why}`);
+	exit(1);
+}
+
+function msc(dir: string, args: string[]): ExecFileResult {
+	return execFileResult(MSC, args, dir);
+}
+
+// Build that must succeed: its log is printed before the verdict when it does not.
+function mustBuild(tag: string, dir: string, args: string[], why: string): string {
+	const r = msc(dir, args);
+	if (!succeeded(r)) {
+		console.log(both(r));
+		failWith(tag, why);
+	}
+	return both(r);
+}
+
+function need(tag: string, ok: boolean, why: string): void {
+	if (!ok) failWith(tag, why);
+}
+
+function freshDir(path: string): string {
+	removeAll(path);
+	ensureDir(path);
+	return path;
+}
+
+// ---- hcrModuleAbi: per-module object cache and ABI bundle classification ----
+
+function moduleAbi(): void {
+	const tag = "hcrModuleObjectCache";
+	const work = freshDir(`${TMP}/work`);
+	copy(`${FIXTURES}/app.ms`, `${work}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${work}/logic.ms`);
+	const hcrBuild = ["build", "app.ms", "--hcr", "--verbose", "--output=module.hcr"];
+	const quietBuild = ["build", "app.ms", "--hcr", "--output=module.hcr"];
+	const bundle = `${work}/module.hcr.hcrabi`;
+
+	mustBuild(tag, work, hcrBuild, "cold build failed");
+	need(tag, exists(bundle), "HCR ABI bundle missing");
+	const manifest = read(bundle);
+	need(tag, manifest.contains("\"moduleId\": \"app\""), "app manifest missing");
+	need(tag, manifest.contains("\"moduleId\": \"logic\""), "logic manifest missing");
+	need(tag, manifest.contains("\"id\": \"logic::value#0\""), "logic slot identity is not project-relative");
+
+	put(bundle, manifest.replace("\"gcMode\": \"orc\"", "\"gcMode\": \"drc\""));
+	const stale = mustBuild(tag, work, quietBuild, "valid stale ABI bundle recovery failed");
+	need(tag, stale.contains("HCR restart required: GC mode changed (drc -> orc)"), "stale bundle classification missing");
+
+	copy(`${FIXTURES}/logicBodyEdit.ms`, `${work}/logic.ms`);
+	const edit = mustBuild(tag, work, hcrBuild, "body-edit build failed");
+	let ccCount = 0;
+	let logicCompiled = false;
+	let appCompiled = false;
+	let appCached = false;
+	for (const line of lines(edit)) {
+		if (line.startsWith("    cc ")) {
+			ccCount = ccCount + 1;
+			if (line.contains("logic_x_ms")) logicCompiled = true;
+			if (line.contains("app_x_ms")) appCompiled = true;
+		}
+		const t = line.trim();
+		if (line != t && t.startsWith("cached ") && t.endsWith("app.ms")) appCached = true;
+	}
+	need(tag, ccCount == 1, `body edit compiled ${ccCount} modules, expected 1`);
+	need(tag, logicCompiled, "logic object was not compiled");
+	need(tag, !appCompiled, "unchanged app object was compiled");
+	need(tag, appCached, "unchanged app object was not reported cached");
+	need(tag, edit.contains("HCR reload module: implementation changed (logic)"), "body edit classification missing");
+	need(tag, exists(`${work}/module.hcr`), "linked HCR image missing");
+
+	copy(`${FIXTURES}/logicSignatureEdit.ms`, `${work}/logic.ms`);
+	const signature = mustBuild(tag, work, hcrBuild, "signature-edit build failed");
+	need(tag, signature.contains("HCR reload dependents: export signature changed (logic::value#0)"), "signature edit classification missing");
+
+	const before = read(`${work}/module.hcr`);
+	put(bundle, "{broken\n");
+	const corrupt = msc(work, quietBuild);
+	need(tag, !succeeded(corrupt), "corrupt current ABI bundle was accepted");
+	need(tag, both(corrupt).contains("invalid current HCR ABI bundle 'module.hcr.hcrabi': invalid JSON"), "corrupt bundle diagnostic missing");
+	need(tag, read(`${work}/module.hcr`) == before, "corrupt bundle replaced current image");
+	console.log("ok   hcrModuleAbi");
+}
+
+// ---- hcrIndirect: cross-module calls lowered through module tables ----
+
+interface Emitted {
+	app: string;
+	logic: string;
+	dispatch: string;
+}
+
+function emitIndirect(dir: string, extra: string[]): Emitted {
+	removeAll(`${dir}/out`);
+	const args: string[] = ["build", "app.ms"];
+	for (const a of extra) args.push(a);
+	args.push("--emit=c");
+	mustBuild("hcrIndirect", dir, args, `C emission failed (${extra.join(" ")})`);
+	const debug = `${dir}/out/debug`;
+	let app = "";
+	let logic = "";
+	for (const e of readDir(debug)) {
+		if (e.endsWith("appOms.c")) app = read(`${debug}/${e}`);
+		if (e.endsWith("logicOms.c")) logic = read(`${debug}/${e}`);
+	}
+	return { app, logic, dispatch: read(`${debug}/_dispatch.c`) };
+}
+
+// The name between `prefix` and `suffix` on a whole line, when it is one identifier.
+function declName(text: string, prefix: string, stem: string, suffixStart: string, suffixEnd: string): string {
+	for (const line of lines(text)) {
+		if (!line.startsWith(prefix + stem) || !line.endsWith(suffixEnd)) continue;
+		const open = line.indexOf(suffixStart, prefix.length);
+		if (open < 0) continue;
+		const name = line.slice(prefix.length, open);
+		let ident = true;
+		for (let i = 0; i < name.length; i++) {
+			const c = name.charAt(i);
+			if (!((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_")) ident = false;
+		}
+		if (ident) return name;
+	}
+	return "";
+}
+
+function indirect(): void {
+	const tag = "hcrIndirect";
+	const dir = freshDir(`${TMP}/indirect`);
+	for (const f of ["app.ms", "logic.ms", "host.ms"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
+
+	const plain = emitIndirect(dir, []);
+	for (const c of [plain.app, plain.logic, plain.dispatch]) {
+		need(tag, !c.contains("msHcr") && !c.contains("_ms_hcr"), "a build without --hcr emitted HCR indirection");
+	}
+
+	const hcr = emitIndirect(dir, ["--hcr"]);
+	const value = declName(hcr.logic, "int32_t ", "value__", "(", "(void);");
+	const base = declName(hcr.logic, "int32_t ", "base__", "(", "(void);");
+	const pair = declName(hcr.logic, "void ", "pair__", "(", " __result, int32_t scale);");
+	need(tag, value != "" && base != "" && pair != "", "logic exports not found in emitted C");
+	need(tag, hcr.app.contains(`#define ${value} ((__typeof__(&${value}))_ms_hcr_m0->current[2])`),
+		"cross-module call to logic::value is not lowered through its table slot");
+	need(tag, hcr.app.contains("_ms_hcr_m0 = msHcrHandle(\"logic\");"), "app does not resolve the logic handle");
+	need(tag, hcr.app.contains(`${value}()`), "app call site changed shape");
+	need(tag, hcr.logic.contains("msHcrPublish(\"logic\", _ms_hcr_table, 3);"), "logic does not publish its table");
+	need(tag, hcr.logic.contains(`(void*)&${base}, (void*)&${pair}, (void*)&${value}`), "logic table is not in manifest slot order");
+	need(tag, !hcr.logic.contains(`#define ${base} `) && !hcr.logic.contains(`#define ${value} `), "same-module calls in logic are indirected");
+	need(tag, hcr.logic.contains(`return (${base}() + offset__`), "same-module and private calls are not direct");
+	need(tag, hcr.dispatch.contains("MS_HCR_EXPORT void DatInit000(void) { MsPreMainInner(); }"),
+		"HCR image does not export its dependency-ordered DatInit");
+
+	if (platform != "windows") {
+		console.log(`ok   hcrIndirect (emission only: this runner has no host adapter for ${platform})`);
+		return;
+	}
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=module.dll"], "HCR image link failed");
+	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "host build failed");
+	const called = execFileResult(`${dir}/host.exe`, ["module.dll"], dir);
+	const said = both(called).trim();
+	need(tag, said == "HCR-HOST call -> 37", `call through the table returned '${said}'`);
+	console.log("ok   hcrIndirect");
+	windowsReload();
+}
+
+// ---- hcrWindowsReload: single-image LoadLibrary reload, four generations ----
+
+function windowsReload(): void {
+	const tag = "hcrWindowsReload";
+	const probeDir = `${ROOT}/examples/hcrProbe`;
+	const out = "out/windows";
+	const gen = `${out}/gen`;
+	freshDir(`${probeDir}/${out}`);
+	for (const g of ["g1", "g2", "g3", "g4"]) ensureDir(`${probeDir}/${gen}/${g}`);
+	const builds = [["module.ms", "g1"], ["moduleBodyEdit.ms", "g2"], ["moduleLayoutEdit.ms", "g3"]];
+	for (const b of builds) {
+		const r = msc(ROOT, ["build", `examples/hcrProbe/${b[0]}`, "--hcr", `--output=examples/hcrProbe/${gen}/${b[1]}/module.dll`]);
+		put(`${probeDir}/${out}/${b[1]}.build.log`, both(r));
+	}
+	put(`${probeDir}/${gen}/g4/module.dll`, read(`${probeDir}/${gen}/g2/module.dll`).byteSlice(0, 512));
+	const host = msc(ROOT, ["build", "examples/hcrProbe/hostWindows.ms", `--output=examples/hcrProbe/${out}/hcrHostWindows.exe`]);
+	put(`${probeDir}/${out}/host.build.log`, both(host));
+
+	const run = execFileResult(`${probeDir}/${out}/hcrHostWindows.exe`,
+		[`${gen}/g1/module.dll`, `${gen}/g2/module.dll`, `${gen}/g3/module.dll`, `${gen}/g4/module.dll`], probeDir);
+	const probeOut = lines(run.output);
+	let loaded = "";
+	let reloaded = "";
+	for (const line of probeOut) {
+		const at = line.indexOf(" state=");
+		if (at < 0) continue;
+		if (line.startsWith("HCR-PROBE loaded ")) loaded = line.slice(at + 7, line.length);
+		if (line.startsWith("HCR-PROBE reloaded ")) reloaded = line.slice(at + 7, line.length);
+	}
+	if (loaded == "" || loaded != reloaded) {
+		console.log(both(run));
+		failWith(tag, `lifted state pointer changed across reload: '${loaded}' -> '${reloaded}'`);
+	}
+	const want = [
+		`HCR-PROBE call ${gen}/g1/module.dll -> 10`,
+		`HCR-PROBE call ${gen}/g2/module.dll -> 40`,
+		`HCR-PROBE rejected ${gen}/g3/module.dll (layout)`,
+		`HCR-PROBE call ${gen}/g2/module.dll -> 60`,
+		`HCR-PROBE rejected ${gen}/g4/module.dll (load)`,
+		`HCR-PROBE call ${gen}/g2/module.dll -> 80`,
+	];
+	for (const w of want) {
+		let found = false;
+		for (const line of probeOut) {
+			if (line == w) found = true;
+		}
+		if (!found) {
+			console.log(both(run));
+			failWith(tag, `missing line: ${w}`);
+		}
+	}
+	need(tag, run.errorOutput.contains("incompatible state layout change"), "missing loud layout diagnostic");
+	need(tag, run.errorOutput.contains("LoadLibraryA failed"), "missing loud bad-image diagnostic");
+	console.log("ok   hcrWindowsReload");
+}
+
+console.log(`hcr: compiler under test = ${MSC}`);
+ensureDir(TMP);
+moduleAbi();
+indirect();

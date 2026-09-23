@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Too many arguments: expected at most 0, got 1
 // @stdout: bigint ops done
 
 // bigint is arbitrary-precision on both backends: C routes every operator to a

@@ -4,7 +4,7 @@ import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
 	msFsIsExecutable, msFsRealPath,
 	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
-	msFsChmod, msFsReadDirEntries,
+	msFsChmod, msFsReadDirEntries, msFsSymlink,
 } from "runtime/fs/header.h";
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
@@ -93,6 +93,13 @@ export function removeAll(path: string): Result<void, IoError> {
 	return remove(path);
 }
 
+export function symlink(target: string, path: string): Result<void, IoError> {
+	if (msFsSymlink(target, path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "symlink failed"));
+}
+
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
 	if (msFsRename(oldPath, newPath) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
@@ -108,6 +115,7 @@ export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
 export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
 export extern function fileSize(path: string): number from "msFsFileSize";
+export extern function modifiedTime(path: string): number from "msFsModifiedTime";
 
 // List directory entries. Directories have a trailing "/" marker.
 // "." and ".." are always excluded. Returns an empty list on error or

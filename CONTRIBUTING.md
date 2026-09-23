@@ -27,7 +27,7 @@ msc test src/utils/string.ms          # one file plus the tests of everything it
 msc run src/test/corpus/run.ms                        # corpus: C/JS parity + RSS lanes, ~19 min
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms         # corpus: ASan + reference-count ledger, ~10 min
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
-src/test/guard/run.sh                                 # lifecycle guards
+msc run src/test/guard/run.ms --target=raiser          # lifecycle guards
 ```
 
 `test` is a keyword and a test body asserts with `assert`; see [docs/LANG-TEST.md](docs/LANG-TEST.md). `msc test <file>` runs that file's `test` blocks plus those of its transitive imports; there are no `--filter` or `--jobs` flags. Corpus runners test `./msc` when it exists, otherwise the installed `msc`; `MSC=<path>` overrides.
@@ -37,9 +37,9 @@ A lifecycle guard is proven red on a binary that has the bug before it is truste
 ## Sync into ~/.metascript
 
 ```bash
-./tools/sync-local-binary.sh              # binary + std + runtime + vendor
-./tools/sync-local-binary.sh --check      # dry run
-./tools/sync-local-binary.sh --no-binary  # support trees only
+./msc run tools/syncLocalBinary.ms --target=raiser              # binary + std + runtime + vendor
+./msc run tools/syncLocalBinary.ms --target=raiser check      # dry run
+./msc run tools/syncLocalBinary.ms --target=raiser no-binary  # support trees only
 ```
 
 Run it from a tree whose `vendor/` submodules are checked out: the sync mirrors `vendor/` with `--delete`.

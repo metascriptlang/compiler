@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Undefined variable 'Number'
 // @stdout: number statics done
 
 // Number is a callable name that also carries static constants — the

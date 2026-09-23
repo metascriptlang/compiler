@@ -21,8 +21,7 @@ import { error, success, bold, cyan, dim, green, red, path } from "../utils/colo
 
 // Formatter imports
 import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
-import { formatDoc } from "./fmt/layout";
-import { printNode as printFormattedNode } from "./fmt/printer/index";
+import { formatNode } from "./fmt/printer/index";
 import { FmtSection, ResolveSection, defaultResolveSection } from "./buildConfig";
 
 // -- dump-tokens --
@@ -153,8 +152,12 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 	const options = applyFmtSection(defaultFormatOptions(), fmtCfg);
 	options.source = source;
 
-	const doc = printFormattedNode(program, options);
-	const formatted = formatDoc(doc, options);
+	const printed = formatNode(program, options);
+	if (!printed.ok) {
+		console.log(error("fmt error") + ": " + printed.error + " in " + path(filePath));
+		exit(1);
+	}
+	const formatted = printed.value;
 
 	if (formatted != source) {
 		if (opts.fmtCheck) {

@@ -4,7 +4,12 @@
 import { Node, NodeKind } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText } from "../doc";
+import { formatDocAt } from "../layout";
 import { registerNodePrinter } from "./callbacks";
+import {
+	printJsxElement, printJsxFragment, printJsxText, printJsxExpressionContainer,
+	printJsxAttribute, printJsxSpreadAttribute,
+} from "./jsx";
 
 import {
 	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
@@ -32,6 +37,21 @@ import {
 	printTestDecl, printAssertStmt, printPropertyDecl, printMethodDecl, printConstructorDecl,
 	printMacroDecl,
 } from "./declarations";
+
+let unprintedKinds: string[] = [];
+
+export function formatNode(node: Node, options: FormatOptions): Result<string, string> {
+	return formatNodeAt(node, options, "");
+}
+
+export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string): Result<string, string> {
+	unprintedKinds = [];
+	const out = formatDocAt(printNode(node, options), options, baseIndent);
+	if (unprintedKinds.length > 0) {
+		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
+	}
+	return Result.ok(out);
+}
 
 export function printNode(node: Node, options: FormatOptions): Doc {
 	if (node == null) return docNil();
@@ -114,7 +134,18 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.ObjectPatternProp => printObjectPatternProp(node, options),
 		NodeKind.DestructuringDecl => printDestructuringDecl(node, options),
 
-		_ => docText("<unsupported node: " + node.kind.toString() + ">"),
+		// ===== JSX =====
+		NodeKind.JSXElement => printJsxElement(node, options),
+		NodeKind.JSXFragment => printJsxFragment(node, options),
+		NodeKind.JSXText => printJsxText(node),
+		NodeKind.JSXExpressionContainer => printJsxExpressionContainer(node, options),
+		NodeKind.JSXAttribute => printJsxAttribute(node, options),
+		NodeKind.JSXSpreadAttribute => printJsxSpreadAttribute(node, options),
+
+		_ => {
+			unprintedKinds.push(node.kind.toString());
+			return docNil();
+		},
 	};
 
 	return wrapNodeComments(node, innerDoc);

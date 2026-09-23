@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an array, got value kind String
 // Parity program — the LANG.md "Index-Space Contract" as a real binary on every
 // lane. One UTF-8 byte buffer, two index spaces: the TS-named surface (length,
 // indexOf, slice, charAt, pad*) is UTF-16 CODE-UNIT indexed, the byte* surface

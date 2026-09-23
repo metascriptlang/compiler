@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot compile node kind OutExpr at comptime: unsupported by the Raiser bytecode compiler
 // @stdout: out-param heap write done
 
 // Writing a heap value through an out/ref param must run the type's sink hook

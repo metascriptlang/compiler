@@ -21,6 +21,7 @@ extern function msFsMkdir(path: string): number from "msFsMkdir";
 extern function msFsRmdir(path: string): number from "msFsRmdir";
 extern function msFsRemove(path: string): number from "msFsRemove";
 extern function msFsRename(oldPath: string, newPath: string): number from "msFsRename";
+extern function msFsSymlink(target: string, path: string): number from "msFsSymlink";
 extern function msFsReadDirEntries(path: string): string from "msFsReadDirEntries";
 
 export function readFile(path: string): Result<string, IoError> {
@@ -91,6 +92,13 @@ export function removeAll(path: string): Result<void, IoError> {
 	return remove(path);
 }
 
+export function symlink(target: string, path: string): Result<void, IoError> {
+	if (msFsSymlink(target, path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "symlink failed"));
+}
+
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
 	if (msFsRename(oldPath, newPath) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
@@ -104,6 +112,7 @@ export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
 export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
 export extern function fileSize(path: string): number from "msFsFileSize";
+export extern function modifiedTime(path: string): number from "msFsModifiedTime";
 
 // readDir: entries are newline-joined by the bridge; directories carry a
 // trailing "/" marker, "." and ".." are excluded. Empty list on error or

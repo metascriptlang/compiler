@@ -29,7 +29,7 @@
 //   untyped arrow params. (The general "arrow -> REQUIRED generic Maybe<fn>
 //   param" is still blocked by separate siblings — neon probe/nullfn_*.) No RC
 //   balance directive; the signal is build-failure / wrong-value-throw.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 function memoApply<T>(produce: () => T, equals: ((a: T, b: T) => boolean) | null = null): boolean {
 	const a = produce();

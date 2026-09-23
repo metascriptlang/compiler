@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot compile node kind OutExpr at comptime: unsupported by the Raiser bytecode compiler
 // @stdout: ref-out-params done
 
 // out/ref params lower to TypeKind.Var → T* in C. The chain that had to agree:

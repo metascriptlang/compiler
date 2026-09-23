@@ -42,9 +42,10 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		if (i > 0) {
 			parts.push(docHardLine());
 			// Preserve one blank line between statement groups (Prettier convention)
-			const prevLine = d.programStmts[i - 1].location.line;
+			const prev = d.programStmts[i - 1].location;
+			const prevEnd = prev.endLine > 0 ? prev.endLine : prev.line;
 			const currLine = d.programStmts[i].location.line;
-			if (currLine - prevLine > 1) {
+			if (currLine - prevEnd > 1) {
 				parts.push(docHardLine());
 			}
 		}

@@ -1,3 +1,4 @@
+// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // Parity program — two JSON paths no other corpus program pins: the IMPLICIT
 // dynamic write (`j.field = value` routed through setDynamicField, where 505
 // only calls the method by name), and decoding an enum-discriminated union

@@ -28,7 +28,7 @@
 //   Proven RED on the pre-fix binary; GREEN post-fix.
 //
 // No RC balance directive — the signal is build-failure / wrong-value exit.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 import { exit } from "std/process";
 

@@ -63,7 +63,7 @@ msc build src/index.ms --gc=drc --danger --output=msc
 msc test src/index.ms
 msc run src/test/corpus/run.ms
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
-src/test/guard/run.sh
+msc run src/test/guard/run.ms --target=raiser
 ```
 
 Then check the self-host fixpoint on emitted C. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:
@@ -77,7 +77,7 @@ cp out/release/.cache/*.c /tmp/fx/B/
 
 Cache file names end in a fingerprint (`<module>_x_ms.<hex>_<hex>.c`) that changes with the building compiler. `diff -rq A B` therefore reports every file. Pair the files by the name before the fingerprint and compare their contents. On 2026-09-19, 322 of 322 modules were identical while `gen1` and `gen2` differed as binaries. A side with 0 files means the wrong cache directory was copied: `--danger` and `--release` write `out/release/.cache`, a plain build writes `out/debug/.cache`.
 
-Never run `tools/sync-local-binary.sh` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` with `--delete`.
+Never run `tools/syncLocalBinary.ms` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` and deletes what the source lacks.
 
 ## 3. Fix a release
 

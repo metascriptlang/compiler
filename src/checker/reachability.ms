@@ -473,7 +473,14 @@ function markReexportConduitsAlive(graph: ModuleGraph): void {
 
 // ===== Public API =====
 
-export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean, graph: ModuleGraph): AliveSet {
+export function computeAliveSet(
+	programs: Node[],
+	paths: string[],
+	entryPath: string,
+	isTest: boolean,
+	graph: ModuleGraph,
+	exportRootModules: string[] = [],
+): AliveSet {
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	nameIndexBuild(programs, paths);
@@ -568,10 +575,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				continue;
 			}
 
-			// Root 5: Exported declarations in ENTRY MODULE only.
-			// Dependency module exports are NOT roots (reference parity: only sfExportc/sfCompilerProc).
-			// They become alive through transitive tracing from main() or top-level statements.
-			if (modulePath == entryPath && isExportedDecl(bare)) {
+			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
 				const name = getDeclName(bare);
 				if (name != "") {
 					markAndWalk(modulePath, name);

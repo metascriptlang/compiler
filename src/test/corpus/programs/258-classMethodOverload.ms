@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: type=str:5|str:x
 // note: same-named methods on one class are distinct routines and must keep
 // distinct emitted names — by param type, by arity, and for statics. Was: both
 // bodies mangled to one C name (conflicting types at cc) and on js the later

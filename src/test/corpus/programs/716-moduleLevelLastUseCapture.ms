@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'q' at comptime: symbol has no declaration node
 // Parity program — a module-level binding introduced by destructuring, then
 // captured into a closure env, was classified last-use and moved (bug: lambda
 // lifting wraps a last-use capture in a synthetic MoveExpr, and the last-use scan

@@ -20,7 +20,7 @@
 // Trigger needs BOTH a per-iteration loop-local capture (j via for..of) AND a
 // shared loop-invariant HEAP string (cc; a literal would make the double free
 // a no-op). High iteration makes the finalize-while-owned window deterministic.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 interface Job { name: string; }
 

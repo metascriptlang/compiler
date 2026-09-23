@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an array, got value kind String
 // note: TSGAP item 5 S1 — branded primitives: nominal in the checker, erased
 // at runtime; pins the erased behavior through every lane (guard bug074).
 type OrderId = string & { __brand: "OrderId" };

@@ -101,6 +101,12 @@ double msFsFileSize(msString path) {
 	return (double)st.st_size;
 }
 
+double msFsModifiedTime(msString path) {
+	struct stat st;
+	if (stat(msStringToCString(path), &st) != 0) return -1.0;
+	return (double)st.st_mtime;
+}
+
 /* ===== Directory ===== */
 
 double msFsMkdir(msString path) {
@@ -202,6 +208,13 @@ double msFsRemove(msString path) {
 double msFsRename(msString oldPath, msString newPath) {
 	_msFsLastErrno = 0;
 	if (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
+}
+
+double msFsSymlink(msString target, msString path) {
+	_msFsLastErrno = 0;
+	if (symlink(msStringToCString(target), msStringToCString(path)) == 0) return 1.0;
 	_msFsLastErrno = errno;
 	return 0.0;
 }

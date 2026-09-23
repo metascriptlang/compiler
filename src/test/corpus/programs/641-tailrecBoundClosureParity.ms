@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-closure r=5000000-5000000-5000000-5000000
 // A self-recursive routine bound to a const gets the same tail-call lowering as
 // a function declaration. Two halves had to land together: the checker now takes

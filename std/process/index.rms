@@ -17,7 +17,7 @@ extern function msProcessSetEnv(name: string, value: string): number from "msPro
 extern function msProcessUnsetEnv(name: string): number from "msProcessUnsetEnv";
 extern function msProcessArgv(): string[] from "msProcessArgv";
 extern function msProcessSpawnSync(command: string): string from "msProcessSpawnSync";
-extern function msProcessSpawnSyncArgv(path: string, args: string[]): string from "msProcessSpawnSyncArgv";
+extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string): string from "msProcessSpawnSyncArgv";
 extern function msProcessExecFile(path: string, args: string[]): number from "msProcessExecFile";
 extern function msProcSpawnGetExitCode(): int32 from "msProcSpawnGetExitCode";
 extern function msProcSpawnGetSignal(): int32 from "msProcSpawnGetSignal";
@@ -63,8 +63,8 @@ export function execFile(path: string, args: string[] = []): number {
 	return msProcessExecFile(path, args);
 }
 
-export function execFileCapture(path: string, args: string[] = []): Result<string, ProcessError> {
-	const stdoutText = msProcessSpawnSyncArgv(path, args);
+export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
 		return Result.err(spawnFailed(path, "fork/exec failed"));
@@ -83,6 +83,29 @@ export function execFileCapture(path: string, args: string[] = []): Result<strin
 		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
 	}
 	return Result.ok(stdoutText);
+}
+
+export interface ExecFileResult {
+	started: boolean;
+	pipeOk: boolean;
+	exitCode: int32;
+	signal: int32;
+	output: string;
+	errorOutput: string;
+}
+
+// Like execFileCapture, but a child that ran reports every stream and status
+// whatever its exit code — `started` is false only when it never ran.
+export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
+	return {
+		started: msProcSpawnGetOk() != 0,
+		pipeOk: msProcSpawnGetPipeOk() != 0,
+		exitCode: msProcSpawnGetExitCode(),
+		signal: msProcSpawnGetSignal(),
+		output: stdoutText,
+		errorOutput: msProcSpawnGetStderr(),
+	};
 }
 
 export class env {

@@ -4,10 +4,10 @@ import {
 	TransAmDb, dbParse
 } from "../../transam/index";
 import { writeStderr } from "std/io";
-import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse } from "../protocol";
+import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
-import { printNode as printFormattedNode } from "../../fmt/printer";
-import { formatDoc } from "../../fmt/layout";
+import { formatNode } from "../../fmt/printer";
+import { FmtPos, formatStatementEdit, innermostStatement, lineOffset } from "../../fmt/edit";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource } from "./shared";
@@ -61,8 +61,8 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			}
 			const parseResult = parseSource(source);
 			if (parseResult.ok) {
-				const doc = printFormattedNode(parseResult.value, options);
-				_codeActionFmtResult = formatDoc(doc, options);
+				const printed = formatNode(parseResult.value, options);
+				_codeActionFmtResult = printed.ok ? printed.value : "";
 			} else {
 				_codeActionFmtResult = "";
 			}
@@ -99,12 +99,12 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	const options = getFormatOptions(db, path);
 	options.source = source;
-	const doc = printFormattedNode(program, options);
-	const t3 = performance.now();
-	const formatted = formatDoc(doc, options);
+	const printed = formatNode(program, options);
+	if (!printed.ok) return lspErrorResponse(id, -32603, printed.error);
+	const formatted = printed.value;
 	const t4 = performance.now();
 
-	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t3 - t2}ms layout=${t4 - t3}ms source=${source.byteLength}b\n`);
+	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t4 - t2}ms source=${source.byteLength}b\n`);
 
 	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 
@@ -120,4 +120,37 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const t6 = performance.now();
 	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
+}
+
+export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
+	const textDoc = lspGetObjectField(params, "textDocument");
+	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	const source = dbGetSource(db, path);
+	if (source == "") return lspResponse(id, "[]");
+
+	const range = lspGetObjectField(params, "range");
+	const rs = lspGetObjectField(range, "start");
+	const re = lspGetObjectField(range, "end");
+	const from: FmtPos = { line: (lspGetNumberField(rs, "line") + 1) as int32, column: (lspGetNumberField(rs, "character") + 1) as int32 };
+	const to: FmtPos = { line: (lspGetNumberField(re, "line") + 1) as int32, column: (lspGetNumberField(re, "character") + 1) as int32 };
+
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+	const parsed = parseSource(source);
+	if (!parsed.ok) return lspResponse(id, "[]");
+	const stmt = innermostStatement(parsed.value, from, to);
+	if (stmt == null) return lspResponse(id, "[]");
+
+	const edit = formatStatementEdit(stmt, source, getFormatOptions(db, path));
+	if (!edit.ok) return lspErrorResponse(id, -32603, edit.error);
+	const e = edit.value;
+	const startOffset = lineOffset(source, e.start.line) + e.start.column - 1;
+	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
+	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
+
+	const lspRange = lspFmtRange(e.start.line - 1, e.start.column - 1, e.end.line - 1, e.end.column - 1);
+	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
 }

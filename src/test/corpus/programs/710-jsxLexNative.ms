@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'msStringHash' at comptime: symbol kind is Function
 // @maxrss: 30
 // @stdout: jsx-lex-native acc=800000
 // note: JSX lexer (src/lexer/jsx.ms) leak guard under the C runtime: lex() 200k× on a JSX string covering every mode — apostrophe text, attribute, expr container, nested + self-close. The lexer allocates per call (byteSlice for text/idents, jsxStack push/pop, token array) and frees per call, so RSS is flat ~2.5MB drc+orc. acc=800000 is the deterministic JSX-token count (4 × 200000 % 1e6); a regressed token stream — e.g. the `'` in "Don't" choking the scanner into an unterminated string — changes it. Only the native binary frees the emitted C strings.

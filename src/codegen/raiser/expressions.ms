@@ -1,6 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
+import { resolveOverloadWinner } from "../c/names";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
@@ -894,9 +895,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	if (d.callee.kind == NodeKind.Identifier) {
 		if (resolveGlobal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		const calleeId = d.callee.data as IdentifierData;
-		let funcIdx = resolveRoutine(s, d.callee.resolvedSym, calleeId.name);
-		if (funcIdx < 0 && d.callee.resolvedSym != null) {
-			funcIdx = callRaiserOnDemand(d.callee.resolvedSym);
+		let calleeSym = d.callee.resolvedSym;
+		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
+			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
+		}
+		let funcIdx = resolveRoutine(s, calleeSym, calleeId.name);
+		if (funcIdx < 0 && calleeSym != null) {
+			funcIdx = callRaiserOnDemand(calleeSym);
 		}
 		if (funcIdx >= 0) {
 			const dest = allocReg(s);

@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind, Token } from "../../lexer/token";
-import { Node, NodeKind, FunctionDeclData, BlockStmtData, createNode } from "../../ast/node";
+import { Node, NodeKind, FunctionDeclData, BlockStmtData, ProgramData, createNode } from "../../ast/node";
 import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments } from "../context";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
@@ -372,3 +372,22 @@ export function registerCoreParsers(): void {
 
 // Auto-register at module load so parser tests work without explicit init
 registerCoreParsers();
+
+import { parseSource } from "./validation";
+
+function firstStmtEnd(src: string): string {
+	const res = parseSource(src);
+	if (!res.ok) return "parse error";
+	const loc = (res.value.data as ProgramData).programStmts[0].location;
+	return `${loc.endLine}:${loc.endColumn}`;
+}
+
+test "statement end covers a closing string's quotes and raw escapes" {
+	assert firstStmtEnd("let s = \"a\\tb\"") == "1:15";
+	assert firstStmtEnd("let s = 'ab'") == "1:13";
+}
+
+test "statement end after a semicolon is the semicolon's column plus one" {
+	assert firstStmtEnd("let x = 1;") == "1:11";
+	assert firstStmtEnd("let s = \"a\\tb\";") == "1:16";
+}

@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
 // @skip-js: spawn has no working js lowering (see 421-spawnSleepTimer); the
 //   { timeout } options object rides the same fused C-only lowering on top of
 //   that, so there is no js spelling of this shape at all.

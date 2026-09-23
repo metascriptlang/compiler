@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Macro 'inMacro' body: Type 'int32' is not assignable to type 'Node'
 // Parity program — `BitSet<E>` built and queried inside macro and @comptime
 // bodies: the comptime engine must produce the same bits as the runtime.
 //

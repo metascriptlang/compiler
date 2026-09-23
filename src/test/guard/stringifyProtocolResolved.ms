@@ -23,7 +23,7 @@
 //   checker/checkExprPass.ms + transform/coercion/stringConcatFlatten.ms.
 //
 // No RC balance directive — the signal is build-failure / wrong-value-throw.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 class Money {
 	amount: number;

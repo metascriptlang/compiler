@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: Maybe_fn_fnint32int3215
 // `field?: T` desugars to `(T) | null`: omission stores null, a narrow
 // restores T. This is the TS optional-property surface mapped onto the
 // existing nullable-union model - the requiresInit rule for bare function

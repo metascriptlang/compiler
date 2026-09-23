@@ -10,8 +10,7 @@ import { compileToC, compileToCWithStd, compileProjectToCWithStd, MapEntry } fro
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { resetAllSideChannels } from "../../parser/context";
-import { printNode } from "../../compiler/fmt/printer/index";
-import { formatDoc } from "../../compiler/fmt/layout";
+import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
 
 function fmtSource(source: string): string {
@@ -20,7 +19,8 @@ function fmtSource(source: string): string {
 	if (!parsed.ok) return "";
 	const opts = defaultFormatOptions();
 	opts.source = source;
-	return formatDoc(printNode(parsed.value, opts), opts);
+	const printed = formatNode(parsed.value, opts);
+	return printed.ok ? printed.value : "";
 }
 
 // Shared converter: any JSX node → the number literal 7.

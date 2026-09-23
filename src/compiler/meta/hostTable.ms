@@ -52,11 +52,11 @@ import {
 import { isNodeWireMetaField } from "./wire";
 
 import {
-	exists, isFile, isDir, isExecutable, fileSize, realpath,
+	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
 	readFile, writeFile, appendFile, chmod,
-	mkdir, rmdir, remove, rename, readDir,
+	mkdir, rmdir, remove, rename, symlink, readDir,
 } from "std/fs";
-import { cwd, platform, env, exec, argv, execFile, execFileCapture } from "std/process";
+import { cwd, platform, env, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
@@ -121,6 +121,10 @@ function _bridgeMsFsFileSize(args: RaiserValue[]): RaiserValue {
 	return boxInt(fileSize(unboxString(args[0])));
 }
 
+function _bridgeMsFsModifiedTime(args: RaiserValue[]): RaiserValue {
+	return boxInt(modifiedTime(unboxString(args[0])));
+}
+
 function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
 	const r = chmod(unboxString(args[0]), unboxInt(args[1]) as int32);
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
@@ -170,6 +174,11 @@ function _bridgeMsFsRemove(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsRename(args: RaiserValue[]): RaiserValue {
 	const r = rename(unboxString(args[0]), unboxString(args[1]));
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
+function _bridgeMsFsSymlink(args: RaiserValue[]): RaiserValue {
+	const r = symlink(unboxString(args[0]), unboxString(args[1]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
@@ -312,13 +321,13 @@ function _bridgeMsProcessExecFile(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
-	const r = execFileCapture(unboxString(args[0]), _unboxStringArrayArg(args[1]));
-	if (r.ok) {
-		_resetSpawnStateOk(r.value);
-	} else {
-		const e = r.error;
-		_setSpawnStateErr(e.kind, e.output, e.errorOutput, e.exitCode, e.signal);
-	}
+	const r = execFileResult(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]));
+	_spawnStdout = r.output;
+	_spawnStderr = r.errorOutput;
+	_spawnExitCode = r.exitCode;
+	_spawnSignal = r.signal;
+	_spawnOk = r.started ? 1 : 0;
+	_spawnPipeOk = r.pipeOk ? 1 : 0;
 	return boxString(_spawnStdout);
 }
 
@@ -764,6 +773,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir, HostCapability.FileRead);
 	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable, HostCapability.FileRead);
 	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize, HostCapability.FileRead);
+	registerHostFn("msFsModifiedTime",   _bridgeMsFsModifiedTime, HostCapability.FileRead);
 	// fs read/write/mutate + errno polling
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
@@ -773,6 +783,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
 	registerHostFn("msFsRename",         _bridgeMsFsRename);
+	registerHostFn("msFsSymlink",        _bridgeMsFsSymlink);
 	registerHostFn("msFsReadDirEntries", _bridgeMsFsReadDirEntries, HostCapability.FileRead);
 	// process accessors
 	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);

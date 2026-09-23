@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: elem=nil
 // @stdout: void slots ok
 //
 // A void call in an array element or object field has no value to store: it runs as

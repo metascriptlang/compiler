@@ -49,15 +49,15 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		return Result.ok(createNode(NodeKind.StringLiteral, { value: "" }, headToken));
 	}
 
-	// Single non-string interpolation (`${expr}`) — prepend "" so concat flatten
-	// generates toString coercion. Without this, `${num}` collapses to just `num`.
-	if (parts.length == 1 && parts[0].kind != NodeKind.StringLiteral) {
-		const empty = createNode(NodeKind.StringLiteral, { value: "" }, headToken);
-		return Result.ok(createNode(NodeKind.BinaryExpr, { operator: "+", left: empty, right: parts[0] }, headToken));
-	}
-
+	// A template that opens on an interpolation starts from "", so every `+` is a
+	// concatenation: `${a}${b}` over two numbers is "31", not the sum 4.
 	let result = parts[0];
-	for (let i = 1; i < parts.length; i++) {
+	let first = 1;
+	if (parts[0].kind != NodeKind.StringLiteral) {
+		result = createNode(NodeKind.StringLiteral, { value: "" }, headToken);
+		first = 0;
+	}
+	for (let i = first; i < parts.length; i++) {
 		result = createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken);
 	}
 	return Result.ok(result);

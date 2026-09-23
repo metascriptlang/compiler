@@ -10,7 +10,7 @@
 
 @import("node:fs", {
 	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, accessSync,
-	mkdirSync, rmdirSync, unlinkSync, renameSync, readdirSync, chmodSync, realpathSync,
+	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
 });
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
@@ -26,12 +26,14 @@ extern function mkdirSync(path: string): void;
 extern function rmdirSync(path: string): void;
 extern function unlinkSync(path: string): void;
 extern function renameSync(oldPath: string, newPath: string): void;
+extern function symlinkSync(target: string, path: string): void;
 extern function readdirSync(path: string): string[];
 extern function chmodSync(path: string, mode: int32): void;
 
 // node `fs.Stats` - only the members the C twin's stat() path exposes.
 interface Stats {
 	size: number;
+	mtimeMs: number;
 	isFile: () => boolean;
 	isDirectory: () => boolean;
 }
@@ -158,6 +160,17 @@ export function removeAll(path: string): Result<void, IoError> {
 	return remove(path);
 }
 
+export function symlink(target: string, path: string): Result<void, IoError> {
+	try {
+		symlinkSync(target, path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "symlink failed"));
+	}
+}
+
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
 	try {
 		renameSync(oldPath, newPath);
@@ -193,6 +206,10 @@ export function isExecutable(path: string): boolean {
 
 export function fileSize(path: string): number {
 	try { return statSync(path).size; } catch (e) { return -1; }
+}
+
+export function modifiedTime(path: string): number {
+	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
 }
 
 // List directory entries. Directories have a trailing "/" marker.

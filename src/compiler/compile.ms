@@ -2,9 +2,10 @@
 
 import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
+import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { Node, ProgramData } from "../ast/node";
-import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
+import { Node, ProgramData, SymbolKind, Type } from "../ast/node";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
@@ -20,20 +21,21 @@ import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName } from "../codegen/c/names";
+import { mangleModuleName, mangleProcName, safeName } from "../codegen/c/names";
 import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { TargetInfo, hostTargetInfo, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
-import { lookupSymbol, SymbolFlag } from "../checker/symbol";
+import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
+import { SymbolFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
+import { HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
@@ -50,15 +52,17 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
-import { writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
+import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
 // checker/context → module/graph layering; callbacks pattern). Registered at
@@ -166,14 +170,14 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 // Report graph-level errors (e.g., missing entry) and circular dep warnings.
 function reportGraphErrors(graph: ModuleGraph): void {
 	for (const err of graph.errors) {
-		console.log(red("graph error: ") + err);
+		printDiag(red("graph error: ") + err);
 	}
 	for (const dep of graph.circularDeps) {
 		let circMsg = `circular import: ${dep.fromPath} <-> ${dep.toPath}`;
 		if (dep.importLine > 0) {
 			circMsg = circMsg + ` (line ${dep.importLine})`;
 		}
-		console.log(yellow("warning: ") + circMsg);
+		printDiag(yellow("warning: ") + circMsg);
 	}
 }
 
@@ -186,6 +190,10 @@ function getSourceLine(source: string, lineNum: number): string {
 	return lines[idx];
 }
 
+function printDiag(line: string): void {
+	writeStderr(line + "\n");
+}
+
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
 	// Header: "error: message" or "warning: message"
@@ -194,7 +202,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 		true => bold(yellow("warning")),
 		false => bold(red("error")),
 	};
-	console.log(levelStr + ": " + bold(e.message));
+	printDiag(levelStr + ": " + bold(e.message));
 
 	// Location: "  --> file:line:col"
 	if (e.line > 0) {
@@ -202,7 +210,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 		if (e.column > 0) {
 			locStr = `${locStr}:${e.column}`;
 		}
-		console.log(locStr);
+		printDiag(locStr);
 
 		// Source line + caret
 		const srcLine = getSourceLine(source, e.line);
@@ -210,9 +218,9 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 			const lineNumStr = e.line.toString();
 			const pad = "   ";
 			// Separator: "   |"
-			console.log(blue(pad + " |"));
+			printDiag(blue(pad + " |"));
 			// Source:    "42 | source code here"
-			console.log(blue(lineNumStr + " | ") + srcLine);
+			printDiag(blue(lineNumStr + " | ") + srcLine);
 			// Caret:    "   |     ^^^"
 			if (e.column > 0) {
 				let caretPad = "";
@@ -221,14 +229,14 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 					caretPad = caretPad + " ";
 					ci = ci + 1;
 				}
-				console.log(blue(pad + " | ") + caretPad + green("^"));
+				printDiag(blue(pad + " | ") + caretPad + green("^"));
 			}
 		}
 	} else {
 		// No line info — show file only
-		console.log(`  ${bold(cyan("-->"))} ${modPath}`);
+		printDiag(`  ${bold(cyan("-->"))} ${modPath}`);
 	}
-	console.log("");
+	printDiag("");
 }
 
 // Report per-module errors without exiting (for non-fatal type errors).
@@ -409,7 +417,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 		}
 	}
 	if (graphErrors > 0) {
-		console.log(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
 		exit(1);
 	}
 	return graph;
@@ -527,7 +535,7 @@ function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 function parseOrExit(source: string, modPath: string): Node {
 	const pr = parseSource(source);
 	if (!pr.ok) {
-		console.log(`${error("parse error")} [${modPath}]: ${pr.error}`);
+		printDiag(`${error("parse error")} [${modPath}]: ${pr.error}`);
 		exit(1);
 	}
 	return pr.value;
@@ -688,7 +696,7 @@ interface CBuildState {
 function flagArgsOrExit(flags: string): string[] {
 	const parsed = splitCcFlags(flags);
 	if (parsed.ok) return parsed.value;
-	console.log(`${error("error")}: ${parsed.error}`);
+	printDiag(`${error("error")}: ${parsed.error}`);
 	exit(1);
 	return [];
 }
@@ -883,7 +891,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					}
 				}
 				if (!exists(fullPath)) {
-					console.log(`${error("error")}: @compile cannot find: ${fullPath}`);
+					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
 				}
 				// Mark C++ at directive-resolution time (main thread, sequential)
@@ -942,7 +950,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
 			// stderr and the join loop only reports the exit code.
-			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
@@ -967,7 +975,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				ci = ci + 1;
 				continue;
 			}
-			console.log(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			exit(1);
 		}
 		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary));
@@ -1007,7 +1015,7 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
-			if (r.error.errorOutput != "") console.log(r.error.errorOutput);
+			if (r.error.errorOutput != "") printDiag(r.error.errorOutput);
 			return r.error.exitCode != 0 ? r.error.exitCode : -1;
 		}));
 	}
@@ -1288,6 +1296,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	}
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
+	if (opts.isHcr) rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 
 	if (rtFiles == "") return [];
 	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
@@ -1309,6 +1318,297 @@ export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: R
 	setGraphLoadTiming(opts.showTime);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
 	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
+}
+
+interface HcrBuildAbi {
+	bundlePath: string;
+	hadCurrent: boolean;
+	current: HcrModuleAbi[];
+	candidate: HcrModuleAbi[];
+	modulePaths: string[];
+}
+
+function hcrBuildRoot(entryPath: string, projectRoot: string): string {
+	let root = projectRoot != "" ? normalize(projectRoot) : dirname(entryPath);
+	if (!isUnder(entryPath, root)) root = dirname(entryPath);
+	return root;
+}
+
+function hcrModuleId(modPath: string, root: string, stdPath: string): string {
+	if (stdPath != "" && isUnder(modPath, stdPath)) return "";
+	if (!isUnder(modPath, root)) return "";
+	return replaceExt(relative(root, modPath), "");
+}
+
+function hcrFunctionSymbol(
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): string {
+	if (info.name == "main") return safeName(info.name);
+	if (exportName != "") return exportName;
+	if (nativeName != "") return nativeName;
+	const baseName = info.originalName != "" ? info.originalName : info.name;
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
+	return mangleProcName(baseName, mangleModuleName(info.definingModule), disamb);
+}
+function hcrFunctionSlot(
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): string {
+	if (info.name == "main") return safeName(info.name);
+	if (exportName != "") return exportName;
+	const baseName = info.originalName != "" ? info.originalName : info.name;
+	if (nativeName != "") return nativeName;
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
+	return `${baseName}#${disamb}`;
+}
+
+
+function appendHcrFunctionExport(
+	exports: HcrAbiExport[],
+	moduleId: string,
+	info: ExportedSymInfo,
+	t: Type,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): Result<void, string> {
+	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasGenericParams(t)) {
+		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
+	}
+	const symbol = hcrFunctionSymbol(info, nativeName, exportName, flags, disamb);
+	const slot = hcrFunctionSlot(info, nativeName, exportName, flags, disamb);
+	exports.push(createHcrAbiExport(moduleId, symbol, hcrSignatureKey(t), slot));
+	return Result.ok(null);
+}
+
+function hcrModuleExports(moduleId: string, modPath: string): Result<HcrAbiExport[], string> {
+	const exports: HcrAbiExport[] = [];
+	const moduleExports = findModuleExports(graphRegistry, modPath);
+	if (moduleExports == null) return Result.ok(exports);
+	for (const info of moduleExports.symbols) {
+		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+		const primary = appendHcrFunctionExport(
+			exports,
+			moduleId,
+			info,
+			info.symType,
+			info.nativeName,
+			info.exportName,
+			info.primaryFlags,
+			info.disamb,
+		);
+		if (!primary.ok) return Result.err(primary.error);
+		for (let i = 0; i < info.overloadTypes.length; i += 1) {
+			const overload = appendHcrFunctionExport(
+				exports,
+				moduleId,
+				info,
+				info.overloadTypes[i],
+				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
+				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
+				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
+				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
+			);
+			if (!overload.ok) return Result.err(overload.error);
+		}
+	}
+	return Result.ok(exports);
+}
+
+function prepareHcrBuildAbi(
+	graph: ModuleGraph,
+	entryPath: string,
+	outBinary: string,
+	opts: CliOptions,
+	compileFlags: string,
+	stdPath: string,
+): Result<HcrBuildAbi, string> {
+	const bundlePath = outBinary + ".hcrabi";
+	const hadCurrent = exists(bundlePath);
+	let current: HcrModuleAbi[] = [];
+	if (hadCurrent) {
+		const content = try readFile(bundlePath) catch "";
+		if (content == "") return Result.err(`cannot read current HCR ABI bundle '${bundlePath}'`);
+		const parsed = parseHcrAbiBundle(content);
+		if (!parsed.ok) return Result.err(`invalid current HCR ABI bundle '${bundlePath}': ${parsed.error}`);
+		current = parsed.value;
+	}
+	const built = buildHcrCandidateAbi(graph, entryPath, opts, compileFlags, stdPath);
+	if (!built.ok) return Result.err(built.error);
+	return Result.ok({
+		bundlePath,
+		hadCurrent,
+		current,
+		candidate: built.value.candidate,
+		modulePaths: built.value.modulePaths,
+	});
+}
+
+interface HcrCandidateAbi {
+	candidate: HcrModuleAbi[];
+	modulePaths: string[];
+}
+
+function buildHcrCandidateAbi(
+	graph: ModuleGraph,
+	entryPath: string,
+	opts: CliOptions,
+	compileFlags: string,
+	stdPath: string,
+): Result<HcrCandidateAbi, string> {
+	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const cpu = opts.targetInfo.cpu != "" ? opts.targetInfo.cpu : "host";
+	const targetKey = `${opts.targetOs}:${cpu}:${opts.targetInfo.ptrSize}:${opts.targetInfo.floatSize}`;
+	const toolchainKey = `${VERSION}:${toolchainStamp()}:${getCompilerName(opts.ccCompiler, opts.ccBinary)}:${hashContent(compileFlags)}`;
+	const candidate: HcrModuleAbi[] = [];
+	const modulePaths: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		const moduleId = hcrModuleId(modPath, root, stdPath);
+		if (moduleId == "") continue;
+		const mod = findModule(graph, modPath);
+		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
+		const dependencies: string[] = [];
+		for (const imported of mod.imports) {
+			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
+			if (dependencyId != "") dependencies.push(dependencyId);
+		}
+		const exports = hcrModuleExports(moduleId, modPath);
+		if (!exports.ok) return Result.err(exports.error);
+		const manifest = buildHcrModuleAbi(
+			moduleId,
+			targetKey,
+			opts.gcMode,
+			toolchainKey,
+			dependencies,
+			exports.value,
+		);
+		if (!manifest.ok) return Result.err(manifest.error);
+		candidate.push(manifest.value);
+		modulePaths.push(modPath);
+	}
+	return Result.ok({ candidate, modulePaths });
+}
+
+function hcrForeignSymbols(modPath: string): HashSet<string> {
+	const foreign = new HashSet<string>();
+	const moduleExports = findModuleExports(graphRegistry, modPath);
+	if (moduleExports == null) return foreign;
+	for (const info of moduleExports.symbols) {
+		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+		addHcrForeignSymbol(foreign, info, info.nativeName, info.exportName, info.primaryFlags, info.disamb);
+		for (let i = 0; i < info.overloadTypes.length; i += 1) {
+			addHcrForeignSymbol(
+				foreign,
+				info,
+				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
+				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
+				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
+				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
+			);
+		}
+	}
+	return foreign;
+}
+
+function addHcrForeignSymbol(
+	foreign: HashSet<string>,
+	info: ExportedSymInfo,
+	nativeName: string,
+	exportName: string,
+	flags: uint32,
+	disamb: int32,
+): void {
+	const isImportC = (flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC);
+	const isBinding = exportName == "" && (nativeName != "" || isImportC);
+	if (info.name == "main" || isBinding) {
+		foreign.add(hcrFunctionSymbol(info, nativeName, exportName, flags, disamb));
+	}
+}
+
+function hcrIndirectModules(abi: HcrCandidateAbi): HcrIndirectModule[] {
+	const modules: HcrIndirectModule[] = [];
+	for (let i = 0; i < abi.candidate.length; i += 1) {
+		const manifest = abi.candidate[i];
+		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
+		const symbols: string[] = [];
+		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
+		modules.push({ moduleId: manifest.moduleId, symbols });
+	}
+	return modules;
+}
+
+function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
+	for (const manifest of manifests) {
+		if (manifest.moduleId == moduleId) return manifest;
+	}
+	return null as unknown as HcrModuleAbi;
+}
+function hcrBundlesMatch(current: HcrModuleAbi[], candidate: HcrModuleAbi[]): boolean {
+	if (current.length != candidate.length) return false;
+	for (const manifest of candidate) {
+		const previous = hcrManifestById(current, manifest.moduleId);
+		if (previous == null || hcrAbiFingerprint(previous) != hcrAbiFingerprint(manifest)) return false;
+	}
+	return true;
+}
+
+
+function hcrPathChanged(paths: string[], path: string): boolean {
+	for (const changed of paths) {
+		if (changed == path) return true;
+	}
+	return false;
+}
+
+function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
+	const decisions: HcrReloadDecision[] = [];
+	if (state.hadCurrent) {
+		for (const current of state.current) {
+			if (hcrManifestById(state.candidate, current.moduleId) == null) {
+				decisions.push({
+					kind: HcrReloadKind.ReloadDependents,
+					reason: HcrReloadReason.ModuleRemoved,
+					subject: current.moduleId,
+				});
+			}
+		}
+		for (let i = 0; i < state.candidate.length; i += 1) {
+			const candidate = state.candidate[i];
+			const current = hcrManifestById(state.current, candidate.moduleId);
+			if (current == null) {
+				decisions.push({
+					kind: HcrReloadKind.ReloadModule,
+					reason: HcrReloadReason.ModuleAdded,
+					subject: candidate.moduleId,
+				});
+			} else if (hcrAbiFingerprint(current) != hcrAbiFingerprint(candidate)) {
+				decisions.push(classifyHcrReload(current, candidate));
+			} else if (hcrPathChanged(changedPaths, state.modulePaths[i])) {
+				decisions.push(classifyHcrReload(current, candidate));
+			}
+		}
+	}
+
+	const encoded = serializeHcrAbiBundle(state.candidate);
+	if (!encoded.ok) {
+		printDiag(`${error("error")}: cannot serialize HCR ABI bundle: ${encoded.error}`);
+		exit(1);
+	}
+	if (!atomicWriteFile(state.bundlePath, encoded.value)) {
+		printDiag(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
+		exit(1);
+	}
+	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
+	console.log(`${green("  Wrote")} ${bold(state.bundlePath)}`);
 }
 
 // ===== C Build =====
@@ -1345,7 +1645,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
 			if (sbfClang == "") {
-				console.log(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
+				printDiag(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
 				console.log(`  System clang carries ${bold("bpf")}/${bold("bpfel")} (Linux kernel BPF) — a different ABI, not this.`);
 				console.log(`  Install Anza platform-tools (${bold("cargo build-sbf")} fetches it to ~/.cache/solana),`);
 				console.log(`  or point at one: ${bold("MSC_SBF_CLANG=/path/to/platform-tools/llvm/bin/clang")}`);
@@ -1354,7 +1654,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			opts.ccBinary = sbfClang;
 		}
 		if (resolveSbfLinker() == "") {
-			console.log(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
+			printDiag(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			exit(1);
 		}
@@ -1395,7 +1695,32 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
-	if (!projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags)) {
+	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
+	if (opts.isHcr && !opts.emitC) {
+		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
+		if (!prepared.ok) {
+			printDiag(`${error("error")}: ${prepared.error}`);
+			exit(1);
+		}
+		hcrBuildAbi = prepared.value;
+	}
+	let hcrModules: HcrIndirectModule[] = [];
+	const hcrModulePaths: string[] = [];
+	if (opts.isHcr) {
+		const abi: Result<HcrCandidateAbi, string> = hcrBuildAbi != null
+			? Result.ok({ candidate: hcrBuildAbi.candidate, modulePaths: hcrBuildAbi.modulePaths })
+			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath);
+		if (!abi.ok) {
+			printDiag(`${error("error")}: ${abi.error}`);
+			exit(1);
+		}
+		hcrModules = hcrIndirectModules(abi.value);
+		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
+	}
+	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+	const hcrBundleCurrent = hcrBuildAbi == null
+		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
+	if (!projectChanged && hcrBundleCurrent) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
@@ -1447,7 +1772,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) {
-			console.log(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
+			printDiag(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
 			continue;
 		}
 		// The graph-checker phase (loadAndCheckGraph → checkModuleGraph) already
@@ -1573,7 +1898,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const _tn0 = performance.now();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		tNative = tNative + (performance.now() - _tn0);
-		const hcrResult = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrLifted = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrSlot = hcrModulePaths.indexOf(modPath);
+		const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, hcrModules[hcrSlot], hcrModules) : hcrLifted;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -1584,7 +1911,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
 			}
 			exit(1);
 		}
@@ -1618,7 +1945,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Gate: stop before codegen if any type errors (standard compiler parity).
 	// All three reference compilers NEVER proceed to codegen with type errors.
 	if (totalCheckerErrors > 0) {
-		console.log(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
+		printDiag(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
 		exit(1);
 	}
 
@@ -1626,7 +1953,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -1701,11 +2028,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -1717,6 +2044,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let clangTime: float64 = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
+	const recompiledModulePaths: string[] = [];
 	const moduleOutputs: CModuleOutput[] = [];
 	const cd = cacheDir();
 	const oSlots: string[][] = [];
@@ -1771,6 +2099,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 				oSlots.push([]);
 				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
+				recompiledModulePaths.push(p.modPath);
 			}
 		}
 		compiled = compiled + 1;
@@ -1792,7 +2121,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
+		const dispatcher = genProjectDispatcher(
+			aliveModules,
+			entryPath,
+			opts.targetOs,
+			opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
+			moduleOutputs,
+			opts.isHcr,
+		);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
@@ -1802,25 +2138,28 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		return;
 	}
 
-	// Generate global init dispatcher and add it to the parallel batch (skip for
-	// HCR — .so has no main). No .c cache for the dispatcher; it always compiles.
 	// Its .o IS content-keyed though: two concurrent builds of different
 	// configs (drc vs orc emit different teardown in the dispatcher TU) must
 	// not rename over each other's object right before the other's link —
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
-	if (!opts.isHcr) {
-		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(aliveModules, entryPath, opts.targetOs, opts.appMode == "lib" || opts.appMode == "staticlib", moduleOutputs);
-		// The dispatcher TU is a fixed input to its compile job — its .c must be
-		// fp-keyed and published atomically like any module's: two concurrent
-		// builds with different entries/configs write different dispatcher C to
-		// one fixed path otherwise, and the loser compiles the winner's dispatcher.
-		const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
-		writeCSource("_dispatch", dispFp, dispatcher);
-		const dispFile = stableCFileFp("_dispatch", dispFp);
-		oSlots.push([]);
-		cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
-	}
+	if (opts.verbose) verboseLog("generating dispatcher");
+	const dispatcher = genProjectDispatcher(
+		aliveModules,
+		entryPath,
+		opts.targetOs,
+		opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
+		moduleOutputs,
+		opts.isHcr,
+	);
+	// The dispatcher TU is a fixed input to its compile job — its .c must be
+	// fp-keyed and published atomically like any module's: two concurrent
+	// builds with different entries/configs write different dispatcher C to
+	// one fixed path otherwise, and the loser compiles the winner's dispatcher.
+	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
+	writeCSource("_dispatch", dispFp, dispatcher);
+	const dispFile = stableCFileFp("_dispatch", dispFp);
+	oSlots.push([]);
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
 	// results in input order from the main thread. Dispatcher failure is fatal
@@ -1839,14 +2178,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
-			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			exit(1);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
 			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
 				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
 			} else {
-				console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+				printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 				moduleCompileFailed = true;
 			}
 		}
@@ -1876,6 +2215,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
+		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
@@ -1904,25 +2244,26 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (opts.appMode == "staticlib") {
 		const arRes = archiveStatic(oFiles, outBinary);
 		if (!arRes.ok) {
-			console.log(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
-			if (arRes.error.errorOutput != "") console.log(arRes.error.errorOutput);
+			printDiag(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
+			if (arRes.error.errorOutput != "") printDiag(arRes.error.errorOutput);
 			exit(1);
 		}
 	} else if (opts.targetOs == "solana") {
 		const linkRes = linkSolana(oFiles, outBinary);
 		if (!linkRes.ok) {
-			console.log(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			exit(1);
 		}
 	} else {
 		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (!linkRes.ok) {
-			console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-			if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+			printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			exit(1);
 		}
 	}
+	if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 
 	// Persist link cache after successful link
 	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary);
@@ -2067,7 +2408,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				console.log(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
 			}
 			exit(1);
 		}
@@ -2112,11 +2453,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			console.log(`${error("error")}: ${modPath}: ${result.failure}`);
+			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			console.log(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -2185,11 +2526,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
 			oSlots[cj.slot] = [cj.oFile];
 		} else if (cj.modPath == "") {
-			console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			console.log(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		}
 		cji = cji + 1;
@@ -2216,15 +2557,15 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linkRes.ok) {
-		console.log(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
-		if (linkRes.error.errorOutput != "") console.log(linkRes.error.errorOutput);
+		printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 		exit(1);
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
-	if (runCode > 128) console.log(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
+	if (runCode > 128) printDiag(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
 
@@ -2646,7 +2987,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
 	// into live code is visible here as a "cannot evaluate" line.
 	for (const e of takeRaiserCompileErrors()) {
-		console.log(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+		printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
@@ -2668,7 +3009,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	if (!ranOk) {
 		if (ctx.lastError != "") {
-			console.log(`${error("raiser runtime error")}: ${ctx.lastError}`);
+			printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
 		}
 		exit(1);
 	}

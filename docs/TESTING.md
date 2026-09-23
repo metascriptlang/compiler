@@ -185,7 +185,7 @@ One invariant per file, built with the DRC ledger (`-DMS_DRC_LEDGER`):
 aborts on the 2nd finalize of a live pointer, dumps per-type
 alloc/destroy balances at exit. A guard is only trusted after it has been
 PROVEN RED against the drift it targets. Methodology and ledger details:
-`guard/README.md`; runner: `guard/run.sh`.
+`guard/README.md`; runner: `guard/run.ms`, run on Raiser.
 
 
 ## Which compiler is under test — the two-tree convention
@@ -200,12 +200,12 @@ come with it:
 | `msc` (PATH → `~/.metascript/bin/msc`) | the last PUBLISHED build | `~/.metascript/` — the last sync |
 
 So the loop is: edit the repo → `msc build … --output=msc` (the published
-compiler builds the candidate) → **test the candidate** → `./tools/sync-local-binary.sh`
+compiler builds the candidate) → **test the candidate** → `./msc run tools/syncLocalBinary.ms --target=raiser`
 only once green (publish: candidate + repo std/runtime become the installed
 ones). Between build and sync the two trees legitimately differ — that gap is
 the whole reason the runners must be told which compiler to exercise.
 
-Convention, applied by `corpus/run.ms` and `guard/run.sh` alike:
+Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
 
 - **Default = `./msc` when it exists**, else the installed `msc`. Plain
   `msc run src/test/corpus/run.ms` therefore tests what you just built, with

@@ -19,7 +19,7 @@
 //   /trace-nim on the type named in the DOUBLE-DESTROY line; check the worker
 //   error branch + the scope-exit destroys on the raising CFG edge.
 //
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc). Heap capture
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc). Heap capture
 // (cc) + loop-local capture (j); every child throws so every run exercises the
 // error-completion + unwind path; high iteration for determinism.
 

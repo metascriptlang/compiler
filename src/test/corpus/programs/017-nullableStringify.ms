@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: cat nil hi nil 42
 // @stdout: nullable stringify ok
 //
 // `T | null` over a value type is a Maybe carrier on the C backend. Every stringify

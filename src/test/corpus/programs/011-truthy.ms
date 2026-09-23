@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: zero falsy
 function pick(x: number, on: boolean): number | null {
 	if (on) { return x; }
 	return null;

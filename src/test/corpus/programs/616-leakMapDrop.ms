@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @maxrss: 40
 // @stdout: leak-map-drop acc=
 // note: FIXED by destructorLifting shouldEmitTypeInfo for mono'd heap classes: a Map<K,V> dropped at scope exit did not free its entries — the mono Map__string_string never ran emitFullTypeInfo (only processDecl does, and a mono has no declaration) so TypeInfo.destroyFn stayed NULL and msDecref skipped the recursive entry free. The mono gate excludes `$`-prefixed synthetic env structs (forcing their TypeInfo in a consumer module breaks the self-host binary compile — they aren't forward-declared there). Nim parity: liftdestructors wires the destructor slot per-instantiation. Was 477MB @ 50k×50 fill+drop, now flat ~2MB drc+orc. Caught by NO inline test or probe; only the full self-host binary build exposed the cross-module compile cascade — this guard pairs with that build as the gate.

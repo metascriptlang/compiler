@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: seam3 order=CALcBMlCA a0=14 bv=8
 // note: Locks TS left-to-right evaluation order for assignment statements
 // whose RHS lowers to statements on C. `arr[idx()] = cnd() ? ta() : tb()`
 // must evaluate the target reference FIRST (idx), then the RHS (cnd, then the

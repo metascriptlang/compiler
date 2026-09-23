@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // Parity program — ordered Map<K,V> churn: set/delete/overwrite cycles.
 // The ordered Map promises insertion-order iteration on BOTH backends
 // (C order-preserving table in std/core/struct.ms, js native Map), so

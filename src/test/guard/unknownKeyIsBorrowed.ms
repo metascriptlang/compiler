@@ -30,7 +30,7 @@
 //   - the value assertions fail → an owned key stopped surviving the container.
 //   Either way row 57's classification moved. Run /trace-nim on `unknown`'s
 //   classify arm (transform/classify) before "fixing" anything here.
-// Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
+// Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 class Handle {
 	tag: int32;

@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'msSetCard32' at comptime: symbol kind is Function
 // Parity program — the ES2025 set method family over the three storage bands.
 // The operator forms `|` `&` `^` stay the shorthand for the familiar three.
 //

@@ -4,19 +4,20 @@ set -uo pipefail
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 RULES=(
   'tools|^tools/'
-  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile)\.ms$'
+  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'build,suite,tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/'
   'tests|^src/(checker|transform|codegen)/'
   'build,suite,guard|^src/test/guard/'
   'build,suite,corpus|^src/test/corpus/'
   'build,suite,corpus|^(src/(codegen|analyzer|transform)|runtime)/'
+  'build,suite,corpus|^src/raiser/|^src/compiler/meta/hostTable\.ms$'
   'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
 )
 DEFAULT_LANES="build suite"
 ORDER="tools build suite hcr tests suite-orc corpus san guard"
 LADDER="build suite hcr tests suite-orc corpus san guard"
 KNOWN_LANES="suite hcr suite-orc tests corpus san guard"
-SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$'
+SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$'
 
 usage() {
   cat <<'USAGE'
@@ -235,14 +236,14 @@ admit() {
 
 lane_cmd() {
   case "$1" in
-    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s && python3 src/test/nativeBuildBoundary.py %s' "$BUILDER" "$CC_FLAG" "$CAND" "$CAND" ;;
+    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s && %s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$BUILDER" "$CC_FLAG" "$CAND" "$CAND" "$CAND" ;;
     suite) printf '%s test src/index.ms' "$BUILDER" ;;
     tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; %s test src/test/lang/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
     suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
-    hcr) printf 'MSC=%s src/test/hcr/run.sh' "$CAND" ;;
+    hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    guard) printf 'MSC=%s src/test/guard/run.sh' "$CAND" ;;
+    guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
   esac
 }
 
@@ -355,7 +356,7 @@ narrow_for() {
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm"
+    lanes_csv="c,drc,js,esm,raiser"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }

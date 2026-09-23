@@ -39,7 +39,8 @@ export function stampEnd(state: ParserState, node: Node): void {
 	if (prevIdx < 0 || prevIdx >= state.tokens.length) return;
 	const prev = state.tokens[prevIdx];
 	node.location.endLine = prev.line as int32;
-	node.location.endColumn = (prev.column + prev.value.length) as int32;
+	const width = prev.kind == TokenKind.String ? prev.rawValue.byteLength + 2 : prev.value.byteLength;
+	node.location.endColumn = (prev.column + width) as int32;
 }
 
 // Internal helper to get the raw token at current position (including comments)

@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // An uninitialized int64/uint64 local must use the SAME numeric representation
 // as every other int64 site on that backend. The JS backend emitted `0n`
 // (BigInt) for the default init while literals and arithmetic stayed Number —

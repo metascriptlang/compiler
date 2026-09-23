@@ -34,7 +34,7 @@ import {
 	handleRename,
 } from "./queries";
 import { handleSemanticTokensFull } from "./semanticTokens";
-import { handleCodeAction, handleFormatting } from "./formatting";
+import { handleCodeAction, handleFormatting, handleRangeFormatting } from "./formatting";
 
 
 // ===== Deferred Diagnostics (post-drain) =====
@@ -82,6 +82,7 @@ export function handleInitialize(id: string): string {
 		+ ",\"documentHighlightProvider\":true"
 		+ ",\"renameProvider\":true"
 		+ ",\"documentFormattingProvider\":true"
+		+ ",\"documentRangeFormattingProvider\":true"
 		+ ",\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.fixAll\"]}"
 		+ ",\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":"
 		+ "[\"namespace\",\"type\",\"class\",\"enum\",\"interface\",\"struct\","
@@ -257,6 +258,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/rename" => handleRename(id, params, db),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
+		"textDocument/rangeFormatting" => handleRangeFormatting(id, params, db),
 		"textDocument/codeAction" => handleCodeAction(id, params, db),
 		"$/cancelRequest" => {
 			return "";
@@ -1154,4 +1156,54 @@ test "watched files are registered only for clients that support it" {
 	assert lspGetField(request, "method") == "client/registerCapability";
 	assert request.indexOf("**/*.ms") >= 0;
 	assert request.indexOf("workspace/didChangeWatchedFiles") >= 0;
+}
+
+function lineStartOffset(source: string, line: number): number {
+	let current = 0;
+	let pos = 0;
+	while (pos < source.byteLength && current < line) {
+		if (source.byteAt(pos) == "\n".code) current = current + 1;
+		pos = pos + 1;
+	}
+	return pos;
+}
+
+function applyRangeFormatting(source: string, line: number, character: number): string {
+	const db = testDb("file:///rangefmt.ms", source);
+	const pos = `{"line":${line},"character":${character}}`;
+	const params = `{"textDocument":{"uri":"file:///rangefmt.ms"},"range":{"start":${pos},"end":${pos}},"options":{"tabSize":2,"insertSpaces":true}}`;
+	const r = lspDispatch("textDocument/rangeFormatting", "20", params, db, testCache());
+	const at = r.indexOf("\"result\":", 0);
+	if (at < 0) return "NO RESULT: " + r;
+	const items = lspGetArrayItems(r.byteSlice(at + 9, r.byteLength - 1));
+	let out = source;
+	let i = items.length - 1;
+	while (i >= 0) {
+		const range = lspGetObjectField(items[i], "range");
+		const s = lspGetObjectField(range, "start");
+		const e = lspGetObjectField(range, "end");
+		const from = lineStartOffset(out, lspGetNumberField(s, "line")) + lspGetNumberField(s, "character");
+		const to = lineStartOffset(out, lspGetNumberField(e, "line")) + lspGetNumberField(e, "character");
+		out = out.byteSlice(0, from) + lspGetField(items[i], "newText") + out.byteSlice(to, out.byteLength);
+		i = i - 1;
+	}
+	return out;
+}
+
+const RANGE_FMT_SOURCE = "const xs = [\n\t1,\n\t2,\n];\nfunction f(): Node {\n\tlet   x=1;\n\treturn <panel title=\"a fairly long title value\" subtitle=\"another long value\" onClose={handleClose}>body</panel>;\n}\n";
+
+test "rangeFormatting is advertised" {
+	assert handleInitialize("1").indexOf("\"documentRangeFormattingProvider\":true") >= 0;
+}
+
+test "rangeFormatting rewrites only the statement under the range" {
+	assert applyRangeFormatting(RANGE_FMT_SOURCE, 5, 3) == "const xs = [\n\t1,\n\t2,\n];\nfunction f(): Node {\n\tlet x = 1;\n\treturn <panel title=\"a fairly long title value\" subtitle=\"another long value\" onClose={handleClose}>body</panel>;\n}\n";
+}
+
+test "rangeFormatting breaks a long JSX statement under its own tab indentation" {
+	assert applyRangeFormatting(RANGE_FMT_SOURCE, 6, 3) == "const xs = [\n\t1,\n\t2,\n];\nfunction f(): Node {\n\tlet   x=1;\n\treturn <panel\n\t  title=\"a fairly long title value\"\n\t  subtitle=\"another long value\"\n\t  onClose={handleClose}\n\t>body</panel>;\n}\n";
+}
+
+test "rangeFormatting on an already formatted statement returns no edit" {
+	assert applyRangeFormatting("const a = 1;\n", 0, 2) == "const a = 1;\n";
 }

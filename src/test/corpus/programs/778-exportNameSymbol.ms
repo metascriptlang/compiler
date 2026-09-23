@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: corpus778Answer
 // Parity program — `@exportName` pins a function body's C symbol: the definition keeps the raw
 // name instead of the module-qualified one, takes external linkage, and stays alive through
 // dead-code elimination even when nothing in MetaScript calls it. Calling it back through an

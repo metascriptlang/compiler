@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an object, got value kind Int
 // @maxrss: 30
 // @stdout: nrvo-positions acc=79
 // note: Companion to nrvo-overload: locks NRVO for struct-returning calls (overloaded operator AND plain function) in object-literal field, member-access on a call result, and deeply nested call args f(g(h())). Closure-call and method-call struct returns are exercised by the broader suite. Proves NRVO is decided per-call in emitCallExpr/genClosureCall regardless of containing position.

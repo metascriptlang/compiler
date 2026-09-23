@@ -1,4 +1,4 @@
-// nim-guard runner — cross-platform port of guard/run.sh (msc run src/test/guard/run.ms).
+// nim-guard runner: msc run src/test/guard/run.ms --target=raiser, from the recompiler root.
 //
 // Each *.ms here is a probe that exercises ONE Nim-derived invariant. It is
 // built with the DRC ledger (-DMS_DRC_LEDGER, a test-only instrumentation that
@@ -8,32 +8,19 @@
 // from the Nim model the probe cites — run /trace-nim on the named type.
 //
 // Directives in a probe's header comments (optional):
-//   // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
-//   // GUARD-BALANCE-ORC <MangledType>  same, but under orc only (cycle leaks are by-design under drc/ARC)
-//   // GUARD-CHECK-FAIL <substr>     build MUST fail and the log MUST carry every substr
-//   // GUARD-JS                      also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
+//   // GUARD-BALANCE <MangledType>       assert alloc==destroy for that type at exit
+//   // GUARD-BALANCE-ORC <MangledType>   same, but under orc only (cycle leaks are by-design under drc/ARC)
+//   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
+//   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
+//   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
-//
-// Port notes vs run.sh (semantics identical, mechanics differ):
-//   - Output capture goes through std/process exec() (in-memory streams), not
-//     shell redirects — no POSIX-ism left, cmd.exe handles `cd "x" && "y" ...`.
-//   - The build sandbox is a persistent out/guard/work instead of mktemp -d:
-//     same isolation from the repo-root out/ cache race, but its object cache
-//     stays warm across runs (the global ~/.metascript cache is warm either way).
-//   - Probe binaries are resolved with an .exe fallback (msc on Windows writes
-//     <output>.exe); shell paths get backslashes on Windows for cmd.exe's cd.
-//   - Verdict lines stream to stderr; the final line also lands on stdout.
-import { exec, exit, env, platform, cwd, cmdExists } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, removeAll } from "std/fs";
-import { writeStderr } from "std/io";
+import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists } from "std/process";
+import { readFile, writeFile, readDir, exists, ensureDir, removeAll, symlink } from "std/fs";
 
-const GUARD_DIR = "src/test/guard/";
-const OUT_DIR = "out/guard/";
-
-function progress(line: string): void {
-	writeStderr(line + "\n");
+function slashes(p: string): string {
+	return p.replaceAll("\\", "/");
 }
 
 function envOr(name: string, dflt: string): string {
@@ -41,58 +28,115 @@ function envOr(name: string, dflt: string): string {
 	return v == "" ? dflt : v;
 }
 
-// The compiler UNDER TEST — same two-tree convention as corpus/run.ms: default
-// ./msc (the freshly built candidate) so a run right after a self-host build
-// measures what was just built; installed msc otherwise; MSC=<path> overrides.
-// Made absolute because probes build from the out/guard/work sandbox below.
+const ROOT = slashes(cwd());
+
+function absolutize(p: string): string {
+	const s = slashes(p);
+	if (s.startsWith("/") || s.indexOf(":") >= 0) return s;
+	return `${ROOT}/${s}`;
+}
+
+// The compiler UNDER TEST: ./msc (the freshly built candidate) when present,
+// else the installed msc; MSC=<path> overrides. Probes read it back from $MSC.
 function resolveMsc(): string {
 	const explicit = env.get("MSC");
-	if (explicit != "") { return hasSeparator(explicit) ? absolutize(explicit) : explicit; }
-	if (exists("./msc")) { return absolutize("./msc"); }
+	if (explicit != "") return explicit.indexOf("/") >= 0 || explicit.indexOf("\\") >= 0 ? absolutize(explicit) : explicit;
+	if (exists("./msc") || exists("./msc.exe")) return absolutize("./msc");
 	return "msc";
 }
 
-function hasSeparator(p: string): boolean {
-	return p.indexOf("/") >= 0 || p.indexOf("\\") >= 0;
+const MSC = resolveMsc();
+env.set("MSC", MSC);
+const GUARD_DIR = `${ROOT}/src/test/guard`;
+const OUT = `${ROOT}/out/guard`;
+// `out/<mode>/.cache` resolves against the cwd, so probes build from a private
+// sandbox: sharing the repo-root cache with a concurrent build produced link
+// errors on a DIFFERENT probe every run.
+const WORK = `${OUT}/work`;
+const BIN_DIR = `${OUT}/bin`;
+const LOG_DIR = `${OUT}/logs`;
+
+// Without node the js cell reports a red about the HOST, not the backend; the
+// build half still runs and the GUARD-OK half is left unscored.
+const HAS_NODE = cmdExists("node");
+
+let fails = 0;
+let passes = 0;
+
+function ok(tag: string): void {
+	passes = passes + 1;
+	console.log(`ok   ${tag}`);
 }
 
-function absolutize(p: string): string {
-	if (p.indexOf("/") == 0 || p.indexOf("\\") == 0 || p.indexOf(":") >= 0) { return p; }
-	return cwd() + "/" + p;
+function fail(tag: string, why: string): void {
+	fails = fails + 1;
+	console.log(`FAIL ${tag}: ${why}`);
 }
 
-// cmd.exe's cd wants backslashes; /bin/sh is happy either way.
-function shellPath(p: string): string {
-	if (platform != "windows") { return p; }
+function lines(text: string): string[] {
+	const out: string[] = [];
+	for (const raw of text.split("\n")) out.push(raw.endsWith("\r") ? raw.slice(0, raw.length - 1) : raw);
+	return out;
+}
+
+function both(r: ExecFileResult): string {
+	return r.output + r.errorOutput;
+}
+
+function succeeded(r: ExecFileResult): boolean {
+	return r.started && r.pipeOk && r.exitCode == 0 && r.signal == 0;
+}
+
+function status(r: ExecFileResult): string {
+	if (!r.started) return "did not start";
+	return r.signal != 0 ? `signal=${r.signal}` : `exit=${r.exitCode}`;
+}
+
+function firstErrorLines(log: string): string {
 	let out = "";
-	let i = 0;
-	while (i < p.length) {
-		const c = p.charAt(i);
-		out = out + (c == "/" ? "\\" : c);
-		i = i + 1;
+	let n = 0;
+	for (const line of lines(log)) {
+		if (line.toLowerCase().startsWith("error")) {
+			out = out + (out == "" ? "" : " | ") + line.trim();
+			n = n + 1;
+			if (n >= 3) break;
+		}
 	}
 	return out;
 }
 
-// The js lane runs its bundle through `node`. Without node installed the cell
-// fails to start and reports a red about the HOST, not about the backend —
-// worse than no lane at all, because it reads like a JS-backend regression.
-// Skip the lane and say so in the header (same call the corpus runner makes).
-const HAS_NODE = cmdExists("node");
+function hasLine(text: string, want: string): boolean {
+	for (const line of lines(text)) {
+		if (line == want) return true;
+	}
+	return false;
+}
 
-const MSC = resolveMsc();
-const ROOT = cwd();
-const WORK = ROOT + "/" + OUT_DIR + "work";
-const BIN_DIR = ROOT + "/" + OUT_DIR + "bin";
-const LOG_DIR = ROOT + "/" + OUT_DIR + "logs";
+function firstLineContaining(text: string, needle: string): string {
+	for (const line of lines(text)) {
+		if (line.contains(needle)) return line.trim();
+	}
+	return "";
+}
 
-interface RunOut { exitCode: int32; signal: int32; ok: boolean; output: string; errorOutput: string; }
+function fieldOf(line: string, key: string): string {
+	const idx = line.indexOf(key);
+	if (idx < 0) return "";
+	const rest = line.slice(idx + key.length, line.length);
+	const sp = rest.indexOf(" ");
+	return sp < 0 ? rest : rest.slice(0, sp);
+}
 
-function runCapture(cmd: string): RunOut {
-	const r = exec(cmd);
-	if (r.ok) { return { exitCode: 0, signal: 0, ok: true, output: r.value, errorOutput: "" }; }
-	const e = r.error;
-	return { exitCode: e.exitCode as int32, signal: e.signal as int32, ok: false, output: e.output, errorOutput: e.errorOutput };
+// LEDGER <Type> ... alloc=N ... destroy=M, one line per type; the LAST one counts.
+function ledgerImbalance(text: string, typeName: string): string {
+	let last = "";
+	for (const line of lines(text)) {
+		if (line.startsWith(`LEDGER ${typeName} `)) last = line;
+	}
+	const a = fieldOf(last, "alloc=");
+	const d = fieldOf(last, "destroy=");
+	if (a == "" || a != d) return `${typeName} alloc=${a == "" ? "?" : a} destroy=${d == "" ? "?" : d}`;
+	return "";
 }
 
 // ---- probe directives ----
@@ -102,65 +146,60 @@ interface Probe {
 	path: string;
 	balance: string[];
 	balanceOrc: string[];
+	testBalance: string[];
 	checkfails: string[];
 	wantJs: boolean;
 }
 
-// First whitespace-separated word after a directive marker — mangled type
-// names are [A-Za-z0-9_]+ and never contain spaces (mirrors the awk '{print
-// $NF}' in run.sh without needing char-class scans).
-function firstWordAfter(s: string): string {
+function firstWord(s: string): string {
 	const w = s.trim();
 	const sp = w.indexOf(" ");
 	return sp < 0 ? w : w.slice(0, sp);
 }
 
 function parseDirectives(probe: Probe, src: string): void {
-	const BAL = "// GUARD-BALANCE";
 	const ORC = "// GUARD-BALANCE-ORC";
+	const TEST = "// GUARD-TEST-BALANCE";
+	const BAL = "// GUARD-BALANCE";
 	const CHECK = "// GUARD-CHECK-FAIL ";
-	const JS = "// GUARD-JS";
-	// A CRLF source leaves a trailing \r on every split line; riding into the
-	// directive token it breaks the log contains() match against LF diagnostics.
-	for (const rawLine of src.split("\n")) {
-		const line = rawLine.endsWith("\r") ? rawLine.slice(0, rawLine.length - 1) : rawLine;
+	for (const line of lines(src)) {
 		const orcAt = line.indexOf(ORC);
+		const testAt = line.indexOf(TEST);
+		const balAt = line.indexOf(BAL);
 		if (orcAt >= 0) {
-			const tok = firstWordAfter(line.slice(orcAt + ORC.length, line.length));
-			if (tok != "") { probe.balanceOrc.push(tok); }
-		} else if (line.indexOf(BAL) >= 0) {
-			const tok = firstWordAfter(line.slice(line.indexOf(BAL) + BAL.length, line.length));
-			if (tok != "") { probe.balance.push(tok); }
+			const tok = firstWord(line.slice(orcAt + ORC.length, line.length));
+			if (tok != "") probe.balanceOrc.push(tok);
+		} else if (testAt >= 0) {
+			const tok = firstWord(line.slice(testAt + TEST.length, line.length));
+			if (tok != "") probe.testBalance.push(tok);
+		} else if (balAt >= 0) {
+			const tok = firstWord(line.slice(balAt + BAL.length, line.length));
+			if (tok != "") probe.balance.push(tok);
 		}
-		if (line.indexOf(CHECK) == 0) {
-			probe.checkfails.push(line.slice(CHECK.length, line.length));
-		}
-		if (line.indexOf(JS) == 0) { probe.wantJs = true; }
+		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
+		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 	}
 }
 
 function readFileOr(path: string, dflt: string): string {
 	const r = readFile(path);
-	if (r.ok) { return r.value; }
-	return dflt;
+	return r.ok ? r.value : dflt;
 }
 
-// readDir order is filesystem-dependent; order only affects listing, not
-// verdicts (run.sh relied on the shell glob's sort). Skip dirs, non-.ms
-// entries, fixtures/ contents live in a subdir (never listed here), and this
-// runner itself.
 function discoverProbes(): Probe[] {
-	const probes: Probe[] = [];
+	const names: string[] = [];
 	for (const e of readDir(GUARD_DIR)) {
-		if (e.indexOf("/") == e.length - 1) { continue; }
-		if (e == "run.ms") { continue; }
-		if (e.length < 4 || e.slice(e.length - 3, e.length) != ".ms") { continue; }
+		if (e.endsWith("/") || !e.endsWith(".ms") || e == "run.ms") continue;
+		names.push(e.slice(0, e.length - 3));
+	}
+	names.sort();
+	const probes: Probe[] = [];
+	for (const name of names) {
 		const probe: Probe = {
-			name: e.slice(0, e.length - 3),
-			path: ROOT + "/" + GUARD_DIR + e,
-			balance: [], balanceOrc: [], checkfails: [], wantJs: false,
+			name, path: `${GUARD_DIR}/${name}.ms`,
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false,
 		};
-		parseDirectives(probe, readFileOr(GUARD_DIR + e, ""));
+		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
 	}
 	return probes;
@@ -168,8 +207,6 @@ function discoverProbes(): Probe[] {
 
 // ---- build / run ----
 
-// toolchain-race signatures — infra noise, not drift (same set run.sh retries
-// on, plus the literal-dedup race corpus/run.ms added)
 function isToolchainRace(log: string): boolean {
 	return log.contains("_link.rsp': FileNotFound")
 		|| log.contains("UnexpectedRemainder")
@@ -178,253 +215,234 @@ function isToolchainRace(log: string): boolean {
 		|| log.contains("failed to deduplicate literals");
 }
 
-function buildCmd(probePath: string, gc: string, binPath: string, js: boolean): string {
-	const target = js ? " --target=js" : " --gc=" + gc + " --passC=\"-DMS_DRC_LEDGER\"";
-	return "cd " + quote(WORK) + " && " + quote(MSC) + " build " + quote(probePath) + target + " --output=" + quote(binPath);
-}
-
-function quote(p: string): string {
-	return "\"" + shellPath(p) + "\"";
-}
-
-// For a command's program token (the probe binary, node): quote only when
-// needed — a cmd.exe command string must not start with a quote, and our bin
-// paths normally carry no spaces.
-function maybeQuote(p: string): string {
-	const s = shellPath(p);
-	return s.contains(" ") ? "\"" + s + "\"" : s;
-}
-
-function buildProbe(probe: Probe, gc: string, binPath: string, logPath: string, js: boolean): boolean {
-	const cmd = buildCmd(probe.path, gc, binPath, js);
-	let r = runCapture(cmd);
-	writeFile(logPath, logText(r));
-	if (!r.ok && isToolchainRace(logText(r))) {
-		progress("     flake-retry " + probe.name + (js ? " [js]" : " [" + gc + "]") + ": toolchain race, rebuilding clean");
-		removeAll(WORK + "/out");
-		r = runCapture(cmd);
-		writeFile(logPath, logText(r));
+// Retries once on a toolchain-race signature so infra noise cannot be mistaken
+// for drift, and says so out loud when it does.
+function buildProbe(probe: Probe, lane: string, args: string[], logPath: string): ExecFileResult {
+	let r = execFileResult(MSC, args, WORK);
+	writeFile(logPath, both(r));
+	if (!succeeded(r) && isToolchainRace(both(r))) {
+		console.log(`     flake-retry ${probe.name} [${lane}]: toolchain race, rebuilding clean`);
+		removeAll(`${WORK}/out`);
+		r = execFileResult(MSC, args, WORK);
+		writeFile(logPath, both(r));
 	}
-	return r.ok;
+	return r;
 }
 
-function logText(r: RunOut): string {
-	const text = r.output + r.errorOutput;
-	if (r.ok || text.length > 0) { return text; }
-	return "\nspawn produced no output";
-}
-
-// msc on Windows appends .exe to --output; resolve whichever exists.
 function binExecutable(binPath: string): string {
-	if (exists(binPath)) { return binPath; }
-	if (exists(binPath + ".exe")) { return binPath + ".exe"; }
+	if (exists(`${binPath}.exe`)) return `${binPath}.exe`;
+	if (exists(binPath)) return binPath;
 	return "";
 }
 
-function firstErrorLines(log: string): string {
-	let out = "";
-	let n = 0;
-	for (const line of log.split("\n")) {
-		if (line.indexOf("error") == 0 || line.indexOf("Error") == 0) {
-			out = out + (out == "" ? "" : " | ") + line.trim();
-			n = n + 1;
-			if (n >= 3) { break; }
+function checkDiagnostics(tag: string, log: string, wants: string[]): void {
+	let good = true;
+	for (const want of wants) {
+		if (want != "" && !log.contains(want)) {
+			fail(tag, `missing diagnostic: ${want}`);
+			good = false;
 		}
 	}
-	return out;
+	if (good) ok(tag);
 }
 
-// ---- verdicts ----
-
-interface Tally { passes: int32; fails: int32; }
-
-function ok(t: Tally, tag: string): void {
-	t.passes = t.passes + 1;
-	progress("ok   " + tag);
-}
-
-function fail(t: Tally, tag: string, why: string): void {
-	t.fails = t.fails + 1;
-	progress("FAIL " + tag + ": " + why);
-}
-
-// LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per type).
-// Balanced iff the LAST line for the type exists and alloc == destroy.
-function ledgerImbalance(errText: string, typeName: string): string {
-	let last = "";
-	for (const line of errText.split("\n")) {
-		if (line.indexOf("LEDGER " + typeName + " ") == 0) { last = line; }
-	}
-	if (last == "") { return typeName + " alloc=? destroy=?"; }
-	const a = fieldOf(last, "alloc=");
-	const d = fieldOf(last, "destroy=");
-	if (a == "" || a != d) { return typeName + " alloc=" + (a == "" ? "?" : a) + " destroy=" + (d == "" ? "?" : d); }
-	return "";
-}
-
-function fieldOf(line: string, key: string): string {
-	const idx = line.indexOf(key);
-	if (idx < 0) { return ""; }
-	const rest = line.slice(idx + key.length, line.length);
-	const sp = rest.indexOf(" ");
-	return sp < 0 ? rest : rest.slice(0, sp);
-}
-
-function firstLineContaining(text: string, needle: string): string {
-	for (const line of text.split("\n")) {
-		if (line.contains(needle)) { return line.trim(); }
-	}
-	return "";
-}
-
-// The gc lanes: build with the ledger, run, assert clean exit + no
-// DOUBLE-DESTROY + declared balances (GUARD-BALANCE always; -ORC under orc
-// only — cycle leaks are by-design under drc/ARC, like Nim).
-function runGcLane(probe: Probe, gc: string, t: Tally): void {
-	const tag = probe.name + " [" + gc + "]";
-	const bin = BIN_DIR + "/" + probe.name + "." + gc;
-	const buildLog = LOG_DIR + "/" + probe.name + "." + gc + ".build";
+function runGcLane(probe: Probe, gc: string): void {
+	const tag = `${probe.name} [${gc}]`;
+	const bin = `${BIN_DIR}/${probe.name}.${gc}`;
+	const buildLog = `${LOG_DIR}/${probe.name}.${gc}.build`;
+	const b = buildProbe(probe, gc, ["build", probe.path, `--gc=${gc}`, "--passC=-DMS_DRC_LEDGER", `--output=${bin}`], buildLog);
 
 	if (probe.checkfails.length > 0) {
-		// errorcheck guard: build MUST fail at check, log MUST carry every tag.
 		// Compiling clean means a checker rule was silently dropped.
-		if (buildProbe(probe, gc, bin, buildLog, false)) {
-			fail(t, tag, "compiled clean — a checker rule was dropped");
+		if (succeeded(b)) {
+			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		const log = readFileOr(buildLog, "");
-		for (const want of probe.checkfails) {
-			if (!log.contains(want)) {
-				fail(t, tag, "missing diagnostic: " + want);
-				return;
-			}
-		}
-		ok(t, tag);
+		checkDiagnostics(tag, both(b), probe.checkfails);
 		return;
 	}
-
-	if (!buildProbe(probe, gc, bin, buildLog, false)) {
-		const errs = firstErrorLines(readFileOr(buildLog, ""));
-		fail(t, tag, "build error" + (errs == "" ? "" : ": " + errs));
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
 		return;
 	}
 	const exe = binExecutable(bin);
 	if (exe == "") {
-		fail(t, tag, "build reported success but no binary at " + bin);
+		fail(tag, `build reported success but no binary at ${bin}`);
 		return;
 	}
-	// The LEDGER dump and the DOUBLE-DESTROY abort land on stderr, and exec's
-	// ok path drops errorOutput — merge stderr into stdout via the shell and
-	// read the combined text, or every GUARD-BALANCE check sees "".
-	const run = runCapture(maybeQuote(exe) + " 2>&1");
-	const errText = run.output;
-	writeFile(LOG_DIR + "/" + probe.name + "." + gc + ".err", errText);
-	writeFile(LOG_DIR + "/" + probe.name + "." + gc + ".out", run.output);
-	const dd = firstLineContaining(errText, "DOUBLE-DESTROY");
-	if (!run.ok || dd != "") {
-		fail(t, tag, dd != "" ? dd : "exit=" + run.exitCode + (run.signal != 0 ? " signal=" + run.signal : ""));
-		progress("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
+	const run = execFileResult(exe, []);
+	writeFile(`${LOG_DIR}/${probe.name}.${gc}.out`, run.output);
+	writeFile(`${LOG_DIR}/${probe.name}.${gc}.err`, run.errorOutput);
+	const dd = firstLineContaining(run.errorOutput, "DOUBLE-DESTROY");
+	if (!succeeded(run) || dd != "") {
+		fail(tag, dd != "" ? dd : status(run));
+		console.log("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
 		return;
 	}
 	const eff: string[] = [];
-	for (const ty of probe.balance) { eff.push(ty); }
-	if (gc == "orc") { for (const ty of probe.balanceOrc) { eff.push(ty); } }
+	for (const ty of probe.balance) eff.push(ty);
+	if (gc == "orc") {
+		for (const ty of probe.balanceOrc) eff.push(ty);
+	}
+	let good = true;
 	for (const ty of eff) {
-		const why = ledgerImbalance(errText, ty);
+		const why = ledgerImbalance(run.errorOutput, ty);
 		if (why != "") {
-			fail(t, tag, "imbalance " + why);
-			return;
+			fail(tag, `imbalance ${why}`);
+			good = false;
 		}
 	}
-	ok(t, tag);
+	if (good) ok(tag);
 }
 
-// // GUARD-JS: the invariant also lives in the node bundle — build for the JS
-// target and run it; pass iff exit 0 AND the probe printed GUARD-OK (values
-// are printed before the checks, so a red run shows what it saw). For
-// errorcheck guards this is the silent-accept half: compiling clean here
-// means js runs the rejected construct with no diagnostic.
-function runJsLane(probe: Probe, t: Tally): void {
-	const tag = probe.name + " [js]";
-	const jsOut = BIN_DIR + "/" + probe.name + ".mjs.js";
-	const buildLog = LOG_DIR + "/" + probe.name + ".js.build";
-
+// The invariant also lives in the node bundle: pass iff exit 0 AND the probe
+// printed GUARD-OK. For an errorcheck guard this is the silent-accept half.
+function runJsLane(probe: Probe): void {
+	const tag = `${probe.name} [js]`;
+	const jsOut = `${BIN_DIR}/${probe.name}.mjs.js`;
+	const b = buildProbe(probe, "js", ["build", probe.path, "--target=js", `--output=${jsOut}`], `${LOG_DIR}/${probe.name}.js.build`);
 	if (probe.checkfails.length > 0) {
-		if (buildProbe(probe, "", jsOut, buildLog, true)) {
-			fail(t, tag, "compiled clean — a checker rule was dropped");
+		if (succeeded(b)) {
+			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		const log = readFileOr(buildLog, "");
-		for (const want of probe.checkfails) {
-			if (!log.contains(want)) {
-				fail(t, tag, "missing diagnostic: " + want);
-				return;
-			}
-		}
-		ok(t, tag);
+		checkDiagnostics(tag, both(b), probe.checkfails);
 		return;
 	}
-
-	if (!buildProbe(probe, "", jsOut, buildLog, true)) {
-		const errs = firstErrorLines(readFileOr(buildLog, ""));
-		fail(t, tag, "build error" + (errs == "" ? "" : ": " + errs));
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
 		return;
 	}
-	// The build half above IS the JS-backend check and runs on every host; only
-	// the GUARD-OK assertion needs node. Without it the cell would report a red
-	// about the HOST, so leave it unscored (the header says the lane is off) —
-	// the errorcheck branch never reaches here, so those cells stay scored.
 	if (!HAS_NODE) {
-		progress("skip " + tag + ": node not found — built only");
+		console.log(`skip ${tag}: node not found — built only`);
 		return;
 	}
-	const run = runCapture("node " + maybeQuote(jsOut) + " 2>&1");
-	const merged = run.output + run.errorOutput;
-	writeFile(LOG_DIR + "/" + probe.name + ".js.out", merged);
-	if (!run.ok || !merged.contains("GUARD-OK")) {
-		const lastLine = merged == "" ? "" : lastTextLine(merged);
-		fail(t, tag, "exit=" + run.exitCode + (lastLine == "" ? "" : " last='" + lastLine + "'"));
+	const run = execFileResult("node", [jsOut]);
+	const merged = both(run);
+	writeFile(`${LOG_DIR}/${probe.name}.js.out`, merged);
+	if (!succeeded(run) || !merged.contains("GUARD-OK")) {
+		const all = lines(merged.trim());
+		fail(tag, `${status(run)} last='${all.length > 0 ? all[all.length - 1] : ""}'`);
 		return;
 	}
-	ok(t, tag);
+	ok(tag);
 }
 
-function lastTextLine(text: string): string {
-	let last = "";
-	for (const line of text.split("\n")) { if (line.trim() != "") { last = line.trim(); } }
-	return last;
+// Test bodies go through the analyzer's TestDecl arm; without it every owned
+// value in a test leaks and `msc test` runs with other memory semantics than
+// `msc build`.
+function runTestLane(probe: Probe): void {
+	const tag = `${probe.name} [test]`;
+	const r = execFileResult(MSC, ["test", probe.path, "--passC=-DMS_DRC_LEDGER"], WORK);
+	const log = both(r);
+	writeFile(`${LOG_DIR}/${probe.name}.test.log`, log);
+	let good = true;
+	if (!succeeded(r)) {
+		fail(tag, `msc test ${status(r)}`);
+		good = false;
+	}
+	for (const ty of probe.testBalance) {
+		const why = ledgerImbalance(log, ty);
+		if (why != "") {
+			fail(tag, `imbalance ${why}`);
+			good = false;
+		}
+	}
+	if (good) ok(tag);
+}
+
+// ---- whole-program gates ----
+
+function freshDir(name: string): string {
+	const dir = `${OUT}/${name}`;
+	removeAll(dir);
+	ensureDir(dir);
+	return dir;
+}
+
+// A hello-world build must carry no websocket/crypto symbols: dead-module
+// pruning + edge-based hook aliveness (NIM-REF CG-1).
+function helloEmitClean(): void {
+	const tag = "helloEmitClean";
+	const dir = freshDir("emit");
+	writeFile(`${dir}/hello_emit.ms`, "console.log(\"hi\");\n");
+	const b = execFileResult(MSC, ["build", "hello_emit.ms", "--gc=drc", `--output=${dir}/hello_emit_bin`], dir);
+	if (!succeeded(b)) {
+		fail(tag, "build error");
+		return;
+	}
+	const nm = execFileResult("nm", [binExecutable(`${dir}/hello_emit_bin`)]);
+	let hits = 0;
+	for (const line of lines(nm.output)) {
+		const l = line.toLowerCase();
+		if (l.contains("websocket") || l.contains("mbedtls") || l.contains("psa_")) hits = hits + 1;
+	}
+	if (hits > 0) {
+		fail(tag, `${hits} dead websocket/crypto symbols in hello binary`);
+		return;
+	}
+	ok(tag);
+}
+
+// `msc build` never runs a `test` block, so a globalImports loader check can
+// only be a gate: an inline guard test is green whatever the loader does.
+function preludeGate(tag: string, name: string, globalImport: string, probeCall: string, onMissing: string, onExit: string, link: string): void {
+	const dir = freshDir(name);
+	if (link != "" && !symlink(link, `${dir}/gi.ms`).ok) {
+		fail(tag, `cannot create the symlink ${dir}/gi.ms -> ${link}`);
+		return;
+	}
+	writeFile(`${dir}/build.ms`, `const config = {\n\tglobalImports: ["${globalImport}"],\n};\nexport default config;\n`);
+	writeFile(`${dir}/main.ms`, `console.log(${probeCall}());\n`);
+	const r = execFileResult(MSC, ["run", "main.ms"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(r));
+	if (!succeeded(r)) {
+		const errs = firstErrorLines(both(r));
+		fail(tag, `${status(r)}${onExit}${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	if (!hasLine(r.output, "42")) {
+		fail(tag, onMissing);
+		return;
+	}
+	ok(tag);
 }
 
 function main(): void {
 	ensureDir(WORK);
 	ensureDir(BIN_DIR);
 	ensureDir(LOG_DIR);
-
 	const modes: string[] = [];
 	for (const m of envOr("GUARD_GC", "drc orc").split(" ")) {
-		if (m != "") { modes.push(m); }
+		if (m != "") modes.push(m);
 	}
-
-	progress("nim-guard: compiler under test = " + MSC);
+	console.log(`nim-guard: compiler under test = ${MSC}`);
 	if (!HAS_NODE) {
-		progress("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target (the backend half is checked), but their GUARD-OK run is unscored on this host");
+		console.log("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target, but their GUARD-OK run is unscored on this host");
 	}
-	const t: Tally = { passes: 0, fails: 0 };
 
 	for (const probe of discoverProbes()) {
-		for (const gc of modes) {
-			runGcLane(probe, gc, t);
-		}
-		if (probe.wantJs) { runJsLane(probe, t); }
+		for (const gc of modes) runGcLane(probe, gc);
+		if (probe.wantJs) runJsLane(probe);
+		if (probe.testBalance.length > 0) runTestLane(probe);
 	}
 
-	progress("");
-	const verdict = t.fails == 0
-		? "nim-guard: ALL GREEN (" + t.passes + " cells)"
-		: "nim-guard: FAILURES ABOVE (" + t.passes + " ok, " + t.fails + " red)";
-	progress(verdict);
+	helloEmitClean();
+	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
+		"globalImports symbol never reached the entry module", "", "");
+	preludeGate("preludeSymlinkedModule", "gisym", "./gi", "neonGuardPreludeProbe",
+		"globalImports symbol never reached the entry module", " — the entry was matched by spelling, not by module identity",
+		`${GUARD_DIR}/fixtures/preludeUserModule.ms`);
+	// A FRESH process is load-bearing: an earlier in-process prelude build warms
+	// the memo and hides the recursion, so this cannot become an inline test.
+	preludeGate("preludeMacroCycle", "pmc", `${GUARD_DIR}/fixtures/preludeMacroCycle/gi`, "preludeMacroCycleProbe",
+		"macro-emitted declaration never reached the entry module", "", "");
+
+	const verdict = fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`;
 	console.log(verdict);
-	if (t.fails > 0) { exit(1); }
+	if (fails > 0) exit(1);
 }
 
 main();

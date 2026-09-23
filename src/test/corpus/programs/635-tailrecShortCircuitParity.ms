@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-shortcircuit r=
 // `a || f(x)` and `a && f(x)` leave f(x) in tail position — the operator only
 // decides whether the call happens, nothing runs after it. The left operand is

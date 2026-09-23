@@ -29,17 +29,17 @@ backend and DRC/ORC runtime.
 | `--hcr` and module-global state lifting | Implemented |
 | Structural hash rejecting changed `_GlobalState` layout | Implemented |
 | Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
-| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `runWindows.sh`: body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
-| Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.sh` proves a body-only edit recompiles only the changed module |
+| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `src/test/hcr/run.ms` (`hcrWindowsReload`): body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
+| Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Not implemented |
-| Cross-module vtable calls | Not implemented |
+| Cross-module vtable calls | Lowered inside the single HCR image by `src/transform/native/hcrIndirect.ms`, guarded by `src/test/hcr/run.ms` (`hcrIndirect`); per-module images that make the tables replaceable are not implemented |
 | Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 `src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
-`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.sh`, and the
+`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.ms`, and the
 `--hcr` branch in the compiler build driver.
 
 ## Architecture decision
@@ -210,6 +210,53 @@ source hash cannot safely predict emitted C. A correct early key would need cano
 lowered-AST, type, symbol, flag, reachability and global-emission inputs; that new cache
 mechanism was rejected rather than risk serving stale native objects for the measured
 sub-percent wall-time gain.
+
+S2 writes one deterministic `<output>.hcrabi` bundle after a successful HCR link. The
+bundle contains one compile-ABI manifest per project module: project-relative module and
+slot identity, canonical exported-function signatures, project dependencies, target,
+GC/runtime and toolchain identity. Standard-library and runtime modules stay outside the
+reload set and are covered by the toolchain stamp. Persistent layouts, TypeInfo and vtable
+shape remain owned by the later packaging and DRC steps; S2 does not claim compatibility
+for them.
+
+On 2026-09-23, Windows 11 x64,
+`MSC=out/msc-hcr-s2.exe bash src/test/hcr/run.sh` returned
+`ok   hcrModuleAbi`. The cold build wrote manifests for `app` and `logic`; a body-only
+`logic` edit compiled one module and reported
+`HCR reload module: implementation changed (logic)`; changing `value` from `int32` to
+`int64` reported
+`HCR reload dependents: export signature changed (logic::value#0)`.
+
+S3a lowers cross-module calls through module tables inside today's single image; S3b will
+link each project module as its own image. The host owns one handle per module at a
+stable address; the handle's `current` points at the slot table of the module's current
+image, in S2 manifest slot order. Each module publishes its table and resolves the handles
+of the other project modules in its DatInit, and every DatInit runs before any Init, so
+cyclic imports see published tables. A caller reaches an export through a macro over its
+native symbol, `#define f ((__typeof__(&f))_ms_hcr_m0->current[k])`: direct calls,
+out-parameter struct returns and function values all enter the current table, while
+same-module and private calls stay direct. Publish and rollback are one pointer store.
+This is the data-table form of the reference's stable-address trampolines, which the
+rejected-foundations list above excludes as writable executable memory. A MetaScript
+function-typed struct field was measured as the alternative and rejected: it emits
+`msClosure` with an `env ?` branch per call.
+
+Exported functions of project modules are dead-code roots under `--hcr`, because the
+manifest promises every slot. The image links the project dispatcher and exports it as
+`DatInit000`/`Init000`, so dependency and standard-library inits run in load order; before
+this, a host ran only the entry module's inits. Standard-library modules are excluded from
+module identity even when the project root contains `std/`; without that,
+`examples/hcrProbe/runWindows.sh` failed its build on `main` with
+`HCR ABI cannot represent generic export 'std/core/system/index::!='`.
+
+On 2026-09-23, Windows 11 x64, source tree `6d66e6d4` plus the S3a working tree,
+`MSC=out/msc-s3a.exe bash src/test/hcr/run.sh` printed `ok   hcrModuleAbi`,
+`ok   hcrIndirect` and `ok   hcrWindowsReload`. The two-module fixture's host call
+returned `HCR-HOST call -> 37` through a plain call, an out-parameter struct return and a
+function value. The same runner on the `6d66e6d4` compiler stopped at
+`FAIL hcrIndirect: cross-module call to logic::value is not lowered through its table slot`.
+Not verified: a POSIX host run (this runner checks emission only off Windows), and
+replacing a table at runtime, which needs S3b's separate images.
 
 ## Neon Fast Refresh boundary
 
