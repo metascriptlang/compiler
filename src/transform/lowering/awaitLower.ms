@@ -348,7 +348,8 @@ function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext
 	}
 	// Nested: expr CONTAINS an AwaitExpr (e.g. f(await g()), x + await y)
 	if (containsExprKind(expr, NodeKind.AwaitExpr)) {
-		return hoistNestedAwait(expr, stmt.location, ctx);
+		const hoisted = hoistNestedAwait(expr, stmt.location, ctx);
+		return hoisted != null ? hoisted : noResult;
 	}
 	return noResult;
 }
@@ -472,7 +473,7 @@ let _hoistStmts: Node[] = [];
 let _hoistCtx: TransformContext = null as unknown as TransformContext;
 let _hoistLoc: SourceLocation = null as unknown as SourceLocation;
 
-function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } {
+function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } | null {
 	if (expr == null) return null;
 	if (expr.kind == NodeKind.AwaitExpr) return null;
 
