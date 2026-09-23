@@ -1,9 +1,9 @@
 // Control Flow Statements - if, while, for, break, continue, return
 // Uses callback injection via util.ms to avoid circular imports
 
-import { TokenKind } from "../../lexer/token";
+import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, takePendingComments } from "../context";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
@@ -27,6 +27,13 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 // ===== If Statement =====
 // syntax: 'if' '(' expr ')' (block | stmt) ('else' (ifStmt | block | stmt))?
 
+function withLeading(node: Node, leading: Token[]): Node {
+	if (leading.length == 0) return node;
+	for (const c of node.comments) leading.push(c);
+	node.comments = leading;
+	return node;
+}
+
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
 	advance(state);
@@ -44,19 +51,22 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Else) {
+		const beforeElse = takePendingComments(state);
 		advance(state);
 		if (current(state).kind == TokenKind.If) {
+			const elseIf = try parseIfStmt(state);
 			return Result.ok(createNode(NodeKind.IfStmt, {
 				condition,
 				consequent,
-				alternate: try parseIfStmt(state),
+				alternate: withLeading(elseIf, beforeElse),
 			}, ifToken));
 		}
 
+		const elseBody = try parseBodyOrStmt(state);
 		return Result.ok(createNode(NodeKind.IfStmt, {
 			condition,
 			consequent,
-			alternate: try parseBodyOrStmt(state),
+			alternate: withLeading(elseBody, beforeElse),
 		}, ifToken));
 	}
 
