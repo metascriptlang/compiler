@@ -27,6 +27,7 @@ extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msH
 extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
 extern function hcrCallStatus(raw: unknown): int32 from "msHcrWinCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
+extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 
 export enum HcrReloadKind {
 	NoChange,
@@ -386,6 +387,7 @@ export function reload(): HcrReloadResult {
 		const item = candidates[i];
 		if (item.isNew) continue;
 		if (committed[i]) msHcrRollback(item.module.moduleId);
+		msHcrRestoreTypeInfos(item.module.moduleId);
 		item.module.image = previousImages[i];
 		item.module.identity = previousIdentities[i];
 	}
