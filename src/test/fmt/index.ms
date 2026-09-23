@@ -83,3 +83,4 @@ import "./cases/leftAssertion";
 import "./cases/patternRest";
 import "./cases/actorStaticBlock";
 import "./cases/exportDecorator";
+import "./cases/specifierComments";

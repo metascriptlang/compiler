@@ -1,7 +1,7 @@
 // Declaration Printers — class, interface, enum, import, export, etc.
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, SourceLocation,
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
@@ -17,6 +17,39 @@ import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+
+function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
+	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
+	const firstLine = locs.length > 0 ? locs[0].line : node.location.line;
+	const inner: Token[] = [];
+	const rest: Token[] = [];
+	for (const c of node.comments) {
+		if (c.line >= firstLine && c.line < endLine) inner.push(c); else rest.push(c);
+	}
+	if (inner.length == 0) return null;
+	node.comments = rest;
+	const lines: Doc[] = [];
+	let ci = 0;
+	for (let i = 0; i < names.length; i += 1) {
+		const line = i < locs.length ? locs[i].line : 0;
+		while (ci < inner.length && inner[ci].line < line) {
+			lines.push(docText(inner[ci].value));
+			ci += 1;
+		}
+		const lastOnLine = i + 1 >= names.length || (i + 1 < locs.length && locs[i + 1].line != line);
+		const entry: Doc[] = [names[i], docText(",")];
+		while (lastOnLine && ci < inner.length && inner[ci].line == line) {
+			entry.push(docLineSuffix([docText(" " + inner[ci].value)]));
+			ci += 1;
+		}
+		lines.push(docGroup(entry));
+	}
+	while (ci < inner.length) {
+		lines.push(docText(inner[ci].value));
+		ci += 1;
+	}
+	return docGroup([docText("{"), docIndent([docHardLine(), docJoin(lines, docHardLine())]), docHardLine(), docText("}")]);
+}
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
@@ -40,7 +73,10 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 			}
 		}
 		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
-		if (names.length == 1) {
+		const commented = commentedSpecifiers(names, d.nameLocations, node);
+		if (commented != null) {
+			parts.push(commented);
+		} else if (names.length == 1) {
 			parts.push(docText("{ "));
 			parts.push(names[0]);
 			parts.push(docText(" }"));
@@ -87,7 +123,7 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	// stray `import` keyword (`export import { ... } from ...`), so we
 	// build the re-export form directly.
 	if (!isDefault && d.exportedDecl != null && d.exportedDecl.kind == NodeKind.ImportDecl) {
-		return printReExport(d.exportedDecl, options);
+		return printReExport(d.exportedDecl, node, options);
 	}
 	// Forward inner-body comments to the inner decl so its printer can
 	// pair them with members/fields. The parser attaches body comments to
@@ -109,7 +145,7 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	return docGroup([docText(prefix), callPrintNode(d.exportedDecl, options)]);
 }
 
-function printReExport(inner: Node, options: FormatOptions): Doc {
+function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	const id = inner.data as ImportDeclData;
 	let q = "\"";
 	if (options.singleQuote) q = "'";
@@ -130,7 +166,10 @@ function printReExport(inner: Node, options: FormatOptions): Doc {
 				names.push(docText(id.importNames[i]));
 			}
 		}
-		if (names.length == 1) {
+		const commented = commentedSpecifiers(names, id.nameLocations, outer);
+		if (commented != null) {
+			parts.push(commented);
+		} else if (names.length == 1) {
 			parts.push(docText("{ "));
 			parts.push(names[0]);
 			parts.push(docText(" }"));
