@@ -30,6 +30,7 @@ export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_$
 
 // Hash a file's content. Returns "hash:byteLength" string.
 function hashFile(path: string): string {
+	if (!exists(path)) return "absent";
 	const src = try readFile(path) catch "";
 	return `${hashContent(src)}:${src.byteLength}`;
 }

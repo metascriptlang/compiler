@@ -134,9 +134,9 @@ function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
 function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
 	const path = unboxString(args[0]);
 	const r = readFile(path);
+	registerCompileTimeRead(resolve(path, cwd()));
 	if (r.ok) {
 		_lastFsErrno = 0;
-		registerCompileTimeRead(resolve(path, cwd()));
 		return boxString(r.value);
 	}
 	_setFsErrno(r.error.kind);
