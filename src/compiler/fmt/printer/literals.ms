@@ -161,6 +161,28 @@ function skipTemplate(source: string, pos: int32): int32 {
 	return end;
 }
 
+export function rawObjectKeyAt(source: string, line: int32, column: int32): string {
+	const pos = sourceOffset(source, line, column - 1);
+	if (pos < 0) return "";
+	const ch = source.byteAt(pos);
+	if (ch == "\"".code || ch == "'".code) return source.byteSlice(pos, skipQuoted(source, pos));
+	if (ch != "[".code) return "";
+	let depth = 0;
+	let end = pos;
+	while (end < source.byteLength) {
+		const c = source.byteAt(end);
+		if (c == "\"".code || c == "'".code) { end = skipQuoted(source, end); continue; }
+		if (c == "`".code) { end = skipTemplate(source, end); continue; }
+		if (c == "[".code) depth = depth + 1;
+		if (c == "]".code) {
+			depth = depth - 1;
+			if (depth == 0) return source.byteSlice(pos, end + 1);
+		}
+		end = end + 1;
+	}
+	return "";
+}
+
 export function rawTemplateAt(node: Node, options: FormatOptions): string {
 	const pos = sourceOffset(options.source, node.location.line, node.location.column - 1);
 	if (pos < 0 || options.source.byteAt(pos) != "`".code) return "";

@@ -17,7 +17,7 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawTemplateAt, sourceByteAt } from "./literals";
+import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -242,7 +242,12 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 			prop.comments = remaining;
 		}
 		let entryDoc: Doc;
-		if (d.keys[i] != "") {
+		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
+		if (d.keys[i] == "...") {
+			entryDoc = callPrintNode(prop, options);
+		} else if (writtenKey != "") {
+			entryDoc = docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
+		} else if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
 			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 			const isShorthand = prop != null && prop.kind == NodeKind.Identifier
