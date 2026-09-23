@@ -273,6 +273,17 @@ the core runtime. Each image exports `DatInit000`, `Init000` and, when it lifts 
 standard-library inits once. A module id `core` is rejected, because it would collide with
 the core image name.
 
+The core image takes the target's shared-library extension (`.dll`, `.so`, `.dylib`)
+whatever `--output` is named, because on Linux and macOS it is a link input of every module
+image, and zig's driver classifies inputs by extension. Measured with zig 0.16.0 on
+2026-09-24, linking an image against a core named `core.hcr` fails with `unrecognized file
+extension` for both `aarch64-macos` and `x86_64-linux-gnu`; the same file named `core.so`
+links; `-l:core.hcr` panics (`TODO`) for macOS and is not found for Linux. A macOS host
+reported the failure as `FAIL hcrModuleObjectCache` under the default `zig cc`. The Windows
+lane pins the name (`hcrModuleObjectCache`) and the naming rule (`hcrCoreImagePath` test).
+Not verified: the macOS and Linux lane after the fix, including `hcrCoreLinkClang`, which is
+skipped on Windows because `--cc=clang` there targets msvc and rejects `-fPIC`.
+
 The layout follows the reference's split, where the registry and runtime are the only
 non-reloadable libraries, with one intentional divergence: the standard library lives in
 core instead of reloading per module, so a change that alters core is a restart. A loaded
