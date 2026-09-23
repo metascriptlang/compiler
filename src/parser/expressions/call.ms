@@ -1,9 +1,9 @@
 // Call Expression + Expression List Parsing
 // Extracted from expression.ms with callback injection
 
-import { TokenKind } from "../../lexer/token";
+import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, CallExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, stampEnd } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, stampEnd, takePendingComments } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 
@@ -15,11 +15,24 @@ type NodesResult = Result<Node[], string>;
 // ===== Comma-Separated Expression List =====
 // Shared by call args and array literals
 
+let _listEndComments: Token[] = [];
+
+export function takeListEndComments(): Token[] {
+	const comments = _listEndComments;
+	_listEndComments = [];
+	return comments;
+}
+
 export function parseExprList(state: ParserState, endKind: TokenKind, exprParser: ExprParser): NodesResult {
 	const items: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind != endKind) {
+		const leading = takePendingComments(state);
 		const item = try exprParser(state, 0);
 		stampEnd(state, item);
+		if (leading.length > 0) {
+			for (const c of item.comments) leading.push(c);
+			item.comments = leading;
+		}
 		items.push(item);
 		if (current(state).kind == TokenKind.Comma) {
 			advance(state);
@@ -27,6 +40,7 @@ export function parseExprList(state: ParserState, endKind: TokenKind, exprParser
 			break;
 		}
 	}
+	_listEndComments = takePendingComments(state);
 	if (current(state).kind == endKind) { advance(state); }
 	return Result.ok(items);
 }
@@ -43,6 +57,7 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 	advance(state);
 	const args = try parseExprList(state, TokenKind.RParen, exprParser);
 	const callNode = createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen);
+	callNode.comments = takeListEndComments();
 	stampEnd(state, callNode);
 	if (typeArg != "") {
 		callNode.typeArg = typeArg;

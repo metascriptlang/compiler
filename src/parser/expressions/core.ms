@@ -11,7 +11,7 @@ import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseJsxRoot } from "./jsx";
-import { parseExprList, parseCallExpr } from "./call";
+import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
@@ -407,6 +407,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			advance(state);
 			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
 			const newNode = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token);
+			newNode.comments = takeListEndComments();
 			if (newTypeArg != "") newNode.typeArg = newTypeArg;
 			return Result.ok(newNode);
 		}
@@ -579,7 +580,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.LBracket) {
 		advance(state);
 		const elems = try parseExprList(state, TokenKind.RBracket, parseExprWithPrec);
-		return Result.ok(createNode(NodeKind.ArrayLiteral, { elements: elems }, token));
+		const arrayNode = createNode(NodeKind.ArrayLiteral, { elements: elems }, token);
+		arrayNode.comments = takeListEndComments();
+		return Result.ok(arrayNode);
 	}
 
 	// Object literal: { key: value, ... } or { key, ... } (shorthand)
