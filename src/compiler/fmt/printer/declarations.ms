@@ -234,8 +234,9 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 
 function printStructLikeDecl(node: Node, keyword: string): Doc {
 	const d = node.data as InterfaceDeclData;
-	const generics = wrapGenerics(getGenericDecl(d.interfaceName));
-	if (d.interfaceFields.length == 0) return docText(keyword + " " + d.interfaceName + generics + " {}");
+	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
+	const head = keyword + " " + d.interfaceName + wrapGenerics(getGenericDecl(d.interfaceName)) + extendsClause;
+	if (d.interfaceFields.length == 0) return docText(head + " {}");
 
 	// Field source positions are stored on node.paramLocations
 	// (parser repurposes that slot — see declaration.ms parseInterfaceLikeDecl).
@@ -303,7 +304,7 @@ function printStructLikeDecl(node: Node, keyword: string): Doc {
 		standaloneIdx = standaloneIdx + 1;
 	}
 	return docGroup([
-		docText(keyword + " " + d.interfaceName + generics + " {"),
+		docText(head + " {"),
 		docIndent([docHardLine(), docJoin(fields, docHardLine())]),
 		docHardLine(),
 		docText("}"),

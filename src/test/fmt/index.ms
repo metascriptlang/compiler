@@ -52,3 +52,4 @@ import "./cases/jsx";
 import "./cases/multilineStmtGap";
 import "./cases/statementEdit";
 import "./cases/wordUnary";
+import "./cases/interfaceExtends";
