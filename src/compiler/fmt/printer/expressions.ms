@@ -39,7 +39,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
 	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !(isRight && opPrecedence(parentOp) == 5)) {
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -89,8 +89,19 @@ function isRightAssocOp(op: string): boolean {
 
 export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as UnaryExprData;
-	const op = d.unaryOp == "typeof" || d.unaryOp == "void" || d.unaryOp == "delete" ? d.unaryOp + " " : d.unaryOp;
+	const isWord = d.unaryOp == "typeof" || d.unaryOp == "void" || d.unaryOp == "delete";
+	const op = isWord ? d.unaryOp + " " : d.unaryOp;
+	if (!isWord && d.operand != null && bindsInsideUnary(d.unaryOp, d.operand)) {
+		return docGroup([docText(op), callPrintNode(d.operand, options)]);
+	}
 	return docGroup([docText(op), printAtom(d.operand, options)]);
+}
+
+function bindsInsideUnary(op: string, operand: Node): boolean {
+	if (operand.kind == NodeKind.TypeAssertion) return true;
+	if (operand.kind != NodeKind.UnaryExpr) return false;
+	const inner = (operand.data as UnaryExprData).unaryOp;
+	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
 }
 
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
