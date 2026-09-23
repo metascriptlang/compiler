@@ -694,6 +694,17 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	arr->len -= deleteCount;
 }
 
+/* Atomic-rc elements (Locked<T>, Arc<T>) — same walk, atomic ops. A cell is
+ * born at MS_RC_INCREMENT, so a plain msDecref never reaches last and leaks. */
+void msAtomicRefArrayDestroy(msRefArray* arr) {
+	if (arr->p != NULL) {
+		for (int64_t i = 0; i < arr->len; i++) msAtomicDecref(arr->p->data[i]);
+		free(arr->p);
+		arr->p = NULL;
+	}
+	arr->len = 0;
+}
+
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {

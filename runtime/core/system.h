@@ -283,6 +283,27 @@ static inline void msStringCopy(msString* dest, msString src) {
 	} \
 } while(0)
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
+#define msArrayAtomicRefDestroy(arr)   msAtomicRefArrayDestroy((msRefArray*)&(arr))
+/* Atomic twin of msArrayRefCopy — the cells are shared across threads, so the
+ * per-element share taken here is an atomic incref. */
+#define msArrayAtomicRefCopy(d, s)     do { \
+	msRefArray _aarc_src = (s); \
+	int64_t _aarc_len = _aarc_src.len; \
+	msRefPayload* _aarc_sp = (msRefPayload*)_aarc_src.p; \
+	msRefPayload* _aarc_newp = NULL; \
+	if (_aarc_sp) { \
+		size_t _aarc_sz = sizeof(msRefPayload) + (size_t)_aarc_sp->cap * sizeof(void*); \
+		_aarc_newp = (msRefPayload*)calloc(1, _aarc_sz); \
+		_aarc_newp->cap = _aarc_sp->cap; \
+		for (int64_t _aarc_i = 0; _aarc_i < _aarc_len; _aarc_i++) { \
+			_aarc_newp->data[_aarc_i] = _aarc_sp->data[_aarc_i]; \
+			if (_aarc_newp->data[_aarc_i]) msAtomicIncRef(_aarc_newp->data[_aarc_i]); \
+		} \
+	} \
+	msAtomicRefArrayDestroy((msRefArray*)&(d)); \
+	(d).len = _aarc_len; \
+	(d).p = (void*)_aarc_newp; \
+} while(0)
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
 #define msArrayUint8Sink(d, ...)       do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
