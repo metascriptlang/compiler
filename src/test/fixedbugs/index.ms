@@ -212,3 +212,4 @@ import "./bug197ProtocolAppliesInsideOwnBody";
 import "./bug198OpenNullableFieldInGenericArg";
 import "./bug199ValueStructMaybeSlot";
 import "./bug200NullIntoBorrowParam";
+import "./bug201StructIntoNullablePtrParam";
