@@ -80,6 +80,14 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
+export function sort(this arr: number[]): void {
+	arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
+}
+
+export function sort(this arr: string[]): void {
+	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
+}
+
 export function join(this arr: string[], sep: string): string {
 	let out = "";
 	for (let i = 0; i < arr.length; i = i + 1) {
