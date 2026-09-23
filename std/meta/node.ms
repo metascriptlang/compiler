@@ -264,6 +264,7 @@ export enum NodeFlag {
 	StaticStorage, // parser: VariableDecl declared `static` inside a body — storage at module scope (reference: global storage flag)
 	ProtocolCall,
 	Parenthesized, // parser: the expression was written inside grouping parentheses
+	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
 }
 
 // ===== Node Kind Enum =====
