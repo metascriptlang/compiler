@@ -661,6 +661,10 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			argExpected = innerType.typeChildren[ai];
 		}
 		callCheckExpr(ctx, d.newArguments[ai], argExpected);
+		const argType = d.newArguments[ai].nodeType;
+		if (hasCtor && argExpected != null && argType != null) {
+			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
+		}
 		ai = ai + 1;
 	}
 	// Fill default args for constructor calls — unified with fillDefaults (same as functions).
@@ -3005,6 +3009,10 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	callCheckExpr(ctx, d.object, null);
+	if (d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union) {
+		const projected = narrowUnionToVariant(d.object, d.object.nodeType);
+		if (projected != null as unknown as Node) d.object = projected;
+	}
 	const objType = d.object.nodeType;
 	if (objType == null) return inferredType();
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.

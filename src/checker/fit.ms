@@ -979,15 +979,18 @@ function declaredTagUnionOf(expr: Node): Type | null {
 	}
 	if (walk == null) return null;
 	const t = declaredTypeOfLocation(walk);
-	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return null;
-	if (unwrapRefNullUnion(t) != null) return null;
+	return t != null && isSlotUnion(t) ? t : null;
+}
+
+export function isSlotUnion(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
+	if (unwrapRefNullUnion(t) != null) return false;
 	let allStrLit = true;
 	for (const child of t.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return null;
+		if (child == null || child.kind == TypeKind.Null) return false;
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	if (allStrLit) return null;
-	return t;
+	return !allStrLit;
 }
 
 // The projection twin of widenVariantToUnion: a flow-narrowed reference whose
