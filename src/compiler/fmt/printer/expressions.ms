@@ -39,7 +39,8 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
 	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight) {
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight
+		&& (parentOp == "|" || parentOp == "&" || parentOp == "<")) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {

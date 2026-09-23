@@ -79,3 +79,4 @@ import "./cases/operatorNames";
 import "./cases/templateRoutine";
 import "./cases/undefinedLiteral";
 import "./cases/staticLocal";
+import "./cases/leftAssertion";
