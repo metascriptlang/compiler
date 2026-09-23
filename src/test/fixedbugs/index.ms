@@ -214,6 +214,7 @@ import "./bug199ValueStructMaybeSlot";
 import "./bug200_dead_branch_without_else";
 import "./bug201_module_const_fold";
 import "./bug202VecTypeArgForwarding";
+import "./bug203TypedForInit";
 import "./bug203AssertedFieldSinkArgCopies";
 import "./bug204MethodCallArgumentsChecked";
 import "./bug205StackedParamModifiers";
