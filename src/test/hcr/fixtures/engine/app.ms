@@ -26,6 +26,12 @@ function report(label: string): void {
 	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}${reason}`);
 }
 
+function inspect(label: string): void {
+	const held = probe!;
+	const fresh = makeProbe(8);
+	console.log(`HCR-ENGINE ${label}: instanceof ${held instanceof Probe} ${fresh instanceof Probe} scaled ${held.scaled()}`);
+}
+
 function show(label: string): void {
 	console.log(`HCR-ENGINE ${label}: value ${value()} tick ${tick()} version ${version()}`);
 }
@@ -47,10 +53,16 @@ place("g1", "module.logic.dll");
 report("complete image");
 show("after complete image");
 
+place("g2", "module.lifecycle.dll");
+place("g2", "module.dll.hcrabi");
+report("lifecycle rebuilt");
+inspect("probe from the first generation");
+
 place("g5", "module.lifecycle.dll");
 place("g5", "module.dll.hcrabi");
 report("after-reload handler throws");
 show("after rollback");
+inspect("probe after rollback");
 probe = null;
 
 place("g3", "module.logic.dll");

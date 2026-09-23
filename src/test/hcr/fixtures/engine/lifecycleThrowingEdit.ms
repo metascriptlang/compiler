@@ -20,6 +20,10 @@ export class Probe {
 		this.tag = tag;
 	}
 
+	scaled(): int32 {
+		return this.tag * 20;
+	}
+
 	onDestroy(): void {
 		console.log(`HCR-ENGINE lifecycle v2: destroy probe ${this.tag}`);
 	}

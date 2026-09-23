@@ -19,6 +19,10 @@ export class Probe {
 		this.tag = tag;
 	}
 
+	scaled(): int32 {
+		return this.tag * 10;
+	}
+
 	onDestroy(): void {
 		console.log(`HCR-ENGINE lifecycle v1: destroy probe ${this.tag}`);
 	}
