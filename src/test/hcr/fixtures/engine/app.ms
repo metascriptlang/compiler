@@ -2,7 +2,7 @@ import { copyFile, readFile, writeFile } from "std/fs";
 import { exit } from "std/process";
 import { reload, reloadKindName } from "std/hcr";
 import { tick, value } from "./logic";
-import { version } from "./lifecycle";
+import { Probe, makeProbe, version } from "./lifecycle";
 
 function place(generation: string, name: string): void {
 	if (!copyFile(`${generation}/${name}`, `run/${name}`).ok) {
@@ -30,6 +30,7 @@ function show(label: string): void {
 	console.log(`HCR-ENGINE ${label}: value ${value()} tick ${tick()} version ${version()}`);
 }
 
+let probe: Probe | null = makeProbe(7);
 show("start");
 report("unchanged");
 
@@ -50,6 +51,7 @@ place("g5", "module.lifecycle.dll");
 place("g5", "module.dll.hcrabi");
 report("after-reload handler throws");
 show("after rollback");
+probe = null;
 
 place("g3", "module.logic.dll");
 place("g3", "module.dll.hcrabi");

@@ -322,6 +322,7 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v2: after reload",
 		"HCR-ENGINE after-reload handler throws: rejected lifecycle (the after-reload handler of module 'lifecycle' threw; rolled back lifecycle)",
 		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
+		"HCR-ENGINE lifecycle v1: destroy probe 7",
 		"HCR-ENGINE added export, app not rebuilt: rejected (module 'app' was built against another export ABI of 'logic'; rebuild it)",
 		"HCR-ENGINE after rejection: value 10 tick 14 version 1",
 		"HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)",
