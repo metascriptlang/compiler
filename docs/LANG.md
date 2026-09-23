@@ -1040,7 +1040,7 @@ In each branch the compiler narrows the union to a single variant, so accessing 
 
 #### C Backend
 
-All three forms lower to the same C layout — a wrapper struct with a numeric `_tag` plus an anonymous union over per-variant struct payloads:
+All three forms lower to a wrapper struct with a numeric `_tag` plus an anonymous union with one slot per variant. A slot holds its variant in the variant's own representation: a `match`-type arm payload is a value, so it sits inline; a TS-style variant written as `{ ... }` or as an interface is a reference, so its slot holds the pointer (`msAnon_<hash>* v0;`, `Circle* v0;`). The `match`-type form:
 
 ```c
 // Generated C for NodeData (enum-disc match-type):

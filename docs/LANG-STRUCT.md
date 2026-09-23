@@ -26,6 +26,19 @@ const a = new Admin();                         // reference
 - `class` — data + methods, reference semantics, can `implements` interfaces
 - `type` — type aliases, intersections (`&`), unions (`|`), reference semantics
 
+An object type written as `{ ... }` — behind `type X =`, inline in an annotation, or inferred for
+an unannotated literal — is a reference, exactly like an `interface`: `const b = a; b.f = 1`
+writes `a.f`, and a parameter of that type can be written through. The alias is structural, so
+two aliases of one shape are the same type. What stays a value: `struct`, tuples, and the arm
+payloads of a `match`-type union. In a union, a reference member is held as a pointer (a
+narrowing projection shares the member); a `struct` member is held inline.
+Pinned by `src/test/guard/typeObjectRef.ms` and `unionRefSlot.ms` on C and JS. Measured on the
+self-host (`msc check src/index.ms`, `--danger --cc=clang` builds of tree `776cc949` against tree
+`9028d273`, interleaved A/B, four pairs, macOS arm64): RSS 1059 → 921 MB, instructions
+60.6 → 61.1 G, user time within noise. The AST payloads became separate cells: `NodeData` went
+from 136 bytes inline to a 16-byte tag plus pointer, and `Node` from 248 to 128 bytes (clang
+`sizeof` on the emitted `std/meta/node.ms`).
+
 No behavioral difference across backends for Layer 1 code.
 
 ### Layer 2: MetaScript Superset (Value Types)
@@ -48,7 +61,7 @@ Value-type features: `struct`, `ref`, `out`, `move`, `defer`.
 |-----------|--------|---------|-----------|---------------|
 | `interface` | Yes | Yes | Reference | `{ ... }` literal or via class |
 | `class` | Yes | Yes | Reference | `new Class()` |
-| `type` | Alias | Alias | Depends on target | Depends on target |
+| `type` | Alias | Alias | Reference for `{ ... }`, else the aliased type's | `{ ... }` literal |
 | `struct` | Yes | **No** (compiler error) | Value | `{ ... }` literal |
 
 ## Interface: Dual Role
