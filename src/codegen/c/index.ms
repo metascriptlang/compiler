@@ -262,7 +262,6 @@ export function genProjectDispatcher(
 	targetOs: string,
 	noMain: boolean,
 	outputs: CModuleOutput[],
-	hcrImage: boolean = false,
 ): string {
 	const b = createBuilder();
 	const emptyDatInits = new HashSet<string>();
@@ -276,7 +275,6 @@ export function genProjectDispatcher(
 	addLine(b, "#include <stdint.h>");
 	addLine(b, "#include \"runtime/drc.h\"");
 	addLine(b, "#include \"runtime/core/system.h\"");
-	if (hcrImage) addLine(b, "#include \"runtime/hcr.h\"");
 	addNewline(b);
 
 	// Forward declarations for all module init functions
@@ -329,12 +327,6 @@ export function genProjectDispatcher(
 	addLine(b, "}");
 	addNewline(b);
 
-	if (hcrImage) {
-		addLine(b, "MS_HCR_EXPORT void DatInit000(void) { MsPreMainInner(); }");
-		addLine(b, "MS_HCR_EXPORT void Init000(void) { MsMainInner(); }");
-		addNewline(b);
-	}
-
 	// Library output: the host owns the entry point and calls MsMain() — emit no
 	// main wrapper, whatever the target OS.
 	if (noMain) return extract(b);
@@ -379,6 +371,63 @@ export function genProjectDispatcher(
 		},
 	};
 
+	return extract(b);
+}
+
+export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutput[]): string {
+	const b = createBuilder();
+	const datInits = new HashSet<string>();
+	const inits = new HashSet<string>();
+	for (const output of outputs) {
+		if (output.hasDatInit) datInits.add(output.modulePath);
+		if (output.hasInit) inits.add(output.modulePath);
+	}
+	addLine(b, "#include <stdint.h>");
+	addLine(b, "#include \"runtime/drc.h\"");
+	addLine(b, "#include \"runtime/core/system.h\"");
+	addLine(b, "#include \"runtime/hcr.h\"");
+	addNewline(b);
+	for (const mp of modulePaths) {
+		if (datInits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__DatInit000(void);`);
+		if (inits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__Init000(void);`);
+	}
+	addNewline(b);
+	addLine(b, "int cmdCount;");
+	addLine(b, "char** cmdLine;");
+	addLine(b, "char** gEnv;");
+	addLine(b, "int msProgramResult;");
+	addNewline(b);
+	addLine(b, "void msHcrCoreInit(void) {");
+	b.indent += 1;
+	addLine(b, "static int done = 0;");
+	addLine(b, "if (done) return;");
+	addLine(b, "done = 1;");
+	for (const mp of modulePaths) {
+		if (datInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
+	}
+	for (const mp of modulePaths) {
+		if (inits.has(mp)) addLine(b, `${mangleModuleName(mp)}__Init000();`);
+	}
+	b.indent -= 1;
+	addLine(b, "}");
+	return extract(b);
+}
+
+export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean): string {
+	const b = createBuilder();
+	const modName = mangleModuleName(output.modulePath);
+	addLine(b, "#include \"runtime/hcr.h\"");
+	addNewline(b);
+	if (output.hasDatInit) addLine(b, `void ${modName}__DatInit000(void);`);
+	if (output.hasInit || isEntry) addLine(b, `void ${modName}__Init000(void);`);
+	addNewline(b);
+	addLine(b, "MS_HCR_EXPORT void DatInit000(void) {");
+	addLine(b, "  msHcrCoreInit();");
+	if (output.hasDatInit) addLine(b, `  ${modName}__DatInit000();`);
+	addLine(b, "}");
+	addLine(b, "MS_HCR_EXPORT void Init000(void) {");
+	if (output.hasInit || isEntry) addLine(b, `  ${modName}__Init000();`);
+	addLine(b, "}");
 	return extract(b);
 }
 

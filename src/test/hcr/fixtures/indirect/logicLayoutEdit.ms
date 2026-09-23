@@ -5,6 +5,7 @@ export struct Pair {
 }
 
 let calls: int32 = 0;
+let resets: int32 = 0;
 
 export function base(): int32 {
 	return 7;
@@ -12,7 +13,11 @@ export function base(): int32 {
 
 export function tick(): int32 {
 	calls += 1;
-	return calls;
+	if (calls > 1000) {
+		calls = 0;
+		resets += 1;
+	}
+	return calls + resets;
 }
 
 function offset(): int32 {

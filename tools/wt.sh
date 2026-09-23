@@ -152,6 +152,7 @@ pick_builder() {
   local w=$1 c
   for c in ${MSC_BUILDER:-} "$MAIN/msc" "$(command -v msc 2>/dev/null)"; do
     [ -n "$c" ] && [ -x "$c" ] || continue
+    rm -f "$w/msc" "$w/msc.exe"
     cp "$c" "$w/msc" || return 1
     if (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
       say "builder: $c"
@@ -159,7 +160,7 @@ pick_builder() {
     fi
     say "builder: $c cannot check src/index.ms at this rev, skipped"
   done
-  rm -f "$w/msc"
+  rm -f "$w/msc" "$w/msc.exe"
   return 1
 }
 

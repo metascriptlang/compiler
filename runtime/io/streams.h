@@ -83,13 +83,26 @@ static inline msString msReadBytes(double n) {
 /**
  * Non-blocking check: is data available on stdin?
  * Uses select() with zero timeout — probes without changing fd state.
+ * Windows: a pipe handle reads as signaled while empty, so pipes are peeked;
+ * a broken pipe reads as ready so the next read sees EOF, as select() does.
  * Returns 1.0 if data available, 0.0 otherwise.
  */
 static inline double msStdinHasData(void) {
 #ifdef _WIN32
 	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-	DWORD result = WaitForSingleObject(hStdin, 0);
-	return result == WAIT_OBJECT_0 ? 1.0 : 0.0;
+	switch (GetFileType(hStdin)) {
+	case FILE_TYPE_PIPE: {
+		DWORD avail = 0;
+		if (!PeekNamedPipe(hStdin, NULL, 0, NULL, &avail, NULL)) {
+			return GetLastError() == ERROR_BROKEN_PIPE ? 1.0 : 0.0;
+		}
+		return avail > 0 ? 1.0 : 0.0;
+	}
+	case FILE_TYPE_DISK:
+		return 1.0;
+	default:
+		return WaitForSingleObject(hStdin, 0) == WAIT_OBJECT_0 ? 1.0 : 0.0;
+	}
 #else
 	fd_set fds;
 	struct timeval tv = {0, 0};

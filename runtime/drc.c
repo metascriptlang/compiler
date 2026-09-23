@@ -180,12 +180,16 @@ static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
 /* ===== Root Registry ===== */
 
 _Thread_local msCellSeq msRoots;
+MS_TLS_PUBLISH(msRoots)
 _Thread_local int32_t msRootsThreshold = 128;
+MS_TLS_PUBLISH(msRootsThreshold)
 _Thread_local int32_t msOrcTeardownDepth = 0;
+MS_TLS_PUBLISH(msOrcTeardownDepth)
 
 /* ===== ORC Diagnostics ===== */
 #ifdef MSGC_ORC_STATS
 _Thread_local int32_t msFreedCyclicObjects = 0;
+MS_TLS_PUBLISH(msFreedCyclicObjects)
 #endif
 
 void msRegisterCycle(void* p, const msTypeInfo* type) {

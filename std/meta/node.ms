@@ -206,6 +206,8 @@ export enum SymbolFlag {
 	Converter,
 	DestroyOp,
 	WasMovedOp,
+	BeforeReload,
+	AfterReload,
 }
 
 // ===== Symbol =====

@@ -49,7 +49,7 @@ typedef struct {
 /* ===== callSoon routing (Standard reference threadvar pattern) ===== */
 
 typedef void (*msCallSoonFn)(msClosure cb);
-extern MS_THREAD_LOCAL msCallSoonFn msCallSoonProc; /* set by dispatcher init */
+MS_TLS_EXTERN(msCallSoonFn, msCallSoonProc); /* set by dispatcher init */
 
 /* Callback-list spinlock — the ONE cross-thread spot in the future machinery.
  * The reference event loop is single-threaded (add and fire on one thread, no
@@ -444,8 +444,8 @@ MS_DEFINE_FUTURE_CHAIN(msFutureChain_ptr, msFuture_ptr)
 
 /* ===== Error Re-raising (Standard reference read parity) ===== */
 
-extern MS_THREAD_LOCAL bool msErr;
-extern MS_THREAD_LOCAL void* msErrPayload;
+MS_TLS_EXTERN(bool, msErr);
+MS_TLS_EXTERN(void*, msErrPayload);
 
 /* Failed/cancelled future read surfaces the caught exception object on
  * msCurrException so an enclosing catch binds it (await re-raise). A NULL error

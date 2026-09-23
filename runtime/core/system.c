@@ -25,11 +25,15 @@ __attribute__((constructor)) static void msStdStreamsBinaryMode(void) {
 
 /* DRC / exception globals — thread-local for multi-threaded safety */
 MS_THREAD_LOCAL bool msErr = false;
+MS_TLS_PUBLISH(msErr)
 MS_THREAD_LOCAL msException* msCurrException = NULL;
+MS_TLS_PUBLISH(msCurrException)
 
 /* Async future globals (declared extern in future.h) */
 MS_THREAD_LOCAL msCallSoonFn msCallSoonProc = NULL;
+MS_TLS_PUBLISH(msCallSoonProc)
 MS_THREAD_LOCAL void* msErrPayload = NULL;
+MS_TLS_PUBLISH(msErrPayload)
 
 /* Future callback-list spinlock (declared extern in future.h). Guards the
  * check-then-append of msFutureAddCallback against the grab-and-NULL of

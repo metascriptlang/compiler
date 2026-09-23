@@ -7,11 +7,11 @@ export struct Pair {
 let calls: int32 = 0;
 
 export function base(): int32 {
-	return 7;
+	return 70;
 }
 
 export function tick(): int32 {
-	calls += 1;
+	calls += 10;
 	return calls;
 }
 

@@ -18,11 +18,13 @@
 
 /* Per-thread current actor — set inside msActorProcess for sender muting. */
 MS_THREAD_LOCAL msActor* msCurrentActor = NULL;
+MS_TLS_PUBLISH(msCurrentActor)
 
 /* Per-thread scheduler ID — main thread = 0, pool worker N = N (1..workerCount).
  * Default -1 means "this thread is not a registered actor poller" so
  * msActorPollLocal early-returns instead of polling msSchedulers[-1]. */
 MS_THREAD_LOCAL int msMySchedulerID = -1;
+MS_TLS_PUBLISH(msMySchedulerID)
 
 /* Fixed-size scheduler registry. msSchedulerCount is bumped to
  * `pool.workerCount + 1` on first actor registration, then immutable. */
@@ -45,6 +47,7 @@ _Atomic(int32_t) msPidNextSlot = 0;
 pthread_mutex_t msPidSegLock = PTHREAD_MUTEX_INITIALIZER;
 _Atomic(msHazardRec*) msHazardHead = NULL;
 MS_THREAD_LOCAL msHazardRec* msMyHazard = NULL;
+MS_TLS_PUBLISH(msMyHazard)
 
 /* Monitor ref counter (used by link/monitor primitives). */
 _Atomic(int64_t) msNextMonitorRef = 1;
@@ -62,10 +65,12 @@ msActor* msCycleDetectorActor = NULL;
  * thread. Single TU-shared TLS slot — see mailbox.h comment for the
  * cross-TU duplication hazard. */
 MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
+MS_TLS_PUBLISH(msMsgPools)
 
 /* Selector per-thread poll result buffer (selector.h). Single TU-shared
  * TLS slot so msSelectorWait/EventFd/EventFlags called across TUs on the
  * same thread share the same event data. */
 MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
+MS_TLS_PUBLISH(_msEvtBuf)
 
 #endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */

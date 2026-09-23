@@ -10,6 +10,10 @@ export function base(): int32 {
 	return 7;
 }
 
+export function extra(): int32 {
+	return 5;
+}
+
 export function tick(): int32 {
 	calls += 1;
 	return calls;

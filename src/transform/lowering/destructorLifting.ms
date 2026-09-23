@@ -57,6 +57,10 @@ export function setGlobalHookOwners(owners: NameSet): void {
 	resetHookSyms();
 }
 
+export function useHookOwners(owners: NameSet): void {
+	_globalHookOwners = owners;
+}
+
 function isGloballyOwned(typeName: string): boolean {
 	return nameSetContains(_globalHookOwners, typeName);
 }

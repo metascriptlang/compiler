@@ -156,19 +156,35 @@ function appendKeyPart(key: string, value: string): string {
 }
 
 export function hcrAbiFingerprint(manifest: HcrModuleAbi): string {
+	let key = identityKey(manifest);
+	key = appendKeyPart(key, `dependencies:${manifest.dependencies.length}`);
+	for (const dependency of manifest.dependencies) key = appendKeyPart(key, dependency);
+	return hashKey(appendExportKeys(key, manifest.exports));
+}
+
+export function hcrExportKey(manifest: HcrModuleAbi): string {
+	return hashKey(appendExportKeys(identityKey(manifest), manifest.exports));
+}
+
+function identityKey(manifest: HcrModuleAbi): string {
 	let key = appendKeyPart("", manifest.version.toString());
 	key = appendKeyPart(key, manifest.moduleId);
 	key = appendKeyPart(key, manifest.targetKey);
 	key = appendKeyPart(key, manifest.gcMode);
-	key = appendKeyPart(key, manifest.toolchainKey);
-	key = appendKeyPart(key, `dependencies:${manifest.dependencies.length}`);
-	for (const dependency of manifest.dependencies) key = appendKeyPart(key, dependency);
-	key = appendKeyPart(key, `exports:${manifest.exports.length}`);
-	for (const item of manifest.exports) {
-		key = appendKeyPart(key, item.id);
-		key = appendKeyPart(key, item.symbol);
-		key = appendKeyPart(key, item.signature);
+	return appendKeyPart(key, manifest.toolchainKey);
+}
+
+function appendExportKeys(key: string, exports: HcrAbiExport[]): string {
+	let out = appendKeyPart(key, `exports:${exports.length}`);
+	for (const item of exports) {
+		out = appendKeyPart(out, item.id);
+		out = appendKeyPart(out, item.symbol);
+		out = appendKeyPart(out, item.signature);
 	}
+	return out;
+}
+
+function hashKey(key: string): string {
 	return `${hashToHex(djb2(key))}_${hashToHex(fingerprint(key))}`;
 }
 
@@ -521,4 +537,17 @@ test "HCR ABI restart incompatibility wins over export changes" {
 	assert decision.kind == HcrReloadKind.RestartRequired;
 	assert decision.reason == HcrReloadReason.TargetChanged;
 	assert decision.subject == "windows-x64 -> linux-x64";
+}
+
+test "HCR export key follows what dependents bind to" {
+	const value32 = createHcrAbiExport("logic", "logic_value", "func():int32");
+	const value64 = createHcrAbiExport("logic", "logic_value", "func():int64");
+	const current = classifierTestManifest("windows-x64", "drc", "toolchain", ["std/io"], [value32]);
+	const dependency = classifierTestManifest("windows-x64", "drc", "toolchain", ["std/io", "std/time"], [value32]);
+	const signature = classifierTestManifest("windows-x64", "drc", "toolchain", ["std/io"], [value64]);
+	const toolchain = classifierTestManifest("windows-x64", "drc", "toolchain2", ["std/io"], [value32]);
+	assert hcrExportKey(current) == hcrExportKey(dependency);
+	assert hcrExportKey(current) != hcrExportKey(signature);
+	assert hcrExportKey(current) != hcrExportKey(toolchain);
+	assert hcrAbiFingerprint(current) != hcrAbiFingerprint(dependency);
 }

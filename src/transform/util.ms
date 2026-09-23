@@ -8,7 +8,7 @@ import { createFunction, createStruct, createArray, createPtr, numberType, int32
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
-import { IdentCache, getIdentId } from "../checker/idents";
+import { IdentCache, getIdentId, findIdentId, createIdentCache } from "../checker/idents";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -192,10 +192,13 @@ export function runtimeProcSym(procName: string): Symbol {
 }
 
 export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
-	const runtimeSym = runtimeProcSym(procName);
+	if (sym == null) return false;
+	let runtimeSym = _compilerFuncs.get(procName);
+	if (runtimeSym == null) runtimeSym = _runtimeSyms.get(procName);
 	if (sym == runtimeSym) return true;
-	return sym != null && sym.nameId != 0 && sym.nameId == runtimeSym.nameId
-		&& hasFlag(sym, SymbolFlag.ImportC);
+	if (sym.nameId == 0 || !hasFlag(sym, SymbolFlag.ImportC)) return false;
+	if (runtimeSym != null) return sym.nameId == runtimeSym.nameId;
+	return _runtimeIdentCache != null && sym.nameId == findIdentId(_runtimeIdentCache, procName);
 }
 
 export function isRuntimeProcCall(node: Node, procName: string): boolean {
@@ -689,4 +692,26 @@ export function extractBodyStmts(body: Node): Node[] {
 		result.push(body);
 	}
 	return result;
+}
+
+test "a runtime proc query mints no symbol" {
+	const savedFuncs = _compilerFuncs;
+	const savedSyms = _runtimeSyms;
+	const savedCache = _runtimeIdentCache;
+	const cache = createIdentCache();
+	bindCompilerFuncs(new HashMap<string, Symbol>(), cache);
+	const other = makeSymbol("msOther", SymbolKind.Function, null, false);
+	assert !isRuntimeProcSym(other, "msProbeAccess");
+	const sameName = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	setFlag(sameName, SymbolFlag.ImportC);
+	sameName.nameId = getIdentId(cache, "msProbeAccess");
+	assert isRuntimeProcSym(sameName, "msProbeAccess");
+	assert _runtimeSyms.size == 0;
+	const minted = runtimeProcSym("msProbeAccess");
+	assert isRuntimeProcSym(minted, "msProbeAccess");
+	assert isRuntimeProcSym(sameName, "msProbeAccess");
+	assert _runtimeSyms.size == 1;
+	_compilerFuncs = savedFuncs;
+	_runtimeSyms = savedSyms;
+	_runtimeIdentCache = savedCache;
 }

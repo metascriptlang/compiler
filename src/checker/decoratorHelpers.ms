@@ -14,7 +14,7 @@ export interface DecoratorInfo {
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws"];
 
@@ -93,6 +93,15 @@ export function exportNameDecorator(decorators: Node[]): Node | null {
 	for (const dec of decorators) {
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		if ((dec.data as MacroInvocationData).macroName == "exportName") return dec;
+	}
+	return null;
+}
+
+export function reloadHandlerDecorator(decorators: Node[]): Node | null {
+	for (const dec of decorators) {
+		if (dec.kind != NodeKind.MacroInvocation) continue;
+		const name = (dec.data as MacroInvocationData).macroName;
+		if (name == "beforeReload" || name == "afterReload") return dec;
 	}
 	return null;
 }

@@ -788,7 +788,8 @@ const PRE_LINKCMD = "linkcmd:";
 const PRE_OFILES = "ofiles:";
 const PRE_LINKINPUTS = "linkInputs:";
 
-function linkCacheFile(): string {
+function linkCacheFile(image: string = ""): string {
+	if (image != "") return `${getCacheDir()}/link.${hashContent(image)}.cache`;
 	return `${getCacheDir()}/link.cache`;
 }
 
@@ -805,9 +806,9 @@ function externalInputKey(paths: string[]): string {
 }
 
 // Check if link step can be skipped.
-export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): boolean {
+export function isLinkCached(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): boolean {
 	if (_forceRebuild) return false;
-	const cFile = linkCacheFile();
+	const cFile = linkCacheFile(image);
 	if (!exists(cFile) || !exists(outputFile)) return false;
 
 	const linkResult = readFile(cFile);
@@ -839,12 +840,12 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 }
 
 // Write link cache after successful link step.
-export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string): void {
+export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
 	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
-	atomicWriteFile(linkCacheFile(), content);
+	atomicWriteFile(linkCacheFile(image), content);
 }
 
 // ===== Header Inline Cache (Layer 5) =====
