@@ -194,7 +194,7 @@ function declName(text: string, prefix: string, stem: string, suffixStart: strin
 function indirect(): void {
 	const tag = "hcrIndirect";
 	const dir = freshDir(`${TMP}/indirect`);
-	for (const f of ["app.ms", "logic.ms", "shapes.ms", "host.ms"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
+	for (const f of ["app.ms", "logic.ms", "shapes.ms", "host.ms", "hostCalls.h"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
 
 	const plain = emitIndirect(dir, []);
 	for (const c of [plain.app, plain.logic, plain.dispatch]) {
@@ -224,6 +224,8 @@ function indirect(): void {
 	}
 	need(tag, typeInfoMacro, "app does not reach the shapes TypeInfo through the registry");
 	need(tag, hcr.app.contains("msHcrTypeInfo(\"shapes\", \"Square__"), "app does not resolve the shapes TypeInfo by owner and name");
+	need(tag, hcr.logic.contains("MS_HCR_EXPORT const char* HcrAbiKey000(void) { return \""), "logic does not export its ABI key");
+	need(tag, hcr.app.contains("HcrImports000(void) { static const char* const imports[] = { \"logic\", \""), "app does not declare its import of logic with a key");
 	sharedVariable();
 
 	if (platform != "windows") {
@@ -236,23 +238,32 @@ function indirect(): void {
 	}
 	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/logic.ms`);
 	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g2/module.dll"], "HCR rebuild after the logic edit failed");
+	copy(`${FIXTURES}/indirect/logicExportEdit.ms`, `${dir}/logic.ms`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g3/module.dll"], "HCR rebuild after the logic export edit failed");
 	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "host build failed");
 	const called = execFileResult(`${dir}/host.exe`,
-		["g1/module.logic.dll", "g1/module.shapes.dll", "g1/module.dll", "--", "g2/module.logic.dll"], dir);
+		["g1/module.logic.dll", "g1/module.shapes.dll", "g1/module.dll", "--", "g2/module.logic.dll", "g3/module.logic.dll"], dir);
 	const want = [
 		"HCR-HOST gen1 hcrIndirectValue -> 37",
 		"HCR-HOST gen1 hcrShapeValue -> 9",
 		"HCR-HOST gen1 hcrErrorValue -> 1",
 		"HCR-HOST gen1 hcrTickValue -> 1",
+		"HCR-HOST key module.dll -> logic matches",
+		"HCR-HOST staged logic -> 1",
+		"HCR-HOST staged hcrIndirectValue -> 37",
 		"HCR-HOST reloaded g2/module.logic.dll",
 		"HCR-HOST gen2 hcrIndirectValue -> 163",
 		"HCR-HOST gen2 hcrShapeValue -> 9",
 		"HCR-HOST gen2 hcrErrorValue -> 1",
 		"HCR-HOST gen2 hcrTickValue -> 11",
+		"HCR-HOST rolled back logic",
+		"HCR-HOST rollback hcrIndirectValue -> 37",
+		"HCR-HOST key module.dll -> logic differs",
+		"HCR-HOST rejected g3/module.logic.dll",
 	];
 	if (lines(both(called).trim()).join("\n") != want.join("\n")) {
 		console.log(both(called));
-		failWith(tag, "the unrebuilt app did not reach the reloaded logic image through its table");
+		failWith(tag, "the host transaction (key check, stage, commit, rollback) did not produce the expected transitions");
 	}
 	console.log("ok   hcrIndirect");
 	windowsReload();
