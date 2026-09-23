@@ -380,6 +380,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// Implicit borrow promotion: T -> Borrow<T> (zero-copy const pointer)
 	if (target.kind == TypeKind.Borrow && target.typeReturn != null) {
+		if (source.kind == TypeKind.Null) return false;
 		return isAssignable(source, target.typeReturn);
 	}
 
@@ -551,7 +552,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	if (source.kind == TypeKind.CString && target.kind == TypeKind.String) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
 	if (target.kind == TypeKind.Borrow && target.typeReturn != null) {
-		if (source.kind != TypeKind.Borrow) return true;
+		if (source.kind != TypeKind.Borrow && source.kind != TypeKind.Null) return true;
 	}
 	return false;
 }
