@@ -318,6 +318,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
 				if (isUnresolvedType(refInner)) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
+				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
 					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 				}
