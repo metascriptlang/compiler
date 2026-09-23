@@ -1158,9 +1158,9 @@ test "watched files are registered only for clients that support it" {
 	assert request.indexOf("workspace/didChangeWatchedFiles") >= 0;
 }
 
-function lineStartOffset(source: string, line: number): number {
-	let current = 0;
-	let pos = 0;
+function lineStartOffset(source: string, line: int32): int32 {
+	let current: int32 = 0;
+	let pos: int32 = 0;
 	while (pos < source.byteLength && current < line) {
 		if (source.byteAt(pos) == "\n".code) current = current + 1;
 		pos = pos + 1;
@@ -1182,8 +1182,8 @@ function applyRangeFormatting(source: string, line: number, character: number): 
 		const range = lspGetObjectField(items[i], "range");
 		const s = lspGetObjectField(range, "start");
 		const e = lspGetObjectField(range, "end");
-		const from = lineStartOffset(out, lspGetNumberField(s, "line")) + lspGetNumberField(s, "character");
-		const to = lineStartOffset(out, lspGetNumberField(e, "line")) + lspGetNumberField(e, "character");
+		const from = lineStartOffset(out, lspGetNumberField(s, "line") as int32) + (lspGetNumberField(s, "character") as int32);
+		const to = lineStartOffset(out, lspGetNumberField(e, "line") as int32) + (lspGetNumberField(e, "character") as int32);
 		out = out.byteSlice(0, from) + lspGetField(items[i], "newText") + out.byteSlice(to, out.byteLength);
 		i = i - 1;
 	}
