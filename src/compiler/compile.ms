@@ -5,6 +5,7 @@ import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, SymbolKind, Type } from "../ast/node";
+import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
@@ -29,7 +30,7 @@ import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
-import { SymbolFlag } from "../checker/symbol";
+import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
@@ -1685,6 +1686,17 @@ function hcrTypeInfoNames(program: Node | null, modPath: string): string[] {
 	return names;
 }
 
+function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
+	const names: string[] = [];
+	if (program == null) return names;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const fn = exportedFunctionOf(stmt);
+		if (fn == null || fn.resolvedSym == null || !hasFlag(fn.resolvedSym, flag)) continue;
+		names.push(fn.resolvedSym.exportName);
+	}
+	return names;
+}
+
 function hcrRootFunctions(modulePaths: string[]): string[] {
 	const roots: string[] = [];
 	for (const modPath of modulePaths) {
@@ -1711,7 +1723,15 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 			if (target == null) return Result.err(`HCR module '${manifest.moduleId}' imports '${dependency}', which has no ABI manifest`);
 			imports.push({ moduleId: dependency, abiKey: hcrExportKey(target) });
 		}
-		modules.push({ moduleId: manifest.moduleId, symbols, typeInfos: [], abiKey: hcrExportKey(manifest), imports });
+		modules.push({
+			moduleId: manifest.moduleId,
+			symbols,
+			typeInfos: [],
+			abiKey: hcrExportKey(manifest),
+			imports,
+			beforeReload: [],
+			afterReload: [],
+		});
 	}
 	return Result.ok(modules);
 }
@@ -2024,7 +2044,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
 		const path = hcrModulePaths[i];
-		hcrModules[i].typeInfos = hcrTypeInfoNames(programByPath.has(path) ? programByPath.get(path) : null, path);
+		const program = programByPath.has(path) ? programByPath.get(path) : null;
+		hcrModules[i].typeInfos = hcrTypeInfoNames(program, path);
+		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
+		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
 	for (const cm of checkedMods) {
 		const program = cm.program;

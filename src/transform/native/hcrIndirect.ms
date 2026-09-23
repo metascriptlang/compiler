@@ -12,6 +12,8 @@ export struct HcrIndirectModule {
 	typeInfos: string[];
 	abiKey: string;
 	imports: HcrImport[];
+	beforeReload: string[];
+	afterReload: string[];
 }
 
 export function lowerHcrIndirection(
@@ -26,6 +28,8 @@ export function lowerHcrIndirection(
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrModuleId000(void) { return ${cString(own.moduleId)}; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrAbiKey000(void) { return ${cString(own.abiKey)}; }`, loc));
 	emitted.push(makeEmitStmt(importsFunction(own), loc));
+	if (own.beforeReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrBeforeReload000", own.beforeReload), loc));
+	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
 
 	if (own.symbols.length > 0) {
 		let table = `/*VARSECTION*/static void* const _ms_hcr_table[${own.symbols.length}] = {`;
@@ -76,6 +80,16 @@ export function lowerHcrIndirection(
 	for (const stmt of pd.programStmts) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
+}
+
+function handlerFunction(entry: string, handlers: string[]): string {
+	let prototypes = "";
+	let calls = "";
+	for (const handler of handlers) {
+		prototypes = prototypes + `MS_HCR_EXPORT void ${handler}(void); `;
+		calls = calls + `${handler}(); if (msErrTake()) return 1; `;
+	}
+	return `${prototypes}MS_HCR_EXPORT int32_t ${entry}(void) { ${calls}return 0; }`;
 }
 
 function importsFunction(own: HcrIndirectModule): string {
