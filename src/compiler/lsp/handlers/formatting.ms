@@ -4,10 +4,9 @@ import {
 	TransAmDb, dbParse
 } from "../../transam/index";
 import { writeStderr } from "std/io";
-import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse } from "../protocol";
+import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
-import { printNode as printFormattedNode } from "../../fmt/printer";
-import { formatDoc } from "../../fmt/layout";
+import { formatNode } from "../../fmt/printer";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource } from "./shared";
@@ -61,8 +60,8 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			}
 			const parseResult = parseSource(source);
 			if (parseResult.ok) {
-				const doc = printFormattedNode(parseResult.value, options);
-				_codeActionFmtResult = formatDoc(doc, options);
+				const printed = formatNode(parseResult.value, options);
+				_codeActionFmtResult = printed.ok ? printed.value : "";
 			} else {
 				_codeActionFmtResult = "";
 			}
@@ -99,12 +98,12 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	const options = getFormatOptions(db, path);
 	options.source = source;
-	const doc = printFormattedNode(program, options);
-	const t3 = performance.now();
-	const formatted = formatDoc(doc, options);
+	const printed = formatNode(program, options);
+	if (!printed.ok) return lspErrorResponse(id, -32603, printed.error);
+	const formatted = printed.value;
 	const t4 = performance.now();
 
-	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t3 - t2}ms layout=${t4 - t3}ms source=${source.byteLength}b\n`);
+	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t4 - t2}ms source=${source.byteLength}b\n`);
 
 	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 

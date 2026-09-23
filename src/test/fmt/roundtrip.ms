@@ -23,18 +23,20 @@ import { Node, NodeKind,
 	VariableDeclData, ImportDeclData, ProgramData, ThrowStmtData, TryCatchStmtData,
 	FunctionExprData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData,
 } from "../../ast/node";
-import { printNode } from "../../compiler/fmt/printer/index";
-import { formatDoc } from "../../compiler/fmt/layout";
+import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
 
-// Run fmt over source text; returns formatted output (or "" on parse fail).
 export function fmt(source: string): string {
 	const parsed = parseSource(source);
 	if (!parsed.ok) return "";
 	const opts = defaultFormatOptions();
 	opts.source = source;
-	const doc = printNode(parsed.value, opts);
-	return formatDoc(doc, opts);
+	const res = formatNode(parsed.value, opts);
+	if (!res.ok) {
+		console.log("FMT ERROR: " + res.error);
+		return "";
+	}
+	return res.value;
 }
 
 // Structural fingerprint: kind-tree + key scalars, ignoring positions and
