@@ -891,6 +891,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 						if (exists(candidate)) { fullPath = candidate; break; }
 					}
 				}
+				fullPath = normalize(fullPath);
 				if (!exists(fullPath)) {
 					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
