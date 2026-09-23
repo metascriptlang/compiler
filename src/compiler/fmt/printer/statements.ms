@@ -165,7 +165,8 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 		_ => "let",
 	};
 
-	const parts: Doc[] = [docText(kind + " " + d.declName)];
+	const storage = node.flags.has(NodeFlag.StaticStorage) ? "static " : "";
+	const parts: Doc[] = [docText(storage + kind + " " + d.declName)];
 	if (d.declType != "") {
 		parts.push(docText(": " + d.declType));
 	}

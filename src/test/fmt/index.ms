@@ -78,3 +78,4 @@ import "./cases/genericClauses";
 import "./cases/operatorNames";
 import "./cases/templateRoutine";
 import "./cases/undefinedLiteral";
+import "./cases/staticLocal";
