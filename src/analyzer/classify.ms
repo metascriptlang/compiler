@@ -125,6 +125,14 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// stride from the per-type C array (sizeof data[0]), so they are exact.
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
+	if (elem.kind == TypeKind.Union && elem.typeName == "" && unwrapRefNullUnion(elem) == null
+			&& !isAllStringLiteralUnion(elem)) {
+		if (anonUnionOwnsRc(elem, ctx)) {
+			const n = arrayCTypeName(t);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+		}
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	// Actor elements are exempt from DRC (managed by actor runtime).
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {

@@ -206,6 +206,11 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 	return node;
 }
 
+function rhsMode(rhs: Node): DrcMode {
+	return rhs.kind == NodeKind.HiddenStdConv || rhs.kind == NodeKind.HiddenSubConv || rhs.kind == NodeKind.TypeAssertion
+		? DrcMode.SinkArg : DrcMode.Consumed;
+}
+
 function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cv = node.data as HiddenStdConvData;
 	if (isUnionProjection(node)) {
@@ -1075,7 +1080,8 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+		// Conversions sink; their operand was walked in SinkArg mode (Reference: nkHiddenSubConv/nkConv → genSink(p(ri, sinkArg)))
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => {
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
 		// Move expression → sink + wasMoved on source
@@ -1718,7 +1724,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// depth so processCallExpr keeps its args as borrows (scope outlives flight).
 	const parkedFutInit = stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.AwaitHandle);
 	if (parkedFutInit) dctx.parkedInitDepth += 1;
-	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
+	d.initializer = processNode(d.initializer, dctx, rhsMode(d.initializer));
 	if (parkedFutInit) dctx.parkedInitDepth -= 1;
 	const init = d.initializer;
 
@@ -1839,8 +1845,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
 	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, sym);
 
-	// Process RHS recursively with Consumed mode
-	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
+	bd.right = processNode(bd.right, dctx, rhsMode(bd.right));
 
 	// Reference parity: when dest appears in the RHS (e.g., result = f(result)),
 	// processNode emits wasMoved(dest) as pending because isLastRead is true
