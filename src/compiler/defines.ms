@@ -127,6 +127,12 @@ export function formatDefines(t: DefineTable): string {
 	return out;
 }
 
+export function defineIdentity(t: DefineTable): string {
+	let out = "";
+	for (const n of t.names) out = out + " -d:" + n + "=" + definedValue(t, n);
+	return out;
+}
+
 test "define: bare flag stores true" {
 	const t = createDefineTable();
 	defineSymbol(t, "myFlag", "true");

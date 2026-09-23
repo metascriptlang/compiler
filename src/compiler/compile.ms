@@ -55,6 +55,7 @@ import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
+import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
@@ -1924,7 +1925,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	const buildIdentityFlags = cliLinkFlags(allFlags0, opts);
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines);
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
