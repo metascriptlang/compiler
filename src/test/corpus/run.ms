@@ -17,7 +17,7 @@
 //                             execute alone, after the parallel drain
 //   // @skip-js: why       -> no JS lane; the skip list is the JS backend worklist
 //
-// Programs WITHOUT @maxrss are parity programs: run through C and (unless
+// Programs WITHOUT @maxrss are parity programs: run through C, Raiser and (unless
 // @skip-js) JS-on-node, outputs byte-compared. No golden files.
 //
 // Scheduling: builds run BUILD_SLOTS-wide on the spawn pool and each finished
@@ -219,6 +219,7 @@ interface Spec {
 	xfailLanes: string[];
 	serial: boolean;
 	skipJs: boolean;
+	skipRaiser: boolean;
 	slackTypes: string[];
 	slackNs: int32[];
 }
@@ -311,6 +312,7 @@ function stalenessWarning(): string {
 
 function laneUniverse(spec: Spec): string[] {
 	const lanes: string[] = spec.maxRssMb >= 0.0 ? ["drc", "orc", "danger", "san"] : ["c", "orc", "danger", "san"];
+	if (!spec.skipRaiser) { lanes.push("raiser"); }
 	if (!spec.skipJs) { lanes.push("js"); lanes.push("esm"); }
 	return lanes;
 }
@@ -334,7 +336,7 @@ function commaList(text: string): string[] {
 
 const ONLY: string[] = commaList(envOr("MSCORPUS_ONLY", ""));
 const LANES: string[] = commaList(envOr("MSCORPUS_LANES", ""));
-const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm"];
+const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm", "raiser"];
 
 function narrowingError(specs: Spec[]): string {
 	for (const lane of LANES) {
@@ -384,7 +386,7 @@ function parseSpec(name: string, entry: string): Spec {
 	const spec: Spec = {
 		name, entry,
 		maxRssMb: -1.0, stdoutSub: "", expectExit: 0,
-		xfailLanes: [], serial: false, skipJs: false,
+		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
 	};
 	const src = readFileOr(entry, "");
@@ -400,6 +402,7 @@ function parseSpec(name: string, entry: string): Spec {
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
 		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
+		if (t.indexOf("// @skip-raiser") == 0) { spec.skipRaiser = true; }
 		if (t.indexOf("// @xfail(") == 0) {
 			const close = t.indexOf(")");
 			if (close > 10) { spec.xfailLanes.push(t.slice(10, close)); }
@@ -538,6 +541,9 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 	}
 	if (c.lane == "esm") {
 		return "node " + q(esmEntryJs(c)) + " > " + q(c.dir + "out.log") + " 2>&1";
+	}
+	if (c.lane == "raiser") {
+		return MSC_CMD + " run " + q(c.bin) + " --target=raiser > " + q(c.dir + "out.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
@@ -720,7 +726,7 @@ function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
 	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
-	if (c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm") { finishRssCell(c); return; }
+	if (isRssCell(c)) { finishRssCell(c); return; }
 	finishParityCell(c);
 }
 
@@ -737,12 +743,37 @@ function reportCell(c: Cell, t: Tally): void {
 	}
 }
 
+function isRssCell(c: Cell): boolean {
+	return c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm" && c.lane != "raiser";
+}
+
 function comparableOutputOf(c: Cell): string {
-	return c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm" ? c.dir + "stdout.log" : c.dir + "out.log";
+	return isRssCell(c) ? c.dir + "stdout.log" : c.dir + "out.log";
+}
+
+function judgeXfailCell(c: Cell, judged: Cell[], t: Tally): void {
+	if (c.pass) {
+		let basePass = judged.length > 0;
+		for (const j of judged) { if (!j.pass) { basePass = false; } }
+		if (!basePass) {
+			c.pass = false;
+			c.detail = c.detail + " [unjudged: no green base lane]";
+		} else if (readFileOr(comparableOutputOf(c), "") != readFileOr(comparableOutputOf(judged[0]), "")) {
+			c.pass = false;
+			c.detail = c.detail + " [output differs from " + judged[0].lane + "]";
+		}
+	}
+	reportCell(c, t);
 }
 
 // byte-compare a finished parity group; one extra verdict line per program
-function compareParityGroup(cells: Cell[], t: Tally): void {
+function compareParityGroup(group: Cell[], t: Tally): void {
+	const cells: Cell[] = [];
+	const expected: Cell[] = [];
+	for (const c of group) {
+		if (isXfail(c)) { expected.push(c); } else { cells.push(c); }
+	}
+	for (const c of expected) { judgeXfailCell(c, cells, t); }
 	if (cells.length < 2) { return; }
 	for (const c of cells) {
 		if (!c.pass) { return; }
@@ -813,6 +844,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 				jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
 			}
 		}
+		if (!spec.skipRaiser) { jobs.push({ spec, lane: "raiser", cmd: "", cell: makeCell(spec, "raiser", spec.entry) }); }
 	}
 	return jobs;
 }
@@ -839,6 +871,7 @@ const BUILD_OK_RETRIED: int32 = 1;
 const BUILD_FAILED: int32 = 2;
 
 function buildOneJob(job: Readonly<BuildJob>): int32 {
+	if (job.cmd == "") { return BUILD_OK; }
 	let b = runCapture(job.cmd);
 	const jsLane = job.lane == "js" || job.lane == "esm";
 	let builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
@@ -899,10 +932,15 @@ function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 		if (!c.launched || c.finished) { continue; }
 		if (cellTimedOut(c)) { failCellTimeout(c, t); continue; }
 		if (!cellDone(c)) { continue; }
-		finishCell(c);
-		reportCell(c, t);
-		if (!SAN) { parityDone.push(c); }
+		settleCell(c, t, parityDone);
 	}
+}
+
+function settleCell(c: Cell, t: Tally, parityDone: Cell[]): void {
+	finishCell(c);
+	if (SAN) { reportCell(c, t); return; }
+	if (!isXfail(c)) { reportCell(c, t); }
+	parityDone.push(c);
 }
 
 function waitForSlot(running: Cell[], t: Tally, parityDone: Cell[]): void {
@@ -1003,7 +1041,7 @@ function main(): void {
 			if (code == BUILD_OK_RETRIED) {
 				progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
 			}
-			progress("  · built " + job.spec.name + " [" + job.lane + "]");
+			if (job.cmd != "") { progress("  · built " + job.spec.name + " [" + job.lane + "]"); }
 			if (job.cell.spec.serial) {
 				pendingSerial.push(job.cell);
 			} else {
@@ -1026,8 +1064,7 @@ function main(): void {
 		launchCell(c);
 		while (!cellDone(c) && !cellTimedOut(c)) { pollSleep("0.05", 50); }
 		if (cellTimedOut(c)) { failCellTimeout(c, t); continue; }
-		finishCell(c);
-		reportCell(c, t);
+		settleCell(c, t, parityDone);
 	}
 
 	// parity byte-compare per program (all lanes finished by now)
