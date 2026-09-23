@@ -305,9 +305,9 @@ rejected before codegen with `HCR cannot share exported variable '<id>::<name>' 
 '<id>' across module images`. Without that check both `export const` and `export let`
 failed the link with `undefined symbol`.
 
-On 2026-09-23, Windows 11 x64 with zig 0.16.0, source tree `6dacd978` plus the S3b working
-tree, `MSC=out/msc-s3b.exe bash src/test/hcr/run.sh` printed `ok   hcrModuleAbi`,
-`ok   hcrIndirect` and `ok   hcrWindowsReload`. The host loaded `logic`, `shapes` and `app`
+On 2026-09-23, Windows 11 x64 with zig 0.16.0, the S3b branch rebased on `f9ce6c7b`,
+`MSC=out/msc-s3b2.exe out/msc-s3b2.exe run src/test/hcr/run.ms --target=raiser` printed
+`ok   hcrModuleAbi`, `ok   hcrIndirect` and `ok   hcrWindowsReload`. The host loaded `logic`, `shapes` and `app`
 from `g1`, then published `g2/module.logic.dll` built after a body edit; the app image was
 not reloaded:
 
@@ -325,8 +325,8 @@ HCR-HOST gen2 hcrTickValue -> 11
 
 `hcrShapeValue` crosses images with `instanceof` and a dispatched method, `hcrErrorValue`
 catches an exception thrown in another image through the TLS error flag, and `hcrTickValue`
-keeps `logic`'s lifted counter across the reload (`1`, then `1 + 10`). The same runner on the
-S3a compiler stopped at `FAIL hcrIndirect: the app image DatInit does not initialize the
+keeps `logic`'s lifted counter across the reload (`1`, then `1 + 10`). Before the port to
+`run.ms`, the same cases in the shell runner stopped on the S3a compiler at `FAIL hcrIndirect: the app image DatInit does not initialize the
 core image first`. Not verified: Linux and macOS images (this machine's `--os=linux --cc=zig`
 cross-build fails at `runtime/core/system.c (exit -1)` without `--hcr` too, and the session
 could not run WSL), Windows ARM64, and an object of a previous generation checked with
