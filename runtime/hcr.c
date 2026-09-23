@@ -1,4 +1,5 @@
 #include "runtime/hcr.h"
+#include "runtime/hcrEngine.h"
 #include "runtime/types.h"
 #include "runtime/hcrTls.h"
 #include <string.h>
@@ -22,6 +23,8 @@ typedef struct MsHcrTypeEntry {
 static MsHcrEntry* msHcrEntries = NULL;
 static MsHcrTypeEntry* msHcrTypes = NULL;
 static int msHcrStaging = 0;
+static char* msHcrDir = NULL;
+static char* msHcrStem = NULL;
 
 static char* msHcrCopy(const char* text, const char* what) {
 	size_t length = strlen(text);
@@ -125,3 +128,17 @@ void* msHcrTypeInfo(const char* moduleId, const char* typeName) {
 	msHcrTypes = entry;
 	return &entry->info;
 }
+
+void msHcrLaunch(const char* dir, const char* stem) {
+	if (msHcrDir != NULL) {
+		fprintf(stderr, "HCR: the engine was already launched from '%s'\n", msHcrDir);
+		abort();
+	}
+	msHcrDir = msHcrCopy(dir, "launch directory");
+	msHcrStem = msHcrCopy(stem, "launch stem");
+	msHcrCoreInit();
+}
+
+msString msHcrLaunchDir(void) { return msStringFromCStr(msHcrDir != NULL ? msHcrDir : ""); }
+
+msString msHcrLaunchStem(void) { return msStringFromCStr(msHcrStem != NULL ? msHcrStem : ""); }
