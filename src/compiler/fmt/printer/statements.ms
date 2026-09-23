@@ -174,9 +174,13 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 function bracelessOnLine(body: Node, line: int32, options: FormatOptions): Node | null {
 	if (options.source == "" || body.kind != NodeKind.BlockStmt || body.location.line != line) return null;
 	const block = body.data as BlockStmtData;
-	if (block.statements.length != 1 || block.statements[0].comments.length > 0) return null;
+	if (block.statements.length != 1) return null;
+	const stmt = block.statements[0];
+	for (const c of stmt.comments) {
+		if (c.line < stmt.location.line) return null;
+	}
 	if (sourceByteAt(options.source, body.location.line, body.location.column) == "{".code) return null;
-	return block.statements[0];
+	return stmt;
 }
 
 function printBody(body: Node, line: int32, options: FormatOptions): Doc {
