@@ -71,16 +71,10 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			// const char* → cstring (base is Char regardless of const)
 			// Function pointer → closure type
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
-			// Struct pointer → Ptr<StructName>, opaque (incomplete) → Ptr<void>
-			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") {
-				if (!t.base.isComplete) return "Ptr<void>";
-				return `Ptr<${t.base.tagName}>`;
-			}
+			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
+			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") return `Ptr<${t.base.tagName}>`;
 			const inner = cTypeToMs(t.base);
-			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) {
-				if (!t.base.isComplete) return "Ptr<void>";
-				return `Ptr<${inner}>`;
-			}
+			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) return `Ptr<${inner}>`;
 			// Other typed pointer — const pointee → Borrow<T> (read-only, accepts arr[0]
 			// borrow-promotion); mutable → Ptr<T>.
 			return t.base.isConst ? `Borrow<${inner}>` : `Ptr<${inner}>`;
@@ -170,8 +164,18 @@ function emitEnum(objs: Obj[], enumType: CType, enumName: string, prefix: string
 	return result;
 }
 
+function isOpaqueTag(t: CType): boolean {
+	return (t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.tagName != "" && !t.isComplete;
+}
+
+function emitOpaqueTag(t: CType, prefix: string): string {
+	const keyword = t.kind == CTypeKind.Union ? "union" : "struct";
+	return `${prefix}extern struct ${t.tagName} from "${keyword} ${t.tagName}";\n`;
+}
+
 function emitTypedef(obj: Obj, prefix: string): string {
 	const t = obj.type;
+	if (isOpaqueTag(t) && t.tagName == obj.name) return `${prefix}extern struct ${obj.name};\n`;
 	// Struct/union typedef → emit as extern struct
 	if ((t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.members.length > 0) {
 		return emitStructBody(obj.name, t, prefix);
@@ -234,6 +238,8 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 
 	// Track which enum types we've already emitted
 	const emittedEnums: string[] = [];
+	const declaredNames = new HashSet<string>();
+	const opaqueTags: CType[] = [];
 
 	let result = "";
 	for (const obj of parsed.objs) {
@@ -268,9 +274,21 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 			},
 			_ => {},
 		};
-		if (emittedNames != null && obj.name != "" && result.length > lenBefore) {
-			emittedNames.add(obj.name);
+		if (result.length > lenBefore) {
+			if (emittedNames != null && obj.name != "") emittedNames.add(obj.name);
+			declaredNames.add(obj.name);
+			collectOpaqueTags(obj.type, opaqueTags, new HashSet<string>());
 		}
+	}
+
+	for (const tag of opaqueTags) {
+		if (declaredNames.has(tag.tagName)) continue;
+		if (emittedNames != null) {
+			if (emittedNames.has(tag.tagName)) continue;
+			emittedNames.add(tag.tagName);
+		}
+		declaredNames.add(tag.tagName);
+		result = result + emitOpaqueTag(tag, prefix);
 	}
 
 	return result;
@@ -308,6 +326,27 @@ function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<stri
 	if (t.returnType != null) collectTypeRefNames(t.returnType, refs, seen);
 	for (const p of t.params) collectTypeRefNames(p, refs, seen);
 	for (const m of t.members) collectTypeRefNames(m.type, refs, seen);
+}
+
+function collectOpaqueTags(t: CType, out: CType[], seen: HashSet<string>): void {
+	if (t == null) return;
+	if (t.typedefName != "" && mapRuntimeType(t.typedefName) != "") return;
+	if (isOpaqueTag(t)) {
+		for (const o of out) {
+			if (o.tagName == t.tagName) return;
+		}
+		out.push(t);
+		return;
+	}
+	if ((t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.tagName != "") {
+		const key = "tag:" + t.tagName;
+		if (seen.has(key)) return;
+		seen.add(key);
+	}
+	if (t.base != null) collectOpaqueTags(t.base, out, seen);
+	if (t.returnType != null) collectOpaqueTags(t.returnType, out, seen);
+	for (const p of t.params) collectOpaqueTags(p, out, seen);
+	for (const m of t.members) collectOpaqueTags(m.type, out, seen);
 }
 
 function arrayContains(arr: string[], val: string): boolean {
@@ -367,16 +406,45 @@ test "emit pointer types" {
 	assert ms.indexOf("name: cstring") >= 0;
 }
 
-test "opaque struct-pointer typedef maps to Ptr<void> not unknown" {
+test "opaque struct-pointer typedef points at its tag declared under its C name" {
 	const ms = translateCHeader("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);", [], false);
-	assert ms.indexOf("OpaqueRef = Ptr<void>") >= 0;
+	assert ms.indexOf("OpaqueRef = Ptr<Opaque>") >= 0;
+	assert ms.indexOf("extern struct Opaque from \"struct Opaque\";") >= 0;
 	assert ms.indexOf("unknown") < 0;
+}
+
+test "opaque union pointer is declared as a union" {
+	const ms = translateCHeader("union U;\nunion U* getU(void);", [], false);
+	assert ms.indexOf("getU(): Ptr<U>") >= 0;
+	assert ms.indexOf("extern struct U from \"union U\";") >= 0;
+}
+
+test "opaque typedef named after its tag is declared once under the typedef name" {
+	const ms = translateCHeader("typedef struct X X;\nX* mkX(void);\nvoid useX(struct X* x);", [], false);
+	assert ms.indexOf("extern struct X;") >= 0;
+	assert ms.indexOf("from \"struct X\"") < 0;
+	assert ms.indexOf("mkX(): Ptr<X>") >= 0;
+}
+
+test "name filter keeps the opaque tag behind an imported handle" {
+	const ms = translateCHeader("typedef struct Impl* H;\nstruct Other;\nint use(H h);\nint skip(struct Other* o);", ["use"], false);
+	assert ms.indexOf("extern struct Impl from \"struct Impl\";") >= 0;
+	assert ms.indexOf("Other") < 0;
+}
+
+test "opaque tag already declared by an earlier import site is not declared again" {
+	const seen = new HashSet<string>();
+	const first = translateCHeader("struct T;\nstruct T* a(void);", [], false, "header.h", [], null as unknown as Diagnostic[], seen);
+	const second = translateCHeader("struct T;\nstruct T* b(void);", [], false, "header.h", [], null as unknown as Diagnostic[], seen);
+	assert first.indexOf("extern struct T from") >= 0;
+	assert second.indexOf("extern struct T") < 0;
+	assert second.indexOf("b(): Ptr<T>") >= 0;
 }
 
 test "handle written through a pointer param binds as out" {
 	const ms = translateCHeader("typedef struct Impl* H;\nstruct S;\nint mk(H* out);\nint mk2(struct S** out);\nint mk3(void** out);\nint argv(char** v);\nint ro(const H* h);", [], false);
 	assert ms.indexOf("mk(out out: H)") >= 0;
-	assert ms.indexOf("mk2(out out: Ptr<void>)") >= 0;
+	assert ms.indexOf("mk2(out out: Ptr<S>)") >= 0;
 	assert ms.indexOf("mk3(out out: Ptr<void>)") >= 0;
 	assert ms.indexOf("argv(v: Ptr<cstring> | null)") >= 0;
 	assert ms.indexOf("out h") < 0;
