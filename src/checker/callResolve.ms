@@ -7,6 +7,7 @@ import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
+import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
@@ -1511,6 +1512,9 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 				if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess) {
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+				} else {
+					const refusal = writeRefusal(lvArg, true);
+					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 				}
 			}
 			if (needsStdConv(argTypes[pi], paramType)) {

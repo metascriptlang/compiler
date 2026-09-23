@@ -1420,9 +1420,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (d.forOfPattern != null) {
 		// Destructured for-of: define symbols for each pattern element
-		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst);
+		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
 	} else {
 		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
+		setFlag(forSym, SymbolFlag.ForVar);
 		defineSymbol(ctx.table, forSym);
 		node.resolvedSym = forSym;
 		// Loop binding is always initialized (iterator provides the value)
@@ -1445,7 +1446,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 }
 
-function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean): void {
+function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {
 	if (pattern.kind == NodeKind.ArrayPattern) {
 		const apd = pattern.data as ArrayPatternData;
 		let i = 0;
@@ -1460,6 +1461,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
 					const elemSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+					if (forVar) setFlag(elemSym, SymbolFlag.ForVar);
 					defineSymbol(ctx.table, elemSym);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
@@ -1475,6 +1477,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
 						const restSym = makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
+						if (forVar) setFlag(restSym, SymbolFlag.ForVar);
 						defineSymbol(ctx.table, restSym);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
@@ -1501,6 +1504,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
 						const objRestSym = makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
+						if (forVar) setFlag(objRestSym, SymbolFlag.ForVar);
 						defineSymbol(ctx.table, objRestSym);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
@@ -1518,6 +1522,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
 				const aliasSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+				if (forVar) setFlag(aliasSym, SymbolFlag.ForVar);
 				defineSymbol(ctx.table, aliasSym);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
@@ -1533,7 +1538,9 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
-	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, inferredType(), !d.forInIsConst));
+	const forInSym = makeSymbol(d.forInBinding, SymbolKind.Variable, inferredType(), !d.forInIsConst);
+	setFlag(forInSym, SymbolFlag.ForVar);
+	defineSymbol(ctx.table, forInSym);
 	markInitialized(ctx.initTracker, d.forInBinding);
 	checkStmt(ctx, d.forInBody);
 	exitLoopScope(ctx, saved);
@@ -2064,7 +2071,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit, null);
 	const initType = d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
-	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst);
+	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, false);
 }
 
 // ===== Check Program Body =====

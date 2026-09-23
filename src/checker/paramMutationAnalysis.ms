@@ -155,17 +155,15 @@ export function findMutationLocation(node: Node | null, paramName: string, inter
 		const d = node.data as BinaryExprData;
 		if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
 			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
-			if (getRootName(d.left) == paramName
-				&& (!interiorOnly || d.left.kind != NodeKind.Identifier)) return node.location;
+			if (!interiorOnly && getRootName(d.left) == paramName) return node.location;
 		}
 	}
 	if (node.kind == NodeKind.UpdateExpr) {
 		const ua = (node.data as UpdateExprData).updateArg;
-		if (getRootName(ua) == paramName
-			&& (!interiorOnly || ua.kind != NodeKind.Identifier)) return node.location;
+		if (!interiorOnly && getRootName(ua) == paramName) return node.location;
 	}
 	if (node.kind == NodeKind.HiddenAddr) {
-		if (getRootName((node.data as { expr: Node }).expr) == paramName) return node.location;
+		if (!interiorOnly && getRootName((node.data as { expr: Node }).expr) == paramName) return node.location;
 	}
 	if (node.kind == NodeKind.FunctionDecl) return makeLoc(0, 0);
 	if (node.kind == NodeKind.BlockStmt) {
@@ -276,22 +274,20 @@ export function scanForMutation(node: Node | null, paramName: string, interiorOn
 			const d = node.data as BinaryExprData;
 			if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
 				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
-				if (getRootName(d.left) == paramName
-					&& (!interiorOnly || d.left.kind != NodeKind.Identifier)) return true;
+				if (!interiorOnly && getRootName(d.left) == paramName) return true;
 			}
 			return scanForMutation(d.left, paramName, interiorOnly) || scanForMutation(d.right, paramName, interiorOnly);
 		},
 
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			if (getRootName(d.updateArg) == paramName
-				&& (!interiorOnly || d.updateArg.kind != NodeKind.Identifier)) return true;
+			if (!interiorOnly && getRootName(d.updateArg) == paramName) return true;
 			return false;
 		},
 
 		NodeKind.HiddenAddr => {
 			const inner = (node.data as { expr: Node }).expr;
-			if (getRootName(inner) == paramName) return true;
+			if (!interiorOnly && getRootName(inner) == paramName) return true;
 			return scanForMutation(inner, paramName, interiorOnly);
 		},
 

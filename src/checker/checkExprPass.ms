@@ -11,6 +11,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
+import { writeRefusal } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -114,8 +115,12 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 		return;
 	}
 	const ro = readonlyPrefixType(target);
-	if (ro == null) return;
-	reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
+	if (ro != null) {
+		reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
+		return;
+	}
+	const refusal = writeRefusal(target, false);
+	if (refusal != "") addError(ctx, refusal, target.location.line, target.location.column);
 }
 
 function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
