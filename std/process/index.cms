@@ -123,7 +123,7 @@ export function execFile(path: string, args: string[] = []): number {
 	return msProcessExecFile(path, args);
 }
 
-extern function msProcessSpawnSyncArgv(path: string, args: string[]): string;
+extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string): string;
 
 // Direct-argv counterpart of exec(): spawn `path` with `args` — no /bin/sh, no
 // cmd.exe — capturing stdout/stderr/exit/signal exactly like exec(). Same
@@ -135,8 +135,8 @@ extern function msProcessSpawnSyncArgv(path: string, args: string[]): string;
 // (compilers, build tools) rather than written as a shell one-liner: without
 // a shell there is no quote-stripping, no 8191-char line cap, no AutoRun, and
 // no temptation to lean on shell-only syntax (`rm -f`, `2>/dev/null`).
-export function execFileCapture(path: string, args: string[] = []): Result<string, ProcessError> {
-	const stdoutText = msProcessSpawnSyncArgv(path, args);
+export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
 		return Result.err(spawnFailed(path, "fork/exec failed"));

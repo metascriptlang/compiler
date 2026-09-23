@@ -782,8 +782,10 @@ static inline msString msProcessSpawnSync(msString command) {
  *   resolves through the standard search order (exe dir, cwd, system dirs,
  *   PATH). The W API also makes paths outside the ANSI codepage work.
  * - POSIX: posix_spawnp (PATH search) with dup2 file actions onto two pipes.
+ *
+ * A non-empty `cwd` is the child's working directory; empty inherits ours.
  */
-static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args) {
+static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args, msString cwd) {
 	/* Reset side-channel state for this invocation. */
 	_msProcSpawnExitCode = 0;
 	_msProcSpawnSignal = 0;
@@ -856,6 +858,25 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args)
 		return MS_EMPTY_STRING;
 	}
 
+	wchar_t* wcwd = NULL;
+	if (cwd.len > 0) {
+		const char* cwdStr = msStringToCString(cwd);
+		int cwdLen = MultiByteToWideChar(CP_UTF8, 0, cwdStr, -1, NULL, 0);
+		if (cwdLen > 0) wcwd = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)cwdLen);
+		if (wcwd == NULL || MultiByteToWideChar(CP_UTF8, 0, cwdStr, -1, wcwd, cwdLen) == 0) {
+			free(cmdLine);
+			free(wcmd);
+			if (wcwd) free(wcwd);
+			CloseHandle(outRd); CloseHandle(outWr);
+			CloseHandle(errRd); CloseHandle(errWr);
+			ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+			return MS_EMPTY_STRING;
+		}
+		for (wchar_t* p = wcwd; *p; p++) {
+			if (*p == L'/') *p = L'\\';
+		}
+	}
+
 	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 	ZeroMemory(&si, sizeof(si));
@@ -866,9 +887,10 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args)
 	si.hStdError = errWr;
 	ZeroMemory(&pi, sizeof(pi));
 
-	BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+	BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, wcwd, &si, &pi);
 	free(cmdLine);
 	free(wcmd);
+	if (wcwd) free(wcwd);
 	CloseHandle(outWr);  /* child writes; parent reads */
 	CloseHandle(errWr);
 	/* Both write ends are gone from this process — end of the critical
@@ -929,6 +951,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args)
 	posix_spawn_file_actions_adddup2(&fa, errPipe[1], STDERR_FILENO);
 	posix_spawn_file_actions_addclose(&fa, outPipe[1]);
 	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
+	if (cwd.len > 0) posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd));
 	pid_t pid = 0;
 	int spawnErr = posix_spawnp(&pid, exeStr, &fa, NULL, argv, MS_SPAWN_ENVIRON);
 	posix_spawn_file_actions_destroy(&fa);

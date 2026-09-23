@@ -312,7 +312,7 @@ function _bridgeMsProcessExecFile(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
-	const r = execFileCapture(unboxString(args[0]), _unboxStringArrayArg(args[1]));
+	const r = execFileCapture(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]));
 	if (r.ok) {
 		_resetSpawnStateOk(r.value);
 	} else {
