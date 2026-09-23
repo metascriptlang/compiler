@@ -10,6 +10,7 @@ export struct HcrIndirectModule {
 	moduleId: string;
 	symbols: string[];
 	typeInfos: string[];
+	typeKeys: string[];
 	abiKey: string;
 	imports: HcrImport[];
 	beforeReload: string[];
@@ -28,6 +29,7 @@ export function lowerHcrIndirection(
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrModuleId000(void) { return ${cString(own.moduleId)}; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrAbiKey000(void) { return ${cString(own.abiKey)}; }`, loc));
 	emitted.push(makeEmitStmt(importsFunction(own), loc));
+	emitted.push(makeEmitStmt(typeKeysFunction(own), loc));
 	if (own.beforeReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrBeforeReload000", own.beforeReload), loc));
 	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
 
@@ -96,6 +98,12 @@ function importsFunction(own: HcrIndirectModule): string {
 	let entries = "";
 	for (const entry of own.imports) entries = entries + `${cString(entry.moduleId)}, ${cString(entry.abiKey)}, `;
 	return `MS_HCR_EXPORT const char* const* HcrImports000(void) { static const char* const imports[] = { ${entries}NULL }; return imports; }`;
+}
+
+function typeKeysFunction(own: HcrIndirectModule): string {
+	let entries = "";
+	for (const entry of own.typeKeys) entries = entries + `${cString(entry)}, `;
+	return `MS_HCR_EXPORT const char* const* HcrTypeKeys000(void) { static const char* const keys[] = { ${entries}NULL }; return keys; }`;
 }
 
 function cString(value: string): string {
