@@ -86,7 +86,8 @@ function isRightAssocOp(op: string): boolean {
 
 export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as UnaryExprData;
-	return docGroup([docText(d.unaryOp), printAtom(d.operand, options)]);
+	const op = d.unaryOp == "typeof" || d.unaryOp == "void" || d.unaryOp == "delete" ? d.unaryOp + " " : d.unaryOp;
+	return docGroup([docText(op), printAtom(d.operand, options)]);
 }
 
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
