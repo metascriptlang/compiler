@@ -57,6 +57,7 @@ static inline int32_t msHcrWinIsNull(void* value) { return value == NULL ? 1 : 0
 static inline void* msHcrWinNull(void) { return NULL; }
 static inline void* msHcrWinCallHandover(void* raw, void* state) { return ((void* (*)(void*))raw)(state); }
 static inline void msHcrWinCallInit(void* raw) { ((void (*)(void))raw)(); }
+static inline int32_t msHcrWinCallProbe(void* raw) { return ((int32_t (*)(void))raw)(); }
 #endif
 
 #endif

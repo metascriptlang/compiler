@@ -25,6 +25,8 @@ extern function hcrIsNull(value: unknown): int32 from "msHcrWinIsNull";
 extern function hcrNull(): unknown from "msHcrWinNull";
 extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrWinCallHandover";
 extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
+extern function hcrCallStatus(raw: unknown): int32 from "msHcrWinCallProbe";
+extern function msHcrRollback(moduleId: cstring): void;
 
 export enum HcrReloadKind {
 	NoChange,
@@ -81,6 +83,7 @@ let coreIdentity: uint64 = 0;
 let bundleIdentity: uint64 = 0;
 let pending = false;
 const modules: HcrModule[] = [];
+const discovering: string[] = [];
 
 function result(kind: HcrReloadKind, names: string[], reason: string): HcrReloadResult {
 	return { kind, modules: names, reason };
@@ -161,6 +164,10 @@ function forgetAfter(count: int32): void {
 	while (modules.length > count) modules.pop();
 }
 
+function beginDiscovery(): void {
+	while (discovering.length > 0) discovering.pop();
+}
+
 function discover(moduleId: string, source: string, order: HcrCandidate[]): string {
 	const loaded = copyLoad(source);
 	if (loaded.error != 0) return loadFailure(source, loaded.error);
@@ -175,13 +182,17 @@ function discover(moduleId: string, source: string, order: HcrCandidate[]): stri
 		return `${source} declares module '${module.moduleId}', expected '${moduleId}'`;
 	}
 	if (moduleId == "") entryId = module.moduleId;
-	modules.push(module);
+	discovering.push(module.moduleId);
 	const candidate: HcrCandidate = { module, image: loaded.image, identity: module.identity, isNew: true };
 	for (const dependency of loaded.image.importIds) {
-		if (findModule(dependency) != null) continue;
+		if (findModule(dependency) != null || discovering.includes(dependency)) continue;
 		const failure = discover(dependency, imagePath(dependency), order);
-		if (failure != "") return failure;
+		if (failure != "") {
+			hcrClose(loaded.image.handle);
+			return failure;
+		}
 	}
+	modules.push(module);
 	order.push(candidate);
 	return "";
 }
@@ -210,6 +221,7 @@ export function start(): int32 {
 	coreIdentity = msHcrFileIdentity(corePath());
 	bundleIdentity = msHcrFileIdentity(bundlePath());
 	const order: HcrCandidate[] = [];
+	beginDiscovery();
 	const failure = discover("", `${launchDir}/${launchStem}.dll`, order);
 	if (failure != "") fatal(failure);
 	started = true;
@@ -221,6 +233,15 @@ export function start(): int32 {
 
 function release(candidates: HcrCandidate[]): void {
 	for (const item of candidates) hcrClose(item.image.handle);
+}
+
+function failingHandler(entry: string, count: int32): string {
+	for (let i: int32 = 0; i < count; i += 1) {
+		const module = modules[i];
+		const raw = symbolOf(module.image.handle, entry);
+		if (hcrIsNull(raw) == 0 && hcrCallStatus(raw) != 0) return module.moduleId;
+	}
+	return "";
 }
 
 function effectiveImage(moduleId: string, candidates: HcrCandidate[]): HcrImage | null {
@@ -285,6 +306,7 @@ export function reload(): HcrReloadResult {
 	pending = false;
 
 	const added: HcrCandidate[] = [];
+	beginDiscovery();
 	for (const item of candidates) {
 		for (const dependency of item.image.importIds) {
 			if (findModule(dependency) != null) continue;
@@ -325,13 +347,28 @@ export function reload(): HcrReloadResult {
 		states.push(state);
 	}
 
+	const quiesceFailed = failingHandler("HcrBeforeReload000", known);
+	if (quiesceFailed != "") {
+		release(candidates);
+		forgetAfter(known);
+		bundleIdentity = bundle;
+		return result(HcrReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
+	}
+
 	msHcrStageBegin();
 	for (const item of candidates) hcrCallInit(required(item.image, "DatInit000"));
 	msHcrStageEnd();
 	const names: string[] = [];
+	const committed: boolean[] = [];
+	const previousImages: HcrImage[] = [];
+	const previousIdentities: uint64[] = [];
 	for (let i = 0; i < candidates.length; i += 1) {
 		const item = candidates[i];
-		if (msHcrStaged(item.module.moduleId) != 0) msHcrCommit(item.module.moduleId);
+		const staged = msHcrStaged(item.module.moduleId) != 0;
+		if (staged) msHcrCommit(item.module.moduleId);
+		committed.push(staged);
+		previousImages.push(item.module.image);
+		previousIdentities.push(item.module.identity);
 		item.module.image = item.image;
 		item.module.image.state = states[i];
 		item.module.identity = item.identity;
@@ -342,7 +379,18 @@ export function reload(): HcrReloadResult {
 		if (item.isNew) hcrCallInit(required(item.image, "Init000"));
 	}
 	bundleIdentity = bundle;
-	return result(HcrReloadKind.Reloaded, names, "");
+
+	const resumeFailed = failingHandler("HcrAfterReload000", modules.length);
+	if (resumeFailed == "") return result(HcrReloadKind.Reloaded, names, "");
+	for (let i = 0; i < candidates.length; i += 1) {
+		const item = candidates[i];
+		if (item.isNew) continue;
+		if (committed[i]) msHcrRollback(item.module.moduleId);
+		item.module.image = previousImages[i];
+		item.module.identity = previousIdentities[i];
+	}
+	return result(HcrReloadKind.Rejected, [resumeFailed],
+		`the after-reload handler of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
 }
 
 export function reloadKindName(kind: HcrReloadKind): string {
