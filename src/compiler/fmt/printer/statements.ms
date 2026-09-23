@@ -63,6 +63,10 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
+function lastLineOf(node: Node): int32 {
+	return node.location.endLine > 0 ? node.location.endLine : node.location.line;
+}
+
 function unpicked(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
@@ -92,7 +96,8 @@ export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
 			if (comment.line < node.location.line) {
 				leading.push(docText(comment.value));
 				leading.push(docHardLine());
-			} else if (comment.line == node.location.line) {
+			} else if (comment.line == node.location.line
+				|| (node.location.endLine > 0 && comment.line == node.location.endLine && comment.column >= node.location.endColumn)) {
 				trailing.push(docLineSuffix([docText(" " + comment.value)]));
 				if (comment.value.startsWith("//")) trailing.push(docBreakParent());
 			} else {
@@ -259,7 +264,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 			}
 			const braceless = bracelessStatement(d.consequent, options);
 			const elseOnOwnLine = beforeElse.length > 0
-				|| (braceless != null && d.alternate.location.line > braceless.location.line);
+				|| (braceless != null && d.alternate.location.line > lastLineOf(braceless));
 			parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else ")]) : docText(" else "));
 			parts.push(d.alternate.kind == NodeKind.IfStmt
 				? callPrintNode(d.alternate, options)
