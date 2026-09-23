@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
@@ -918,6 +918,7 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	let vi = variantIndexInUnion(formal, valueType);
 	if (vi < 0) vi = structuralMemberIndex(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
+	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	// A by-value slot READS a ref operand and copies it, never consumes it:
 	// handing the pointer to the conversion makes the analyzer sink it
@@ -959,13 +960,25 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
+function declaredTypeOfLocation(loc: Node): Type | null {
+	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null ? loc.resolvedSym.symbolType : null;
+	if (loc.kind != NodeKind.MemberExpr) return null;
+	const md = loc.data as MemberExprData;
+	const owner = md.object != null ? peelToStructOrUnion(md.object.nodeType) : null;
+	if (owner == null || owner.kind != TypeKind.Struct) return null;
+	for (let i = 0; i < owner.typeNames.length && i < owner.typeChildren.length; i += 1) {
+		if (owner.typeNames[i] == md.property) return owner.typeChildren[i];
+	}
+	return null;
+}
+
 function declaredTagUnionOf(expr: Node): Type | null {
 	let walk: Node = expr;
 	while (walk != null && walk.kind == NodeKind.TypeAssertion) {
 		walk = (walk.data as TypeAssertionData).asExpr;
 	}
-	if (walk == null || walk.kind != NodeKind.Identifier || walk.resolvedSym == null) return null;
-	const t = walk.resolvedSym.symbolType;
+	if (walk == null) return null;
+	const t = declaredTypeOfLocation(walk);
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return null;
 	if (unwrapRefNullUnion(t) != null) return null;
 	let allStrLit = true;

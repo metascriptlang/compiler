@@ -1571,9 +1571,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					pi = pi + 1;
 				}
 				const anonName = anonStructName(fieldNames, fieldTypes);
-				const anonType = createStruct(anonName, fieldNames, fieldTypes, false);
-				node.nodeType = anonType;
-				node.nodeType = anonType; return;
+				node.nodeType = createRef(createStruct(anonName, fieldNames, fieldTypes, false)); return;
 			}
 		},
 		NodeKind.ArrayLiteral => {
@@ -1831,6 +1829,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					srcType = d.asExpr.nodeType;
 				}
 			}
+			if (srcType != null && srcType.kind != TypeKind.Union) {
+				const projected = narrowUnionToVariant(d.asExpr, srcType);
+				if (projected != null as unknown as Node) {
+					node.data = { asExpr: projected, asType: d.asType };
+					d = node.data as TypeAssertionData;
+				}
+			}
 			// Nil typing: collapse `null as T` into typed NullLiteral.
 			if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
 			if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
@@ -1861,10 +1866,19 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = targetType;
 				}
+			} else if (srcType != null && srcType.kind == TypeKind.Union && targetType.kind == TypeKind.Ref
+				&& targetType.typeReturn != null) {
+				const refTarget = targetType.typeReturn;
+				const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
+				node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
 			} else {
 				node.nodeType = targetType;
 			}
-			const castSrcUnknown = (srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
+			if (srcType != null && srcType.kind != TypeKind.Union && targetType.kind == TypeKind.Union) {
+				const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
+				if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
+			}
+			const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
 			if (castSrcUnknown != null && isUnknownType(castSrcUnknown)
 				&& !isUnresolvedType(targetType) && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);

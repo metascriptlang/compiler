@@ -656,6 +656,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// Nominal mismatch: both have names but they differ → not a match.
 		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
 		if (objName != "") return false;
+		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
 	}
 	return isAssignable(objType, receiverType);
 }

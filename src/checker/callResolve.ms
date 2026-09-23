@@ -3225,9 +3225,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// stamped on the per-site property sym so codegen routes `.v<slot-1>.field`
 		// instead of guessing by field name (which is offset-blind).
 		let narrowedSlot = 0;
+		const pinnedVariant = narrowedObjType != null && narrowedObjType.kind == TypeKind.Ref && narrowedObjType.typeReturn != null
+			? narrowedObjType.typeReturn : narrowedObjType;
 		if (narrowedObjType != null && narrowedObjType != resolvedObjType
-				&& narrowedObjType.kind == TypeKind.Struct) {
-			const fieldInVariant = findFieldInVariant(narrowedObjType, d.property);
+				&& pinnedVariant != null && pinnedVariant.kind == TypeKind.Struct) {
+			const fieldInVariant = findFieldInVariant(pinnedVariant, d.property);
 			if (fieldInVariant == null) {
 				// The flow graph pinned the reference to ONE variant. Reading a
 				// payload field of some OTHER variant through the pinned reference
@@ -3236,7 +3238,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// union's metadata at a fixed offset), and disc re-reads inside a
 				// narrowed block were always legal.
 				if (getDiscriminantName(resolvedObjType) != d.property) {
-					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${narrowedObjType.typeNames.join(", ")}`,
+					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${pinnedVariant.typeNames.join(", ")}`,
 						node.location.line, node.location.column);
 					return propType;
 				}
