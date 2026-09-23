@@ -4,6 +4,13 @@ import { Node, NumberLiteralData, StringLiteralData, BooleanLiteralData, Identif
 import { FormatOptions } from "../options";
 import { Doc, docText } from "../doc";
 
+export function printNullLiteral(node: Node, options: FormatOptions): Doc {
+	const pos = sourceOffset(options.source, node.location.line, node.location.column - 1);
+	const word = "undefined";
+	if (pos >= 0 && options.source.byteSlice(pos, pos + word.byteLength) == word) return docText(word);
+	return docText("null");
+}
+
 export function printNumberLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as NumberLiteralData;
 	const raw = rawNumberAt(node, options.source);

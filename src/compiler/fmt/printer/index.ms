@@ -14,7 +14,7 @@ import {
 } from "./jsx";
 
 import {
-	indexSourceLines, sourceSpan, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	indexSourceLines, sourceSpan, printNullLiteral, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
 	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
@@ -76,7 +76,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.NumberLiteral => printNumberLiteral(node, options),
 		NodeKind.StringLiteral => printStringLiteral(node, options),
 		NodeKind.BooleanLiteral => printBooleanLiteral(node),
-		NodeKind.NullLiteral => docText("null"),
+		NodeKind.NullLiteral => printNullLiteral(node, options),
 		NodeKind.BigIntLiteral => printBigIntLiteral(node),
 		NodeKind.RegexLiteral => printRegexLiteral(node),
 		NodeKind.Identifier => printIdentifier(node),
