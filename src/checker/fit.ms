@@ -733,7 +733,14 @@ export function tryApplyConverter(ctx: CheckerContext, expr: Node, srcType: Type
 	return call;
 }
 
-function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
+export function propagatedErrorConverter(ctx: CheckerContext, site: Node, srcType: Type, targetType: Type): Symbol | null {
+	if (ctx.runtimeConverters.length == 0) return null;
+	const conv = runtimeConverterFor(ctx, srcType, targetType, site);
+	if (conv == null || refusedInsideOwnBody(ctx, conv, site)) return null;
+	return conv;
+}
+
+export function convertsBetween(ctx: CheckerContext, src: Type, target: Type): boolean {
 	for (const conv of ctx.runtimeConverters) {
 		ensureShaped(conv, ctx);
 		const fnType = conv.symbolType;
