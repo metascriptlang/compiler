@@ -112,6 +112,13 @@ function sourceOffset(source: string, line: int32, col: int32): int32 {
 	return pos < source.byteLength ? pos : -1;
 }
 
+export function sourceSpan(source: string, line: int32, column: int32, endLine: int32, endColumn: int32): string {
+	const start = sourceOffset(source, line, column - 1);
+	let end = sourceOffset(source, endLine, endColumn - 1);
+	if (end < 0) end = source.byteLength;
+	return start < 0 || end < start ? "" : source.byteSlice(start, end);
+}
+
 export function sourceByteAt(source: string, line: int32, column: int32): int32 {
 	const pos = sourceOffset(source, line, column - 1);
 	return pos >= 0 ? source.byteAt(pos) : -1;

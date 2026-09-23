@@ -2,6 +2,8 @@
 // Implementation logic follows Biome/Prettier standards (2026).
 
 import { Node, NodeKind, NodeFlag } from "../../../ast/node";
+import { TokenKind } from "../../../lexer/token";
+import { forEachChild } from "../../../ast/visitor";
 import { FormatOptions } from "../options";
 import { Doc, docNil, docText, docGroup } from "../doc";
 import { formatDocAt } from "../layout";
@@ -12,7 +14,7 @@ import {
 } from "./jsx";
 
 import {
-	indexSourceLines, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	indexSourceLines, sourceSpan, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
 	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
@@ -47,11 +49,23 @@ export function formatNode(node: Node, options: FormatOptions): Result<string, s
 export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: string): Result<string, string> {
 	unprintedKinds = [];
 	indexSourceLines(options.source);
+	fillWhenSpans(node, options.source);
 	const out = formatDocAt(printNode(node, options), options, baseIndent);
 	if (unprintedKinds.length > 0) {
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
 	}
 	return Result.ok(out);
+}
+
+function fillWhenSpans(node: Node, source: string): void {
+	for (const c of node.comments) {
+		if (c.kind != TokenKind.When || c.value != "") continue;
+		const end = c.rawValue.split(":");
+		c.value = sourceSpan(source, c.line, c.column, end[0].parseInt() as int32, end[1].parseInt() as int32);
+	}
+	forEachChild(node, (child: Node): void => {
+		fillWhenSpans(child, source);
+	});
 }
 
 export function printNode(node: Node, options: FormatOptions): Doc {

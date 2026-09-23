@@ -15,9 +15,10 @@ import { sourceByteAt } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
+	const written = unpicked(d.programStmts);
 	const parts: Doc[] = [];
-	for (let i = 0; i < d.programStmts.length; i += 1) {
-		const stmt = d.programStmts[i];
+	for (let i = 0; i < written.length; i += 1) {
+		const stmt = written[i];
 
 		// Extract inter-statement comments: comments AFTER this statement
 		// (line > stmt.endLine) but before the next statement. These are
@@ -28,7 +29,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		const interComments: Token[] = [];
 		if (stmt.comments.length > 0) {
 			const stmtEnd = stmt.location.endLine > 0 ? stmt.location.endLine : stmt.location.line;
-			const nextLine = (i + 1 < d.programStmts.length) ? d.programStmts[i + 1].location.line : 999999;
+			const nextLine = (i + 1 < written.length) ? written[i + 1].location.line : 999999;
 			const remaining: Token[] = [];
 			for (const comment of stmt.comments) {
 				if (comment.line > stmtEnd && comment.line < nextLine) {
@@ -43,9 +44,9 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		if (i > 0) {
 			parts.push(docHardLine());
 			// Preserve one blank line between statement groups (Prettier convention)
-			const prev = d.programStmts[i - 1].location;
+			const prev = written[i - 1].location;
 			const prevEnd = prev.endLine > 0 ? prev.endLine : prev.line;
-			const currLine = d.programStmts[i].location.line;
+			const currLine = written[i].location.line;
 			if (currLine - prevEnd > 1) {
 				parts.push(docHardLine());
 			}
@@ -60,6 +61,14 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		}
 	}
 	return docGroup(parts);
+}
+
+function unpicked(stmts: Node[]): Node[] {
+	const out: Node[] = [];
+	for (const s of stmts) {
+		if (!s.flags.has(NodeFlag.WhenPicked)) out.push(s);
+	}
+	return out;
 }
 
 export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
@@ -108,9 +117,10 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 		}
 	}
 	node.comments = outer;
-	if (d.statements.length == 0 && inner.length == 0) return docText("{}");
+	const written = unpicked(d.statements);
+	if (written.length == 0 && inner.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
-	for (const s of d.statements) {
+	for (const s of written) {
 		stmts.push(callPrintNode(s, options));
 	}
 	for (const c of inner) {
@@ -129,7 +139,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	// printWidth. Multi-stmt blocks always break — flattening multiple
 	// statements onto one line is unreadable. Statements with leading
 	// comments also break, so the comments don't get smushed inline.
-	if (d.statements.length == 1 && d.statements[0].comments.length == 0) {
+	if (written.length == 1 && written[0].comments.length == 0) {
 		return docGroup([
 			docText("{"),
 			docIndent([docLine(), stmts[0]]),
