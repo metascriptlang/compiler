@@ -34,7 +34,7 @@ import { TransformContext } from "../context";
 import { peelToRepr } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeIdent, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
+import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
@@ -95,7 +95,7 @@ function wrapsOnUint32(op: string): boolean {
 // already gone by the time any mask sees the result. Math.imul is an exact
 // 32-bit multiply; it answers signed, so the width mask still follows.
 function exactMul(left: Node, right: Node, loc: SourceLocation): Node {
-	return makeCall(makeMember(makeIdent("Math", loc), "imul", loc), [left, right], loc);
+	return makeCall(makeMember(runtimeRef("Math", loc), "imul", loc), [left, right], loc);
 }
 
 function compoundBaseOf(op: string): string {
@@ -139,11 +139,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 // that are themselves identifiers or literals.
 export function cloneIfPure(node: Node): Node | null {
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		const c = makeIdent(d.name, node.location);
-		c.nodeType = node.nodeType;
-		c.resolvedSym = node.resolvedSym;
-		return c;
+		return cloneIdent(node, node.location);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;

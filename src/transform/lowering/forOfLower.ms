@@ -13,7 +13,7 @@ import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../ch
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
-	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
@@ -224,10 +224,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 // Avoids sharing a single AST node across multiple parents.
 function cloneExpr(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		const clone = makeTypedIdent(d.name, node.nodeType, loc);
-		clone.resolvedSym = node.resolvedSym;
-		return clone;
+		return cloneIdent(node, loc);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
