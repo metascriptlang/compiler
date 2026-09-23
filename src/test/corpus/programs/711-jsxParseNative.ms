@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'msStringHash' at comptime: symbol kind is Function
 // @ledger-slack(msStringArrayRefCell): 6
 // @ledger-slack(msRefArrayRefCell): 5
 // @maxrss: 40

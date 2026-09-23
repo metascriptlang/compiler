@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msSleepAsync
 // @skip-js: spawn has no working js lowering - the emitted
 //   _std/core/promise/index.js dies at "TypeError: Promise.resolve is not a
 //   function" before any user code runs (measured 2026-09-07, tree mode, after

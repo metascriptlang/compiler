@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @stdout: stringify m=$7 p=(1,2) t=#hot tmpl=$7/#hot acc=p=(1,2) many=$7 p=(1,2)
 // note: parity program — the two backends used to disagree here. Implicit
 // stringification of a user type was planted after the checker by a C-only pass

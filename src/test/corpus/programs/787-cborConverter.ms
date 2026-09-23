@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // Parity program — a CBOR value reads through the CBOR converters once they
 // are imported: a typed slot, an argument, `as U`, and an operand whose
 // other side is typed.

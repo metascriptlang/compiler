@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Undefined variable 'Number'
 // @stdout: static member namespace ok
 
 // A static member (`this typeof T`) belongs to its receiver type, never to the

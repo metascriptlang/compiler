@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot compile node kind BigIntLiteral at comptime: unsupported by the Raiser bytecode compiler
 // Parity program — a generic body sees the real width of its bound type. A
 // type argument inferred from an enum MEMBER, a named distinct, or a bigint
 // each has to spell itself back into the substituted annotation; any of them

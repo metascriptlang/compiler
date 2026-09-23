@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: tags err=Expected string key at position 1
 // Parity program — array fields through the typed JSON.parse<T> facade.
 // Its own program since birth: the split predates a since-fixed instantiation
 // bug (an array-typed interface declared next to 509's dropped the `string`

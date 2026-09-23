@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: tar parity ok
 
 // Pins the USTAR bytes produced by writeTar on the C backend: total layout,

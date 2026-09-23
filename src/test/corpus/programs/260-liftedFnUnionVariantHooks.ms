@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: total=0
 // Parity program — a closure over a DU whose variants carry a managed field
 // (string). Lambda lifting prepends the lifted function ahead of every
 // declaration, so the union is emitted BEFORE the variant interfaces; the

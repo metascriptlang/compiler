@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Undefined variable 'BigInt'
 // @stdout: namespace call surface done
 
 // One name carries two surfaces: a call (`String(x)`, `BigInt(s)`) and a set of

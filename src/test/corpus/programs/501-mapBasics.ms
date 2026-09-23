@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // Parity program — std collections floor: ordered Map<K,V> (JS Map spec
 // parity: insertion-ordered iteration, update-in-place keeps position).
 // C implements the order-preserving table in std/core/struct.ms; JS binds

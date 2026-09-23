@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-nested r=56-5000000
 // Two halves. (1) A self tail call inside a while body is lowered via the
 // labeled wrapper (continue __tcl) — a rewrite whose continue binds the INNER

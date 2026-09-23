@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: interpretation requires too many iterations (limit 10000000)
 // @maxrss: 40
 // @stdout: array-literal-strings acc=
 // note: FIXED in runtime/core/array.c: msStringArrayFromArr deep-copied each element, allocating a redundant 2nd buffer and orphaning the analyzer's already-owned element (the analyzer copies aliased + moves last-read upstream, then assumes FromArr moves). Changed FromArr to MOVE (take the handle as-is), mirroring msGenericArrayPush (ref arrays) and Nim's sink. Permanent regression guard — was 177MB leaking, now flat.

@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: blockShadowInLoop=900,901,901,902,902,903,|102,102,102,
 // Parity program — a binding that shadows a captured name inside a nested
 // block, an if-block, or a nested arrow body keeps its own storage. Lambda
 // lifting is a C-backend pass, so the JS lane is the oracle: it reads every

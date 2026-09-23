@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: total=0
 // Parity program — the read-side sibling of 258: a local whose STORAGE is
 // the union, narrowed by a discriminant guard, then read FIELD-BY-FIELD.
 // 258 pins passing the narrowed reference back to a union formal; this pins

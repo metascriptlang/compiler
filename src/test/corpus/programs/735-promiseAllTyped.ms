@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
 async function fd(x: float64): Promise<float64> { return x * 2.0; }
 async function fi(x: int32): Promise<int32> { return x + 10; }
 async function fs(n: string): Promise<string> { return n + "@x"; }

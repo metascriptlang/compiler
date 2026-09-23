@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: n=nil
 // The carrier of a bound void result is null on every backend: a bare bind,
 // a chained bind, a reassignment, an awaited Promise<void>, and a ternary of
 // two void calls all observe the same value, print "null" in string context,

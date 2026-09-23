@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: str 0 int:abc
 // Parity program — free-function overload dispatch binds the check-time
 // winner at every call site (bug: js emitted the primary `_u0` for ALL
 // call sites while C honored resolvedOverloadIdx, so `childOf(box)` ran

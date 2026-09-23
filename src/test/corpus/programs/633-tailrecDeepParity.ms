@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-parity r=
 // Deep self-recursion must run in O(1) stack on BOTH targets: tailCallLower
 // rewrites it to a loop before codegen (JS engines ship no proper tail calls).

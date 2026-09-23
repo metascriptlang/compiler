@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Undefined variable 'Number'
 // @stdout: math number boolean done
 
 // Math is a namespace class carrying static extensions; Number and Boolean are

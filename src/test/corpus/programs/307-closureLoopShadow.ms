@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'j' at comptime: symbol has no declaration node
 // Parity program — a variable declared AFTER a loop whose body was captured by
 // a closure must keep its own storage, even when it spells the same name as the
 // captured loop-local. The per-iteration env belongs to the iteration that

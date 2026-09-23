@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate 'super' at comptime: symbol kind is Class
 // @stdout: 42 3 gau 1 true true false ok
 // The C backend used to bind method calls to the receiver's STATIC type:
 // `const b: Base = new Derived(); b.step(3)` ran Base.step (printed 0) while

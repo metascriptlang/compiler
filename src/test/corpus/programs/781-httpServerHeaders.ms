@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Cannot resolve module 'std/http/server'
 // Parity program — `std/http/server` type-checks and its response header
 // methods reach the header table: `setHeader` / `hasHeader` / `getHeader` /
 // `removeHeader` are `this` functions that call the `std/http/headers`

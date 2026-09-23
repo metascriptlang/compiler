@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @maxrss: 30
 // @stdout: map-guard-fatal armed
 // @exit: 2

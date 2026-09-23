@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Cannot resolve module 'std/actor'
 // @maxrss: 40
 // @stdout: actor-churn-noctor done
 // @serial

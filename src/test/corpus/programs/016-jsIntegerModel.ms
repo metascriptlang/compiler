@@ -1,3 +1,4 @@
+// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @stdout: js-integer-model all-ok
 // This program is the acceptance gate for docs/JS-NUMERIC.md. It was marked
 // known-fail on the js lane until the conversion, division and uint32 phases

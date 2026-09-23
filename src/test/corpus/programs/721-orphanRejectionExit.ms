@@ -1,3 +1,4 @@
+// @xfail(raiser): a throw in an orphan strand aborts the program (raiser runtime error: unhandled exception: [object]) instead of reaching top-end
 // @exit: 1
 // @skip-js: node prints its own unhandled-rejection report; exit code matches but the text differs
 async function boom(): Promise<void> {

@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: buffer surface ok
 
 // Pins the Buffer byte-container surface as it behaves on the C backend

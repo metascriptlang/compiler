@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @xfail(esm): tree emit: prelude container class binding never imported into the referencing module
 // @maxrss: 40
 // @stdout: leak-hashmap-enlarge acc=

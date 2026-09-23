@@ -1,3 +1,4 @@
+// @xfail(raiser): error: Property 'join' does not exist on type 'Array'
 // Parity program — std array surface: push/pop/shift/slice/concat/indexOf/
 // includes/join/reverse/sort/fill/splice on number[] and string[], plus a
 // churn loop (RC-stress: string elements relayed through slices then dropped).

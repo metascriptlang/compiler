@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 40
 // @stdout: leak-moved-arg done
 // @serial

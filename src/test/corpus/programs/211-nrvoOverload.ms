@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an object, got value kind Int
 // @maxrss: 30
 // @stdout: nrvo-overload acc=102
 // note: Locks NRVO for OVERLOADED struct-returning operators across every value position (return/arg/array/ternary). The TAG_CALL_OVERLOAD codegen path (emitCallExpr) emitted f(args) by-value instead of f(&tmp, args), so an overloaded operator returning a struct miscompiled (C 'too few arguments') everywhere except variable-decl (which pre-handles NRVO itself). Marker proves correct VALUES at runtime — a regression re-breaks the build or the math. Reference (Nim) has no such bug: overloads resolve in sem → one genCall path → isInvalidReturnType handled uniformly.

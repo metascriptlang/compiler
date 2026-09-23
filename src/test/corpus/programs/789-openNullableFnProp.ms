@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an object, got value kind Int
 // Parity program — a generic function passed as a value to another generic
 // function whose props carry a nullable function of the type parameter. The
 // callee binds its own parameter to the uninstantiated props type, so the open

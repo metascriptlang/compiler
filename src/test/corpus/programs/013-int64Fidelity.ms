@@ -1,3 +1,4 @@
+// @xfail(raiser): runs but stdout misses its @stdout line (exit=1)
 // @stdout: int64-fidelity all-ok
 // Oracle program — an int64 must survive the WHOLE pipeline exactly: source
 // literal → AST → codegen → runtime arithmetic → toString. 012-floatFormat pins

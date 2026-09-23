@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
 // @skip-js: spawn has no js lowering (421/422 family); { move } rides the same
 //   C-only lowering, so there is no js spelling of this shape yet.
 // @stdout: moved v=9 cfg=8

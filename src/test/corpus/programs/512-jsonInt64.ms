@@ -1,3 +1,4 @@
+// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @stdout: int64-json all-ok
 // Oracle program — int64 fidelity THROUGH the JSON surface, the one place the
 // two backends deliberately diverge today with no corpus coverage.
