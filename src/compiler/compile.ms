@@ -1534,6 +1534,19 @@ function addHcrForeignSymbol(
 	}
 }
 
+function hcrRootFunctions(modulePaths: string[]): string[] {
+	const roots: string[] = [];
+	for (const modPath of modulePaths) {
+		const moduleExports = findModuleExports(graphRegistry, modPath);
+		if (moduleExports == null) continue;
+		for (const info of moduleExports.symbols) {
+			if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+			roots.push(modPath + ":" + info.name);
+		}
+	}
+	return roots;
+}
+
 function hcrIndirectModules(abi: HcrCandidateAbi): HcrIndirectModule[] {
 	const modules: HcrIndirectModule[] = [];
 	for (let i = 0; i < abi.candidate.length; i += 1) {
@@ -1953,7 +1966,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];

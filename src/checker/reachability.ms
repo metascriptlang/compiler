@@ -480,7 +480,10 @@ export function computeAliveSet(
 	isTest: boolean,
 	graph: ModuleGraph,
 	exportRootModules: string[] = [],
+	exportRootFunctions: string[] = [],
 ): AliveSet {
+	const rootFunctions = new HashSet<string>();
+	for (const key of exportRootFunctions) rootFunctions.add(key);
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	nameIndexBuild(programs, paths);
@@ -546,8 +549,10 @@ export function computeAliveSet(
 					walkBody(bare, modulePath);
 					continue;
 				}
-
-
+				if (rootFunctions.has(modulePath + ":" + fn)) {
+					markAndWalk(modulePath, fn);
+					continue;
+				}
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
