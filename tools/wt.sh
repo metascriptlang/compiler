@@ -130,6 +130,8 @@ worktrees() { git -C "$MAIN" worktree list --porcelain | awk '/^worktree /{print
 
 norm_dir() { if [ -d "$1" ]; then (cd "$1" && pwd -P); else printf '%s\n' "$1"; fi; }
 
+native_dir() { (cd "$1" && pwd -W 2>/dev/null) || printf '%s\n' "$1"; }
+
 is_worktree() {
   local w
   while IFS= read -r w; do
@@ -504,7 +506,7 @@ case "${1:-}" in
   __ls_row) ls_row "${2%%$'\t'*}" "${2#*$'\t'}" ;;
   rm) shift; cmd_rm "$@" ;;
   land) shift; cmd_land "$@" ;;
-  hook-create) name=$(hook_field name); cmd_new "$name" ;;
+  hook-create) name=$(hook_field name); w=$(cmd_new "$name") && native_dir "$w" ;;
   hook-remove) path=$(hook_field worktree_path); cmd_rm "$path" ;;
   hook-session) hook_session ;;
   -h|--help|help|"") usage ;;
