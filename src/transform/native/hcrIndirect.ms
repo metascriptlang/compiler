@@ -1,10 +1,17 @@
 import { Node, NodeKind, ProgramData, createNode, SourceLocation } from "../../ast/node";
 import { syntheticToken } from "../util";
 
+export struct HcrImport {
+	moduleId: string;
+	abiKey: string;
+}
+
 export struct HcrIndirectModule {
 	moduleId: string;
 	symbols: string[];
 	typeInfos: string[];
+	abiKey: string;
+	imports: HcrImport[];
 }
 
 export function lowerHcrIndirection(
@@ -16,6 +23,8 @@ export function lowerHcrIndirection(
 	const pd = program.data as ProgramData;
 	const loc = program.location;
 	const emitted: Node[] = [makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc)];
+	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrAbiKey000(void) { return ${cString(own.abiKey)}; }`, loc));
+	emitted.push(makeEmitStmt(importsFunction(own), loc));
 
 	if (own.symbols.length > 0) {
 		let table = `/*VARSECTION*/static void* const _ms_hcr_table[${own.symbols.length}] = {`;
@@ -63,10 +72,15 @@ export function lowerHcrIndirection(
 		}
 	}
 
-	if (emitted.length == 1) return program;
 	for (const stmt of pd.programStmts) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
+}
+
+function importsFunction(own: HcrIndirectModule): string {
+	let entries = "";
+	for (const entry of own.imports) entries = entries + `${cString(entry.moduleId)}, ${cString(entry.abiKey)}, `;
+	return `MS_HCR_EXPORT const char* const* HcrImports000(void) { static const char* const imports[] = { ${entries}NULL }; return imports; }`;
 }
 
 function cString(value: string): string {

@@ -35,7 +35,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrImport, HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
@@ -61,7 +61,7 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
-import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
@@ -1698,16 +1698,22 @@ function hcrRootFunctions(modulePaths: string[]): string[] {
 	return roots;
 }
 
-function hcrIndirectModules(abi: HcrCandidateAbi): HcrIndirectModule[] {
+function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], string> {
 	const modules: HcrIndirectModule[] = [];
 	for (let i = 0; i < abi.candidate.length; i += 1) {
 		const manifest = abi.candidate[i];
 		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
 		const symbols: string[] = [];
 		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
-		modules.push({ moduleId: manifest.moduleId, symbols, typeInfos: [] });
+		const imports: HcrImport[] = [];
+		for (const dependency of manifest.dependencies) {
+			const target = hcrManifestById(abi.candidate, dependency);
+			if (target == null) return Result.err(`HCR module '${manifest.moduleId}' imports '${dependency}', which has no ABI manifest`);
+			imports.push({ moduleId: dependency, abiKey: hcrExportKey(target) });
+		}
+		modules.push({ moduleId: manifest.moduleId, symbols, typeInfos: [], abiKey: hcrExportKey(manifest), imports });
 	}
-	return modules;
+	return Result.ok(modules);
 }
 
 function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
@@ -1878,7 +1884,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			printDiag(`${error("error")}: ${abi.error}`);
 			exit(1);
 		}
-		hcrModules = hcrIndirectModules(abi.value);
+		const indirect = hcrIndirectModules(abi.value);
+		if (!indirect.ok) {
+			printDiag(`${error("error")}: ${indirect.error}`);
+			exit(1);
+		}
+		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
 	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
