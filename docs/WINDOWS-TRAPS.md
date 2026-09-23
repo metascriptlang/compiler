@@ -21,3 +21,9 @@ Only relevant when the dev box is Windows. On macOS/Linux hosts, skip.
 - Strip ANSI before grepping logs: ``-replace "`e\[[0-9;]*m",""``.
 - The SAN lane needs libasan; scoop MinGW has none (`cannot find -lasan`), so
   `MSCORPUS_SAN=1` is host-blocked until a toolchain with ASan arrives.
+- **Tracked symlinks need `core.symlinks=true`.** With it false, Git writes
+  `src/test/guard/fixtures/moduleIdentity/link` as a one-line text file and
+  `moduleIdentityPhysicalPath` fails with `Cannot resolve module '../link/dep'`.
+  Developer Mode lets Git create the link unprivileged: `git config
+  core.symlinks true`, then `rm <link> && git checkout -f -- <link>` in each
+  checkout (the setting is shared by every worktree).
