@@ -266,7 +266,48 @@ function indirect(): void {
 		failWith(tag, "the host transaction (key check, stage, commit, rollback) did not produce the expected transitions");
 	}
 	console.log("ok   hcrIndirect");
+	engine();
 	windowsReload();
+}
+
+function engine(): void {
+	const tag = "hcrEngine";
+	const dir = freshDir(`${TMP}/engine`);
+	for (const f of ["app.ms", "host.ms", "hostCalls.h"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	copy(`${FIXTURES}/indirect/shapes.ms`, `${dir}/shapes.ms`);
+	const generations = [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"], ["logicExportEdit.ms", "g3"], ["logicLayoutEdit.ms", "g4"]];
+	for (const g of generations) {
+		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module.dll`], `HCR build of ${g[0]} failed`);
+	}
+	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "thin host build failed");
+	ensureDir(`${dir}/run`);
+	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.dll.hcrabi"]) copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	const ran = execFileResult(`${dir}/host.exe`, ["run", "module"], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-ENGINE ")) seen.push(line);
+	}
+	const want = [
+		"HCR-ENGINE start: value 10 tick 1",
+		"HCR-ENGINE unchanged: no change",
+		"HCR-ENGINE body edit: reloaded logic",
+		"HCR-ENGINE after body edit: value 73 tick 11",
+		"HCR-ENGINE truncated image: pending logic (cannot load run/module.logic.dll (error 193))",
+		"HCR-ENGINE same truncated image: pending logic (run/module.logic.dll is not a loadable image yet)",
+		"HCR-ENGINE complete image: reloaded logic",
+		"HCR-ENGINE after complete image: value 10 tick 12",
+		"HCR-ENGINE added export, app not rebuilt: rejected (module 'app' was built against another export ABI of 'logic'; rebuild it)",
+		"HCR-ENGINE after rejection: value 10 tick 13",
+		"HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)",
+		"HCR-ENGINE after layout rejection: value 10 tick 14",
+		"HCR-ENGINE core changed: restart required (the core image changed (runtime, standard library or toolchain))",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "the engine did not produce the expected reload outcomes");
+	}
+	console.log("ok   hcrEngine");
 }
 
 function sharedVariable(): void {
