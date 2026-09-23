@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "runtime/hcrTls.h"
 #include <string.h>
 
 /* ===== Message (Pony parity: size-class allocation, exact-fit per method) ===== */
@@ -73,7 +74,7 @@ typedef struct msMsgPool {
  * TUs share the same TLS slot — `static` here would give each TU its own
  * pool, and cross-TU msMsgAlloc/msMsgFree on the same thread would touch
  * different freelists. */
-extern MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
+MS_TLS_EXTERN_ARRAY(msMsgPool, msMsgPools, MS_MSG_POOL_CLASSES);
 
 static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
     /* Allocate slab as raw bytes — messages are msgSize apart */

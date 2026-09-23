@@ -62,6 +62,7 @@ int32_t msPoolBusyPeek(void) {
  * Main thread always queues to ensure initial fan-out reaches workers.
  * Matches Malebolgia's activeProducer flag. */
 _Thread_local bool msIsPoolWorker = false;
+MS_TLS_PUBLISH(msIsPoolWorker)
 
 /* ===== CPU Detection ===== */
 

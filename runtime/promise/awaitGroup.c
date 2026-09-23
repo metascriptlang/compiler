@@ -348,7 +348,9 @@ static _Thread_local int32_t msSlotPoolIdx = 0;
  * pattern (mailbox.h:76, defined in actor.c). */
 #if MS_FUTURE_SUBMIT_REF
 _Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
+MS_TLS_PUBLISH(msFutureReleaseBuf)
 _Thread_local int msFutureReleaseCount = 0;
+MS_TLS_PUBLISH(msFutureReleaseCount)
 #endif
 
 void* msAwaitSlotCreate(int32_t n) {

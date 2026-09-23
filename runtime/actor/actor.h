@@ -133,8 +133,8 @@ typedef struct msActor {
 
 /* Shared TLS / globals — defined in runtime/actor/actor.c. Extern (not
  * static) so all .ms→.c TUs see the same instance — see actor.c header. */
-extern MS_THREAD_LOCAL msActor* msCurrentActor;
-extern MS_THREAD_LOCAL int msMySchedulerID;
+MS_TLS_EXTERN(msActor*, msCurrentActor);
+MS_TLS_EXTERN(int, msMySchedulerID);
 
 /* ===== I19: Pid Table + Hazard Pins =====
  *
@@ -170,7 +170,7 @@ typedef struct msHazardRec {
     _Atomic(struct msHazardRec*) next;
 } msHazardRec;
 extern _Atomic(msHazardRec*) msHazardHead;
-extern MS_THREAD_LOCAL msHazardRec* msMyHazard;
+MS_TLS_EXTERN(msHazardRec*, msMyHazard);
 
 static inline msPidSlot* msPidSlotAt(int32_t idx) {
     msPidSlot* seg = atomic_load_explicit(&msPidSegs[idx >> MS_PID_SEG_BITS], memory_order_acquire);

@@ -59,8 +59,8 @@
 #ifndef MS_THREAD_LOCAL
 #define MS_THREAD_LOCAL _Thread_local
 #endif
-extern MS_THREAD_LOCAL bool msErr;         /* slot-failure propagation (mirror future.h) */
-extern MS_THREAD_LOCAL void* msErrPayload;
+MS_TLS_EXTERN(bool, msErr);         /* slot-failure propagation (mirror future.h) */
+MS_TLS_EXTERN(void*, msErrPayload);
 
 /* Amendment G (PARALOCK, I16): in-flight ownership of cross-thread completion
  * futures. The queue's completion ref is taken on the OWNER thread at submit
@@ -109,8 +109,8 @@ extern MS_THREAD_LOCAL void* msErrPayload;
 
 extern void msCompletionQueuePushReleaseBatch(void** futs, int count);
 
-extern _Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
-extern _Thread_local int msFutureReleaseCount;
+MS_TLS_EXTERN_ARRAY(void*, msFutureReleaseBuf, MS_FUTURE_RELEASE_CAP);
+MS_TLS_EXTERN(int, msFutureReleaseCount);
 
 static inline void msFutureDeferredRelease(void* fut) {
 	if (fut == NULL) return;
@@ -328,7 +328,7 @@ static inline void msAwaitSlotFail(void* sp, void* error) {
 }
 
 /* msIsPoolWorker declared in pool.c — true only for pool worker threads */
-extern _Thread_local bool msIsPoolWorker;
+MS_TLS_EXTERN(bool, msIsPoolWorker);
 
 extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include */
 

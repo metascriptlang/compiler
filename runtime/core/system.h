@@ -104,8 +104,8 @@ msError* msMakeError(msString message);
 #include "runtime/promise/dispatch.h"
 
 /* MS_THREAD_LOCAL becomes available via future.h above. */
-extern MS_THREAD_LOCAL bool msErr;
-extern MS_THREAD_LOCAL msException* msCurrException;
+MS_TLS_EXTERN(bool, msErr);
+MS_TLS_EXTERN(msException*, msCurrException);
 void msClearException(void);
 void msDiscardCurrentException(void);
 void msThrow(msString msg);

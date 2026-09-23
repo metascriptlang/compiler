@@ -24,6 +24,7 @@
 #include <stdatomic.h>
 
 #include "runtime/types.h"
+#include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
 /* Under --gc=orc (MSGC_ORC), rc field = [count:28][flags:4].
@@ -322,8 +323,8 @@ void msCellSeqPush(msCellSeq* s, msCell cell);
 void msCellSeqClear(msCellSeq* s);
 void msCellSeqFree(msCellSeq* s);
 
-extern _Thread_local msCellSeq msRoots;
-extern _Thread_local int32_t msRootsThreshold;
+MS_TLS_EXTERN(msCellSeq, msRoots);
+MS_TLS_EXTERN(int32_t, msRootsThreshold);
 
 void msRegisterCycle(void* p, const msTypeInfo* type);
 void msUnregisterCycle(void* p);
@@ -379,7 +380,7 @@ static inline int32_t msOrcPrepare(void) { return msRoots.len; }
  * for the whole (possibly nested) teardown, then run one deferred collect on unwind.
  * Mirrors the reference collector's own free-loop guard, extended to ARC scope-exit
  * destroys (which the free-loop threshold hack does not cover). */
-extern _Thread_local int32_t msOrcTeardownDepth;
+MS_TLS_EXTERN(int32_t, msOrcTeardownDepth);
 static inline void msOrcBeginTeardown(void) { msOrcTeardownDepth += 1; }
 static inline void msOrcEndTeardown(void) {
 	msOrcTeardownDepth -= 1;
@@ -401,7 +402,7 @@ typedef struct {
 void msOrcTraceRef(void* child, void* env);
 
 #ifdef MSGC_ORC_STATS
-extern _Thread_local int32_t msFreedCyclicObjects;
+MS_TLS_EXTERN(int32_t, msFreedCyclicObjects);
 #endif
 
 #else /* !MSGC_ORC — plain ARC (--gc=drc) */
