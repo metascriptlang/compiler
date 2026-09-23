@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
-import { writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { sourceByteAt, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, printBlock, wrapNodeComments, isSynthesized } from "./statements";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -461,6 +461,17 @@ export function printExternDecl(node: Node, options: FormatOptions): Doc {
 export function printDecoratedDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DecoratedDeclData;
 	const parts: Doc[] = [];
+	const exportFirst = d.decoratedNode.kind == NodeKind.ExportDecl && !d.decoratedNode.flags.has(NodeFlag.ExportDefault)
+		&& sourceByteAt(options.source, node.location.line, node.location.column) == "e".code;
+	if (exportFirst) {
+		parts.push(docText("export "));
+		for (const dec of d.decorators) {
+			parts.push(callPrintNode(dec, options));
+			parts.push(docText(" "));
+		}
+		parts.push(callPrintNode((d.decoratedNode.data as ExportDeclData).exportedDecl, options));
+		return docGroup(parts);
+	}
 	for (const dec of d.decorators) {
 		parts.push(callPrintNode(dec, options));
 		parts.push(docHardLine());
