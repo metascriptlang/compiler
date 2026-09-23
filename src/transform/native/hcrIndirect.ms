@@ -4,6 +4,7 @@ import { syntheticToken } from "../util";
 export struct HcrIndirectModule {
 	moduleId: string;
 	symbols: string[];
+	typeInfos: string[];
 }
 
 export function lowerHcrIndirection(
@@ -27,6 +28,20 @@ export function lowerHcrIndirection(
 			`/*DATINITSECTION*/  msHcrPublish(${cString(own.moduleId)}, _ms_hcr_table, ${own.symbols.length});`,
 			loc,
 		));
+	}
+
+	let typeSlot = 0;
+	for (const target of modules) {
+		for (const typeName of target.typeInfos) {
+			const pointer = `_ms_hcr_ti${typeSlot}`;
+			typeSlot += 1;
+			emitted.push(makeEmitStmt(`/*VARSECTION*/msTypeInfo* ${pointer};`, loc));
+			emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${typeName}TypeInfo (*${pointer})`, loc));
+			emitted.push(makeEmitStmt(
+				`/*DATINITSECTION*/  ${pointer} = (msTypeInfo*)msHcrTypeInfo(${cString(target.moduleId)}, ${cString(typeName)});`,
+				loc,
+			));
+		}
 	}
 
 	for (let k = 0; k < modules.length; k += 1) {

@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { Node, ProgramData, SymbolKind, Type } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, SymbolKind, Type } from "../ast/node";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
@@ -20,8 +20,8 @@ import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
-import { CModuleOutput, generatePreparedCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName, mangleProcName, safeName } from "../codegen/c/names";
+import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
+import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
 import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -39,7 +39,7 @@ import { HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrI
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet } from "../transform/context";
-import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
+import { setGlobalHookOwners, useHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
@@ -1479,7 +1479,12 @@ function buildHcrCandidateAbi(
 		const dependencies: string[] = [];
 		for (const imported of mod.imports) {
 			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
-			if (dependencyId != "") dependencies.push(dependencyId);
+			if (dependencyId == "") continue;
+			dependencies.push(dependencyId);
+			const shared = hcrSharedVariable(imported.sourcePath, imported.names);
+			if (shared != "") {
+				return Result.err(`HCR cannot share exported variable '${dependencyId}::${shared}' with module '${moduleId}' across module images; export a function that reads it instead`);
+			}
 		}
 		const exports = hcrModuleExports(moduleId, modPath);
 		if (!exports.ok) return Result.err(exports.error);
@@ -1496,6 +1501,17 @@ function buildHcrCandidateAbi(
 		modulePaths.push(modPath);
 	}
 	return Result.ok({ candidate, modulePaths });
+}
+
+function hcrSharedVariable(sourcePath: string, names: string[]): string {
+	const moduleExports = findModuleExports(graphRegistry, sourcePath);
+	if (moduleExports == null) return "";
+	for (const name of names) {
+		for (const info of moduleExports.symbols) {
+			if (info.name == name && info.definingModule == sourcePath && info.kind == SymbolKind.Variable) return name;
+		}
+	}
+	return "";
 }
 
 function hcrForeignSymbols(modPath: string): HashSet<string> {
@@ -1534,6 +1550,141 @@ function addHcrForeignSymbol(
 	}
 }
 
+function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
+	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
+	writeCSource(key, fp, source);
+	oSlots.push([]);
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", slot: oSlots.length - 1 });
+}
+
+function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
+	for (const output of outputs) {
+		if (output.modulePath == modPath) return output;
+	}
+	return null;
+}
+
+function hcrImageStem(outBinary: string): string {
+	const slash = outBinary.lastIndexOf("/");
+	const dot = outBinary.lastIndexOf(".");
+	return dot > slash ? outBinary.substring(0, dot) : outBinary;
+}
+
+function hcrImageExt(outBinary: string): string {
+	const slash = outBinary.lastIndexOf("/");
+	const dot = outBinary.lastIndexOf(".");
+	return dot > slash ? outBinary.substring(dot, outBinary.length) : "";
+}
+
+function hcrImagePath(outBinary: string, moduleId: string): string {
+	return `${hcrImageStem(outBinary)}.${moduleId.replaceAll("/", ".")}${hcrImageExt(outBinary)}`;
+}
+
+function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
+	if (isLinkCached(objects, externalInputs, flags, image, image)) return;
+	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary);
+	if (!linked.ok) {
+		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
+		if (linked.error.errorOutput != "") console.log(linked.error.errorOutput);
+		exit(1);
+	}
+	writeLinkCache(objects, externalInputs, flags, image, image);
+}
+
+function linkHcrImages(
+	oSlots: string[][],
+	moduleSlots: int32[],
+	jobPaths: string[],
+	coreSlot: int32,
+	imageSlots: int32[],
+	hcrModulePaths: string[],
+	hcrModules: HcrIndirectModule[],
+	entryPath: string,
+	outBinary: string,
+	allFlags: string,
+	opts: CliOptions,
+): void {
+	let linkFlags = cliLinkFlags(allFlags, opts);
+	for (const flag of globalLinkFlags()) linkFlags = appendFlag(linkFlags, flag);
+	const externalInputs: string[] = [];
+	for (const obj of globalLinkObjects()) externalInputs.push(obj);
+
+	const core = `${hcrImageStem(outBinary)}.core${hcrImageExt(outBinary)}`;
+	let coreFlags = linkFlags;
+	let imageFlags = linkFlags;
+	let coreInput = core;
+	if (opts.targetOs == "windows") {
+		coreInput = `${hcrImageStem(outBinary)}.core.lib`;
+		coreFlags = appendFlag(coreFlags, "-Wl,--export-all-symbols");
+		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,--out-implib,${coreInput}`));
+	} else if (opts.targetOs == "linux") {
+		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-soname,${basename(core)}`));
+		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,$ORIGIN");
+	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
+		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-install_name,@rpath/${basename(core)}`));
+		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,@loader_path");
+	} else {
+		console.log(`${error("error")}: --hcr has no per-module image adapter for target '${opts.targetOs}'`);
+		exit(1);
+	}
+
+	const coreObjects: string[] = [];
+	for (const oFile of oSlots[0]) coreObjects.push(oFile);
+	for (let j = 0; j < jobPaths.length; j += 1) {
+		if (hcrModulePaths.includes(jobPaths[j])) continue;
+		for (const oFile of oSlots[moduleSlots[j]]) coreObjects.push(oFile);
+		for (const oFile of oSlots[moduleSlots[j] + 1]) coreObjects.push(oFile);
+	}
+	for (const oFile of oSlots[coreSlot]) coreObjects.push(oFile);
+	for (const obj of externalInputs) coreObjects.push(obj);
+	linkHcrImage(coreObjects, externalInputs, core, coreFlags, opts);
+
+	for (let i = 0; i < hcrModulePaths.length; i += 1) {
+		const moduleId = hcrModules[i].moduleId;
+		if (moduleId == "core") {
+			console.log(`${error("error")}: HCR module id 'core' collides with the core image name; rename the module`);
+			exit(1);
+		}
+		const j = jobPaths.indexOf(hcrModulePaths[i]);
+		if (j < 0) {
+			console.log(`${error("error")}: internal: HCR module '${hcrModulePaths[i]}' was not emitted`);
+			exit(1);
+		}
+		const objects: string[] = [];
+		for (const oFile of oSlots[moduleSlots[j]]) objects.push(oFile);
+		for (const oFile of oSlots[moduleSlots[j] + 1]) objects.push(oFile);
+		for (const oFile of oSlots[imageSlots[i]]) objects.push(oFile);
+		objects.push(coreInput);
+		const image = hcrModulePaths[i] == entryPath ? outBinary : hcrImagePath(outBinary, moduleId);
+		let flags = imageFlags;
+		if (opts.targetOs == "windows") flags = appendFlag(flags, quoteCcArg(`-Wl,--out-implib,${cacheDir()}/hcr-${hashContent(image)}.lib`));
+		linkHcrImage(objects, externalInputs, image, flags, opts);
+	}
+}
+
+function hcrTypeInfoNames(program: Node | null, modPath: string): string[] {
+	const names: string[] = [];
+	if (program == null) return names;
+	const moduleName = mangleModuleName(modPath);
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let decl = stmt;
+		if (decl.kind == NodeKind.DecoratedDecl) {
+			const decorated = decl.data as DecoratedDeclData;
+			if (decorated.decoratedNode != null) decl = decorated.decoratedNode;
+		}
+		if (decl.kind == NodeKind.ExportDecl) {
+			const exported = decl.data as ExportDeclData;
+			if (exported.exportedDecl != null) decl = exported.exportedDecl;
+		}
+		let name = "";
+		if (decl.kind == NodeKind.ClassDecl) name = (decl.data as ClassDeclData).className;
+		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
+		if (name == "" || name.startsWith("$") || name.indexOf("__", 0) >= 0) continue;
+		names.push(mangleQualified(name, moduleName));
+	}
+	return names;
+}
+
 function hcrRootFunctions(modulePaths: string[]): string[] {
 	const roots: string[] = [];
 	for (const modPath of modulePaths) {
@@ -1554,7 +1705,7 @@ function hcrIndirectModules(abi: HcrCandidateAbi): HcrIndirectModule[] {
 		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
 		const symbols: string[] = [];
 		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
-		modules.push({ moduleId: manifest.moduleId, symbols });
+		modules.push({ moduleId: manifest.moduleId, symbols, typeInfos: [] });
 	}
 	return modules;
 }
@@ -1860,6 +2011,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	for (let i = 0; i < hcrModulePaths.length; i += 1) {
+		const path = hcrModulePaths[i];
+		hcrModules[i].typeInfos = hcrTypeInfoNames(programByPath.has(path) ? programByPath.get(path) : null, path);
+	}
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
@@ -1900,6 +2055,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 				fsAsyncHits.push({ modPath, source: cm.source, line: hitLoc.line, column: hitLoc.column });
 			}
 		}
+		const hcrSlot = hcrModulePaths.indexOf(modPath);
+		if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : sharedHookOwners);
 		const _tx0 = performance.now();
 		const transformed = transformProgram(comptimeResolved, ctx, false);
 		tXform = tXform + (performance.now() - _tx0);
@@ -1911,8 +2068,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		const _tn0 = performance.now();
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		tNative = tNative + (performance.now() - _tn0);
-		const hcrLifted = opts.isHcr && modPath == entryPath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		const hcrSlot = hcrModulePaths.indexOf(modPath);
+		const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, hcrModules[hcrSlot], hcrModules) : hcrLifted;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -1996,12 +2152,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
 	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
+	const hcrImages = opts.isHcr && !opts.emitC;
+	const coreFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_CORE") : allFlags;
+	const imageFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_MODULE") : allFlags;
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, coreFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
 
-	const rtObjs = compilePlatformRuntime(includePaths, allFlags, opts);
+	const rtObjs = compilePlatformRuntime(includePaths, coreFlags, opts);
 	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module
@@ -2063,6 +2222,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const oSlots: string[][] = [];
 	oSlots.push(oFiles);
 	const cJobs: ModuleCompileJob[] = [];
+	const moduleSlots: int32[] = [];
 	for (let emitIndex = 0; emitIndex < emissionJobs.length; emitIndex += 1) {
 		const p = emissionJobs[emitIndex];
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
@@ -2072,8 +2232,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		output.code = "";
 		moduleOutputs.push(output);
 
+		const sideFlags = !hcrImages ? allFlags : hcrModulePaths.includes(p.modPath) ? imageFlags : coreFlags;
 		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, sideFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		moduleSlots.push(oSlots.length);
 		oSlots.push(compileObjs);
 
 		if (opts.emitC) {
@@ -2088,7 +2250,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			writeOutput(emitPath, cCode);
 			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
-			let modFlags = appendFlag(allFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
+			let modFlags = appendFlag(sideFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
 			modFlags = appendFlag(modFlags, quoteCcArg(`-iquote${cd}`));
 			// Per-module MS→.c: add -I<projectRoot> only for user modules (paths
 			// under projectRoot, not under compilerRoot). Stdlib modules get
@@ -2132,15 +2294,33 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 
 	// Skip link step if --emit=c (only writing C source files)
+	if (opts.emitC && opts.isHcr) {
+		const emitDir = outDirForMode(opts.mode);
+		const coreModules: string[] = [];
+		for (const mp of aliveModules) {
+			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
+		}
+		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs));
+		console.log(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
+		for (const mp of hcrModulePaths) {
+			const output = moduleOutputFor(moduleOutputs, mp);
+			if (output == null) continue;
+			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
+			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath));
+			console.log(`${green("  Wrote")} ${bold(imagePath)}`);
+		}
+		console.log(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
+		if (opts.showTime) printTiming("emitted", t0);
+		return;
+	}
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
 		const dispatcher = genProjectDispatcher(
 			aliveModules,
 			entryPath,
 			opts.targetOs,
-			opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
+			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
-			opts.isHcr,
 		);
 		const emitDir = outDirForMode(opts.mode);
 		const dispPath = `${emitDir}/_dispatch.c`;
@@ -2155,24 +2335,34 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// configs (drc vs orc emit different teardown in the dispatcher TU) must
 	// not rename over each other's object right before the other's link —
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
-	if (opts.verbose) verboseLog("generating dispatcher");
-	const dispatcher = genProjectDispatcher(
-		aliveModules,
-		entryPath,
-		opts.targetOs,
-		opts.appMode == "lib" || opts.appMode == "staticlib" || opts.isHcr,
-		moduleOutputs,
-		opts.isHcr,
-	);
-	// The dispatcher TU is a fixed input to its compile job — its .c must be
-	// fp-keyed and published atomically like any module's: two concurrent
-	// builds with different entries/configs write different dispatcher C to
-	// one fixed path otherwise, and the loser compiles the winner's dispatcher.
-	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
-	writeCSource("_dispatch", dispFp, dispatcher);
-	const dispFile = stableCFileFp("_dispatch", dispFp);
-	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+	const hcrImageSlots: int32[] = [];
+	let hcrCoreSlot: int32 = -1;
+	if (hcrImages) {
+		const coreModules: string[] = [];
+		for (const mp of aliveModules) {
+			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
+		}
+		pushDispatcherJob(cJobs, oSlots, "_hcrcore", genHcrCoreDispatcher(coreModules, moduleOutputs), coreFlags, opts);
+		hcrCoreSlot = oSlots.length - 1;
+		for (const mp of hcrModulePaths) {
+			const output = moduleOutputFor(moduleOutputs, mp);
+			if (output == null) {
+				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
+				exit(1);
+			}
+			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath), imageFlags, opts);
+			hcrImageSlots.push(oSlots.length - 1);
+		}
+	} else {
+		if (opts.verbose) verboseLog("generating dispatcher");
+		pushDispatcherJob(cJobs, oSlots, "_dispatch", genProjectDispatcher(
+			aliveModules,
+			entryPath,
+			opts.targetOs,
+			opts.appMode == "lib" || opts.appMode == "staticlib",
+			moduleOutputs,
+		), allFlags, opts);
+	}
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
 	// results in input order from the main thread. Dispatcher failure is fatal
@@ -2205,6 +2395,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		cji = cji + 1;
 	}
 	if (moduleCompileFailed) exit(1);
+	if (hcrImages) {
+		const jobPaths: string[] = [];
+		for (const job of emissionJobs) jobPaths.push(job.modPath);
+		const tLink = performance.now();
+		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
+		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
+		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+		if (opts.showTime) printTiming("phase D (link images)", tLink);
+		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
+		return;
+	}
 	oFiles = [];
 	for (const slot of oSlots) {
 		for (const oFile of slot) oFiles.push(oFile);
