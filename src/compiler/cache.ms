@@ -18,7 +18,7 @@ import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDi
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
-import { getCompilerName, modeFlags } from "./cc";
+import { getCompilerName, compilerInvocation, modeFlags } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
 
@@ -506,17 +506,17 @@ let _compilerHashKey = "";
 function getCompilerHash(ccOption: number, ccBinary: string): string {
 	const name = getCompilerName(ccOption, ccBinary);
 	if (_compilerHash != "" && _compilerHashKey == name) return _compilerHash;
-	let path = name;
-	const args: string[] = [];
-	if (ccBinary == "" && name.endsWith(" cc")) {
-		path = name.slice(0, name.length - 3);
-		args.push("cc");
-	}
+	const command = compilerInvocation(ccOption, ccBinary);
+	let path = command.ok ? command.value.path : name;
 	const resolved = findOnPath(path);
 	if (resolved != "") path = resolved;
-	args.push("--version");
-	const r = execFileCapture(path, args);
-	const version = r.ok ? r.value : r.error.errorOutput;
+	let version = command.ok ? "" : command.error.message;
+	if (command.ok) {
+		const args = command.value.args;
+		args.push("--version");
+		const r = execFileCapture(path, args);
+		version = r.ok ? r.value : r.error.errorOutput;
+	}
 	_compilerHashKey = name;
 	_compilerHash = hashContent(`${name}:${hashFile(path)}:${version}`);
 	return _compilerHash;

@@ -610,23 +610,34 @@ export function cliAllFlags(opts: CliOptions): string {
 
 // -- Build command construction --
 
-struct ToolCommand {
+export struct ToolCommand {
 	path: string;
 	args: string[];
 }
 
-function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): ToolCommand {
+export function compilerInvocation(ccOption: number, ccBinary: string): Result<ToolCommand, ProcessError> {
 	const base = getCompilerName(ccOption, ccBinary);
-	if (ccBinary != "") {
-		return { path: isCpp ? toCppCompiler(base) : base, args: [] };
+	if (ccBinary == "") {
+		if (isZigCC(base)) return Result.ok({ path: base.slice(0, base.length - 3), args: ["cc"] });
+		return Result.ok({ path: base, args: [] });
 	}
-	if (isZigCC(base)) {
-		return {
-			path: base.slice(0, base.length - 3),
-			args: [isCpp ? "c++" : "cc"],
-		};
+	const words = splitCcFlags(ccBinary);
+	if (!words.ok) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, `--cc: ${words.error}`));
+	if (words.value.length == 0) return Result.err(processError(ProcessErrorKind.Unknown, ccBinary, "--cc names no compiler"));
+	const args: string[] = [];
+	for (let i = 1; i < words.value.length; i++) args.push(words.value[i]);
+	return Result.ok({ path: words.value[0], args });
+}
+
+function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): Result<ToolCommand, ProcessError> {
+	const r = compilerInvocation(ccOption, ccBinary);
+	if (!r.ok || !isCpp) return r;
+	const command = r.value;
+	if (command.args.length > 0 && command.args[0] == "cc") {
+		command.args[0] = "c++";
+		return Result.ok(command);
 	}
-	return { path: isCpp ? toCppCompiler(base) : base, args: [] };
+	return Result.ok({ path: toCppCompiler(command.path), args: command.args });
 }
 
 
@@ -649,7 +660,9 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 	ensureDir(dirname(outBinary));
 	const isCpp = isCppFile(cFile);
 	if (isCpp) _hasCppCompile = true;
-	const command = compilerCommand(ccOption, ccBinary, isCpp);
+	const resolved = compilerCommand(ccOption, ccBinary, isCpp);
+	if (!resolved.ok) return Result.err(resolved.error);
+	const command = resolved.value;
 	const args = command.args;
 	args.push(isCpp ? "-std=c++17" : "-std=gnu11");
 	const modeArgs = appendParsedFlags(command.path, args, modeFlags(mode));
@@ -672,7 +685,9 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const isCpp = isCppFile(cFile);
-	const command = compilerCommand(ccOption, ccBinary, isCpp);
+	const resolved = compilerCommand(ccOption, ccBinary, isCpp);
+	if (!resolved.ok) return Result.err(resolved.error);
+	const command = resolved.value;
 	const args = command.args;
 	args.push(isCpp ? "-std=c++17" : "-std=gnu11");
 	const modeArgs = appendParsedFlags(command.path, args, modeFlags(mode));
@@ -739,7 +754,9 @@ function responseFileBody(args: string[]): string {
 
 export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
-	const command = compilerCommand(ccOption, ccBinary, _hasCppCompile);
+	const resolved = compilerCommand(ccOption, ccBinary, _hasCppCompile);
+	if (!resolved.ok) return Result.err(resolved.error);
+	const command = resolved.value;
 	const prefix = command.args;
 	const rtDir = resolveRuntime();
 	if (rtDir != "") prefix.push(`-iquote${dirname(dirname(rtDir))}`);
