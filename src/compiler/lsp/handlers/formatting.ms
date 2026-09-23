@@ -1,7 +1,7 @@
 // LSP Handlers — Code Actions (quick fixes) and Document Formatting.
 
 import {
-	TransAmDb, dbParse
+	TransAmDb, dbParse, createTransAmDb, dbSetFileText
 } from "../../transam/index";
 import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
@@ -158,4 +158,26 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 
 	const lspRange = lspFmtRange(e.start.line - 1, e.start.column - 1, e.end.line - 1, e.end.column - 1);
 	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
+}
+
+function formattingDb(source: string): TransAmDb {
+	const db = createTransAmDb(8);
+	dbSetFileText(db, lspUriToPath("file:///fmt/probe.ms"), source);
+	return db;
+}
+
+const FORMAT_PARAMS = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"}}";
+const RANGE_PARAMS = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":1,\"character\":5}}}";
+const LOSSY = "const x = a // why a\n\t+ b;\n";
+
+test "document formatting refuses an edit that changes a token" {
+	assert handleFormatting("1", FORMAT_PARAMS, formattingDb(LOSSY)).contains("fmt refused");
+}
+
+test "range formatting refuses an edit that changes a token" {
+	assert handleRangeFormatting("1", RANGE_PARAMS, formattingDb(LOSSY)).contains("fmt refused");
+}
+
+test "document formatting still edits a lossless source" {
+	assert handleFormatting("1", FORMAT_PARAMS, formattingDb("const  a=1;\n")).contains("newText");
 }
