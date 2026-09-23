@@ -7,6 +7,7 @@ import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
+import { FmtPos, formatStatementEdit, innermostStatement, lineOffset } from "../../fmt/edit";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
 import { dbGetSource } from "./shared";
@@ -119,4 +120,37 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const t6 = performance.now();
 	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
+}
+
+export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
+	const textDoc = lspGetObjectField(params, "textDocument");
+	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	const source = dbGetSource(db, path);
+	if (source == "") return lspResponse(id, "[]");
+
+	const range = lspGetObjectField(params, "range");
+	const rs = lspGetObjectField(range, "start");
+	const re = lspGetObjectField(range, "end");
+	const from: FmtPos = { line: (lspGetNumberField(rs, "line") + 1) as int32, column: (lspGetNumberField(rs, "character") + 1) as int32 };
+	const to: FmtPos = { line: (lspGetNumberField(re, "line") + 1) as int32, column: (lspGetNumberField(re, "character") + 1) as int32 };
+
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+	const parsed = parseSource(source);
+	if (!parsed.ok) return lspResponse(id, "[]");
+	const stmt = innermostStatement(parsed.value, from, to);
+	if (stmt == null) return lspResponse(id, "[]");
+
+	const edit = formatStatementEdit(stmt, source, getFormatOptions(db, path));
+	if (!edit.ok) return lspErrorResponse(id, -32603, edit.error);
+	const e = edit.value;
+	const startOffset = lineOffset(source, e.start.line) + e.start.column - 1;
+	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
+	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
+
+	const lspRange = lspFmtRange(e.start.line - 1, e.start.column - 1, e.end.line - 1, e.end.column - 1);
+	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
 }
