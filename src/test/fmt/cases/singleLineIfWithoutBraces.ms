@@ -13,10 +13,10 @@ test "fmt: a braceless if/else on one line keeps no braces" {
 	assert assertFmtContains(source, "if (x == 0) return 1; else return 2;");
 }
 
-test "fmt: a braceless body on the next line gets braces" {
+test "fmt: a braceless body on the next line stays braceless" {
 	const source = "function f(x: int32): int32 {\n\tif (x == 0)\n\t\treturn 1;\n\treturn x;\n}\n";
 	assert assertFmtPreservesAst(source);
-	assert assertFmtContains(source, "if (x == 0) { return 1; }");
+	assert assertFmtContains(source, "if (x == 0) return 1;");
 }
 
 test "fmt: a braced single-line if keeps its braces" {

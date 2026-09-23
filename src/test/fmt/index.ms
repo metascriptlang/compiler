@@ -64,3 +64,4 @@ import "./cases/forInitType";
 import "./cases/tryClauses";
 import "./cases/paramModifiers";
 import "./cases/groupingParens";
+import "./cases/bracelessLoops";

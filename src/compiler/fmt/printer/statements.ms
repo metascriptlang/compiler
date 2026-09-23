@@ -171,8 +171,8 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
-function bracelessOnLine(body: Node, line: int32, options: FormatOptions): Node | null {
-	if (options.source == "" || body.kind != NodeKind.BlockStmt || body.location.line != line) return null;
+function bracelessStatement(body: Node, options: FormatOptions): Node | null {
+	if (options.source == "" || body.kind != NodeKind.BlockStmt) return null;
 	const block = body.data as BlockStmtData;
 	if (block.statements.length != 1) return null;
 	const stmt = block.statements[0];
@@ -183,8 +183,8 @@ function bracelessOnLine(body: Node, line: int32, options: FormatOptions): Node 
 	return stmt;
 }
 
-function printBody(body: Node, line: int32, options: FormatOptions): Doc {
-	const single = bracelessOnLine(body, line, options);
+function printBody(body: Node, options: FormatOptions): Doc {
+	const single = bracelessStatement(body, options);
 	return callPrintNode(single != null ? single : body, options);
 }
 
@@ -194,7 +194,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		docText("if ("),
 		callPrintNode(d.condition, options),
 		docText(") "),
-		printBody(d.consequent, node.location.line, options),
+		printBody(d.consequent, options),
 	];
 	// Skip empty else blocks (parser may create a BlockStmt with 0 statements)
 	if (d.alternate != null) {
@@ -207,7 +207,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 			parts.push(docText(" else "));
 			parts.push(d.alternate.kind == NodeKind.IfStmt
 				? callPrintNode(d.alternate, options)
-				: printBody(d.alternate, d.consequent.location.line, options));
+				: printBody(d.alternate, options));
 		}
 	}
 	return docGroup(parts);
@@ -219,7 +219,7 @@ export function printWhileStmt(node: Node, options: FormatOptions): Doc {
 		docText("while ("),
 		callPrintNode(d.whileCondition, options),
 		docText(") "),
-		callPrintNode(d.whileBody, options),
+		printBody(d.whileBody, options),
 	]);
 }
 
@@ -233,7 +233,7 @@ export function printForStmt(node: Node, options: FormatOptions): Doc {
 		docText("; "),
 		callPrintNode(d.forUpdate, options),
 		docText(") "),
-		callPrintNode(d.forBody, options),
+		printBody(d.forBody, options),
 	]);
 }
 
@@ -245,7 +245,7 @@ export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 		docText("for (" + binding + " " + d.forOfBinding + " of "),
 		callPrintNode(d.forOfIterable, options),
 		docText(") "),
-		callPrintNode(d.forOfBody, options),
+		printBody(d.forOfBody, options),
 	]);
 }
 
@@ -256,7 +256,7 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 		docText("for (" + binding + " " + d.forInBinding + " in "),
 		callPrintNode(d.forInObject, options),
 		docText(") "),
-		callPrintNode(d.forInBody, options),
+		printBody(d.forInBody, options),
 	]);
 }
 
