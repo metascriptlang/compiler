@@ -17,7 +17,7 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawTemplateAt } from "./literals";
+import { rawTemplateAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -329,8 +329,15 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrowFunctionData;
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
+	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
+		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
+		&& sourceByteAt(options.source, node.location.line, node.location.column) != -1;
 	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options);
-	for (const p of paramListInParens(params, options)) parts.push(p);
+	if (bare) {
+		parts.push(params[0]);
+	} else {
+		for (const p of paramListInParens(params, options)) parts.push(p);
+	}
 	if (d.arrowReturnType != "") {
 		parts.push(docText(": " + d.arrowReturnType));
 	}

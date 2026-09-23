@@ -67,3 +67,4 @@ import "./cases/groupingParens";
 import "./cases/bracelessLoops";
 import "./cases/nonNullAssertion";
 import "./cases/assertionOperands";
+import "./cases/bareArrowParam";
