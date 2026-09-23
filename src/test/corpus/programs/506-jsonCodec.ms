@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: escFail=Expected string key at position 1
 // Parity program — std json codec depth: escape decode (incl. \u + surrogate
 // pairs → WTF-8 byte metrics, corpus 101 convention), int/float split,
 // stringifyPretty shape, and the typed macro path JSON.stringify<T> /

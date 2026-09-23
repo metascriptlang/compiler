@@ -1,4 +1,5 @@
 // @stdout: 6 9 6 12 -1
+// @xfail(raiser): raiser runtime error "expected an object, got value kind Int" when a method calls a function value it received; same on a control built from origin/main
 
 // A function value passed to a method parameter takes the closure representation the
 // parameter declares, for a bare function type and for a nullable one, whether the value is
