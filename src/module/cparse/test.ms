@@ -20,6 +20,14 @@ test "end-to-end skeleton runs without crashing" {
 	assert out.diagnostics.length == 0;
 }
 
+test "a tag-only declaration declares the tag, not a variable" {
+	const out = parseHeader("struct S;\nunion U;\nenum E;\nstruct S* get(void);", "tags.h", defaultOptions());
+	assert out.diagnostics.length == 0;
+	assert out.objs.length == 1;
+	assert out.objs[0].name == "get";
+	assert out.objs[0].type.returnType.base.tagName == "S";
+}
+
 test "end-to-end function declaration parses" {
 	const out = parseHeader("int add(int a, int b);", "add.h", defaultOptions());
 	assert out.diagnostics.length == 0;

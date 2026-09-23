@@ -484,8 +484,7 @@ function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
 
 	// Optional tag name
 	let tagName = "";
-	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident &&
-		ctx.tok.next != null && ctx.tok.next.stringVal != ";") {
+	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident) {
 		tagName = ctx.tok.stringVal;
 		advance(ctx);
 	}
@@ -588,8 +587,7 @@ function enumSpecifier(ctx: ParseCtx): CType {
 	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
 
 	let tagName = "";
-	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident &&
-		ctx.tok.next != null && ctx.tok.next.stringVal != ";") {
+	if (ctx.tok != null && ctx.tok.kind == CTokenKind.Ident) {
 		tagName = ctx.tok.stringVal;
 		advance(ctx);
 	}
@@ -721,6 +719,7 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			parseTypedef(ctx, baseTy);
 			continue;
 		}
+		if (consume(ctx, ";")) continue;
 
 		const declResult = declarator(ctx, baseTy);
 		const ty = declResult.type;
