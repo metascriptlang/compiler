@@ -2,11 +2,11 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt } from "./validation";
 
@@ -1986,7 +1986,9 @@ test "ref param" { assert programOk("function update(ref v: number): void {}"); 
 
 test "ref struct param" { assert programOk("struct Vec2 { x: number; y: number; }\nfunction scale(ref v: Vec2): void {}"); }
 // Enum with complex values — exercises skipDefaultValue depth tracking
-test "enum complex value" { assert programOk("enum E { A = fn(1, 2), B = arr[0] }"); }
+test "enum non-literal value rejected" { assert !programOk("enum E { A = fn(1, 2), B = arr[0] }"); }
+test "enum negative value" { const d = stmtAt("enum E { A = -1, B }", 0).data as EnumDeclData; assert d.enumValues[0] == -1 && d.enumValues[1] == 0; }
+test "extern enum negative value" { assert programOk("extern enum E { A = 0, B = -1, }"); }
 // Var declarations
 test "var decl" { assert programOk("var x = 1;"); }
 
