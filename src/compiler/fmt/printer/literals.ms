@@ -89,6 +89,11 @@ function sourceOffset(source: string, line: int32, col: int32): int32 {
 	return pos < source.byteLength ? pos : -1;
 }
 
+export function sourceByteAt(source: string, line: int32, column: int32): int32 {
+	const pos = sourceOffset(source, line, column - 1);
+	return pos >= 0 ? source.byteAt(pos) : -1;
+}
+
 function skipQuoted(source: string, pos: int32): int32 {
 	const quote = source.byteAt(pos);
 	let end = pos + 1;

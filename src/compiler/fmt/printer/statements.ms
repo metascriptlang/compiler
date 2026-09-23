@@ -11,6 +11,7 @@ import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
+import { sourceByteAt } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -168,17 +169,6 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(";"));
 	}
 	return docGroup(parts);
-}
-
-function sourceByteAt(source: string, line: int32, column: int32): int32 {
-	let currentLine = 1;
-	let pos = 0;
-	while (pos < source.byteLength && currentLine < line) {
-		if (source.byteAt(pos) == "\n".code) currentLine = currentLine + 1;
-		pos = pos + 1;
-	}
-	pos = pos + column - 1;
-	return pos >= 0 && pos < source.byteLength ? source.byteAt(pos) : -1;
 }
 
 function bracelessOnLine(body: Node, line: int32, options: FormatOptions): Node | null {
