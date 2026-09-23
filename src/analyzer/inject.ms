@@ -1058,6 +1058,9 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			return genSink(stmt, dest, destName, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+		},
 		// Move expression → sink + wasMoved on source
 		NodeKind.MoveExpr => {
 			const md = rhs.data as MoveExprData;
