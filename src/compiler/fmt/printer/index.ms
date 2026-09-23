@@ -14,7 +14,7 @@ import {
 } from "./jsx";
 
 import {
-	indexSourceLines, sourceSpan, printNullLiteral, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
+	indexSourceLines, sourceSpan, rawThroughBlockAt, printNullLiteral, printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
 	printBigIntLiteral, printRegexLiteral,
 } from "./literals";
 import {
@@ -55,6 +55,15 @@ export function formatNodeAt(node: Node, options: FormatOptions, baseIndent: str
 		return Result.err("fmt has no printer for node kind " + unprintedKinds.join(", "));
 	}
 	return Result.ok(out);
+}
+
+function printVerbatimBlock(node: Node, options: FormatOptions): Doc {
+	const text = rawThroughBlockAt(options.source, node.location.line, node.location.column);
+	if (text == "") {
+		unprintedKinds.push(node.kind.toString());
+		return docNil();
+	}
+	return docText(text);
 }
 
 function fillWhenSpans(node: Node, source: string): void {
@@ -148,6 +157,9 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.ObjectPattern => printObjectPattern(node, options),
 		NodeKind.ObjectPatternProp => printObjectPatternProp(node, options),
 		NodeKind.DestructuringDecl => printDestructuringDecl(node, options),
+
+		// ===== Compile-time blocks, printed as written =====
+		NodeKind.QuoteExpr | NodeKind.ComptimeBlock => printVerbatimBlock(node, options),
 
 		// ===== JSX =====
 		NodeKind.JSXElement => printJsxElement(node, options),

@@ -96,3 +96,4 @@ import "./cases/fieldSeparatorsAndHoles";
 import "./cases/operandComments";
 import "./cases/aliasComments";
 import "./cases/stableLayout";
+import "./cases/compileTimeBlocks";
