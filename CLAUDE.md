@@ -36,9 +36,9 @@ msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
 msc build src/index.ms --gc=drc --danger --output=msc
 
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
-./tools/sync-local-binary.sh              # full sync
-./tools/sync-local-binary.sh --check      # dry-run
-./tools/sync-local-binary.sh --no-binary  # support trees only
+./msc run tools/syncLocalBinary.ms --target=raiser            # full sync
+./msc run tools/syncLocalBinary.ms --target=raiser check      # dry-run
+./msc run tools/syncLocalBinary.ms --target=raiser no-binary  # support trees only
 
 bash tools/editor-plugin/build.sh --install   # after grammar/highlights edits
 ```
@@ -108,18 +108,18 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **One worktree per feature or named arc, many sessions on it** — the unit has a name and a card; `claude --worktree <name>` (or `tools/wt.sh new <name>` by hand) creates branch `wt/<name>` with vendor, `paper` and a builder `./msc` ready, and re-enters the same worktree on every later session; from branch-off to done the arc's work happens only there.
 - **A second worktree needs a reason** — (1) two pieces run at the same time in different sessions and write no common path, or (2) a stray change that belongs to no open arc, which gets a short `fix-<name>` worktree, lands and is retired. Sequential steps of one arc are commits in its worktree, never new worktrees; work that needs a path another worktree is ahead of `main` on (`tools/wt.sh ls`, then `git diff --name-only main...wt/<other>`) waits for that land.
 - **A step is a commit, a slice is a land** — a step of an arc ends at its commit and the next step starts right away; a gate costs about ten minutes and holds the machine, so nobody lands or waits for a land after each step.
-- **Land a slice when it stands alone and something needs it, not at every step and not when the arc ends** — the reasons are: another repo needs the fix through `tools/sync-local-binary.sh`, the session ends, or the worktree has neither landed nor rebased for two days while `main` moved; `land` rebases onto `main`, so the worktree stays current and keeps going after the land.
+- **Land a slice when it stands alone and something needs it, not at every step and not when the arc ends** — the reasons are: another repo needs the fix through `tools/syncLocalBinary.ms`, the session ends, or the worktree has neither landed nor rebased for two days while `main` moved; `land` rebases onto `main`, so the worktree stays current and keeps going after the land.
 - **The card is `$MSC_WT_ROOT/<name>.md`** — `tools/wt.sh new` seeds it; its State is written for a reader who has seen none of the arc: no stage codes, and the step in flight can be started without opening another file. The SessionStart hook prints it (`tools/wt.sh card` by hand) with the compiler inbox tallied by `State:`; `tools/wt.sh ls` shows each goal, marks a worktree without one `NO CARD` and lists every card left without a branch. A fresh card gets its Goal and "Done when" before the first commit. Its `Layer:`, `Kind:` and `Mechanism:` lines are filled when the fix is understood, in the words the report uses, so the classification outlives the session and the inbox tallies by kind.
 - **The main checkout only receives lands** — `tools/wt.sh land` rebases, gates, moves `main` and syncs the checkout path by path, refusing any path the checkout holds uncommitted work on.
 - **A gate verdict survives a `main` that moved only by paths no lane tests** — when `main` moves during the gate, `land` rebases onto it and lands without a second gate if every path the move changed picks no lane (`tools/gate.sh --inert <from> <to>`, the gate's own inert list); a move that changes a path a lane tests re-gates. Nobody re-runs a lane on what is already known safe.
 - **A worktree is retired from outside it, with `tools/wt.sh rm`** — a session cannot remove the worktree it runs in (its own processes hold it), so it reports the land and leaves the worktree; `rm` names what it would lose, `--force` discards only that; find idle ones with `tools/wt.sh ls --stale`.
-- **Data flows one way, repo → `~/.metascript/`** — through `tools/sync-local-binary.sh` only, run from a clean worktree of `main` (it refuses uncommitted work under `src`, `std`, `runtime` and a binary older than `src`) and recording the commit in `~/.metascript/BUILD`; nothing mirrors into a checkout.
+- **Data flows one way, repo → `~/.metascript/`** — through `tools/syncLocalBinary.ms` only, run from a clean worktree of `main` (it refuses uncommitted work under `src`, `std`, `runtime` and a binary older than `src`) and recording the commit in `~/.metascript/BUILD`; nothing mirrors into a checkout.
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 - **`land --no-gate` belongs to the person at the keyboard** — it lands on evidence gathered outside the gate and says so; an agent does not reach for it on its own.
 
 ## Verification Cost — lanes follow the change; the full ladder follows a release
 
-**"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/sync-local-binary.sh` are not shipping, and neither asks for the full ladder.
+**"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for the full ladder.
 
 - **One command picks and runs the lanes** — `tools/gate.sh` maps the paths a change touches to lanes (the table at the top of the script), runs them one after another and stops at the first new red; `--dry-run` shows the choice and why, `--release` runs the full ladder, and `tools/wt.sh land` calls it.
 - **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.

@@ -77,7 +77,7 @@ cp out/release/.cache/*.c /tmp/fx/B/
 
 Cache file names end in a fingerprint (`<module>_x_ms.<hex>_<hex>.c`) that changes with the building compiler. `diff -rq A B` therefore reports every file. Pair the files by the name before the fingerprint and compare their contents. On 2026-09-19, 322 of 322 modules were identical while `gen1` and `gen2` differed as binaries. A side with 0 files means the wrong cache directory was copied: `--danger` and `--release` write `out/release/.cache`, a plain build writes `out/debug/.cache`.
 
-Never run `tools/sync-local-binary.sh` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` with `--delete`.
+Never run `tools/syncLocalBinary.ms` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` and deletes what the source lacks.
 
 ## 3. Fix a release
 

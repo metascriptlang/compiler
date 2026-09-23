@@ -37,9 +37,9 @@ A lifecycle guard is proven red on a binary that has the bug before it is truste
 ## Sync into ~/.metascript
 
 ```bash
-./tools/sync-local-binary.sh              # binary + std + runtime + vendor
-./tools/sync-local-binary.sh --check      # dry run
-./tools/sync-local-binary.sh --no-binary  # support trees only
+./msc run tools/syncLocalBinary.ms --target=raiser              # binary + std + runtime + vendor
+./msc run tools/syncLocalBinary.ms --target=raiser check      # dry run
+./msc run tools/syncLocalBinary.ms --target=raiser no-binary  # support trees only
 ```
 
 Run it from a tree whose `vendor/` submodules are checked out: the sync mirrors `vendor/` with `--delete`.
