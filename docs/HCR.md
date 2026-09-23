@@ -33,7 +33,8 @@ backend and DRC/ORC runtime.
 | Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Windows x64: a non-reloadable `<stem>.core.dll` (runtime, std, registry) plus one DLL per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image. Linux and macOS link flags exist but are not verified |
 | Cross-module vtable calls | Lowered by `src/transform/native/hcrIndirect.ms` and replaced at runtime by publishing a reloaded image's table, guarded by `src/test/hcr/run.ms` (`hcrIndirect`) |
-| Full transactional current/old/candidate module registry | Not implemented; the Windows single-image host proves candidate-before-publish and retained accepted generations |
+| Full transactional current/old/candidate module registry | Windows x64: `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); POSIX loader not implemented (the engine aborts loud) |
+| `@beforeReload` / `@afterReload` lifecycle handlers | Implemented on Windows x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
 | iOS and automated watch/deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
@@ -333,6 +334,101 @@ could not run WSL), Windows ARM64, and an object of a previous generation checke
 `instanceof` after its module reloaded. Standard-library generics instantiated for a project
 class link and run across images in one probe: `Shape[]` with `map` and `Map<string, Shape>`
 in `app` over `shapes` returned `PROBE 17` (4 + 9 + 4); other generic shapes are not covered.
+
+### Host runtime (S4)
+
+The reload engine is the standard-library module `std/hcr` (`std/hcr/index.cms`), linked into
+the core image; the registry and the Win32 loader edge stay C (`runtime/hcr.c`,
+`runtime/hcrEngine.h`). A thin host copies `<stem>.core.dll` into `<dir>/.hcr/<pid>/core/`,
+loads it, calls `msHcrLaunch(dir, stem)` and then `msHcrEngineStart`; the fixture host is
+`src/test/hcr/fixtures/engine/host.ms`. A program that never imports `std/hcr` has no engine
+in its core, and the host stops at the missing `msHcrEngineStart`. The program calls
+`reload()` at its safe point (the Neon frame loop) and reacts to the returned kind:
+`NoChange`, `Reloaded`, `Pending`, `Rejected` or `RestartRequired`.
+
+The shape follows nimhcr (`lib/nimhcr.nim`: `hcrInit`, `recursiveDiscovery`, `initModules`,
+`hcrPerformCodeReload`, `hcrAddEventHandler`) with these decisions:
+
+- **Images describe themselves.** Every module image exports `HcrModuleId000`,
+  `HcrAbiKey000` and `HcrImports000`, the analogue of nimhcr's `HcrGetImportedModules` and
+  `HcrGetSigHash`. The key is `hcrExportKey` over the S2 manifest without its dependency
+  list, so it changes exactly when a dependent must reload. Before anything is published,
+  every import edge of the post-transaction module set must carry the key of the image it
+  would bind to; otherwise the reload is `Rejected` and names the module to rebuild. Reading
+  the `.hcrabi` bundle instead was rejected: it can disagree with a copied image, and it cannot
+  describe the generation that is already loaded.
+- **The bundle is the trigger.** `reload()` stats only `<stem>.dll.hcrabi`, which the compiler
+  writes after every link succeeds, and then compares each image's size and write time. A
+  `stat` cost 10 µs on this host, so polling every image each frame would cost about 1 ms for
+  100 modules. nimhcr compares each module's modification time.
+- **Copies are immutable.** Every image is copied to `<dir>/.hcr/<pid>/<generation>/` before
+  it is loaded, so the build directory is never locked. A copy in another directory binds to
+  the core that is already loaded, because Windows resolves an import by base name (one
+  `module.core.dll` in the process after loading a copy from `.hcr/2/`). Images name their PDB
+  without a path (`PDBFileName: module.logic.pdb`), so the path patching that cr.h does
+  (`cr_pdb_replace`) is not needed.
+- **A bad image is retried, not trusted.** A load or copy error (`193` for a truncated image,
+  `32` for a file the linker still holds) returns `Pending` and is retried only when the file
+  changes, as cr.h's `CR_BAD_IMAGE` retries on the next update.
+- **Publication is one transaction.** Under `msHcrStageBegin` a candidate's `DatInit000` stages
+  its table instead of publishing it. The engine commits every staged table after the
+  lifted-state handover and the before-handlers succeed. Each handle keeps `current`, `old` and
+  `staged` tables.
+- **Handlers are image exports.** `@beforeReload` and `@afterReload` mark a module-level
+  `(): void` function; the checker gives it a deterministic C name, which makes it a
+  dead-code root, and each image wraps its handlers in `HcrBeforeReload000` /
+  `HcrAfterReload000`. nimhcr registers handlers from `Init000`, but a MetaScript reload never
+  reruns first-load initialization, so a registered handler would keep pointing into the old
+  image. Handlers run leaf to root: before-handlers on the current generation after the
+  candidates are validated, after-handlers on the new generation once it is published.
+- **Rollback restores tables, not state.** A throwing after-handler rolls every committed
+  table of the transaction back and returns `Rejected`. cr.h also restores backed-up
+  `.state`/`.bss` sections (`cr_plugin_sections_reload`). Lifted state holds DRC references,
+  so restoring its bytes would corrupt reference counts, and lifted state is left as the new
+  code wrote it. Crash recovery through SEH stays out of scope.
+- **Accepted generations stay loaded.** No accepted image is unloaded, as RCC++'s
+  `RuntimeObjectSystem` never frees a module. Twenty extra generations of `logic` cost about
+  70 KB of private memory each. Purging old generations needs proof that no frame or callback
+  still reaches them.
+
+Traps measured while building it:
+
+- One explicit `__declspec(dllexport)` in core C turns lld's export-all off, even with
+  `-Wl,--export-all-symbols` on the link line: the core's exports fell from 851 to 1, and every
+  module image failed to link `msHcrPublish`. Core C therefore uses no `MS_HCR_EXPORT`.
+- Core is linked from what the program reaches. An edit that starts using a standard-library
+  routine the old core lacks relinks core, and `reload()` answers `RestartRequired`. An image
+  loaded against the old core fails with loader error `127`.
+- A loop that runs inside the entry module calls its own module directly, so it stays on the
+  generation it started in; only calls through a module table see new code. nimhcr avoids
+  this by keeping its main module unreloadable.
+
+On 2026-09-23, Windows 11 x64 with zig 0.16.0, tree `add20d0a491aec1f1b573d5f8addf47012603bf1`,
+`MSC=out/msc-s4c.exe out/msc-s4c.exe run src/test/hcr/run.ms
+--target=raiser` printed `ok hcrModuleAbi`, `ok hcrIndirect`, `ok hcrEngine` and
+`ok hcrWindowsReload`. The `hcrEngine` app places prebuilt generations into the watched
+directory from inside the running images and calls `reload()`:
+
+```
+HCR-ENGINE start: value 10 tick 1 version 1
+HCR-ENGINE body edit: reloaded logic
+HCR-ENGINE after body edit: value 73 tick 11 version 1
+HCR-ENGINE truncated image: pending logic (cannot load run/module.logic.dll (error 193))
+HCR-ENGINE same truncated image: pending logic (run/module.logic.dll is not a loadable image yet)
+HCR-ENGINE complete image: reloaded logic
+HCR-ENGINE lifecycle v2: after reload
+HCR-ENGINE after-reload handler throws: rejected lifecycle (the after-reload handler of module 'lifecycle' threw; rolled back lifecycle)
+HCR-ENGINE after rollback: value 10 tick 13 version 1
+HCR-ENGINE added export, app not rebuilt: rejected (module 'app' was built against another export ABI of 'logic'; rebuild it)
+HCR-ENGINE state layout changed: restart required logic (the lifted state layout of module 'logic' changed)
+HCR-ENGINE core changed: restart required (the core image changed (runtime, standard library or toolchain))
+```
+
+The same runner stops at `HCR: run/module.dll is not an HCR module image` on a compiler
+without `HcrModuleId000`, and prints `after rollback: ... version 2` when the engine skips
+`msHcrRollback`. Not verified: a module that first appears during a reload (written, no
+fixture), POSIX and macOS loaders, reload latency (S6), and `instanceof` on an object of a
+previous generation.
 
 ## Neon Fast Refresh boundary
 
