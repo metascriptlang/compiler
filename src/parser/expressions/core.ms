@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -173,12 +173,22 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 		}
 
 		advance(state);
+		const afterOperator: Token[] = [];
+		const beforeOperator: Token[] = [];
+		for (const c of takePendingComments(state)) {
+			if (c.line > op.line || (c.line == op.line && c.column > op.column)) afterOperator.push(c); else beforeOperator.push(c);
+		}
+		state.pendingComments = beforeOperator;
 		// Right-associative operators (**, =, +=, etc.) use prec instead of prec+1
 		let nextPrec = prec + 1;
 		if (isRightAssociative(op.kind)) {
 			nextPrec = prec;
 		}
 		const right = try parseExprWithPrec(state, nextPrec);
+		if (afterOperator.length > 0) {
+			for (const c of right.comments) afterOperator.push(c);
+			right.comments = afterOperator;
+		}
 		const data: NodeData = {
 			operator: op.value,
 			left,
