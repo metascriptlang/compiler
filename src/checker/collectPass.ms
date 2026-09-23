@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
-import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf } from "./decoratorHelpers";
+import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, addRuntimeConverter } from "./context";
@@ -11,6 +11,7 @@ import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { getGenericDecl } from "../parser/context";
 import { callDecoratorDefers } from "./checkerCallbacks";
+import { mangleModuleName } from "../codegen/c/names";
 
 // ===== Top-Level Collector =====
 
@@ -251,7 +252,8 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, declName);
 	if (sym == null) return;
 	const info = extractDecoratorInfo(node);
-	const exportName = exportNameRejected ? "" : info.exportName;
+	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
+	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
 	// For overloaded functions, the new function was just pushed as the last overload.
 	// Set builtinKind on the correct symbol (not the primary).
 	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
@@ -275,6 +277,35 @@ function registerCompilerFunc(ctx: CheckerContext, sym: Symbol): void {
 	const key = sym.nativeName != "" ? sym.nativeName : sym.name;
 	if (key == "") return;
 	ctx.compilerFuncs.set(key, sym);
+}
+
+function reloadHandlerExportName(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol, declName: string): string {
+	const dec = reloadHandlerDecorator(dd.decorators);
+	if (dec == null) return "";
+	const md = dec.data as MacroInvocationData;
+	const problem = reloadHandlerMisuse(md, dd, sym);
+	if (problem != "") {
+		addError(ctx, problem, dec.location.line, dec.location.column);
+		return "";
+	}
+	const before = md.macroName == "beforeReload";
+	setFlag(sym, before ? SymbolFlag.BeforeReload : SymbolFlag.AfterReload);
+	return `${mangleModuleName(sym.modulePath)}__hcr${before ? "Before" : "After"}Reload__${declName}`;
+}
+
+function reloadHandlerMisuse(md: MacroInvocationData, dd: DecoratedDeclData, sym: Symbol): string {
+	const name = `@${md.macroName}`;
+	if (md.macroArgs.length > 0) return `${name} takes no arguments`;
+	if (exportNameDecorator(dd.decorators) != null) return `${name} names the handler's C symbol itself; drop @exportName`;
+	const fn = exportedFunctionOf(dd.decoratedNode);
+	if (fn == null) return `${name} applies to a module-level function`;
+	const fd = fn.data as FunctionDeclData;
+	if (fd.fnFlags.indexOf("extern", 0) >= 0 || fd.fnBody == null) return `${name} needs a function with a body`;
+	if (isGenericFn(fd.fnFlags)) return `${name} needs one C definition; a generic function has one per instantiation`;
+	if (fd.params.length > 0) return `${name} handlers take no parameters`;
+	if (fd.fnReturnType != "" && fd.fnReturnType != "void") return `${name} handlers return void`;
+	if (sym.overloads.length > 0) return `${name} handlers cannot be overloaded`;
+	return "";
 }
 
 function reportExportNameMisuse(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
