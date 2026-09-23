@@ -21,6 +21,7 @@ typedef struct MsHcrTypeEntry {
 
 static MsHcrEntry* msHcrEntries = NULL;
 static MsHcrTypeEntry* msHcrTypes = NULL;
+static int msHcrStaging = 0;
 
 static char* msHcrCopy(const char* text, const char* what) {
 	size_t length = strlen(text);
@@ -50,8 +51,51 @@ MsHcrHandle* msHcrHandle(const char* moduleId) {
 
 void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount) {
 	MsHcrHandle* handle = msHcrHandle(moduleId);
+	if (msHcrStaging) {
+		handle->staged = table;
+		handle->stagedCount = slotCount;
+		return;
+	}
 	handle->slotCount = slotCount;
 	handle->current = table;
+}
+
+void msHcrStageBegin(void) { msHcrStaging = 1; }
+
+void msHcrStageEnd(void) { msHcrStaging = 0; }
+
+int32_t msHcrStaged(const char* moduleId) { return msHcrHandle(moduleId)->staged != NULL ? 1 : 0; }
+
+void msHcrCommit(const char* moduleId) {
+	MsHcrHandle* handle = msHcrHandle(moduleId);
+	if (handle->staged == NULL) {
+		fprintf(stderr, "HCR: module '%s' has no staged table to commit\n", moduleId);
+		abort();
+	}
+	handle->old = handle->current;
+	handle->oldCount = handle->slotCount;
+	handle->slotCount = handle->stagedCount;
+	handle->current = handle->staged;
+	handle->staged = NULL;
+	handle->stagedCount = 0;
+}
+
+void msHcrRollback(const char* moduleId) {
+	MsHcrHandle* handle = msHcrHandle(moduleId);
+	if (handle->old == NULL) {
+		fprintf(stderr, "HCR: module '%s' has no previous table to roll back to\n", moduleId);
+		abort();
+	}
+	handle->slotCount = handle->oldCount;
+	handle->current = handle->old;
+	handle->old = NULL;
+	handle->oldCount = 0;
+}
+
+void msHcrDiscard(const char* moduleId) {
+	MsHcrHandle* handle = msHcrHandle(moduleId);
+	handle->staged = NULL;
+	handle->stagedCount = 0;
 }
 
 void* msHcrTypeInfo(const char* moduleId, const char* typeName) {

@@ -32,10 +32,20 @@ static inline int32_t msHcrWinCallProbe(void* raw) { return ((int32_t (*)(void))
 typedef struct MsHcrHandle {
 	void* const* current;
 	uint32_t slotCount;
+	void* const* old;
+	uint32_t oldCount;
+	void* const* staged;
+	uint32_t stagedCount;
 } MsHcrHandle;
 
 MsHcrHandle* msHcrHandle(const char* moduleId);
 void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount);
+void msHcrStageBegin(void);
+void msHcrStageEnd(void);
+int32_t msHcrStaged(const char* moduleId);
+void msHcrCommit(const char* moduleId);
+void msHcrRollback(const char* moduleId);
+void msHcrDiscard(const char* moduleId);
 void* msHcrTypeInfo(const char* moduleId, const char* typeName);
 void msHcrCoreInit(void);
 
