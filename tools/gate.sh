@@ -12,11 +12,12 @@ RULES=(
   'build,suite,corpus|^(src/(codegen|analyzer|transform)|runtime)/'
   'build,suite,corpus|^src/raiser/|^src/compiler/meta/hostTable\.ms$'
   'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
+  'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build suite hcr tests suite-orc corpus san guard"
-LADDER="build suite hcr tests suite-orc corpus san guard"
-KNOWN_LANES="suite hcr suite-orc tests corpus san guard"
+ORDER="tools build suite hcr tests suite-orc fmt corpus san guard"
+LADDER="build suite hcr tests suite-orc fmt corpus san guard"
+KNOWN_LANES="suite hcr suite-orc tests fmt corpus san guard"
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$'
 
 usage() {
@@ -28,7 +29,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build suite hcr tests suite-orc corpus san guard
+  --lanes a,b    run exactly these lanes: tools build suite hcr tests suite-orc fmt corpus san guard
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -103,6 +104,7 @@ reds_of() {
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
     guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
+    fmt) sed -n 's/^\(LOSSY\|UNSTABLE\|NO-FMT\|UNREADABLE\) \(.*\.ms\).*$/\2/p' "$log" ;;
   esac | sort -u
 }
 
@@ -244,6 +246,7 @@ lane_cmd() {
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
+    fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
   esac
 }
 
@@ -392,7 +395,7 @@ flaky_ids >"$OUT/flaky.ids"
 
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
-case " $lanes " in *" build "*|*" suite "*|*" hcr "*|*" suite-orc "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
+case " $lanes " in *" build "*|*" suite "*|*" hcr "*|*" suite-orc "*|*" fmt "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
 
 for lane in $lanes; do
   if [ -n "$stopped" ]; then say "gate: $lane skipped, $stopped has a new red"; continue; fi
