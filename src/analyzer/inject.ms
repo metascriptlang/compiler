@@ -1082,6 +1082,10 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		},
 		// Conversions sink; their operand was walked in SinkArg mode (Reference: nkHiddenSubConv/nkConv → genSink(p(ri, sinkArg)))
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => {
+			const operand = skipConversionWrappers(rhs);
+			const operandOwns = isFreshExpr(operand.kind)
+				|| (operand.nodeType != null && classifyRc(operand.nodeType, dctx).needsCleanup);
+			if (!operandOwns) return genCopy(stmt, dest, destSym, rhs, rcInfo, flags, dctx, loc);
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
 		// Move expression → sink + wasMoved on source
