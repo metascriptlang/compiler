@@ -293,8 +293,8 @@ test "binary expression" {
 }
 
 test "identifier" {
-	const js = genFromSource("const x = 1; x;");
-	assert js == "const x = 1;\nx;\n";
+	const js = genFromSource("let x = 1; x;");
+	assert js == "let x = 1;\nx;\n";
 }
 
 test "call expression" {

@@ -567,9 +567,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								d.left.location.line, d.left.location.column);
 						}
 						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
-						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring) && !isDeclaringStaticBlockWrite(ctx, declaring)) {
-							addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
-								d.left.location.line, d.left.location.column);
+						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
+							if (!isDeclaringStaticBlockWrite(ctx, declaring)) {
+								addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+									d.left.location.line, d.left.location.column);
+							} else if (d.left.resolvedSym != null && d.left.resolvedSym.symFlags.has(SymbolFlag.Static)) {
+								setFlag(d.left.resolvedSym, SymbolFlag.Mutable);
+							}
 						}
 					}
 				}

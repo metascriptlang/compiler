@@ -13,6 +13,8 @@
 //   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
 //   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
+//   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
+//                                        build must fail with every tag, else it must link (nothing is run)
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
@@ -149,6 +151,7 @@ interface Probe {
 	testBalance: string[];
 	checkfails: string[];
 	wantJs: boolean;
+	os: string;
 }
 
 function firstWord(s: string): string {
@@ -162,6 +165,7 @@ function parseDirectives(probe: Probe, src: string): void {
 	const TEST = "// GUARD-TEST-BALANCE";
 	const BAL = "// GUARD-BALANCE";
 	const CHECK = "// GUARD-CHECK-FAIL ";
+	const OS = "// GUARD-OS ";
 	for (const line of lines(src)) {
 		const orcAt = line.indexOf(ORC);
 		const testAt = line.indexOf(TEST);
@@ -178,6 +182,7 @@ function parseDirectives(probe: Probe, src: string): void {
 		}
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
+		if (line.startsWith(OS)) probe.os = firstWord(line.slice(OS.length, line.length));
 	}
 }
 
@@ -197,7 +202,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false,
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, os: "",
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -294,6 +299,34 @@ function runGcLane(probe: Probe, gc: string): void {
 		}
 	}
 	if (good) ok(tag);
+}
+
+// The invariant lives in a freestanding build whose binary the host cannot run,
+// so the lane only builds: an errorcheck probe must fail with every tag, any
+// other probe must link.
+function runOsLane(probe: Probe): void {
+	const tag = `${probe.name} [${probe.os}]`;
+	const bin = `${BIN_DIR}/${probe.name}.${probe.os}`;
+	const buildLog = `${LOG_DIR}/${probe.name}.${probe.os}.build`;
+	if (probe.balance.length > 0 || probe.balanceOrc.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
+		fail(tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-TEST-BALANCE/GUARD-JS");
+		return;
+	}
+	const b = buildProbe(probe, probe.os, ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`], buildLog);
+	if (probe.checkfails.length > 0) {
+		if (succeeded(b)) {
+			fail(tag, "compiled clean — a checker rule was dropped");
+			return;
+		}
+		checkDiagnostics(tag, both(b), probe.checkfails);
+		return;
+	}
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	ok(tag);
 }
 
 // The invariant also lives in the node bundle: pass iff exit 0 AND the probe
@@ -424,6 +457,10 @@ function main(): void {
 	}
 
 	for (const probe of discoverProbes()) {
+		if (probe.os != "") {
+			runOsLane(probe);
+			continue;
+		}
 		for (const gc of modes) runGcLane(probe, gc);
 		if (probe.wantJs) runJsLane(probe);
 		if (probe.testBalance.length > 0) runTestLane(probe);

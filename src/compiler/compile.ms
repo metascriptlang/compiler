@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, SymbolKind, Type } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, SymbolKind, Type, VariableDeclData } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
@@ -23,11 +23,11 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHas, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
-import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -1938,6 +1938,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
 	const fsAsyncHits: { modPath: string, source: string, line: int32, column: int32 }[] = [];
+	const fsWritableHits: { modPath: string, source: string, name: string, line: int32, column: int32, message: string }[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
@@ -2127,6 +2128,19 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			printTiming(modPath, modT0);
 		}
 
+		if (opts.targetOs == "solana" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			for (const hitNode of collectWritableModuleBindings(nativeLowered)) {
+				const d = hitNode.data as VariableDeclData;
+				fsWritableHits.push({
+					modPath,
+					source: cm.source,
+					name: d.declName,
+					line: d.nameLocation.line,
+					column: d.nameLocation.column,
+					message: writableModuleBindingMessage(hitNode),
+				});
+			}
+		}
 		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
@@ -2179,6 +2193,21 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		}
 		if (fsReported > 0) exit(1);
 	}
+	if (fsWritableHits.length > 0) {
+		let fsReported = 0;
+		for (const h of fsWritableHits) {
+			if (!aliveSetHas(aliveSet, h.modPath, h.name)) continue;
+			renderModuleError(h.modPath, h.source, {
+				message: h.message,
+				line: h.line,
+				column: h.column,
+				severity: ErrorSeverity.Error,
+			});
+			fsReported = fsReported + 1;
+		}
+		if (fsReported > 0) exit(1);
+	}
+
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
 	const tC = performance.now();

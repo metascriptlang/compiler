@@ -1,4 +1,4 @@
-// bug202 — a parameter with stacked modifiers refused its own element type
+// bug205 — a parameter with stacked modifiers refused its own element type
 //
 // Symptom:    `k(n)` against `sink x: Cursor<N>` failed with `got N, expected <kind:Sink>`.
 // Root cause: `skipModifier` peeled one modifier layer, so `Sink<Cursor<N>>` stopped at `Cursor<N>`.
@@ -16,12 +16,12 @@ function run(n: N): void {
 }
 `;
 
-test "bug202: a node passes a sink cursor parameter" {
+test "bug205: a node passes a sink cursor parameter" {
 	const c = compileToC(src);
 	assert c.ok, c.ok ? "" : c.error;
 }
 
-test "bug202: a mismatched type still fails a sink cursor parameter" {
+test "bug205: a mismatched type still fails a sink cursor parameter" {
 	const c = compileToC(src + "k(1);\n");
 	assert !c.ok;
 }

@@ -50,6 +50,8 @@ Optional header directive:
 
 ```
 // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
+// GUARD-OS <os>                 one [<os>] lane: build --os=<os>, never run; with
+//                               GUARD-CHECK-FAIL the build must fail with every tag
 ```
 
 Note: mangled type names are compiler-internal and can shift under transform
@@ -68,6 +70,12 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   function signature (`hashType` tyProc / `sameInstantiation`; NIM-REF CK-52). Two nullable-fn fields of different arity: a
   collapse re-erases the 2nd's arity → checker "expected at most 0" → build RED.
   Proven RED on the pre-fix compiler, GREEN post-fix (drc+orc).
+- **`solanaConstFoldLinks.ms`**, **`solanaWritableBinding.ms`** (`GUARD-OS solana`) —
+  scalar module consts fold before the SBF link, which keeps only `.text` and
+  `.rodata` (`getConstExpr`); a binding that still needs writable storage is
+  FREESTANDING E02 at the binding, in the entry and in an imported module.
+  Proven RED on `8be46044`; `solanaWritableBinding` alone RED with only the E02
+  report in `compile.ms` removed.
   - **Known gap:** the sibling `monoTypeKey` collapse is NOT guarded — its
     function case is *benign* (uniform `msClosure` repr → a collapsed
     `Holder__function` still runs correct), and its only RED case (anon-union
