@@ -100,7 +100,8 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	const callParts: Doc[] = [printAtom(d.callee, options), docText("(")];
+	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
+	const callParts: Doc[] = [printAtom(d.callee, options), docText(typeArgs + "(")];
 	if (args.length > 0) {
 		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
 		callParts.push(docIndent(argParts));
