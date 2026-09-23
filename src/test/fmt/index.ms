@@ -55,3 +55,4 @@ import "./cases/wordUnary";
 import "./cases/interfaceExtends";
 import "./cases/externDecl";
 import "./cases/templateVerbatim";
+import "./cases/chainedAssertion";

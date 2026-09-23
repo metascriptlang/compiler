@@ -360,8 +360,9 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
+	const inner = d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
 	return docGroup([
-		printAtom(d.asExpr, options),
+		inner,
 		docText(" as " + d.asType),
 	]);
 }
