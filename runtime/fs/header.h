@@ -55,6 +55,9 @@ msString msFsRealPath(msString path);
 /* File size in bytes. Returns -1.0 on error. */
 double msFsFileSize(msString path);
 
+/* Last modification time in seconds since the epoch, or -1.0. */
+double msFsModifiedTime(msString path);
+
 /* Create directory (0755 on POSIX). Returns 1.0 on success or EEXIST, 0.0 on failure. */
 double msFsMkdir(msString path);
 

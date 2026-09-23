@@ -33,6 +33,7 @@ extern function chmodSync(path: string, mode: int32): void;
 // node `fs.Stats` - only the members the C twin's stat() path exposes.
 interface Stats {
 	size: number;
+	mtimeMs: number;
 	isFile: () => boolean;
 	isDirectory: () => boolean;
 }
@@ -205,6 +206,10 @@ export function isExecutable(path: string): boolean {
 
 export function fileSize(path: string): number {
 	try { return statSync(path).size; } catch (e) { return -1; }
+}
+
+export function modifiedTime(path: string): number {
+	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
 }
 
 // List directory entries. Directories have a trailing "/" marker.

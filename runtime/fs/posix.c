@@ -101,6 +101,12 @@ double msFsFileSize(msString path) {
 	return (double)st.st_size;
 }
 
+double msFsModifiedTime(msString path) {
+	struct stat st;
+	if (stat(msStringToCString(path), &st) != 0) return -1.0;
+	return (double)st.st_mtime;
+}
+
 /* ===== Directory ===== */
 
 double msFsMkdir(msString path) {

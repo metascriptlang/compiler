@@ -52,7 +52,7 @@ import {
 import { isNodeWireMetaField } from "./wire";
 
 import {
-	exists, isFile, isDir, isExecutable, fileSize, realpath,
+	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
 	readFile, writeFile, appendFile, chmod,
 	mkdir, rmdir, remove, rename, symlink, readDir,
 } from "std/fs";
@@ -119,6 +119,10 @@ function _bridgeMsFsIsExecutable(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsFileSize(args: RaiserValue[]): RaiserValue {
 	return boxInt(fileSize(unboxString(args[0])));
+}
+
+function _bridgeMsFsModifiedTime(args: RaiserValue[]): RaiserValue {
+	return boxInt(modifiedTime(unboxString(args[0])));
 }
 
 function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
@@ -769,6 +773,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsIsDir",          _bridgeMsFsIsDir, HostCapability.FileRead);
 	registerHostFn("msFsIsExecutable",   _bridgeMsFsIsExecutable, HostCapability.FileRead);
 	registerHostFn("msFsFileSize",       _bridgeMsFsFileSize, HostCapability.FileRead);
+	registerHostFn("msFsModifiedTime",   _bridgeMsFsModifiedTime, HostCapability.FileRead);
 	// fs read/write/mutate + errno polling
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
