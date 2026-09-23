@@ -229,8 +229,10 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		let entryDoc: Doc;
 		if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
+			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 			const isShorthand = prop != null && prop.kind == NodeKind.Identifier
-				&& (prop.data as { name: string }).name == d.keys[i];
+				&& (prop.data as { name: string }).name == d.keys[i]
+				&& (keyLoc == null || (keyLoc.line == prop.location.line && keyLoc.column == prop.location.column));
 			if (isShorthand) {
 				entryDoc = docText(d.keys[i]);
 			} else {

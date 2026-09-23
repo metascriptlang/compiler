@@ -59,3 +59,4 @@ import "./cases/chainedAssertion";
 import "./cases/callTypeArgs";
 import "./cases/bracelessBodyComment";
 import "./cases/numberSpelling";
+import "./cases/objectShorthand";
