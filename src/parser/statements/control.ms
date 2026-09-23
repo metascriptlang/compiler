@@ -4,7 +4,7 @@
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
-import { skipOptionalType, isIdentLike } from "../util";
+import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind } from "./validation";
@@ -205,8 +205,8 @@ export function parseForStmt(state: ParserState): NodeResult {
 		}
 
 		advance(state);
-		// Optional type annotation
-		skipOptionalType(state);
+		const declType = captureOptionalType(state);
+		const declTypeExpr = getLastTypeExpr();
 
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' in for init at line ${current(state).line}`);
@@ -215,11 +215,12 @@ export function parseForStmt(state: ParserState): NodeResult {
 		advance(state);
 		const initNode = createNode(NodeKind.VariableDecl, {
 			declName: varName.value,
-			declType: "",
+			declType,
 			initializer: try callExprParser(state),
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
+		initNode.typeExpr = declTypeExpr;
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 		}
