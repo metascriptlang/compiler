@@ -9,7 +9,7 @@ import {
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docJoin, docCommaSepList } from "../doc";
+import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawGenericsAt, sourceByteAt } from "./literals";
 
@@ -87,6 +87,7 @@ export function wrapNodeComments(node: Node, innerDoc: Doc): Doc {
 				leading.push(docHardLine());
 			} else if (comment.line == node.location.line) {
 				trailing.push(docLineSuffix([docText(" " + comment.value)]));
+				if (comment.value.startsWith("//")) trailing.push(docBreakParent());
 			} else {
 				below.push(docHardLine());
 				below.push(docText(comment.value));
