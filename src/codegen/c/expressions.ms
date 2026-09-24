@@ -2500,7 +2500,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			if (ovNeedsAddr && ai == 0) {
 				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
-				const ovMutBits: int32 = sym != null ? sym.mutatedParams : 0;
+				const ovMutBits: int32 = emitSym != null ? emitSym.mutatedParams : sym.mutatedParams;
 				arg = shimCallArg(g, p, arg, ovType.typeChildren[ai], cd.arguments[ai], ovMutBits, ai);
 			}
 			argsStr = argsStr + arg;
@@ -2514,7 +2514,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const ovIdx = emitIdx >= 0 ? emitIdx : 0;
 		const ovCalleeName = mangledFunctionName(emitSym, emitSym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
-		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);
+		ensureCrossModuleProto(g, ovCalleeName, ovType, emitSym != null ? emitSym : sym);
 		const ovRet = (ovType != null && ovType.kind == TypeKind.Function) ? ovType.typeReturn : null;
 		emitNrvoOrValueCall(g, p, ctx, ovCalleeName, argsStr, ovRet, ovType);
 		return;
