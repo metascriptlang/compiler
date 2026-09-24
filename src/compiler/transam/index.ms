@@ -7,7 +7,7 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, isExportedBy, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
@@ -55,7 +55,7 @@ import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator ca
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
-import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
+import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
@@ -526,6 +526,23 @@ function hashCheckerResult(ctx: CheckerContext): number {
 	return h;
 }
 
+function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: Node): HashMap<Node, Symbol> {
+	const adopted = new HashMap<Node, Symbol>();
+	const entry = findModuleExports(db.exportRegistry, filePath);
+	if (entry == null) return adopted;
+	const early = new HashMap<Node, Symbol>();
+	for (const info of entry.symbols) {
+		if (info.sym.declNode != null && info.sym.modulePath == filePath) early.set(info.sym.declNode, info.sym);
+	}
+	const parsedStmts = (parsed.data as ProgramData).programStmts;
+	const stmts = (program.data as ProgramData).programStmts;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const sym = early.get(declOfStatement(parsedStmts[i]));
+		if (sym != null) adopted.set(declOfStatement(stmts[i]), sym);
+	}
+	return adopted;
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -608,7 +625,8 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	registerModuleProgram(filePath, program);
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
-		db.preludeCtx, db.cancelCtx, startVersion
+		db.preludeCtx, db.cancelCtx, startVersion,
+		earlyAdoptions(db, filePath, cachedProgram, program)
 	);
 
 	// If cancelled, discard frame without caching — partial result not reliable

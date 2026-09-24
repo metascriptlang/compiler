@@ -2970,6 +2970,7 @@ function checkProgramCore(
 	mod: Module | null,
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
+	adoptedDecls: HashMap<Node, Symbol> | null,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -2977,6 +2978,7 @@ function checkProgramCore(
 	ctx.extensionRegistry = createExtensionRegistry();
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
+	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
 	injectPrelude(ctx, preludeCtx);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
 	const consoleClass = lookupSymbol(ctx.table, "console");
@@ -3043,7 +3045,7 @@ export function checkProgram(program: Node): CheckerContext {
 	// Phase 8a POC: expose outer Program to @comptime evaluator so it can
 	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
 	setOuterProgramForComptime(program);
-	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0);
+	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0, null);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
@@ -3051,16 +3053,17 @@ export function checkProgramWithRegistry(program: Node, registry: ExportRegistry
 	// Spike 2: expose full multi-module context so @comptime evaluator's inner
 	// check can resolve cross-module imports via the same registry/graph.
 	setOuterCheckContext(registry, graph, mod, preludeCtx);
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, null, 0);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, null, 0, null);
 }
 
 export function checkProgramWithRegistryCancellable(
 	program: Node, registry: ExportRegistry,
 	graph: ModuleGraph, mod: Module,
 	preludeCtx: CheckerContext,
-	cancelCtx: CancelCtx, cancelVersion: int32
+	cancelCtx: CancelCtx, cancelVersion: int32,
+	adoptedDecls: HashMap<Node, Symbol> | null = null
 ): CheckerContext {
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls);
 }
 
 // Register callbacks at module load time
