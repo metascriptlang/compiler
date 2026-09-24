@@ -59,7 +59,7 @@ import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../ch
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
-import { createModule, createModuleGraph, addModule, ImportEntry, createImportEntry } from "../../module/graph";
+import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
 import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
@@ -83,6 +83,29 @@ function isStdPathFor(db: TransAmDb, filePath: string): boolean {
 export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 	db.stdPath = stdPath;
 	db.resolverConfig = createDefaultConfig(Backend.C, stdPath);
+}
+
+export function dbSetResolverConfig(db: TransAmDb, config: ResolverConfig): void {
+	db.stdPath = config.stdPath;
+	db.resolverConfig = config;
+}
+
+export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
+	db.graph = graph;
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod != null && mod.source != "") dbSetFileText(db, path, mod.rawSource);
+	}
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod == null || mod.source == "") continue;
+		const fileId = getFileId(db.fileInput, path);
+		clearImportsFor(db.moduleDeps, fileId);
+		for (const imp of mod.imports) {
+			const targetId = getFileId(db.fileInput, imp.sourcePath);
+			if (targetId >= 0) recordModuleImport(db.moduleDeps, fileId, targetId);
+		}
+	}
 }
 
 
@@ -130,6 +153,7 @@ export class TransAmDb {
 	preludeCtx: CheckerContext;
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
+	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
 }
 
 export function createTransAmDb(cacheCapacity: int32): TransAmDb {
@@ -147,6 +171,7 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		preludeCtx: null as unknown as CheckerContext,
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
+		graph: null,
 	};
 }
 
@@ -616,11 +641,13 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		recordDependency(db.depStack, depCheckKey, depCheckEntry != null ? depCheckEntry.outputHash : 0);
 	}
 
-	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
-	const mod = createModule(filePath);
-	mod.imports = imports;
-	const graph = createModuleGraph();
-	addModule(graph, mod);
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
+	const mod = graphMod != null ? graphMod : createModule(filePath);
+	if (graphMod == null) {
+		mod.imports = imports;
+		addModule(graph, mod);
+	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	registerModuleProgram(filePath, program);
 	const checkerCtx = checkProgramWithRegistryCancellable(
