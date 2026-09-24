@@ -370,6 +370,31 @@ test "a module binds the prelude module's own declarations, never a second copy"
 	assert preludeDeclaresWhatMainBinds(".jms");
 }
 
+function itemsOfModuleB(): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): number { return n; }\nexport const k = 2;\nfunction helper(): number { return 1; }\nexport class Box { v: number; show(): number { return this.v; } }" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const moduleB = graph.loadOrder.indexOf("/src/b.ms") as int32;
+	const seen: int32[] = [];
+	let out = "";
+	for (const name of ["foo", "k", "helper", "Box"]) {
+		const sym = scopeSymbolOf("/src/b.ms", name);
+		if (sym == null || sym.itemModule != moduleB || sym.item <= 0 || seen.includes(sym.item)) return "";
+		seen.push(sym.item);
+		out = out + name + "=" + sym.item.toString() + " ";
+	}
+	if (scopeSymbolOf("/src/a.ms", "foo") != scopeSymbolOf("/src/b.ms", "foo")) return "";
+	return out;
+}
+
+test "a declaration carries its module's index and an ordinal unique in that module, the same on every check" {
+	const first = itemsOfModuleB();
+	assert first != "";
+	assert itemsOfModuleB() == first;
+}
+
 test "imported enum available" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });

@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, addRuntimeConverter } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, stampOwner, stampItem, addRuntimeConverter } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -345,10 +345,7 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	if (sym.location == null || sym.location.line == 0) sym.location = node.location;
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
-	if (sym.modulePath == "") {
-		sym.modulePath = ctx.modulePath;
-		if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
-	}
+	if (sym.modulePath == "") stampOwner(ctx, sym);
 }
 
 export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
@@ -725,6 +722,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	methodSym.location = member.location;
 	methodSym.modulePath = ctx.modulePath;
 	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, md.methodName);
+	stampItem(ctx, methodSym);
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;

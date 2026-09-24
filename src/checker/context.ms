@@ -1163,6 +1163,8 @@ export class CheckerContext {
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
+	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
+	nextItem: int32;
 	localTypeNames: HashMap<string, boolean>; // names claimed by local (non-module-scope) type decls, module-wide — C keys struct emission and its include guard by bare name, so same-named locals in sibling scopes would silently merge into one definition
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	liftedLocalTypeDecls: Node[];
@@ -1241,6 +1243,8 @@ export function createContext(): CheckerContext {
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
+		itemModule: -1,
+		nextItem: 0,
 		localTypeNames: new HashMap<string, boolean>(),
 		pendingLocalTypeDecls: [],
 		liftedLocalTypeDecls: [],
@@ -1265,6 +1269,7 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
+	ctx.itemModule = graph.loadOrder.indexOf(mod.path) as int32;
 	return ctx;
 }
 
@@ -1272,6 +1277,24 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 // emitted C name. Keyed on the declaring module so a routine that never joins
 // an overload set — a static member, a routine nested in another body — still
 // gets a distinct name.
+export function stampOwner(ctx: CheckerContext, sym: Symbol): void {
+	sym.modulePath = ctx.modulePath;
+	if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	stampItem(ctx, sym);
+}
+
+export function stampItem(ctx: CheckerContext, sym: Symbol): void {
+	ctx.nextItem += 1;
+	sym.itemModule = ctx.itemModule;
+	sym.item = ctx.nextItem;
+}
+
+export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symType: Type | null): Symbol {
+	const sym = makeSymbol(name, kind, symType, false);
+	stampOwner(ctx, sym);
+	return sym;
+}
+
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
 	const key = modulePath + "\t" + name;
 	const next = ctx.disambTable.get(key) ?? 0;

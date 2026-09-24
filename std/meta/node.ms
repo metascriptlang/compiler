@@ -241,6 +241,8 @@ export class Symbol {
 	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 	instances: Symbol[];   // A generic's instances, one per type-argument list
+	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
+	item: int32;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
