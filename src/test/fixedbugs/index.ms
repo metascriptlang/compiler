@@ -222,4 +222,5 @@ import "./bug205MethodCallArgumentsChecked";
 import "./bug206StackedParamModifiers";
 import "./bug207ReadonlyGenericBinding";
 import "./bug208StructIntoPtrVariable";
+import "./bug209ConstFoldIntegerTyped";
 import "./bug210StaticExtensionParamModifiers";
