@@ -75,7 +75,7 @@ export function hashString(s: string): int64 {
 	return h;
 }
 
-// Nim's hashWangYi1 (hashes.nim:166) on its gcc/clang path: hiXorLo is the full
+// hashWangYi1 — hiXorLo is the full
 // 128-bit product of two uint64, high half XOR low half (msHiXorLo in
 // runtime/core/system.h). Every key type reaches this one mixing site.
 extern function msHiXorLo(a: uint64, b: uint64): uint64;
@@ -95,7 +95,23 @@ extern function msFloat64Bits(d: number): uint64;
 
 export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
 
-test "hashWangYi1 matches Nim's 128-bit product" {
+export function hashCombine(h: int64, v: int64): int64 {
+	let r = (h as uint64) + (v as uint64);
+	r = r + (r << (10 as uint64));
+	r = r ^ (r >> (6 as uint64));
+	return r as int64;
+}
+
+export function hashFinish(h: int64): int64 {
+	let r = (h as uint64) + ((h as uint64) << (3 as uint64));
+	r = r ^ (r >> (11 as uint64));
+	r = r + (r << (15 as uint64));
+	const f = r as int64;
+	if (f == (0 as int64)) return 314159265 as int64;
+	return f;
+}
+
+test "hashWangYi1 matches a 128-bit C product" {
 	assert hashWangYi1(0 as uint64) == (-5940405725068231575 as int64);
 	assert hashWangYi1(7 as uint64) == (-7855962892973491642 as int64);
 	assert hashWangYi1(0xFFFFFFFFFFFFFFFF as uint64) == (8231874320669540605 as int64);
@@ -125,7 +141,6 @@ test "reference hashing routes through the one mixing site" {
 // Every scalar key type needs its own entry because UFCS matches `this` exactly —
 // a scalar does not transparently widen to number during extension-method
 // lookup. Without one, `Map<K, V>`'s `key.hash()` fails to resolve.
-// Nim: ordinals hash as hashWangYi1(uint64(ord(x))), floats by their bits.
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }
 export function hash(this f: float64): int64 { return hashNumber(f as number); }
@@ -142,7 +157,7 @@ export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u)); }
 
-test "scalar keys hash like Nim's ordinals and floats" {
+test "scalar keys hash by ordinal value and float bits" {
 	const low = 7 as uint64;
 	assert low.hash() != (low | ((1 as uint64) << (32 as uint64))).hash();
 	assert low.hash() == (7 as int64).hash();
