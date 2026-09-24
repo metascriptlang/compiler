@@ -384,7 +384,27 @@ function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): Un
 function isShapedByContext(arg: Node): boolean {
 	return isContextSensitive(arg)
 		|| arg.kind == NodeKind.FunctionExpr
-		|| arg.kind == NodeKind.ArrayLiteral;
+		|| arg.kind == NodeKind.ArrayLiteral
+		|| isNumberLiteralArg(arg);
+}
+
+function isNumberLiteralArg(arg: Node): boolean {
+	if (arg.kind == NodeKind.NumberLiteral) return true;
+	if (arg.kind != NodeKind.UnaryExpr) return false;
+	const ud = arg.data as UnaryExprData;
+	return (ud.unaryOp == "-" || ud.unaryOp == "+") && ud.operand.kind == NodeKind.NumberLiteral;
+}
+
+function genericArgOrder(args: Node[], isGeneric: boolean): int32[] {
+	const order: int32[] = [];
+	for (let ai = 0; ai < args.length; ai += 1) {
+		if (!isGeneric || !isShapedByContext(args[ai])) order.push(ai as int32);
+	}
+	if (!isGeneric) return order;
+	for (let ai = 0; ai < args.length; ai += 1) {
+		if (isShapedByContext(args[ai])) order.push(ai as int32);
+	}
+	return order;
 }
 
 function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
@@ -1098,10 +1118,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// bindings into the formal type — bindings accumulate left-to-right as
 	// concrete args feed forward inference (Source 3).
 	const argTypes: Type[] = [];
+	for (let ai = 0; ai < d.arguments.length; ai += 1) { argTypes.push(null as unknown as Type); }
 		const spawnCalleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		let spawnMoveKeys: string[] = [];
 		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") spawnMoveKeys = desugarSpawnMoveList(ctx, d);
-	for (let ai = 0; ai < d.arguments.length; ai += 1) {
+	const argOrder = genericArgOrder(d.arguments, _isGenericCall);
+	for (let oi = 0; oi < argOrder.length; oi += 1) {
+		const ai = argOrder[oi];
 		let paramExpected: Type | null = null;
 		const _formal: Type | null = (calleeType != null
 			&& calleeType.kind == TypeKind.Function
@@ -1180,7 +1203,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				argType = argNode.resolvedSym.symbolType;
 			}
 		}
-		argTypes.push(argType!);
+		argTypes[ai] = argType!;
 		// Source 3: forward inference. Single-walk — subsequent args see
 		// the updated bindings, prior args are never re-checked.
 		if (_isGenericCall && _formal != null && argType != null
