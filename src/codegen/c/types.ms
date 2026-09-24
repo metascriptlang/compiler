@@ -858,6 +858,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
+		ensureDrcProto(g, destroyHook, destroySym);
 	} else if (isGeneric && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
