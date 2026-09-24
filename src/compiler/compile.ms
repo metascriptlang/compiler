@@ -4,11 +4,9 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
-import { parseSource } from "../parser/statements/validation";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
-import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
@@ -542,16 +540,6 @@ function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 		ci = ci + 1;
 	}
 	setStdGraphDepsSnapshot({ mods, circulars }, key);
-}
-
-// Parse source or exit with error message.
-function parseOrExit(source: string, modPath: string): Node {
-	const pr = parseSource(source);
-	if (!pr.ok) {
-		printDiag(`${error("parse error")} [${modPath}]: ${pr.error}`);
-		exit(1);
-	}
-	return pr.value;
 }
 
 // Stored result of Phase A (transform all modules) for Phase B (DCE) and Phase C (codegen).
@@ -1265,6 +1253,18 @@ function placePendingInstances(programOf: (path: string) => Node | null, entryPa
 	const _placed = routeInstances(drainPendingInstances(), programOf, entryPath, true);
 }
 
+function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
+	const program = lookupModuleProgram(modPath);
+	const ctx = lookupModuleCtx(modPath);
+	if (program == null || ctx == null) throw new Error(`internal: module ${modPath} was not checked by the graph phase`);
+	setOuterProgramForComptime(program);
+	setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
+	ctx.strictDefs = opts.strictDefs;
+	ctx.strictNullChecks = opts.strictNullChecks;
+	exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+	return { program, ctx };
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1337,11 +1337,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		const program = checked.program;
+		const ctx = checked.ctx;
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
@@ -2285,8 +2283,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	setGlobalHookOwners(sharedHookOwners);
 
 	// PROFILE: sub-phase timings summed across all modules.
-	let tParse: number = 0;
-	let tCheck: number = 0;
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
@@ -2311,40 +2307,12 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		// diagnostics. Reuse the checked pair — reference parity: Nim checks each
 		// module exactly once (sem results cached on the module). LSP-only
 		// finalization (sgSortRecords, stampJsModulePaths) is skipped on this path.
-		const reusedProgram = lookupModuleProgram(modPath);
-		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram != null && reusedCtx != null) {
-			setOuterProgramForComptime(reusedProgram);
-			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			reusedCtx.strictDefs = opts.strictDefs;
-			reusedCtx.strictNullChecks = opts.strictNullChecks;
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
-			if (hasErrors(reusedCtx)) {
-				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
-			}
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
-			programByPath.set(modPath, reusedProgram);
-			continue;
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		if (hasErrors(checked.ctx)) {
+			totalCheckerErrors = totalCheckerErrors + errorCount(checked.ctx);
 		}
-		const _tp0 = performance.now();
-		const program = parseOrExit(mod.source, modPath);
-		tParse = tParse + (performance.now() - _tp0);
-		const _tc0 = performance.now();
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		tCheck = tCheck + (performance.now() - _tc0);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
-		// Errors and warnings were already rendered in the graph-checker phase
-		// (loadAndCheckGraph → reportModuleErrors). Re-checking here re-populates
-		// ctx.errors with the same diagnostics — only count them for the codegen
-		// gate; do NOT render again, otherwise every error/warning prints twice.
-		if (hasErrors(ctx)) {
-			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
-		}
-		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
-		programByPath.set(modPath, program);
+		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
+		programByPath.set(modPath, checked.program);
 	}
 
 	const routeOrder: Node[] = [];
@@ -2473,7 +2441,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 	if (opts.showTime) {
-		console.log(`    parse=${tParse}ms check=${tCheck}ms mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
+		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
@@ -2931,27 +2899,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		// created once (instantiation is memoized), attached to the graph-check
 		// program, and the discarded re-check never recreates them, so the owner
 		// module's TU emits none of them.
-		const reusedProgram = lookupModuleProgram(modPath);
-		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram != null && reusedCtx != null) {
-			setOuterProgramForComptime(reusedProgram);
-			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			reusedCtx.strictDefs = opts.strictDefs;
-			reusedCtx.strictNullChecks = opts.strictNullChecks;
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
-			reusedCtx.errors = [];
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
-			programByPath.set(modPath, reusedProgram);
-			continue;
-		}
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
-		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
-		programByPath.set(modPath, program);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		checked.ctx.errors = [];
+		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
+		programByPath.set(modPath, checked.program);
 	}
 
 	// Single drain after A1 — route each pending generic instance to its OWNER module's
@@ -3236,12 +3187,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		const ctx = checked.ctx;
 		ctx.errors = [];
 
-		const macroExpanded = expandMacros(program, ctx);
+		const macroExpanded = expandMacros(checked.program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 
 		unitPaths.push(modPath);
@@ -3507,15 +3457,11 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		if (mod == null) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
-		const program = parseOrExit(mod.source, modPath);
-		const modCtx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(modCtx, modPath, mod.rawSource);
-		modCtx.errors = [];
-
-
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		checked.ctx.errors = [];
 		unitPaths.push(modPath);
-		unitPrograms.push(program);
-		unitCtxs.push(modCtx);
+		unitPrograms.push(checked.program);
+		unitCtxs.push(checked.ctx);
 	}
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), entryCanonical);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
