@@ -912,6 +912,18 @@ test "C header import keeps every later line where the source has it" {
 	assert lines[2] == "const y = 2;";
 }
 
+test "a module keeps the source it was read from beside its inlined source" {
+	const raw = "import { foo } from \"./lib.h\";\nconst x = foo;";
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", raw));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	const mod = findModule(graph, "/src/app.ms");
+	assert mod != null;
+	assert mod.rawSource == raw;
+	assert mod.source != raw;
+}
+
 test "parse error recorded" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/src/a.ms", "const x = ;"));
