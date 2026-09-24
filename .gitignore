@@ -12,6 +12,7 @@ zig-out/
 
 src/**/*.c
 !src/raiser/dispatch.c
+!src/test/corpus/programs/**/*.c
 std/**/*.c
 
 /a.o
