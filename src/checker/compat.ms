@@ -14,6 +14,10 @@ function isOpenElement(t: Type): boolean {
 	};
 }
 
+function isUntypedPointer(t: Type): boolean {
+	return t.kind == TypeKind.Ptr && t.typeReturn != null && t.typeReturn.kind == TypeKind.Void;
+}
+
 function sameElement(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
 	if (sameType(a, b)) return true;
@@ -100,6 +104,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	if (source.kind == TypeKind.Ref && source.typeReturn != null
 		&& source.typeReturn.kind == TypeKind.Array && target.kind == TypeKind.Array) return true;
 	if (source.kind != target.kind) return false;
+	if (source.kind == TypeKind.Ptr && isUntypedPointer(target)) return false;
 	if (source.kind == TypeKind.Array || source.kind == TypeKind.Span
 		|| source.kind == TypeKind.Ptr || source.kind == TypeKind.SizedArray) {
 		if (!sameElementRepr(source.typeReturn, target.typeReturn)) return true;
@@ -340,7 +345,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return match (source.kind) {
 			TypeKind.SizedArray => source.typeValue == target.typeValue && sameElement(source.typeReturn, target.typeReturn),
 			TypeKind.Set => sameElement(source.typeReturn, target.typeReturn),
-			TypeKind.Array | TypeKind.Span | TypeKind.Ptr => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span => sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn),
+			TypeKind.Ptr => isUntypedPointer(target)
+				|| (sameElementRepr(source.typeReturn, target.typeReturn) && sameElement(source.typeReturn, target.typeReturn)),
 			TypeKind.Ref => {
 				// Arc<T> and plain Ref<T> share kind=Ref but must not interconvert:
 				// mixing atomic + non-atomic rc ops on one object is UB.
