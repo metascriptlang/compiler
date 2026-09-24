@@ -972,7 +972,7 @@ function declaredTypeOfLocation(loc: Node): Type | null {
 	return null;
 }
 
-function declaredTagUnionOf(expr: Node): Type | null {
+export function declaredTagUnionOf(expr: Node): Type | null {
 	let walk: Node = expr;
 	while (walk != null && walk.kind == NodeKind.TypeAssertion) {
 		walk = (walk.data as TypeAssertionData).asExpr;

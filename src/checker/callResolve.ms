@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -21,7 +21,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, skipModifier, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { unionHasMemberOfKind, skipModifier, findVariantByBooleanDiscriminant, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -2091,7 +2091,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
 		// now gets the instantiated formal: codegen must emit the same struct
 		// identity the instance's parameter uses, not the literal's own anon name.
-		if (arg.kind == NodeKind.ObjectLiteral && substituted.kind == TypeKind.Struct
+		const substitutedObject = substituted.kind == TypeKind.Ref && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		if (arg.kind == NodeKind.ObjectLiteral && substitutedObject.kind == TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
 			let skipConstruct = false;
 			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
@@ -2866,7 +2867,10 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 	}
 
 	let variantIdx = -1;
-	if (discValue != "") {
+	if (discExpr.kind == NodeKind.BooleanLiteral) {
+		variantIdx = findVariantByBooleanDiscriminant(unionType, discName, (discExpr.data as BooleanLiteralData).boolValue);
+	}
+	if (variantIdx < 0 && discValue != "") {
 		variantIdx = findVariantByDiscriminant(unionType, discValue);
 		// Also try with underscore → dot conversion: "Kind_A" → "Kind.A"
 		if (variantIdx < 0) {
@@ -2888,6 +2892,8 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[variantIdx];
 		if (variant.kind == TypeKind.Ref) {
+			const discField = findFieldInVariant(variant, discName);
+			if (discField != null) discExpr.nodeType = discField;
 			recheckLiteralAs(ctx, node, variant);
 			const retyped = node.nodeType as Type | null;
 			return retyped != null ? retyped : variant;
@@ -3009,8 +3015,9 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	callCheckExpr(ctx, d.object, null);
-	if (d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union) {
-		const projected = narrowUnionToVariant(d.object, d.object.nodeType);
+	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
+	if (declaredUnion != null && !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
+		const projected = narrowUnionToVariant(d.object, d.object.nodeType!);
 		if (projected != null as unknown as Node) d.object = projected;
 	}
 	const objType = d.object.nodeType;
