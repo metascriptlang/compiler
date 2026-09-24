@@ -2997,8 +2997,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const enumName = objType.typeName;
 		const propName = d.property;
 		// Extern C enums: member names are already full C identifiers (e.g. WGPUCullMode_Back)
-		const enumSym0 = lookupSymbol(ctx.table, enumName);
-		const isExternEnum = enumSym0 != null && hasFlag(enumSym0, SymbolFlag.ImportC);
+		const enumSym = objType.sym;
+		const isExternEnum = enumSym != null && hasFlag(enumSym, SymbolFlag.ImportC);
 		const mangledName = isExternEnum ? propName : enumName + "_" + propName;
 		let memberExists = false;
 		for (const m of objType.typeNames) {
@@ -3021,7 +3021,6 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const reportedType = wantsLiteral ? litType : objType;
 		// Create synthetic symbol for the enum member (no scope lookup needed).
 		// Enum member mangled names are NOT in scope — resolved here at use site.
-		const enumSym = lookupSymbol(ctx.table, enumName);
 		const memberSym = makeSymbolState(propName, SymbolKind.EnumMember, reportedType, false, SymbolState.Shaped);
 		if (enumSym != null && enumSym.location != null) {
 			memberSym.location = enumSym.location;
