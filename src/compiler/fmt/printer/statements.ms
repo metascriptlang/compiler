@@ -647,12 +647,6 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	const names: string[] = [];
 	const types: string[] = [];
 	const defaults: Node[] = [];
-	const staticType = flagGet(d.fnFlags, "sext");
-	if (staticType != "") {
-		names.push("this typeof " + staticType);
-		types.push("");
-		defaults.push(null as unknown as Node);
-	}
 	for (let i = 0; i < d.params.length; i += 1) {
 		names.push(d.params[i]);
 		types.push(i < d.fnParamTypes.length ? d.fnParamTypes[i] : "");
@@ -663,7 +657,10 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	prefixAt(names, flagGet(d.fnFlags, "ref"), "ref ");
 	prefixAt(names, flagGet(d.fnFlags, "out"), "out ");
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
-	const params = buildParamList(names, types, defaults, options, node.paramLocations);
+	const params: Doc[] = [];
+	const staticType = flagGet(d.fnFlags, "sext");
+	if (staticType != "") params.push(docText("this typeof " + staticType));
+	for (const p of buildParamList(names, types, defaults, options, node.paramLocations)) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);
 	if (paramComments.length > 0 && node.paramLocations != null && staticType == "") {
 		parts.push(commentedList(params, node.paramLocations, paramComments, "(", ")"));
