@@ -172,6 +172,11 @@ export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 let _runtimeSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _compilerFuncs: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _runtimeIdentCache: IdentCache | null = null;
+let _runtimeProcsSealed = false;
+
+export function sealRuntimeProcs(sealed: boolean): void {
+	_runtimeProcsSealed = sealed;
+}
 
 export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): void {
 	_compilerFuncs = declared;
@@ -185,6 +190,7 @@ export function runtimeProcSym(procName: string): Symbol {
 	if (declared != null) return declared;
 	const existing = _runtimeSyms.get(procName);
 	if (existing != null) return existing;
+	if (_runtimeProcsSealed) throw new Error(`internal: runtime proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
@@ -722,6 +728,28 @@ test "a runtime proc query mints no symbol" {
 	assert isRuntimeProcSym(minted, "msProbeAccess");
 	assert !isRuntimeProcSym(sameName, "msProbeAccess");
 	assert _runtimeSyms.size == 1;
+	_compilerFuncs = savedFuncs;
+	_runtimeSyms = savedSyms;
+	_runtimeIdentCache = savedCache;
+}
+
+test "a sealed runtime proc table serves known procs and refuses a new one" {
+	const savedFuncs = _compilerFuncs;
+	const savedSyms = _runtimeSyms;
+	const savedCache = _runtimeIdentCache;
+	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
+	const known = runtimeProcSym("msSealKnown");
+	sealRuntimeProcs(true);
+	const again = runtimeProcSym("msSealKnown");
+	let refused = "";
+	try {
+		runtimeProcSym("msSealNew");
+	} catch (e) {
+		refused = e.message;
+	}
+	sealRuntimeProcs(false);
+	assert again == known;
+	assert refused.contains("msSealNew");
 	_compilerFuncs = savedFuncs;
 	_runtimeSyms = savedSyms;
 	_runtimeIdentCache = savedCache;

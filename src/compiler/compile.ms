@@ -28,7 +28,8 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
-import { getSimpleTypeDesc } from "../codegen/c/types";
+import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
+import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
@@ -602,6 +603,8 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	let next = 0;
 	let head = 0;
 	let failed = false;
+	sealRuntimeProcs(true);
+	sealHookSyms(true);
 	while (true) {
 		while (!failed && next < order.length && next - head < workers) {
 			const job = jobs[order[next]];
@@ -614,6 +617,8 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 		results[result.slot] = result;
 		if (result.failure != "" || result.output.errors.length > 0) failed = true;
 	}
+	sealRuntimeProcs(false);
+	sealHookSyms(false);
 	return results;
 }
 
