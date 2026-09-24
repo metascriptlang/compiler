@@ -1829,7 +1829,7 @@ function hasBindingName(b: UnifyBindings, name: string): boolean {
 // 4+ call sites (ext static path, direct call mono, explicit-type-arg
 // validation, overload winner). Returns "" when declNode is null or of an
 // unsupported kind; callers should treat that as "no mono path applies".
-function rearmLiteralForRecheck(lit: Node, formal: Type | null): void {
+export function rearmLiteralForRecheck(lit: Node, formal: Type | null): void {
 	lit.flags = lit.flags.excl(NodeFlag.Sem);
 	lit.nodeType = null;
 	if (lit.kind != NodeKind.ObjectLiteral) return;
@@ -2850,11 +2850,6 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
-export function recheckLiteralAs(ctx: CheckerContext, node: Node, variant: Type): void {
-	node.nodeType = null;
-	callCheckExpr(ctx, node, variant);
-}
-
 export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null): Type {
 	if (unionType == null) return inferredType();
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
@@ -2935,7 +2930,8 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		if (variant.kind == TypeKind.Ref) {
 			const discField = findFieldInVariant(variant, discName);
 			if (discField != null) discExpr.nodeType = discField;
-			recheckLiteralAs(ctx, node, variant);
+			rearmLiteralForRecheck(node, variant);
+			callCheckExpr(ctx, node, variant);
 			const retyped = node.nodeType as Type | null;
 			return retyped != null ? retyped : variant;
 		}
