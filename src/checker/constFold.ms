@@ -108,7 +108,7 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.UnaryExpr => {
 			const d = expr.data as UnaryExprData;
-			const operand = constantLiteralOf(d.operand, depth + 1);
+			const operand = d.operand.kind == NodeKind.NumberLiteral ? d.operand : constantLiteralOf(d.operand, depth + 1);
 			if (operand == null) return none;
 			const folded = foldUnaryLiteral(d.unaryOp, operand, expr);
 			return folded != expr ? folded : none;
@@ -369,9 +369,13 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 		NodeKind.NumberLiteral => {
 			const od = operand.data as NumberLiteralData;
 			const nv = od.value;
-			if (!od.isFloat && node.nodeType != null && isIntegerType(node.nodeType) && literalFitsWidth(od, node.nodeType) && (op == "-" || op == "+")) {
+			if (!od.isFloat && node.nodeType != null && isIntegerType(node.nodeType) && literalFitsWidth(od, node.nodeType) && (op == "-" || op == "+" || op == "~")) {
 				if (op == "-" && !isUnsignedIntegerType(node.nodeType) && od.intVal == signedMinValue(node.nodeType)) return node;
-				const bits: uint64 = op == "-" ? 0 - (od.intVal as uint64) : od.intVal as uint64;
+				const bits: uint64 = match (op) {
+					"-" => 0 - (od.intVal as uint64),
+					"~" => ~(od.intVal as uint64),
+					_ => od.intVal as uint64,
+				};
 				return makeTypedInteger(wrapToWidth(bits, node.nodeType), node.nodeType, loc);
 			}
 			const result = match (op) {
