@@ -39,7 +39,8 @@ after another, and compare every red against src/test/known-red.json.
   --self-test    check the routing table and the red parsers against fixed cases
 
 Every path that is not inert and not under tools/ gets build and suite; a rule
-only adds lanes to that floor.
+only adds lanes to that floor. The tests lane compiles its tiers with the
+candidate, so a pin there tests the change rather than the previous compiler.
 
 corpus and san run on the programs whose emitted C or JS the change alters
 (control = the compiler at the merge base, kept in out/gate/ctl); they run whole
@@ -339,13 +340,13 @@ run_tools_lane() {
 TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms"
 
 run_test_lane() {
-  local files=src/index.ms flags="" rc=0 f part="$OUT/$1.part"
+  local bin=$BUILDER files=src/index.ms flags="" rc=0 f part="$OUT/$1.part"
   case "$1" in
     suite-orc) flags=--gc=orc ;;
-    tests) files=$TIERS ;;
+    tests) bin=$CAND files=$TIERS ;;
   esac
   for f in $files; do
-    env -u NO_COLOR -u FORCE_COLOR "$BUILDER" test "$f" $flags >"$part" 2>&1 || rc=1
+    env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" $flags >"$part" 2>&1 || rc=1
     cat "$part"
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
       printf 'NORESULT %s > no result\n' "$f"
@@ -512,7 +513,8 @@ for lane in $lanes; do
     rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); reused=" (reused log)"
   else case "$lane" in
     tools) run_tools_lane >"$log" 2>&1; rc=$? ;;
-    suite|suite-orc|tests) run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    tests) need_cand "$lane"; run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    suite|suite-orc) run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
