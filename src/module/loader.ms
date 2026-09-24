@@ -898,6 +898,20 @@ test "C header import inlines declarations" {
 	assert appMod.errors.length == 0;
 }
 
+test "C header import keeps every later line where the source has it" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", "import { foo, bar } from \"./lib.h\";\nconst x = 1;\nconst y = 2;"));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);\nint bar(void);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	const mod = findModule(graph, "/src/app.ms");
+	assert mod != null;
+	assert mod.source.indexOf("extern") >= 0;
+	const lines = mod.source.split("\n");
+	assert lines.length == 3;
+	assert lines[1] == "const x = 1;";
+	assert lines[2] == "const y = 2;";
+}
+
 test "parse error recorded" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/src/a.ms", "const x = ;"));
