@@ -1,19 +1,15 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, HiddenStdConvData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
-
-// Create a synthetic token from a source location (for transform-generated nodes)
-export function syntheticToken(loc: SourceLocation): Token {
-	return createToken(TokenKind.Ident, "", loc.line);
-}
+import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
+export { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
 
 // Value type needing typed-sized future allocation (msFutureCreateInline) and
 // typed inline read (msWaitForStruct). Includes msString (16 bytes > sizeof(void*)).
@@ -245,22 +241,6 @@ export function makeNull(loc: SourceLocation): Node {
 	return n;
 }
 
-export function makeNumber(val: number, loc: SourceLocation): Node {
-	const isFloat = val % 1 != 0 || val > 9007199254740992 || val < -9007199254740992;
-	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat, intVal: isFloat ? 0 as int64 : val as int64 }, syntheticToken(loc));
-	if (!isFloat) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
-	return n;
-}
-
-// Integer literal built from an exact int64 — the double field is only the
-// approximate view, so anything past 2^53 must be produced through here rather
-// than makeNumber.
-export function makeIntNumber(val: int64, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.NumberLiteral, { value: val as number, isFloat: false, intVal: val }, syntheticToken(loc));
-	n.nodeType = int32Type();
-	return n;
-}
-
 // Reference parity (resetLoc): produce type-appropriate default/zero value.
 // Primitives → 0, booleans → false, refs/closures → null, strings → "".
 // Used by async/generator transforms to initialize state vars correctly.
@@ -287,17 +267,6 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	return makeNull(loc);
 }
 
-export function makeString(val: string, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.StringLiteral, { value: val }, syntheticToken(loc));
-	n.nodeType = stringType();
-	return n;
-}
-
-export function makeBool(val: boolean, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.BooleanLiteral, { boolValue: val }, syntheticToken(loc));
-	n.nodeType = booleanType();
-	return n;
-}
 
 // ===== Statement Builders =====
 
