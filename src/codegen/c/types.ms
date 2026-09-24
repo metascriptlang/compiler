@@ -1189,6 +1189,7 @@ function genObjectType(g: CGen, t: Type): string {
 	const fieldTypes: string[] = [];
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		let ft = (i < t.typeChildren.length) ? getTypeDesc(g, t.typeChildren[i]) : "void";
+		if (ft == "void") ft = "void*";
 		// Self-referential fields: same type as containing struct → must be pointer
 		// C cannot contain a struct by value inside itself (infinite size)
 		if (ft == name) {
