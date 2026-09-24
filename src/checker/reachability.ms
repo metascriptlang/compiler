@@ -21,7 +21,7 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { isMaybeType, unwrapRefNullUnion } from "./types";
+import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { mangleMonoName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
@@ -196,6 +196,12 @@ function walkBody(node: Node, modulePath: string): void {
 		return;
 	}
 
+	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
+		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType);
+		walkChildrenGeneric(node, modulePath);
+		return;
+	}
+
 	// MemberExpr — walk object + mark resolved extension/class method
 	if (k == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
@@ -271,7 +277,17 @@ function markUnionHookEdges(t: Type): void {
 }
 
 function markTypeInfoEdge(node: Node, modulePath: string): void {
-	let t = node.nodeType;
+	markTypeInfoOf(node.nodeType);
+}
+
+function markRematerializedMemberTypeInfo(conv: Type | null): void {
+	if (conv == null || conv.kind == TypeKind.Union) return;
+	const member = unwrapPointerLikeForVariant(conv);
+	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member);
+}
+
+function markTypeInfoOf(type: Type | null): void {
+	let t = type;
 	if (t == null) return;
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
