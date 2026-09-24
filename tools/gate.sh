@@ -2,23 +2,23 @@
 set -uo pipefail
 
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
+FLOOR_EXEMPT='^tools/'
+EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomorphize|parser|raiser|transform|utils)/|^src/compiler/(meta/|[^/]+\.ms$)|^src/index\.ms$|^(std|runtime|vendor)/'
 RULES=(
   'tools|^tools/'
-  'build,suite,hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
-  'build,suite,tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/'
-  'tests|^src/(checker|transform|codegen)/'
-  'build,suite,guard|^src/test/guard/'
-  'build,suite,corpus|^src/test/corpus/'
-  'build,suite,corpus|^(src/(codegen|analyzer|transform)|runtime)/'
-  'build,suite,corpus|^src/raiser/|^src/compiler/meta/hostTable\.ms$'
-  'build,suite,san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
+  'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
+  'tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  "tests,corpus|$EMITS"
+  'guard|^src/test/guard/'
+  'corpus|^src/test/corpus/'
+  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
 )
 DEFAULT_LANES="build suite"
 ORDER="tools build suite hcr tests suite-orc fmt corpus san guard"
 LADDER="build suite hcr tests suite-orc fmt corpus san guard"
 KNOWN_LANES="suite hcr suite-orc tests fmt corpus san guard"
-SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$'
+SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
 usage() {
   cat <<'USAGE'
@@ -35,6 +35,10 @@ after another, and compare every red against src/test/known-red.json.
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
+  --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
+
+Every path that is not inert and not under tools/ gets build and suite; a rule
+only adds lanes to that floor.
 
 corpus and san run on the programs whose emitted C or JS the change alters
 (control = the compiler at the merge base, kept in out/gate/ctl); they run whole
@@ -108,6 +112,20 @@ reds_of() {
   esac | sort -u
 }
 
+route_paths() {
+  RULES_TXT=$(printf '%s\n' "${RULES[@]}") INERT_RE=$INERT EXEMPT_RE=$FLOOR_EXEMPT DEFAULT_TXT=$DEFAULT_LANES awk '
+    BEGIN {
+      n = split(ENVIRON["RULES_TXT"], rule, "\n")
+      for (i = 1; i <= n; i++) { k = index(rule[i], "|"); lanes[i] = substr(rule[i], 1, k - 1); re[i] = substr(rule[i], k + 1) }
+      nd = split(ENVIRON["DEFAULT_TXT"], floor, " ")
+    }
+    $0 == "" || $0 ~ ENVIRON["INERT_RE"] { next }
+    {
+      if ($0 !~ ENVIRON["EXEMPT_RE"]) for (j = 1; j <= nd; j++) print floor[j] "\t" $0
+      for (i = 1; i <= n; i++) if ($0 ~ re[i]) { m = split(lanes[i], l, ","); for (j = 1; j <= m; j++) print l[j] "\t" $0 }
+    }'
+}
+
 base=main release=0 dry=0 record=0 reuse=0 lanes_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -120,6 +138,7 @@ while [ $# -gt 0 ]; do
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
     --emit-one) emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0 ;;
     --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
+    --route) route_paths; exit 0 ;;
     -h|--help|help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -132,18 +151,6 @@ changed_paths() {
     git diff --name-only --no-renames HEAD
     git ls-files --others --exclude-standard
   } | sort -u
-}
-
-lanes_for_path() {
-  local p=$1 r matched=0
-  if printf '%s\n' "$p" | grep -Eq "$INERT"; then return; fi
-  for r in "${RULES[@]}"; do
-    if printf '%s\n' "$p" | grep -Eq "${r#*|}"; then
-      printf '%s\n' "${r%%|*}" | tr ',' '\n'
-      matched=1
-    fi
-  done
-  [ "$matched" -eq 1 ] || printf '%s\n' $DEFAULT_LANES
 }
 
 mkdir -p "$OUT" || die "cannot create $OUT"
@@ -160,11 +167,7 @@ elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then
   chosen=$LADDER
   for l in $chosen; do printf '%s\t%s\n' "$l" "the full ladder" >>"$OUT/why"; done
 else
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    for l in $(lanes_for_path "$p"); do printf '%s\t%s\n' "$l" "$p" >>"$OUT/why"; done
-  done <<<"$paths"
-  sort -u -o "$OUT/why" "$OUT/why"
+  printf '%s\n' "$paths" | route_paths | sort -u >"$OUT/why"
   chosen=$(cut -f1 "$OUT/why" | sort -u)
 fi
 
@@ -209,9 +212,7 @@ explain
 
 if [ "$record" -eq 1 ]; then
   base=main
-  off_main=$(changed_paths | while IFS= read -r p; do
-    [ -n "$p" ] && [ -n "$(lanes_for_path "$p" | grep -vx tools)" ] && printf '%s\n' "$p"
-  done)
+  off_main=$(changed_paths | route_paths | awk -F'\t' '$1 != "tools" { print $2 }' | sort -u)
   [ -z "$off_main" ] || die "--record: this checkout differs from main on paths the lanes test:
 $(printf '%s\n' "$off_main" | head -5 | sed 's/^/  /')"
 fi
