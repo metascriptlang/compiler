@@ -13,11 +13,12 @@ RULES=(
   'corpus|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
+  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build suite hcr tests suite-orc fmt corpus san guard"
-LADDER="build suite hcr tests suite-orc fmt corpus san guard"
-KNOWN_LANES="suite hcr suite-orc tests fmt corpus san guard"
+ORDER="tools build boundary suite hcr tests suite-orc fmt corpus san guard"
+LADDER="build boundary suite hcr tests suite-orc fmt corpus san guard"
+KNOWN_LANES="boundary suite hcr suite-orc tests fmt corpus san guard"
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
 usage() {
@@ -29,7 +30,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build suite hcr tests suite-orc fmt corpus san guard
+  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests suite-orc fmt corpus san guard
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -101,6 +102,7 @@ reds_of() {
   local lane=$1 log=$2 rc=$3
   case "$lane" in
     build) [ "$rc" -eq 0 ] || echo "build" ;;
+    boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -n 's/^FAIL \(.*\): \(bash -n\|self-test\|check\)$/\1/p' "$log" ;;
     suite|suite-orc|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
@@ -136,23 +138,25 @@ src/checker/checkPass.ms|build corpus suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
 std/meta/node.ms|build corpus fmt suite tests
-std/fs/index.ms|build corpus suite tests
-vendor/miniz/miniz.c|build corpus suite tests
+std/fs/index.ms|boundary build corpus suite tests
+vendor/miniz/miniz.c|boundary build corpus suite tests
 src/module/loader.ms|build corpus suite tests
 src/monomorphize/index.ms|build corpus suite tests
 src/utils/path.ms|build corpus suite tests
-src/index.ms|build corpus suite tests
+src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
-runtime/drc.h|build corpus guard san suite tests
-runtime/hcr.c|build corpus hcr suite tests
+runtime/drc.h|boundary build corpus guard san suite tests
+runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
-src/compiler/cc.ms|build corpus suite tests
-src/compiler/compile.ms|build corpus hcr suite tests
+src/compiler/cc.ms|boundary build corpus suite tests
+src/compiler/compile.ms|boundary build corpus hcr suite tests
 src/compiler/meta/comptime.ms|build corpus suite tests
 src/compiler/lsp/server.ms|build suite
 src/compiler/transam/query.ms|build suite
-src/compiler/package/install.ms|build suite
+src/compiler/package/install.ms|boundary build suite
+src/compiler/meta/hostTable.ms|boundary build corpus suite tests
+src/test/nativeBuildBoundary.ms|boundary build suite
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
@@ -194,6 +198,11 @@ CASES
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
   want="src/test/c/json.ms > parses numbers|src/test/fixedbugs/index.ms > no result"
   [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' "FAIL  when branch after a -d: value change  expected=two actual=other" \
+    "boundary: setup step failed: source baseline (root C:/tmp/msc-native-boundary-1)" "pass  argv  expected=1 actual=1" >"$log"
+  got=$(reds_of boundary "$log" 1 | paste -sd'|' -)
+  want="setup: source baseline|when branch after a -d: value change"
+  [ "$got" = "$want" ] || { printf 'FAIL reds boundary: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
@@ -313,7 +322,8 @@ admit() {
 
 lane_cmd() {
   case "$1" in
-    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s && %s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$BUILDER" "$CC_FLAG" "$CAND" "$CAND" "$CAND" ;;
+    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
+    boundary) printf '%s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$CAND" "$CAND" ;;
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
@@ -515,7 +525,7 @@ for lane in $lanes; do
     tools) run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests) need_cand "$lane"; run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     suite|suite-orc) run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   printf '\nRC=%d\nEND\n' "$rc" >>"$log"
