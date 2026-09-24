@@ -752,9 +752,8 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			"Type '" + typeDisplayName(initType) + "' is not assignable to type '" + typeDisplayName(dt) + "'"
 				+ explainStructuralPrefix(initType, dt),
 			shapeLoc.line, shapeLoc.column);
-	}
-	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
-	if (declType != null && d.initializer != null) {
+	} else if (declType != null && d.initializer != null) {
+		// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 		d.initializer = fitNode(ctx, d.initializer, declType, initType);
 	}
 	// Prefer explicit type annotation over inferred type
@@ -1748,6 +1747,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
 	// or a call to the runtime converter for the return type.
+	const errorsBeforeFit = ctx.errors.length;
 	if (returnExpected != null && !errSentinel && !engineReturnMarshalsToNode(retType, returnExpected)) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
@@ -1772,6 +1772,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& finalRetType.kind != TypeKind.Error
 		&& !isNominalMismatch(finalRetType, returnExpected)
 		&& !errSentinel
+		&& ctx.errors.length == errorsBeforeFit
 		&& !engineReturnMarshalsToNode(finalRetType, returnExpected)
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);

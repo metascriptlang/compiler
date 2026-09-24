@@ -748,9 +748,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					"Type '" + typeDisplayName(rightType) + "' is not assignable to type '" + typeDisplayName(leftType) + "'"
 						+ explainStructuralPrefix(rightType, leftType),
 					d.right.location.line, d.right.location.column);
-			}
-			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
-			if (d.operator == "=" && leftType != null) {
+			} else if (d.operator == "=" && leftType != null) {
+				// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
 			// Null RHS routes through the same relation as literal-field init
@@ -1781,8 +1780,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								"Type '" + typeDisplayName(d.elements[i].nodeType) + "' is not assignable to element type '" + typeDisplayName(elemExpected) + "'"
 									+ explainStructuralPrefix(d.elements[i].nodeType, elemExpected),
 								d.elements[i].location.line, d.elements[i].location.column);
+						} else {
+							d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
 						}
-						d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
 					}
 				}
 				let elemType = d.elements[0].nodeType;
