@@ -195,7 +195,6 @@ export enum SymbolFlag {
 	OverloadValidated, // Tier 1: overload set already validated (return-type compatibility check)
 	SinkTemp, // DRC sink-arg temp synthesized by passCopyToSink — always single-use by construction, always last-read
 	ComptimeNodeAlias, // `const x = <jsx>` — x binds a compile-time Node, folded into the consuming macro; emits no runtime decl
-	Imported, // symbol imported from another module's export registry (importer-side copy)
 	StaticLocal, // `static` decl inside a body: carries Global (module storage) but is named per-site, since a body can hold several and a module may hold several bodies
 	ActorProxy, // symbol is an actor-method proxy (actorLower): an UNPARKED call to it is a
 	                       // SEND-class handoff — plain-ref args transfer ownership into the message
