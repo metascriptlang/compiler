@@ -2993,7 +2993,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr.
 	// Skip "toString" — that's a method call, not a member access.
 	// builtinLower handles enum .toString() → EnumName_toString(value).
-	if (objType.kind == TypeKind.Enum && d.property != "toString") {
+	const enumTypeRef = d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Enum;
+	if (objType.kind == TypeKind.Enum && d.property != "toString"
+			&& (enumTypeRef || objType.typeNames.indexOf(d.property) >= 0)) {
 		const enumName = objType.typeName;
 		const propName = d.property;
 		// Extern C enums: member names are already full C identifiers (e.g. WGPUCullMode_Back)
