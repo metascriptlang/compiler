@@ -7,10 +7,10 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, Symbol, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, isExportedBy, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
+import { CheckerContext, isExportedBy, Severity, CancelCtx, createContext } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -134,10 +134,6 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 }
 
 // ===== TransAmDb =====
-// Node/CheckerContext caches live in ast/node.ms and checker/context.ms
-// to avoid DRC lifecycle mangling bug (wrong module path for Node_destroy).
-// Cache keys use: parseKey = fileId, checkKey = fileId + 10000,
-// transformKey = fileId + 20000, analyzeKey = fileId + 30000.
 
 export class TransAmDb {
 	revision: TaRevision;
@@ -154,6 +150,16 @@ export class TransAmDb {
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
+	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
+	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
+}
+
+function dbTree(db: TransAmDb, key: int32): Node {
+	return db.trees.get(key) ?? null as unknown as Node;
+}
+
+function dbContext(db: TransAmDb, key: int32): CheckerContext {
+	return db.contexts.get(key) ?? null as unknown as CheckerContext;
 }
 
 export function createTransAmDb(cacheCapacity: int32): TransAmDb {
@@ -172,6 +178,8 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 		graph: null,
+		trees: new HashMap<int32, Node>(),
+		contexts: new HashMap<int32, CheckerContext>(),
 	};
 }
 
@@ -332,7 +340,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 
 	// Try cache
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(parseNodeKey(fileId));
+		return dbTree(db, parseNodeKey(fileId));
 	}
 
 	// Compute — get preprocessed source via the Preprocess query. This records
@@ -356,7 +364,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	if (parseResult.ok) {
 		program = parseResult.value;
 	}
-	nodeCacheStore(parseNodeKey(fileId), program);
+	db.trees.set(parseNodeKey(fileId), program);
 	const parseHash = transAmHashNode(program);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
@@ -575,7 +583,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return ctxCacheGet(checkCtxKey(fileId));
+		return dbContext(db, checkCtxKey(fileId));
 	}
 
 	// Get the cached parse tree (needed for dependency hash tracking + to source the clone).
@@ -663,9 +671,9 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		return checkerCtx;
 	}
 
-	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
+	db.contexts.set(checkCtxKey(fileId), checkerCtx);
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
-	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
+	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
 	db.checkInProgress.delete(filePath);
@@ -677,7 +685,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
-	const checked = nodeCacheGet(checkNodeKey(fileId));
+	const checked = dbTree(db, checkNodeKey(fileId));
 	if (checked != null) return checked;
 	return dbParse(db, filePath);
 }
@@ -689,7 +697,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Analyze, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(analyzeNodeKey(fileId));
+		return dbTree(db, analyzeNodeKey(fileId));
 	}
 
 	// Ensure upstream queries are computed
@@ -711,7 +719,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx);
-	nodeCacheStore(analyzeNodeKey(fileId), analyzed);
+	db.trees.set(analyzeNodeKey(fileId), analyzed);
 	const analyzeHash = transAmHashNode(analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, analyzeHash, true);
 	return analyzed;
@@ -724,7 +732,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Transform, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(transformNodeKey(fileId));
+		return dbTree(db, transformNodeKey(fileId));
 	}
 
 	const _cachedProg2 = dbParse(db, filePath);
@@ -743,7 +751,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	recordDependency(db.depStack, tckKey, tckEntry != null ? tckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
-	nodeCacheStore(transformNodeKey(fileId), transformed);
+	db.trees.set(transformNodeKey(fileId), transformed);
 	const transformHash = transAmHashNode(transformed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, transformHash, true);
 	return transformed;

@@ -1359,42 +1359,6 @@ export function errorMessage(err: CheckerError): string {
 	return err.message;
 }
 
-// ===== Context Cache (DRC-safe: CheckerContext in struct fields ONLY here) =====
-
-interface CtxCacheEntry {
-	key: number;
-	ctx: CheckerContext;
-}
-
-interface CtxCache {
-	items: CtxCacheEntry[];
-}
-
-let _ctxCache: CtxCache = { items: [] };
-
-export function ctxCacheStore(key: number, ctx: CheckerContext): void {
-	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
-		if (_ctxCache.items[i].key == key) {
-			_ctxCache.items[i].ctx = ctx;
-			return;
-		}
-	}
-	const entry: CtxCacheEntry = { key: key, ctx: ctx };
-	_ctxCache.items.push(entry);
-}
-
-export function ctxCacheGet(key: number): CheckerContext {
-	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
-		if (_ctxCache.items[i].key == key) return _ctxCache.items[i].ctx;
-	}
-	return null as unknown as CheckerContext;
-}
-
-export function ctxCacheClear(): void {
-	const empty: CtxCacheEntry[] = [];
-	_ctxCache.items = empty;
-}
-
 // ===== Tests =====
 test "create context" {
 	const ctx = createContext();
