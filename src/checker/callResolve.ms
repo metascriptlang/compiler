@@ -1081,15 +1081,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		&& calleeType != null
 		&& calleeType.kind == TypeKind.Function
 		&& hasGenericParams(calleeType);
-	const _nakedReturn = _isGenericCall
-		&& calleeType.typeReturn != null
-		&& calleeType.typeReturn.kind == TypeKind.GenericParam;
-	let _returnContext: Type | null = expectedType;
-	if (_nakedReturn) _returnContext = null;
 	const _argBindings = _isGenericCall
-		? deriveCallBindings(ctx, node, node.resolvedSym, calleeType, _returnContext)
+		? deriveCallBindings(ctx, node, node.resolvedSym, calleeType, null)
 		: createUnifyBindings();
-	const _contextBindings = _nakedReturn
+	const _contextBindings = _isGenericCall
 		? bindFromExpectedReturn(calleeType, expectedType)
 		: createUnifyBindings();
 	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
@@ -1843,56 +1838,18 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 	if (returnType == null) return inferredType();
 
 	const hasExpected = expectedType != null && !isUnresolvedType(expectedType);
-	// TS rule: when the return type is a NAKED generic param `T`, contextual type
-	// does NOT drive inference — args are the sole source. `function id<T>(x:T):T`
-	// called as `id(null)` infers T=null from the arg; the later assignment to a
-	// declared `int32` then errors at the assignment site, not at the call.
-	// Wrapped returns like `Result<T,E>` or `Box<T>` use contextual inference
-	// (TS-quirk: null arg is accepted when T was bound from contextual via wrapper).
-	const isNakedGenericReturn = returnType.kind == TypeKind.GenericParam;
 
-	// Pass 1: argument-driven inference.
-	// Skip weak inference sources:
-	//   - Unknown / Error: failed checks must not poison bindings.
-	//   - Null literal (only when contextual inference is enabled, i.e. wrapped
-	//     return types). TS treats `null` as a weak inference source there so
-	//     contextual T wins. For naked-T returns, args ALWAYS drive — including
-	//     null — to mirror TS behavior of erroring later at assignment.
 	const argBindings = createUnifyBindings();
-	const skipNullArg = hasExpected && !isNakedGenericReturn;
 	for (let i = 0; i < fnType.typeChildren.length && i < argTypes.length; i += 1) {
 		const at = argTypes[i];
 		if (at == null) continue;
 		if (isUnresolvedType(at) || at.kind == TypeKind.Error) continue;
-		if (skipNullArg && at.kind == TypeKind.Null) continue;
+		if (hasExpected && at.kind == TypeKind.Null) continue;
 		unifyType(fnType.typeChildren[i], at, argBindings);
 	}
 
-	// Pass 2: combine contextual return type bindings with arg-bindings.
-	// GATED on non-naked-T to match TS naked-T rule (see `isNakedGenericReturn`).
-	//   - T unbound by args   → contextual fills the gap.
-	//   - T bound by args AND argType assignable to contextualType (contextual
-	//     is the SUPERTYPE) → prefer contextual. Mirrors TS contextual typing:
-	//     `let x: Result<number, string> = ok(int32_var)` must infer T=number
-	//     so the int32 arg widens via stdConv; otherwise the call emits
-	//     Result<int32, string> and fails at the assignment despite the types
-	//     being legitimately compatible via numeric widening.
-	//   - T bound by args AND NOT a subtype of contextual → keep arg-binding;
-	//     the assignment site surfaces the real type error.
-	if (hasExpected && !isNakedGenericReturn) {
-		const expBindings = createUnifyBindings();
-		unifyType(returnType, expectedType, expBindings);
-		for (let k = 0; k < expBindings.names.length; k += 1) {
-			const name = expBindings.names[k];
-			const expType = expBindings.types[k];
-			const idx = findBindingIndex(argBindings, name);
-			if (idx == -1) {
-				argBindings.names.push(name);
-				argBindings.types.push(expType);
-			} else if (isAssignable(argBindings.types[idx], expType)) {
-				argBindings.types[idx] = expType;
-			}
-		}
+	if (hasExpected) {
+		mergeUnifyBindings(argBindings, bindFromExpectedReturn(fnType, expectedType));
 	}
 
 	returnType = applySubstitutions(returnType, argBindings);
@@ -2184,8 +2141,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// Pass 2: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
-	// caller context. Mirrors local pattern in `inferGenericReturn`:
-	// gated on !isNakedGenericReturn to preserve TS-flavored naked-T rule.
+	// caller context. Mirrors local pattern in `inferGenericReturn`.
 	// `mergeUnifyBindings` preserves earlier bindings so Pass 2
 	// only fills gaps — no overwrite risk.
 	//
@@ -2193,12 +2149,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// `const colors: Color[] = ...` context. Args alone don't bind T (null is
 	// weak), explicit <T> not present in macro emit. Pass 2 binds T=Color from
 	// return Array<T> vs expected Array<Color>.
-	if (expectedType != null && calleeType.typeReturn != null
-			&& calleeType.typeReturn.kind != TypeKind.GenericParam) {
-		const ctxBindings = createUnifyBindings();
-		unifyType(calleeType.typeReturn, expectedType, ctxBindings);
-		mergeUnifyBindings(eb, ctxBindings);
-	}
+	mergeUnifyBindings(eb, bindFromExpectedReturn(calleeType, expectedType));
 	if (eb.names.length == 0) return null as unknown as Type;
 	const declType = sym.symbolType != null ? sym.symbolType : calleeType;
 	if (reportUnmetConstraints(ctx, node, declType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
