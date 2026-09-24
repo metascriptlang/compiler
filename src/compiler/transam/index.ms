@@ -1125,7 +1125,8 @@ test "a dependency's exported type keeps its declaring module" {
 	for (const name of ["Box", "Pair"]) {
 		const info = findExportedSymbol(db.exportRegistry, "/test/box.ms", name);
 		assert info != null;
-		const t = info.symType;
+		assert info.sym.modulePath == "/test/box.ms";
+		const t = info.sym.symbolType;
 		const inner = t.typeReturn != null ? t.typeReturn : t;
 		assert inner.sym != null;
 		assert inner.sym.modulePath == "/test/box.ms";
