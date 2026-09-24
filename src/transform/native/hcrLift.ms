@@ -15,17 +15,18 @@
 
 import {
 	Node, NodeKind, SourceLocation, createNode,
-	ProgramData, VariableDeclData, IdentifierData, ExportDeclData, DecoratedDeclData, Type, TypeKind } from "../../ast/node";
+	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, Type, TypeKind } from "../../ast/node";
 import { createStruct, createPtr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { djb2 } from "std/hash";
 import { walkNode } from "../walker";
-import { makeIdent, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
+import { makeIdentResolved, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
 
 // ===== Collected Global Info =====
 
 interface HcrGlobal {
 	name: string;
+	sym: Symbol;
 	declType: Type;
 	initNode: Node;
 }
@@ -41,12 +42,12 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	const kept: Node[] = [];
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const stmt = pd.programStmts[i];
-		const g = extractGlobal(stmt);
+		const g = extractGlobal(stmt, ctx);
 		if (g != null) {
 			globals.push(g);
 			// Convert initializer to assignment statement (stays in ModuleInit)
 			if (g.initNode != null) {
-				const lhs = makeIdent(g.name, stmt.location);
+				const lhs = makeIdentResolved(g.sym, stmt.location);
 				if (g.declType != null) lhs.nodeType = g.declType;
 				const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
 				if (g.declType != null) assign.nodeType = g.declType;
@@ -73,16 +74,13 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	const gsType = createStruct("_GlobalState", fieldNames, fieldTypes, true);
 	const gsPtrType = createPtr(gsType);
 
-	// Build a name set for O(1) lookup of globals
-	const globalNames: string[] = [];
-	for (let i = 0; i < globals.length; i += 1) {
-		globalNames.push(globals[i].name);
-	}
+	const globalSyms = new HashSet<Symbol>();
+	for (const g of globals) globalSyms.add(g.sym);
 
 	// Pass 2: Rewrite all Identifier references to globals → (*_ms_gs).field
 	const loc = program.location;
 	for (let i = 0; i < kept.length; i += 1) {
-		kept[i] = rewriteGlobalRefs(kept[i], globalNames, gsPtrType, loc);
+		kept[i] = rewriteGlobalRefs(kept[i], globalSyms, gsPtrType, loc);
 	}
 
 	// Pass 3: Synthesize HCR nodes via @emit
@@ -129,19 +127,19 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 // Returns HcrGlobal if the statement is a top-level variable declaration, null otherwise.
 // Unwraps ExportDecl and DecoratedDecl wrappers.
 
-function extractGlobal(stmt: Node): HcrGlobal {
+function extractGlobal(stmt: Node, ctx: TransformContext): HcrGlobal {
 	if (stmt == null) return null as unknown as HcrGlobal;
 
 	// Direct VariableDecl
 	if (stmt.kind == NodeKind.VariableDecl) {
-		return varDeclToGlobal(stmt);
+		return varDeclToGlobal(stmt, ctx);
 	}
 
 	// export const x = ...
 	if (stmt.kind == NodeKind.ExportDecl) {
 		const ed = stmt.data as ExportDeclData;
 		if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
-			return varDeclToGlobal(ed.exportedDecl);
+			return varDeclToGlobal(ed.exportedDecl, ctx);
 		}
 	}
 
@@ -149,50 +147,47 @@ function extractGlobal(stmt: Node): HcrGlobal {
 	if (stmt.kind == NodeKind.DecoratedDecl) {
 		const dd = stmt.data as DecoratedDeclData;
 		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.VariableDecl) {
-			return varDeclToGlobal(dd.decoratedNode);
+			return varDeclToGlobal(dd.decoratedNode, ctx);
 		}
 	}
 
 	return null as unknown as HcrGlobal;
 }
 
-function varDeclToGlobal(node: Node): HcrGlobal {
+function varDeclToGlobal(node: Node, ctx: TransformContext): HcrGlobal {
 	const d = node.data as VariableDeclData;
 	// Skip TypeInfo vars (ORC runtime, should stay as globals)
 	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) {
 		return null as unknown as HcrGlobal;
 	}
+	const sym = node.resolvedSym;
+	if (sym == null) {
+		ctx.errors.push(`internal: HCR state lifting met module variable '${d.declName}' without a symbol`);
+		return null as unknown as HcrGlobal;
+	}
 	const t = node.nodeType != null ? node.nodeType : null as unknown as Type;
-	return { name: d.declName, declType: t, initNode: d.initializer };
+	return { name: d.declName, sym, declType: t, initNode: d.initializer };
 }
 
 // ===== Rewrite Global References =====
 // Walks AST and replaces Identifier nodes that reference lifted globals
 // with MemberExpr: (*_ms_gs).fieldName
 
-function rewriteGlobalRefs(node: Node, globalNames: string[], gsPtrType: Type, loc: SourceLocation): Node {
+function rewriteGlobalRefs(node: Node, globalSyms: HashSet<Symbol>, gsPtrType: Type, loc: SourceLocation): Node {
 	return walkNode(node, (n: Node): Node => {
-		if (n.kind != NodeKind.Identifier) return n;
-		const d = n.data as IdentifierData;
-		if (!isGlobalName(d.name, globalNames)) return n;
+		if (n.kind != NodeKind.Identifier || n.resolvedSym == null || !globalSyms.has(n.resolvedSym)) return n;
+		const sym = n.resolvedSym;
 
 		// Build (*_ms_gs).fieldName
 		const gsIdent = makeTypedIdent("_ms_gs", gsPtrType, loc);
 		const deref = makeHiddenDeref(gsIdent, loc);
-		const member = makeMember(deref, d.name, loc);
+		const member = makeMember(deref, sym.name, loc);
 		// Preserve original type
 		if (n.nodeType != null) {
 			member.nodeType = n.nodeType;
 		}
 		return member;
 	});
-}
-
-function isGlobalName(name: string, globalNames: string[]): boolean {
-	for (let i = 0; i < globalNames.length; i += 1) {
-		if (globalNames[i] == name) return true;
-	}
-	return false;
 }
 
 // ===== @emit Helper =====
