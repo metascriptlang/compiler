@@ -41,6 +41,7 @@ import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { recordDirUse } from "../utils/lruDirs";
+import { GenericDeclEntry, restoreGenericDecl, getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes } from "../parser/context";
 import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
@@ -548,8 +549,9 @@ function writePreludeDeps(root: string, key: string): void {
 //   D includeDirectives
 //   F compilerFlags
 //   X compileDirectives
+//   A genericDeclName genericParams fieldNames fieldTypes   (parser side channel the std parse filled)
 
-export function writePreludePack(key: string, ctx: CheckerContext): void {
+export function writePreludePack(key: string, ctx: CheckerContext, genericDecls: GenericDeclEntry[]): void {
 	const _w0 = performance.now();
 	if (packDisabled()) return;
 	const root = packDir();
@@ -806,6 +808,10 @@ export function writePreludePack(key: string, ctx: CheckerContext): void {
 		const idx: int32[] = [];
 		for (const m of members) idx.push(idxSym(m));
 		lines.push(`U\t${escapeP(spec)}\t${intsCsv(idx)}`);
+	}
+
+	for (const g of genericDecls) {
+		lines.push(`A\t${escapeP(g.key)}\t${escapeP(g.val)}\t${escapeP(g.fieldNames)}\t${escapeP(g.fieldTypes)}`);
 	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
@@ -1185,6 +1191,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
 	const aliasRows: string[][] = [];
+	const genericRows: string[][] = [];
 	let importRow = "";
 	let exportRow = "";
 	let includeDirectives = "";
@@ -1287,6 +1294,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			compilerFlags = unescapeP(f[1]);
 		} else if (f[0] == "X") {
 			compileDirectives = unescapeP(f[1]);
+		} else if (f[0] == "A" && f.length >= 5) {
+			genericRows.push(f);
 		} else {
 			return null;
 		}
@@ -1413,6 +1422,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	ctx.includeDirectives = includeDirectives;
 	ctx.compilerFlags = compilerFlags;
 	ctx.compileDirectives = compileDirectives;
+	for (const f of genericRows) {
+		restoreGenericDecl({ key: unescapeP(f[1]), val: unescapeP(f[2]), fieldNames: unescapeP(f[3]), fieldTypes: unescapeP(f[4]) });
+	}
 
 	if (packDebug) console.log(`[pack:r] done ms=${performance.now() - _r0}`);
 	return ctx;
@@ -1458,7 +1470,7 @@ test "preludePack: escape/unescape roundtrip incl separators" {
 	assert maxByte < 128;
 }
 
-test "preludePack: write then load reconstructs symbols, types, nodes, exts, directives" {
+test "preludePack: write then load reconstructs symbols, types, nodes, exts, directives, generic declarations" {
 	env.set("MSC_PRELUDE_PACK", "1");
 	try {
 		const ctx = makeTestCtx();
@@ -1500,9 +1512,13 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
-		writePreludePack(key, ctx);
+		writePreludePack(key, ctx, [{ key: "PkBox", val: "T", fieldNames: "value", fieldTypes: "T" }]);
+		assert getGenericDecl("PkBox") == "";
 		const loaded = tryLoadPreludePack(key);
 		assert loaded != null;
+		assert getGenericDecl("PkBox") == "T", "a generic declaration the std parse registered did not survive the pack";
+		assert getGenericDeclFieldNames("PkBox") == "value";
+		assert getGenericDeclFieldTypes("PkBox") == "T";
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkTestFn"));
 		assert got != null;
 		assert loaded.compilerFuncs.get("pkRuntimeName") == got, "a compilerFunc binding did not survive the pack";
@@ -1574,7 +1590,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const program = createNodeAt(NodeKind.Program, { programStmts: samples } as NodeData, makeLoc(1, 1));
 		sym.declNode = program;
 		const key = preludePackKey("kind-roundtrip", ".test");
-		writePreludePack(key, ctx);
+		writePreludePack(key, ctx, []);
 		const loaded = tryLoadPreludePack(key);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkKindFn"));
@@ -1636,7 +1652,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 				{ fromPath: "/std/core/a.ms", toPath: "/std/core/b.ms", cycle: ["/std/core/a.ms", "/std/core/b.ms", "/std/core/a.ms"], importLine: 3, importNames: ["z"] },
 			],
 		}, key);
-		writePreludePack(key, makeTestCtx());
+		writePreludePack(key, makeTestCtx(), []);
 		const loaded = tryLoadPreludeDeps(key);
 		assert loaded != null;
 		assert loaded.mods.length == 2;
@@ -1661,7 +1677,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		remove(`${packDir()}/${key}.deps`);
 		remove(`${packDir()}/${key}.pk`);
 		const otherKey = preludePackKey("deps-roundtrip-probe", ".other-backend");
-		writePreludePack(otherKey, makeTestCtx());
+		writePreludePack(otherKey, makeTestCtx(), []);
 		assert tryLoadPreludeDeps(otherKey) == null;
 		remove(`${packDir()}/${otherKey}.pk`);
 	} finally {

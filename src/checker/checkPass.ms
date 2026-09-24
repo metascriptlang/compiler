@@ -25,7 +25,7 @@ setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
-import { getGenericDecl } from "../parser/context";
+import { getGenericDecl, genericDeclCount, genericDeclsSince } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
@@ -2812,6 +2812,7 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packed = tryLoadPreludePack(packKey);
 	if (packed != null) return packed;
+	const genericMark = genericDeclCount();
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
@@ -2824,7 +2825,7 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
-	writePreludePack(packKey, ctx);
+	writePreludePack(packKey, ctx, genericDeclsSince(genericMark));
 	return ctx;
 }
 

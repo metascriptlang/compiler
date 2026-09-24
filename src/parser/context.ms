@@ -402,7 +402,7 @@ export function consumePendingTypeArg(state: ParserState): string {
 // Parser stores generic params for interface/class declarations (e.g., interface Box<T>).
 // Checker reads this to create GenericParam types for field resolution.
 
-interface GenericDeclEntry {
+export interface GenericDeclEntry {
 	key: string;        // interface/class name
 	val: string;        // comma-joined generic param names ("T,U")
 	fieldNames: string; // "|"-joined field names ("value|count"), empty for functions
@@ -427,6 +427,29 @@ export function resetGenericDeclStore(): void {
 export function addGenericDecl(name: string, genericParams: string): void {
 	const entry: GenericDeclEntry = { key: name, val: genericParams, fieldNames: "", fieldTypes: "" };
 	_genericDeclStore.items.push(entry);
+}
+
+export function genericDeclCount(): int32 {
+	return _genericDeclStore.items.length;
+}
+
+export function genericDeclsSince(mark: int32): GenericDeclEntry[] {
+	const out: GenericDeclEntry[] = [];
+	let i = mark;
+	while (i < _genericDeclStore.items.length) {
+		out.push(_genericDeclStore.items[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function restoreGenericDecl(entry: GenericDeclEntry): void {
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key == entry.key) return;
+		i = i + 1;
+	}
+	_genericDeclStore.items.push({ key: entry.key, val: entry.val, fieldNames: entry.fieldNames, fieldTypes: entry.fieldTypes });
 }
 
 // Update an existing GenericDeclEntry with field info (called after parsing interface body)
