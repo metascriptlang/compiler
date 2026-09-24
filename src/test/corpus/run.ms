@@ -278,7 +278,15 @@ function stalenessWarning(): string {
 	if (path == "" || !exists(path)) { return ""; }
 	const mtime = IS_WIN
 		? shellOut(winPath(WINTIME) + " --mtime \"" + winPath(path) + "\"")
-		: shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null");
+		// Chained with `||` this reported nonsense on Linux: GNU `stat -f` is
+		// "file system status", so it prints a whole block to STDOUT and only
+		// then exits 1 — the fallback runs, but its number arrives after three
+		// lines of filesystem info and parseInt reads 0, making every run claim
+		// the compiler was 56 years stale. Pick the spelling by platform, and
+		// keep the other only as a fallback for a host that surprises us.
+		: IS_MAC
+			? shellOut("stat -f %m '" + path + "' 2>/dev/null || stat -c %Y '" + path + "' 2>/dev/null")
+			: shellOut("stat -c %Y '" + path + "' 2>/dev/null || stat -f %m '" + path + "' 2>/dev/null");
 	// The two git calls run on BOTH platforms, so every shell-ism in them has to
 	// be spelled portably — and each of these was measured failing on cmd.exe:
 	// `2>/dev/null` makes cmd reject the whole line ("cannot find the path"),
