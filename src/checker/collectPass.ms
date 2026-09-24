@@ -1114,6 +1114,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		nsSym.modulePath = sourcePath;
 		nsSym.location = node.location;
 		defineSymbol(ctx.table, nsSym);
+		autoPropagateModuleExtensions(ctx, sourcePath, false);
 		return;
 	}
 
