@@ -21,7 +21,8 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction 
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx } from "../../checker/instantiate";
+import { lookupModuleCtx, drainPendingInstances, addPendingInstance } from "../../checker/instantiate";
+import { findModule } from "../../module/graph";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
@@ -84,9 +85,16 @@ function transformForEngine(program: Node): Node {
 		&& outer.module != null
 		&& outer.preludeCtx != null;
 	const prevEngineMode = setEngineCheckMode(true);
+	const outerInstances = drainPendingInstances();
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
+	const engineInstances = drainPendingInstances();
+	for (const node of outerInstances) addPendingInstance(node);
+	for (const node of engineInstances) {
+		const owner = node.resolvedSym != null ? node.resolvedSym.modulePath : "";
+		if (!hasFullOuterCtx || owner == "" || findModule(outer.graph, owner) != null) addPendingInstance(node);
+	}
 	_lastEngineCheckErrors = checkerCtx.errors;
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
