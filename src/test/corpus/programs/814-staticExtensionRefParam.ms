@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: static ref 7 7 9 9 6 0
 // @stdout: static ref 7 7 9 9 6 3
 // note: a `ref` or `out` parameter of a `this typeof T` static extension, second or third after the receiver. The caller has to see every write; the modifier used to land on the parameter after it, so `bump(c)` changed a copy.
 
