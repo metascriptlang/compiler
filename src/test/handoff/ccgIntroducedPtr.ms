@@ -236,7 +236,7 @@ function walkCalls(node: Node): void {
 		if (id.alternate != null) walkCalls(id.alternate);
 	} else if (node.kind == NodeKind.ReturnStmt) {
 		const rd = node.data as ReturnStmtData;
-		walkCalls(rd.argument);
+		if (rd.argument != null) walkCalls(rd.argument);
 	} else if (node.kind == NodeKind.ExprStmt) {
 		const ed = node.data as ExprStmtData;
 		walkCalls(ed.expr);
