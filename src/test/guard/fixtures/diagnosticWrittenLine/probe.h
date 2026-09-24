@@ -1,0 +1,1 @@
+int diagnosticWrittenLineProbe(int x);
