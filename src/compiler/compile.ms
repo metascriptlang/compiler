@@ -471,7 +471,8 @@ function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: 
 		const row = deps.mods[mi];
 		const mod = createModule(row.path);
 		const headerErrors: ModuleError[] = [];
-		mod.source = inlineHeaderImports(sources[mi], row.path, provider, true, headerErrors);
+		mod.rawSource = sources[mi];
+		mod.source = inlineHeaderImports(mod.rawSource, row.path, provider, true, headerErrors);
 		for (const he of headerErrors) mod.errors.push(he);
 		let ii = 0;
 		while (ii < row.imports.length) {
