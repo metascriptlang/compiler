@@ -3,7 +3,7 @@
 // reinterpreted onto the union variant (which read the four trailing fields
 // from stack garbage and printed an address).
 //
-// @stdout: 4|1|8|8|8|4|16|4|8|32|40|8|32
+// @stdout: 4|1|8|8|8|4|16|4|8|16|16|8|32
 // @exit: 0
 
 type MyId = distinct int32;
