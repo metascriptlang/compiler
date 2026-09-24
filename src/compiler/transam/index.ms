@@ -48,7 +48,7 @@ import {
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../checker/checkPass";
-import { registerModuleProgram } from "../../checker/instantiate";
+import { registerModuleProgram, lookupModuleProgram } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -1145,4 +1145,14 @@ test "an importer resolves members through a dependency's checked exports" {
 	const ctx = dbTypeCheck(db, "/test/reader.ms");
 	assert ctx != null;
 	assert checkErrorCount(ctx) == 0;
+}
+
+test "a module's type check registers the program it checked" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/registered.ms", "export function one(): int32 { return 1; }");
+	const ctx = dbTypeCheck(db, "/test/registered.ms");
+	assert ctx != null;
+	const program = lookupModuleProgram("/test/registered.ms");
+	assert program != null;
+	assert program == dbGetCheckedProgram(db, "/test/registered.ms");
 }
