@@ -1,4 +1,4 @@
-import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll, rename, isDir } from "std/fs";
+import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll, rename } from "std/fs";
 import { join } from "std/fs/path";
 import { execFile, env, exit } from "std/process";
 import { exeSuffix } from "./io";
@@ -10,6 +10,7 @@ import { cacheRoot } from "./package/cache";
 import { shimFileName, shimContent, isShim, SHIM_MODE } from "./package/shim";
 import { cmdAdd } from "./package/add";
 import { findChar } from "../utils/string";
+import { dirEntryName, recordDirUse } from "../utils/lruDirs";
 import { error as errStyle, bold, cyan, dim } from "../utils/color";
 
 
@@ -91,13 +92,6 @@ export function globalShimDir(): string {
 	if (home == "") home = env.get("USERPROFILE");
 	if (home == "") return "";
 	return join(home, join(".metascript", "bin"));
-}
-
-export function dirEntryName(entry: string): string {
-	if (entry.length > 1 && entry.charAt(entry.length - 1) == "/") {
-		return entry.slice(0, entry.length - 1);
-	}
-	return entry;
 }
 
 export function pruneStaleShims(shimDir: string, keep: string[]): int32 {
@@ -244,52 +238,6 @@ function tempBuildPath(binPath: string): string {
 
 export const BIN_CACHE_CAP: int32 = 32;
 
-function readBinJournal(binRoot: string): string[] {
-	const raw = try readFile(join(binRoot, ".lru")) catch "";
-	if (raw == "") return [];
-	const keys: string[] = [];
-	for (const line of raw.split("\n")) {
-		if (line != "") keys.push(line);
-	}
-	return keys;
-}
-
-export function recordBinUse(binRoot: string, key: string): void {
-	const prev = readBinJournal(binRoot);
-	const kept: string[] = [];
-	const start = prev.length - (BIN_CACHE_CAP - 1);
-	let i0 = start > 0 ? start : 0;
-	while (i0 < prev.length) {
-		if (prev[i0] != key) kept.push(prev[i0]);
-		i0 = i0 + 1;
-	}
-	kept.push(key);
-
-	const dirs: string[] = [];
-	for (const rawEntry of readDir(binRoot)) {
-		const entry = dirEntryName(rawEntry);
-		if (isDir(join(binRoot, entry))) dirs.push(entry);
-	}
-	if (prev.length == 0) {
-		for (const d of dirs) {
-			if (kept.length >= BIN_CACHE_CAP) break;
-			let known = false;
-			for (const k of kept) { if (k == d) known = true; }
-			if (!known) kept.push(d);
-		}
-	} else if (dirs.length > BIN_CACHE_CAP) {
-		for (const d of dirs) {
-			let live = false;
-			for (const k of kept) { if (k == d) live = true; }
-			if (!live) removeAll(join(binRoot, d));
-		}
-	}
-
-	let out = "";
-	for (const k of kept) { out = out + k + "\n"; }
-	writeFile(join(binRoot, ".lru"), out);
-}
-
 export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boolean {
 	const declared = declaredCommands(projectRoot);
 
@@ -379,40 +327,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 			return false;
 		}
 	}
-	recordBinUse(join(cache, "bin"), key);
+	recordDirUse(join(cache, "bin"), key, BIN_CACHE_CAP);
 
 	exit(execFile(binPath, forwarded));
 	return true;
-}
-
-test "recordBinUse adopts unjournaled dirs, then evicts least-recent past the cap" {
-	const base = env.get("TMPDIR");
-	const binRoot = join(base != "" ? base : "/tmp", "msc-bincache-test");
-	removeAll(binRoot);
-	ensureDir(binRoot);
-	for (const k of ["a", "b", "c"]) {
-		ensureDir(join(binRoot, k));
-		writeFile(join(binRoot, k), "x");
-	}
-	recordBinUse(binRoot, "a");
-	assert exists(join(binRoot, "b"));
-	assert exists(join(binRoot, "c"));
-	recordBinUse(binRoot, "b");
-	assert exists(join(binRoot, "c"));
-	let n = 0;
-	while (n < 40) {
-		const k = `p${n.toString()}`;
-		ensureDir(join(binRoot, k));
-		recordBinUse(binRoot, k);
-		n = n + 1;
-	}
-	assert !exists(join(binRoot, "a"));
-	assert !exists(join(binRoot, "c"));
-	assert exists(join(binRoot, "p39"));
-	let dirCount = 0;
-	for (const entry of readDir(binRoot)) {
-		if (isDir(join(binRoot, entry))) dirCount = dirCount + 1;
-	}
-	assert dirCount <= BIN_CACHE_CAP;
-	removeAll(binRoot);
 }
