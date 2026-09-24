@@ -376,6 +376,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						const ctorKey = cd.className + "_new";
 						const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
 						globalFuncMap.items.push(cEntry);
+						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
 						const ctd = cd.classBody[ci].data as ConstructorDeclData;
 						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: ctd.ctorParams, ctorBody: ctd.ctorBody });
 						funcIdx += 1;
@@ -385,6 +386,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					const ctorKey = cd.className + "_new";
 					const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
 					globalFuncMap.items.push(cEntry);
+					globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
 					projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: noStrs, ctorBody: nullNode });
 					funcIdx += 1;
 				}

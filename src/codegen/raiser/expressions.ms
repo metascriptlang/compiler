@@ -1093,7 +1093,10 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const classId = d.newCallee.data as IdentifierData;
 		const sym = d.newCallee.resolvedSym;
-		let funcIdx = resolveFunc(s, classId.name + "_new");
+		const ctorName = (sym != null ? sym.name : classId.name) + "_new";
+		let funcIdx = s.scopedFunctions && sym != null && sym.modulePath != ""
+			? resolveFunc(s, sym.modulePath + ":" + ctorName)
+			: resolveFunc(s, ctorName);
 		if (funcIdx < 0 && sym != null) funcIdx = callRaiserOnDemand(sym);
 		if (funcIdx >= 0) {
 			const knownCtorless = sym != null && !sym.symFlags.has(SymbolFlag.HasConstructor);
