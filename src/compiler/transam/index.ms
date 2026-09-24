@@ -98,8 +98,7 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 	if (source.length == 0) return;
 	const pr = parseSourceLenient(source);
 	if (!pr.ok) return;
-	const tmpCtx = createTempCollectContext();
-	tmpCtx.modulePath = filePath;
+	const tmpCtx = createTempCollectContext(filePath);
 	collectTopLevelLocal(tmpCtx, pr.value);
 	resolveDeclarations(tmpCtx, pr.value);
 	const exports = collectExports(tmpCtx, filePath);
@@ -430,7 +429,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
-		const tmpCtx = createTempCollectContext();
+		const tmpCtx = createTempCollectContext(depPath);
 		tmpCtx.exportRegistry = db.exportRegistry;
 		const depMod = createModule(depPath);
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
@@ -445,8 +444,9 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
-function createTempCollectContext(): CheckerContext {
+function createTempCollectContext(modulePath: string): CheckerContext {
 	const ctx = createContext();
+	ctx.modulePath = modulePath;
 	openScope(ctx.table, ScopeKind.Module);
 	return ctx;
 }
@@ -457,7 +457,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
 	if (program == null) return;
-	const tmpCtx = createTempCollectContext();
+	const tmpCtx = createTempCollectContext(filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
 	depMod.imports = buildImportEntries(db, filePath, program);
