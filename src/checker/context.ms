@@ -1,6 +1,6 @@
 import { platform } from "std/process";
 import { TargetInfo, hostTargetInfo, isPointerShapedForUnknown, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
-import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
+import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -637,7 +637,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
-	if (recvNominal != null && objNominal != null) return true;
+	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
 	if (ext.receiverTypeName != "") {
@@ -663,6 +663,22 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
 	}
 	return isAssignable(objType, receiverType);
+}
+
+function instanceArgs(t: Type): Type[] | null {
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	return s.kind == TypeKind.GenericInstance ? s.typeChildren : null;
+}
+
+function sameInstanceArgs(recv: Type, obj: Type): boolean {
+	const recvArgs = instanceArgs(recv);
+	const objArgs = instanceArgs(obj);
+	if (recvArgs == null || objArgs == null) return true;
+	if (recvArgs.length != objArgs.length) return false;
+	for (let i = 0; i < recvArgs.length; i += 1) {
+		if (!sameType(recvArgs[i], objArgs[i])) return false;
+	}
+	return true;
 }
 
 function nominalTypeSym(t: Type): Symbol | null {

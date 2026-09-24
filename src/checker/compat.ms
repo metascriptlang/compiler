@@ -317,10 +317,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				if (isAtomicRef(source) != isAtomicRef(target)) {
 					return false;
 				}
-				// Nominal shortcut: Ref types with same-named inner struct are assignable
-				// (handles cross-module interface identity where Type objects differ but names match)
 				if (source.typeReturn != null && target.typeReturn != null
-					&& source.typeReturn.typeName != "" && source.typeReturn.typeName == target.typeReturn.typeName) {
+					&& source.typeReturn.kind != TypeKind.GenericInstance
+					&& sameNominal(source.typeReturn, target.typeReturn)) {
 					return true;
 				}
 				return isAssignable(source.typeReturn, target.typeReturn);
@@ -642,10 +641,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
 	if (source == target) return true;
 	if (source == null || target == null) return false;
-	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
-	if (source.typeName != "" && source.typeName == target.typeName) return true;
-	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
-	if (source.sym != null && source.sym == target.sym) return true;
+	if (sameNominal(source, target)) return true;
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -706,11 +702,11 @@ export function isObjectShapeMismatch(source: Type | null, target: Type | null):
 	if (s0 == null || t0 == null) return false;
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
+	if (s.kind == TypeKind.GenericInstance && t.kind == TypeKind.GenericInstance) return !isAssignable(source, shapeTarget);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return false;
 	if (s == t) return false;
 	if (s.typeName == "" || t.typeName == "") return false;
-	if (s.typeName == t.typeName) return false;
-	if (s.sym != null && s.sym == t.sym) return false;
+	if (sameNominal(s, t)) return false;
 	return !isAssignable(source, shapeTarget);
 }
 
@@ -726,7 +722,7 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	const t = unwrapRefBase(t0);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return "";
 	if (s.typeName == "" || t.typeName == "") return "";
-	if (s.typeName == t.typeName) return "";
+	if (sameNominal(s, t)) return "";
 	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
 		return " (the literal froze as an anonymous type before reaching '" + t.typeName
 			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
@@ -821,6 +817,11 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
 }
 
+export function sameNominal(a: Type, b: Type): boolean {
+	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	return a.typeName != "" && a.typeName == b.typeName;
+}
+
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
@@ -852,8 +853,7 @@ function sameNameList(a: string[], b: string[]): boolean {
 }
 
 function sameStructType(a: Type, b: Type): boolean {
-	// Nominal types keep comparing by name; anonymous ones are structural.
-	if (a.typeName != "" || b.typeName != "") return a.typeName == b.typeName;
+	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
 	return sameTypeList(a.typeChildren, b.typeChildren);

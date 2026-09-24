@@ -421,6 +421,55 @@ test "a method call on one of two same-named classes resolves to that class's ow
 	assert showCallOwners(true) == "/src/a.ms /src/b.ms ";
 }
 
+function mainErrorsWith(mainSource: string): int32 {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export class Box { n: number; constructor(n: number) { this.n = n; } }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Box { s: string; constructor(s: string) { this.s = s; } }" });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { Box as BoxA } from \"./a\";\nimport { Box as BoxB } from \"./b\";\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+function soloErrorsWith(source: string): int32 {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const dir = "/tmp/msc-generic-instance-identity";
+	ensureDir(dir);
+	const soloPath = `${dir}/solo.ms`;
+	writeFile(soloPath, "class Crate<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n}\nfunction tag(this b: Crate<number>): number { return b.v; }\n" + source);
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, soloPath, provider, config, 1);
+	checkModuleGraph(graph, stdPath, ".cms");
+	const solo = findModule(graph, moduleIdentity(soloPath, config, provider));
+	if (solo == null) return -1;
+	let errors = 0;
+	for (const e of solo.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a generic class instance is assignable and callable only with its own type arguments" {
+	assert soloErrorsWith("const s = new Crate<string>(\"x\");\nconst n: Crate<number> = s;\n") > 0;
+	assert soloErrorsWith("const t = new Crate<string>(\"x\").tag();\n") > 0;
+	assert soloErrorsWith("const k = new Crate<number>(3);\nconst same: Crate<number> = k;\nconst t = k.tag();\n") == 0;
+}
+
+test "a class is not assignable to a same-named class of another module" {
+	assert mainErrorsWith("const x: BoxA = new BoxB(\"q\");") > 0;
+	assert mainErrorsWith("function take(b: BoxA): number { return b.n; }\nconst v = take(new BoxB(\"q\"));") > 0;
+	assert mainErrorsWith("const x: BoxA = new BoxA(1);\nconst y: BoxB = new BoxB(\"q\");") == 0;
+}
+
 test "imported enum available" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });
