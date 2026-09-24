@@ -483,6 +483,11 @@ export function jsMethodMemberName(methodName: string, sym: Symbol | null): stri
 
 export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MemberExprData;
+	const ns = d.object.resolvedSym;
+	if (gen.bundleMode && ns != null && ns.symbolKind == SymbolKind.Module && node.resolvedSym != null) {
+		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
+		return;
+	}
 	// Wrap number literals: (42).toString()
 	if (d.object.kind == NodeKind.NumberLiteral) {
 		emit(gen, "(");
