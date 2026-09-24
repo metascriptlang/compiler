@@ -1111,3 +1111,20 @@ test "module exports keep a decorated exported class" {
 	const info = findExportedSymbol(db.exportRegistry, "decmod.ms", "Widget");
 	assert info != null;
 }
+
+test "a dependency's exported type keeps its declaring module" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/box.ms", "export class Box { v: int32 = 1; }\nexport struct Pair { a: int32; b: int32; }");
+	dbSetFileText(db, "/test/use.ms", 'import { Box, Pair } from "./box";\nexport function f(b: Box, p: Pair): int32 { return b.v + p.a; }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/test/use.ms"), getFileId(db.fileInput, "/test/box.ms"));
+	const visited: HashSet<string> = new HashSet<string>();
+	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
+	for (const name of ["Box", "Pair"]) {
+		const info = findExportedSymbol(db.exportRegistry, "/test/box.ms", name);
+		assert info != null;
+		const t = info.symType;
+		const inner = t.typeReturn != null ? t.typeReturn : t;
+		assert inner.sym != null;
+		assert inner.sym.modulePath == "/test/box.ms";
+	}
+}
