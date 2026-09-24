@@ -36,10 +36,10 @@ export function isTemplateSym(sym: Symbol): boolean {
 	return flags.indexOf("template", 0) >= 0;
 }
 
-let _templateGensymCounter: int32 = 0;
 let _templateDepth: int32 = 0;
 const TEMPLATE_DEPTH_LIMIT: int32 = 100;
 
+let _templateGensymCounter: int32 = 0;
 export function templateGensymMark(): int32 {
 	return _templateGensymCounter;
 }

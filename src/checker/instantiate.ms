@@ -18,12 +18,6 @@ import { getIdentId } from "./idents";
 import { fitJoinedBranch } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 
-// ===== Global Instance Collection =====
-// Module-level pending list — all instantiated ASTs go here.
-// compile.ms drains this after each module's check.
-let _pendingInstances: Node[] = [];
-let _pendingNames: HashSet<string> = new HashSet<string>();
-
 // ===== Module-Path → CheckerContext Registry =====
 // When a generic body (function or class constructor) is cloned and re-checked
 // during monomorphization, private module-level symbols in the defining module
@@ -139,48 +133,70 @@ export function pendingInstanceKeyOf(node: Node): string {
 	return "";
 }
 
-export function addPendingInstance(node: Node): void {
-	const key = pendingInstanceKeyOf(node);
-	if (key != "") {
-		if (_pendingNames.has(key)) return;
-		_pendingNames.add(key);
+export function instanceGenericOf(node: Node): Symbol | null {
+	const sym = node.resolvedSym;
+	if (sym == null) return null;
+	if (node.kind == NodeKind.ClassDecl) return sym;
+	return sym.instantiatedFrom;
+}
+
+export function distinctInstances(order: Node[]): Node[] {
+	const seen = new HashMap<Symbol, string[]>();
+	const out: Node[] = [];
+	for (const node of order) {
+		const generic = instanceGenericOf(node);
+		if (generic == null) throw new Error(`internal: a generic instance of this build has no generic it was made from`);
+		const name = node.kind == NodeKind.ClassDecl ? (node.data as ClassDeclData).className : (node.data as FunctionDeclData).fnName;
+		let names: string[] = [];
+		const known = seen.get(generic);
+		if (known != null) names = known;
+		if (names.includes(name)) continue;
+		names.push(name);
+		seen.set(generic, names);
+		out.push(node);
 	}
-	_pendingInstances.push(node);
+	return out;
 }
 
-export function pendingInstanceMark(): int32 {
-	return _pendingInstances.length;
+export function addPendingInstance(host: CheckerContext, node: Node): void {
+	host.generatedInstances.push(node);
 }
 
-export function discardPendingInstancesFrom(mark: int32): void {
-	while (_pendingInstances.length > mark) {
-		const node = _pendingInstances.pop();
-		const key = pendingInstanceKeyOf(node);
-		if (key != "") _pendingNames.delete(key);
+export function drainPendingInstances(moduleCtxs: CheckerContext[]): Node[] {
+	const drained = new HashSet<CheckerContext>();
+	const result: Node[] = [];
+	for (const moduleCtx of moduleCtxs) {
+		if (drained.has(moduleCtx)) continue;
+		drained.add(moduleCtx);
+		for (const node of moduleCtx.generatedInstances) result.push(node);
+		moduleCtx.generatedInstances = [];
 	}
-}
-
-export function takePendingInstancesFrom(mark: int32): Node[] {
-	const taken: Node[] = [];
-	for (let i = mark; i < _pendingInstances.length; i += 1) taken.push(_pendingInstances[i]);
-	while (_pendingInstances.length > mark) _pendingInstances.pop();
-	return taken;
-}
-
-export function drainPendingInstances(): Node[] {
-	const result = _pendingInstances;
-	_pendingInstances = [];
-	_pendingNames = new HashSet<string>();
 	return result;
+}
+
+export function forgetInstances(ctx: CheckerContext): void {
+	ctx.generatedInstances = [];
+	ctx.procInstCache = new HashMap<Symbol, Symbol[]>();
+	ctx.typeInstCache = new HashMap<Symbol, string[]>();
 }
 
 // ===== Helpers =====
 
-function cachedInstance(generic: Symbol, instanceName: string): Symbol | null {
-	for (const inst of generic.instances) {
+function cachedInstance(host: CheckerContext, generic: Symbol, instanceName: string): Symbol | null {
+	const instances = host.procInstCache.get(generic);
+	if (instances == null) return null;
+	for (const inst of instances) {
 		if (inst.name == instanceName) return inst;
 	}
 	return null;
+}
+
+function cacheInstance(host: CheckerContext, generic: Symbol, inst: Symbol): void {
+	let instances: Symbol[] = [];
+	const known = host.procInstCache.get(generic);
+	if (known != null) instances = known;
+	instances.push(inst);
+	host.procInstCache.set(generic, instances);
 }
 
 // Deduplicate unify bindings (K=string may appear twice from HashMap<K,V> + K params)
@@ -520,10 +536,6 @@ export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes:
 
 // ===== On-Demand Instantiation =====
 
-// PROFILE: instantiation counters for the -t summary. The cache in
-// instantiateGenericFunction is scoped to the CURRENT module's symbol table
-// (lookupSymbol(ctx.table, ...)), so a later module re-instantiates the same
-// (generic, typeArgs) pair from scratch. These counters expose that.
 let _igfCalls: int64 = 0;
 let _igfHits: int64 = 0;
 let _igfMisses: int64 = 0;
@@ -576,7 +588,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const mangledName = mangleMonoName(mangleBase, dedup.types) + readonlyViewSuffix(dedup.types);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const existing = cachedInstance(sym, mangledName);
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	const existing = cachedInstance(host, sym, mangledName);
 	if (existing != null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		_igfHits = _igfHits + 1;
@@ -622,14 +635,14 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
-	sym.instances.push(instSym);
+	instSym.instantiatedFrom = sym;
+	cacheInstance(host, sym, instSym);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
 	// (for private helpers like mapRawGet), but with concrete type symbols injected so
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
 	if (cd.fnBody != null) {
-		const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
 		const savedModulePath = bodyCtx.modulePath;
@@ -688,8 +701,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
-	// Push to global pending list — reliable regardless of context save/restore.
-	addPendingInstance(cloned);
+	addPendingInstance(host, cloned);
 
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	_igfTime = _igfTime + (performance.now() - _ig0);
@@ -714,14 +726,13 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
 	const mangledClass = mangleMonoName(monoBaseName(classSym.name, classSym.modulePath), dedup.types);
-	const ctorFnName = mangledClass + "_new";
-
-	// Cache check — already instantiated?
-	const existingSym = lookupSymbol(ctx.table, ctorFnName);
-	if (existingSym != null) return;
-	for (const existing of _pendingInstances) {
-		if (existing.kind == NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName == ctorFnName) return;
-		if (existing.kind == NodeKind.ClassDecl && (existing.data as ClassDeclData).className == mangledClass) return;
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	let instances: string[] = [];
+	const known = host.typeInstCache.get(classSym);
+	if (known != null) instances = known;
+	for (const name of instances) {
+		if (name == mangledClass) return;
 	}
 
 	// An imported class symbol carries the ImportDecl, not the ClassDecl — export
@@ -807,10 +818,11 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Fallback chain: registry → preludeCtx → caller's ctx. Reference parity: Nim's
 	// `graph.ifaces[module]` lookup. Inject concrete type symbols so user types in type
 	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
+	instances.push(mangledClass);
+	host.typeInstCache.set(classSym, instances);
 	if (clonedBody != null) {
-		const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 		const savedHost = bodyCtx.instantiatingCtx;
-		bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+		bodyCtx.instantiatingCtx = host;
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
@@ -854,7 +866,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = classSym;
-	addPendingInstance(classNode);
+	addPendingInstance(host, classNode);
 }
 
 // Register callback at module load time

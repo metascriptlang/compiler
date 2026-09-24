@@ -511,7 +511,7 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 		unitCtxs.push(ctx);
 	}
 
-	const pendingInsts = drainPendingInstances();
+	const pendingInsts = drainPendingInstances(unitCtxs);
 	for (const instNode of pendingInsts) {
 		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;

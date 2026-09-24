@@ -16,7 +16,7 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx, pendingInstanceMark, takePendingInstancesFrom, drainPendingInstances } from "./instantiate";
+import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
@@ -135,7 +135,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	if (session != null) {
 		session.db = db;
 		session.rechecked = new HashSet<string>();
-		const _stale = drainPendingInstances();
 		const preludeRows = takeGenericTypeInstsFrom(0);
 		if (kept == null) session.preludeTypeInstances = preludeRows;
 	}
@@ -157,13 +156,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedIncludes = baseCtx.includeDirectives;
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
-		const instanceMark = pendingInstanceMark();
 		const typeInstanceMark = genericTypeInstMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
-			session.instances.set(path, takePendingInstancesFrom(instanceMark));
+			session.instances.set(path, ctx.generatedInstances);
 			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
 			session.rechecked.add(path);
 		}

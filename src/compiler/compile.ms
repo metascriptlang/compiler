@@ -48,7 +48,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPrelud
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, pendingInstanceKeyOf } from "../checker/instantiate";
+import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
@@ -1228,29 +1228,23 @@ function unitProgramAt(paths: string[], programs: Node[], path: string): Node | 
 	return null;
 }
 
-function routeInstances(order: Node[], programOf: (path: string) => Node | null, entryPath: string, place: boolean): HashMap<string, Node[]> {
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean): HashMap<string, Node[]> {
 	const byHome = new HashMap<string, Node[]>();
-	const routed = new HashSet<string>();
-	for (const instNode of order) {
-		const key = pendingInstanceKeyOf(instNode);
-		if (key != "") {
-			if (routed.has(key)) continue;
-			routed.add(key);
-		}
+	for (const instNode of distinctInstances(order)) {
 		const sym = instNode.resolvedSym;
-		if (instNode.nodeType == null && sym != null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
-		const home = sym != null && sym.modulePath != "" ? sym.modulePath : entryPath;
-		const program = programOf(home);
-		if (program == null) throw new Error(`internal: generic instance '${sym != null ? sym.name : ""}' belongs to ${home}, which is not a module of this build`);
-		if (!byHome.has(home)) byHome.set(home, []);
-		byHome.get(home).push(instNode);
+		if (sym == null || sym.modulePath == "") throw new Error(`internal: a generic instance of this build has no owning module`);
+		if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
+		const program = programOf(sym.modulePath);
+		if (program == null) throw new Error(`internal: generic instance '${sym.name}' belongs to ${sym.modulePath}, which is not a module of this build`);
+		if (!byHome.has(sym.modulePath)) byHome.set(sym.modulePath, []);
+		byHome.get(sym.modulePath).push(instNode);
 		if (place) (program.data as ProgramData).programStmts.push(instNode);
 	}
 	return byHome;
 }
 
-function placePendingInstances(programOf: (path: string) => Node | null, entryPath: string): void {
-	const _placed = routeInstances(drainPendingInstances(), programOf, entryPath, true);
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[]): void {
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -1263,6 +1257,12 @@ function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, op
 	ctx.strictNullChecks = opts.strictNullChecks;
 	exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 	return { program, ctx };
+}
+
+function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[]): CheckerContext[] {
+	const ctxs: CheckerContext[] = [];
+	for (const m of mods) ctxs.push(m.ctx);
+	return ctxs;
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -1373,7 +1373,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), entryPath);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -2320,8 +2320,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		const created = session.check.instances.get(modPath);
 		if (created != null) for (const instNode of created) routeOrder.push(instNode);
 	}
-	for (const instNode of drainPendingInstances()) routeOrder.push(instNode);
-	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, entryPath, !session.keep);
+	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
@@ -2908,7 +2907,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Single drain after A1 — route each pending generic instance to its OWNER module's
 	// program so the generic body's module-private helpers are visible in the same TU.
 	// Owner-less nodes fall back to the entry program.
-	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, filePath);
+	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (const cm of checkedMods) {
@@ -3204,7 +3203,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// module that first asked for it — leaves the name pointing at one module
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), filePath);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -3463,7 +3462,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);
 	}
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), entryCanonical);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);

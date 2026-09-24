@@ -24,7 +24,7 @@ import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShape
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -35,7 +35,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, checkPropagatedErrorAgainst } from "./callResolve";
-import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym, beginGensymUnit } from "./template";
+import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
@@ -2882,13 +2882,10 @@ export function createGraphPreludeContext(): CheckerContext {
 
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	const imps = defaultGlobalImports();
-	const gensymMark = templateGensymMark();
-	const instanceMark = pendingInstanceMark();
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
-	rewindTemplateGensym(gensymMark);
-	discardPendingInstancesFrom(instanceMark);
+	forgetInstances(ctx);
 	return ctx;
 }
 
@@ -5076,14 +5073,34 @@ test "a method and a constructor carry their parameter symbols with the receiver
 	assert seen == 2;
 }
 
+function gensymLocals(node: Node | null, out: string[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const name = (node.data as VariableDeclData).declName;
+		if (name.indexOf("$t", 0) >= 0) out.push(name);
+	}
+	forEachChild(node, (child: Node): void => { gensymLocals(child, out); });
+}
+
+function templateLocalsOfOneCheck(): string {
+	const out: string[] = [];
+	for (const stmt of checkedStmts("template logDoubled(x: int32): void {\n\tconst t = x + x;\n\tconsole.log(t);\n}\nfunction f(): void {\n\tlogDoubled(1);\n\tlogDoubled(2);\n}\n")) gensymLocals(stmt, out);
+	return out.join(",");
+}
+
+test "a module numbers its template locals in its own context, whatever was checked before it" {
+	const first = templateLocalsOfOneCheck();
+	assert first != "";
+	checkedStmts("template logBumped(x: int32): void {\n\tconst u = x + 1;\n\tconsole.log(u);\n}\nlogBumped(3);\n");
+	assert templateLocalsOfOneCheck() == first;
+}
+
 test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
 	env.set("MSC_NO_PRELUDE_PACK", "1");
 	try {
-		const gensym = templateGensymMark();
-		const instances = pendingInstanceMark();
-		buildPreludeContext(join(resolveRuntimeDir(), "std"));
-		assert templateGensymMark() == gensym;
-		assert pendingInstanceMark() == instances;
+		const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"));
+		assert ctx.generatedInstances.length == 0;
+		assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
 	} finally {
 		env.delete("MSC_NO_PRELUDE_PACK");
 	}
@@ -5092,11 +5109,8 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
 	const pr = parseSource(src);
 	if (!pr.ok) return -1;
-	const mark = pendingInstanceMark();
 	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-	const n = hasErrors(ctx) ? -1 : pendingInstanceMark() - mark;
-	discardPendingInstancesFrom(mark);
-	return n;
+	return hasErrors(ctx) ? -1 : ctx.generatedInstances.length;
 }
 
 test "an instance requested from inside a prelude generic body stays with the requesting module, so a second check against the same prelude queues it again" {
