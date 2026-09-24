@@ -280,6 +280,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnFlags: fnFlagsFinal,
 		fnReturnType,
 		fnDefaults: isStatic ? stripFirstDefault(fnDefaults) : fnDefaults,
+		nativeName: "",
 		nameLocation: makeLocFromToken(nameToken),
 	}, fnToken);
 	fnNode.typeExpr = fnReturnTypeExpr;
