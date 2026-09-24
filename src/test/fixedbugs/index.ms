@@ -224,3 +224,4 @@ import "./bug207ReadonlyGenericBinding";
 import "./bug208StructIntoPtrVariable";
 import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
+import "./bug211SinkParamTakesUnknown";
