@@ -53,6 +53,11 @@ const OUT_DIR = "out/corpus/";
 // once per run — see ensureWintime.
 const IS_WIN = platform == "windows";
 
+// The peak-RSS reader is the second platform fork, and it splits three ways
+// rather than two: `/usr/bin/time` is BSD time on macOS and GNU time on Linux,
+// and they share neither a flag nor an output shape. See RSS_TIMER.
+const IS_MAC = platform == "darwin";
+
 // cmd.exe will not execute a command token written with forward slashes:
 // `out/corpus/bin/x.exe` fails with "'out' is not recognized" while
 // `out\corpus\bin\x.exe` runs. Redirect targets are less picky, but the whole
@@ -220,6 +225,30 @@ function shellOut(cmd: string): string {
 // behind each mode: src/test/corpus/wintime.c. Built once per run because it is
 // 150 lines of C and a stale copy would be worse than a rebuild.
 const WINTIME = OUT_DIR + "wintime.exe";
+
+// Peak RSS, per host:
+//   macOS   BSD time  `-l`, whole rusage block, "<bytes>  maximum resident set size"
+//   Linux   GNU time  `-f`, one line, KILOBYTES — `-l` is not a GNU flag at all
+//                     ("/usr/bin/time: invalid option -- 'l'"), so every RSS cell
+//                     died with exit=125 rss=-1 before this fork existed
+//   Windows wintime.exe, which prints the macOS line verbatim
+// The GNU format label is deliberately space-free: the whole cell command is one
+// string handed to `sh -c`, and a quoted format would need escaping at every
+// layer it passes through.
+const GNU_TIME_LABEL = "msMaxRssKb=";
+const RSS_TIMER = IS_MAC ? "/usr/bin/time -l " : "/usr/bin/time -f " + GNU_TIME_LABEL + "%M ";
+
+// GNU time ships in its own package on most distributions — `time` alone is a
+// shell keyword and measures nothing. Checked once, up front: without it every
+// @maxrss cell fails identically and the report describes the host, not the
+// compiler.
+function ensureRssTimer(): boolean {
+	if (IS_WIN || exists("/usr/bin/time")) { return true; }
+	progress("  !! /usr/bin/time not found — the RSS lane cannot measure peak memory.");
+	progress("     install it (Debian/Ubuntu: apt install time, Fedora: dnf install time),");
+	progress("     or run only the parity lane with MSCORPUS_FILTER=<substring>.");
+	return false;
+}
 
 function ensureWintime(): boolean {
 	if (!IS_WIN) { return true; }
@@ -395,10 +424,19 @@ function isXfail(c: Cell): boolean {
 	return false;
 }
 
-// parse peak RSS (MB) from `/usr/bin/time -l` output (macOS prints BYTES)
+// Peak RSS in MB, from whichever timer ran (RSS_TIMER). Two shapes, two units:
+//   GNU  "msMaxRssKb=12345"                          — number AFTER the label, KB
+//   BSD  "  12345678  maximum resident set size"     — number BEFORE the label, BYTES
+// -1.0 means "no RSS line found", which the caller reports as a failed cell
+// rather than a passing one — an unmeasured cell must never read as green.
 function parseRssMB(output: string): float64 {
 	const lines = output.split("\n");
 	for (const line of lines) {
+		const gnu = line.indexOf(GNU_TIME_LABEL);
+		if (gnu >= 0) {
+			const numStr = line.slice(gnu + GNU_TIME_LABEL.length, line.length).trim();
+			return (numStr.parseInt() as float64) / 1024.0;
+		}
 		if (line.contains("maximum resident set size")) {
 			const idx = line.indexOf("maximum");
 			const numStr = line.slice(0, idx).trim();
@@ -465,7 +503,7 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
-		const timer = IS_WIN ? q(WINTIME) + " " : "/usr/bin/time -l ";
+		const timer = IS_WIN ? q(WINTIME) + " " : RSS_TIMER;
 		return timer + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "time.log");
 	}
 	return bin + " > " + q(c.dir + "out.log") + " 2>&1";
@@ -518,7 +556,11 @@ function finishRssCell(c: Cell): void {
 	const rawExit = readExit(c);
 	const timeLog = readFileOr(c.dir + "time.log", "");
 	const stdoutLog = readFileOr(c.dir + "stdout.log", "");
-	const died = rawExit >= 128 || timeLog.contains("terminated abnormally");
+	// BSD time says "terminated abnormally", GNU time "terminated by signal N";
+	// the 128+N exit already catches both through the shell, and the text is the
+	// backstop for a timer that reports the signal without propagating it.
+	const died = rawExit >= 128 || timeLog.contains("terminated abnormally")
+		|| timeLog.contains("terminated by signal");
 	const signal = died ? rawExit - 128 : 0;
 	const exitCode = died ? 0 : rawExit;
 	const rssMB = parseRssMB(timeLog);
@@ -794,6 +836,7 @@ function main(): void {
 	// measure without this helper, and a half-working run would report reds
 	// that describe the harness rather than the compiler.
 	if (!ensureWintime()) { exit(1); }
+	if (!ensureRssTimer()) { exit(1); }
 
 	const specs = discoverSpecs();
 	const jobs = planJobs(specs);
