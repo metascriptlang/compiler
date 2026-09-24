@@ -1,13 +1,15 @@
 // bug234 — the destination type overrode what the arguments bound
 //
-// Symptom:    `const b: Box<int64> = one(1)` bound `T` to int64 from the declared type, and
-//             `Result<number, string> = ok(i32)` preferred the destination's supertype, so the
-//             literal and the variable argument saw a type no argument had given them.
+// Symptom:    `Result<number, string> = ok(i32)` and `Box<number> = one(i32)` bound `T` to the
+//             destination's supertype and handed the int32 to a number slot unconverted
+//             (`Box<number>` read 3.5e-323); a literal before a variable took the destination
+//             and then conflicted with the variable (`Math.max(1, power) as int64`).
 // Root cause: the context bound type parameters before the argument walk and, after it,
 //             replaced an argument binding with the destination's supertype.
-// Fix:        the arguments bind first and the context only fills a parameter they left
-//             unbound (reference inheritBindings); before the walk the context reaches only an
-//             argument with no type of its own (arrow, function expression, object or array literal).
+// Fix:        an argument with a type of its own binds first; an argument with none (number
+//             literal, arrow, function expression, object or array literal) is checked after them
+//             and takes the destination only for a parameter still unbound. Nothing re-types an
+//             argument that has its own type.
 
 import { compileToC } from "../helpers";
 
@@ -15,6 +17,7 @@ const header = `
 class Box<T> { v: T; constructor(v: T) { this.v = v; } }
 function one<T>(a: T): Box<T> { return new Box<T>(a); }
 function id<T>(x: T): T { return x; }
+function pick<T>(a: T, b: T): T { return a; }
 function make<T>(): T[] { return []; }
 const i: int32 = 3;
 `;
@@ -24,16 +27,32 @@ function errorOf(body: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug234: a literal argument binds T even under a wider destination" {
-	assert errorOf("const b: Box<int64> = one(1);").contains("is not assignable");
+test "bug234: a variable argument binds T even under a supertype destination" {
+	assert errorOf("const r: Box<number> = one(i);").contains("'Box<int32>' is not assignable to type 'Box<number>'");
 }
 
-test "bug234: a variable argument binds T even under a supertype destination" {
-	assert errorOf("const r: Box<number> = one(i);").contains("is not assignable");
+test "bug234: a literal argument takes a wider destination" {
+	assert errorOf("const b: Box<int64> = one(1);") == "";
+}
+
+test "bug234: a literal in Result.ok takes the declared return type" {
+	assert errorOf("function f(): Result<number, string> { return Result.ok(42); } const r = f();") == "";
+}
+
+test "bug234: a literal before a variable follows the variable" {
+	assert errorOf("const d = pick(1, i) as int64; const e: int64 = Math.max(1, i);") == "";
+}
+
+test "bug234: a literal that does not fit the destination is refused" {
+	assert errorOf("const b: Box<uint8> = one(300);").contains("cannot convert 300 to uint8");
+}
+
+test "bug234: a negative literal that does not fit the destination is refused" {
+	assert errorOf("const b: Box<uint64> = one(-1);").contains("cannot convert -1 to uint64");
 }
 
 test "bug234: an argument spelled in the destination type binds it" {
-	assert errorOf("const b: Box<int64> = one(1 as int64);") == "";
+	assert errorOf("const b: Box<number> = one(i as number);") == "";
 }
 
 test "bug234: the context fills a type parameter no argument binds" {
