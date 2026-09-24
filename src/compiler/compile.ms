@@ -255,7 +255,7 @@ function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
 		if (mod.errors.length > 0) {
 			for (const e of mod.errors) {
 				if (overErrorMax(rendered)) return;
-				renderModuleError(mod.path, mod.source, e);
+				renderModuleError(mod.path, mod.rawSource, e);
 				rendered = rendered + 1;
 			}
 		}
@@ -307,7 +307,7 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 			if (e.severity != ErrorSeverity.Error) continue;
 			hasErr = true;
 			if (overErrorMax(rendered)) continue;
-			renderModuleError(mod.path, mod.source, e);
+			renderModuleError(mod.path, mod.rawSource, e);
 			rendered = rendered + 1;
 		}
 	}
@@ -1146,7 +1146,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
@@ -1174,7 +1174,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 
 		const macroExpanded = expandMacros(program, ctx);
-		exitOnCheckerErrors(ctx, modPath, mod.source);
+		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 		unitPaths.push(modPath);
 		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
 		unitCtxs.push(ctx);
@@ -1210,7 +1210,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
-		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.source);
+		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
 		// Build per-module import specifier → module ID mapping
 		const localMapKeys: string[] = [];
@@ -1973,12 +1973,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
 			reusedCtx.strictDefs = opts.strictDefs;
 			reusedCtx.strictNullChecks = opts.strictNullChecks;
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.source);
+			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
 			if (hasErrors(reusedCtx)) {
 				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
 			}
 			reusedCtx.errors = [];
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.source });
+			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
 			programByPath.set(modPath, reusedProgram);
 			continue;
 		}
@@ -1990,7 +1990,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		tCheck = tCheck + (performance.now() - _tc0);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		// Errors and warnings were already rendered in the graph-checker phase
 		// (loadAndCheckGraph → reportModuleErrors). Re-checking here re-populates
 		// ctx.errors with the same diagnostics — only count them for the codegen
@@ -1999,7 +1999,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
 		}
 		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.source });
+		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
 		programByPath.set(modPath, program);
 	}
 
@@ -2604,9 +2604,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
 			reusedCtx.strictDefs = opts.strictDefs;
 			reusedCtx.strictNullChecks = opts.strictNullChecks;
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.source);
+			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
 			reusedCtx.errors = [];
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.source });
+			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
 			programByPath.set(modPath, reusedProgram);
 			continue;
 		}
@@ -2614,9 +2614,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
-		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.source });
+		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
 		programByPath.set(modPath, program);
 	}
 
@@ -2913,11 +2913,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		ctx.errors = [];
 
 		const macroExpanded = expandMacros(program, ctx);
-		exitOnCheckerErrors(ctx, modPath, mod.source);
+		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 
 		unitPaths.push(modPath);
 		unitPrograms.push(evaluateComptimeBlocks(macroExpanded));
@@ -2975,7 +2975,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const ctx = unitCtxs[ui];
 		const mod = findModule(graph, modPath);
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
-		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.source : "");
+		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
 		const fromRel = lookupOutRel(outRelKeys, outRelVals, modPath);
 		const importSpecKeys: string[] = [];
@@ -3200,7 +3200,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		if (opts.verbose) verboseLog("compiling " + modPath);
 		const program = parseOrExit(mod.source, modPath);
 		const modCtx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(modCtx, modPath, mod.source);
+		exitOnFatalCheckerErrors(modCtx, modPath, mod.rawSource);
 		modCtx.errors = [];
 
 
@@ -3231,7 +3231,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
 		const macroExpanded = expandMacros(monoed, modCtx);
 		const mod = findModule(graph, unitPaths[i]);
-		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.source);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
