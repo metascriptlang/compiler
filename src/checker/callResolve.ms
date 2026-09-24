@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1406,6 +1406,11 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 				d.arguments[pi] = adoptedArg;
 				argTypes[pi] = paramType;
 			}
+			const thunkArg = synthClosureThunk(d.arguments[pi], paramType, argTypes[pi]);
+			if (thunkArg != null as unknown as Node) {
+				d.arguments[pi] = thunkArg;
+				argTypes[pi] = paramType;
+			}
 			if (paramType.kind == TypeKind.CString
 					&& (argTypes[pi].kind == TypeKind.String || argTypes[pi].kind == TypeKind.StringLiteral)) {
 				d.arguments[pi] = synthCStringConv(d.arguments[pi], paramType);
@@ -2067,6 +2072,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		if (arg == null) continue;
 		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
 		if (substituted == null) continue;
+		if (arg.nodeType != null && !hasGenericParams(substituted)) {
+			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType);
+			if (thunkArg != null as unknown as Node) {
+				cd.arguments[pi] = thunkArg;
+				if (pi < argTypes.length) argTypes[pi] = substituted;
+				continue;
+			}
+		}
 		// An object-literal arg that self-typed under the generic-adoption gate
 		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
 		// now gets the instantiated formal: codegen must emit the same struct
