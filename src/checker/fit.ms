@@ -989,7 +989,15 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	if (exprType.kind == TypeKind.Union) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
-	return projectTagUnionMember(expr, declared, exprType);
+	const projected = projectTagUnionMember(expr, declared, exprType);
+	if (projected != null as unknown as Node) typeStorageLeafAs(expr, declared);
+	return projected;
+}
+
+function typeStorageLeafAs(expr: Node, storage: Type): void {
+	let leaf: Node = expr;
+	while (leaf != null && leaf.kind == NodeKind.TypeAssertion) leaf = (leaf.data as TypeAssertionData).asExpr;
+	if (leaf != null && leaf.kind == NodeKind.Identifier) leaf.nodeType = storage;
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
