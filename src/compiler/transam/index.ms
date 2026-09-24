@@ -676,6 +676,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	db.contexts.set(checkCtxKey(fileId), checkerCtx);
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
+	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
