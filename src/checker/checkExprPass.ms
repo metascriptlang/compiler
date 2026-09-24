@@ -1875,6 +1875,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
 				if (varIdx >= 0 && varIdx < srcType.typeChildren.length) {
 					node.nodeType = srcType.typeChildren[varIdx];
+					if (isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[varIdx]), asType: d.asType };
 				} else {
 					node.nodeType = targetType;
 				}
@@ -1883,6 +1884,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const refTarget = targetType.typeReturn;
 				const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
 				node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
+				if (refIdx >= 0 && isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[refIdx]), asType: d.asType };
 			} else {
 				node.nodeType = targetType;
 			}
