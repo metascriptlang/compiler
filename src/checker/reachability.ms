@@ -9,7 +9,15 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
-import { AliveSet, createAliveSet, aliveSetAdd, aliveSetAddModule, aliveSetHas, aliveSetHasModule } from "../codegen/c/context";
+import {
+	AliveSet,
+	createAliveSet,
+	aliveSetAdd,
+	aliveSetAddModule,
+	aliveSetHas,
+	aliveSetHasModule,
+	aliveSetModuleCount,
+} from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
@@ -467,6 +475,31 @@ function markReexportConduitsAlive(graph: ModuleGraph): void {
 	}
 }
 
+function markSideEffectImportsAlive(graph: ModuleGraph): void {
+	const pending: string[] = [];
+	for (const mod of graph.modules) {
+		if (aliveSetHasModule(_aliveSet, mod.path)) pending.push(mod.path);
+	}
+	while (pending.length > 0) {
+		const mod = findModule(graph, pending.pop());
+		if (mod == null) continue;
+		for (const imp of mod.imports) {
+			if (imp.names.length > 0 || aliveSetHasModule(_aliveSet, imp.sourcePath)) continue;
+			aliveSetAddModule(_aliveSet, imp.sourcePath);
+			pending.push(imp.sourcePath);
+		}
+	}
+}
+
+function markImportedModulesAlive(graph: ModuleGraph): void {
+	let known: int32 = -1;
+	while (aliveSetModuleCount(_aliveSet) != known) {
+		known = aliveSetModuleCount(_aliveSet);
+		markSideEffectImportsAlive(graph);
+		markReexportConduitsAlive(graph);
+	}
+}
+
 // ===== Public API =====
 
 export function computeAliveSet(
@@ -585,7 +618,7 @@ export function computeAliveSet(
 		}
 	}
 
-	markReexportConduitsAlive(graph);
+	markImportedModulesAlive(graph);
 
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
@@ -744,7 +777,7 @@ test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
 }
 
-function conduitGraph(edges: string[][]): ModuleGraph {
+function importGraph(edges: string[][]): ModuleGraph {
 	const graph = createModuleGraph();
 	for (const e of edges) {
 		let mod = findModule(graph, e[0]);
@@ -752,60 +785,99 @@ function conduitGraph(edges: string[][]): ModuleGraph {
 			mod = createModule(e[0]);
 			addModule(graph, mod);
 		}
+		if (e.length == 2) mod.imports.push(createImportEntry([], [], e[1], e[1]));
 		if (e.length == 4) mod.imports.push(createImportEntry([e[1]], [e[2]], e[3], e[3]));
 	}
 	return graph;
 }
 
-function conduitAlive(graph: ModuleGraph, conduit: string): boolean {
+function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
 	_aliveSet = createAliveSet();
 	aliveSetAdd(_aliveSet, "/main.ms", "main");
 	aliveSetAdd(_aliveSet, "/impl.ms", "add");
-	markReexportConduitsAlive(graph);
-	const alive = aliveSetHasModule(_aliveSet, conduit);
+	markImportedModulesAlive(graph);
+	const alive = aliveSetHasModule(_aliveSet, modulePath);
 	_aliveSet = createAliveSet();
 	return alive;
 }
 
 test "named re-export on the path to an alive symbol keeps its module alive" {
-	const graph = conduitGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/hub.ms");
+	const graph = importGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert moduleAlive(graph, "/hub.ms");
 }
 
 test "aliased re-export resolves the source name" {
-	const graph = conduitGraph([["/main.ms", "plus", "plus", "/hub.ms"], ["/hub.ms", "add", "plus", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/hub.ms");
+	const graph = importGraph([["/main.ms", "plus", "plus", "/hub.ms"], ["/hub.ms", "add", "plus", "/impl.ms"], ["/impl.ms"]]);
+	assert moduleAlive(graph, "/hub.ms");
 }
 
 test "star re-export on the path to an alive symbol keeps its module alive" {
-	const graph = conduitGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/hub.ms");
+	const graph = importGraph([["/main.ms", "add", "add", "/hub.ms"], ["/hub.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
+	assert moduleAlive(graph, "/hub.ms");
 }
 
 test "every module of a re-export chain stays alive" {
-	const graph = conduitGraph([["/main.ms", "add", "add", "/outer.ms"], ["/outer.ms", "add", "add", "/inner.ms"], ["/inner.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/outer.ms");
-	assert conduitAlive(graph, "/inner.ms");
+	const graph = importGraph([["/main.ms", "add", "add", "/outer.ms"], ["/outer.ms", "add", "add", "/inner.ms"], ["/inner.ms", "*", "*", "/impl.ms"], ["/impl.ms"]]);
+	assert moduleAlive(graph, "/outer.ms");
+	assert moduleAlive(graph, "/inner.ms");
 }
 
 test "two hubs sharing one inner hub both stay alive" {
-	const graph = conduitGraph([["/main.ms", "add", "add", "/hubA.ms"], ["/main.ms", "add", "add2", "/hubB.ms"],
+	const graph = importGraph([["/main.ms", "add", "add", "/hubA.ms"], ["/main.ms", "add", "add2", "/hubB.ms"],
 		["/hubA.ms", "add", "add", "/inner.ms"], ["/hubB.ms", "add", "add", "/inner.ms"], ["/inner.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/hubA.ms");
-	assert conduitAlive(graph, "/hubB.ms");
+	assert moduleAlive(graph, "/hubA.ms");
+	assert moduleAlive(graph, "/hubB.ms");
 }
 
 test "namespace import of a re-export module keeps it alive" {
-	const graph = conduitGraph([["/main.ms", "*", "lib", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
-	assert conduitAlive(graph, "/hub.ms");
+	const graph = importGraph([["/main.ms", "*", "lib", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert moduleAlive(graph, "/hub.ms");
 }
 
 test "module imported for a dead name stays dead" {
-	const graph = conduitGraph([["/main.ms", "unused", "unused", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
-	assert !conduitAlive(graph, "/hub.ms");
+	const graph = importGraph([["/main.ms", "unused", "unused", "/hub.ms"], ["/hub.ms", "add", "add", "/impl.ms"], ["/impl.ms"]]);
+	assert !moduleAlive(graph, "/hub.ms");
 }
 
 test "re-export cycle terminates" {
-	const graph = conduitGraph([["/main.ms", "ghost", "ghost", "/a.ms"], ["/a.ms", "*", "*", "/b.ms"], ["/b.ms", "*", "*", "/a.ms"]]);
-	assert !conduitAlive(graph, "/a.ms");
+	const graph = importGraph([["/main.ms", "ghost", "ghost", "/a.ms"], ["/a.ms", "*", "*", "/b.ms"], ["/b.ms", "*", "*", "/a.ms"]]);
+	assert !moduleAlive(graph, "/a.ms");
+}
+
+test "side-effect import from a live module keeps its target alive" {
+	const graph = importGraph([["/main.ms", "/side.ms"], ["/side.ms"]]);
+	assert moduleAlive(graph, "/side.ms");
+}
+
+test "side-effect imports keep every module of their chain alive" {
+	const graph = importGraph([["/main.ms", "/mid.ms"], ["/mid.ms", "/side.ms"], ["/side.ms"]]);
+	assert moduleAlive(graph, "/mid.ms");
+	assert moduleAlive(graph, "/side.ms");
+}
+
+test "side-effect import from a dead module keeps nothing" {
+	const graph = importGraph([
+		["/main.ms", "unused", "unused", "/dead.ms"],
+		["/dead.ms", "/side.ms"],
+		["/side.ms"],
+	]);
+	assert !moduleAlive(graph, "/dead.ms");
+	assert !moduleAlive(graph, "/side.ms");
+}
+
+test "side-effect import of a re-export hub keeps its target alive" {
+	const graph = importGraph([
+		["/main.ms", "add", "add", "/hub.ms"],
+		["/hub.ms", "add", "add", "/impl.ms"],
+		["/hub.ms", "/native.ms"],
+		["/native.ms"],
+		["/impl.ms"],
+	]);
+	assert moduleAlive(graph, "/native.ms");
+}
+
+test "side-effect import cycle terminates" {
+	const graph = importGraph([["/main.ms", "/a.ms"], ["/a.ms", "/b.ms"], ["/b.ms", "/a.ms"]]);
+	assert moduleAlive(graph, "/a.ms");
+	assert moduleAlive(graph, "/b.ms");
 }

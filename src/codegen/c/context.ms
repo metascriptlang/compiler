@@ -581,11 +581,13 @@ export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, na
 	return aliveSet._set.has(key);
 }
 
-// Check if any alive symbol belongs to a given module.
-// Used for module-level DCE: skip entire modules with zero reachable symbols.
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
 	if (aliveSet.entries.length == 0) return true;  // DCE disabled
 	return aliveSet._modules.has(modulePath);
+}
+
+export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
+	return aliveSet._modules.size;
 }
 
 export class CEmissionFacts {
