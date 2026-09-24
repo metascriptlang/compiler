@@ -8,7 +8,7 @@ import { mangleMonoName } from "../monomorphize/registry";
 import { findCallTypeArg, getGenericDecl } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
+import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -2545,6 +2545,27 @@ function isNeverCallable(t: Type): boolean {
 	};
 }
 
+// Declared types, not `candidates`: those have the receiver stripped, and the receiver is what differs.
+function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
+	let winner = -1;
+	for (let i = 0; i < exts.length; i += 1) {
+		let beatsAll = true;
+		for (let j = 0; j < exts.length; j += 1) {
+			if (i == j) continue;
+			const a = getExtFnType(exts[i]);
+			const b = getExtFnType(exts[j]);
+			let s = checkGenericSpecialization(a, b);
+			if (s == 0) s = complexDisambiguation(a, b);
+			if (s <= 0) { beatsAll = false; break; }
+		}
+		if (beatsAll) {
+			if (winner >= 0) return -1;
+			winner = i;
+		}
+	}
+	return winner;
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
@@ -2636,8 +2657,11 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 				}
 				ti = ti + 1;
 			}
+			const specificIdx = concreteCount == 0 ? mostSpecificGenericExt(exts) : -1;
 			if (concreteCount == 1) {
 				idx = concreteIdx;
+			} else if (specificIdx >= 0) {
+				idx = specificIdx;
 			} else {
 				addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
 				return getReturnType(candidates[0]);
@@ -2673,6 +2697,19 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
 	if (winnerType.kind == TypeKind.Function) relateCallArgs(ctx, callNode, winnerType, argTypes, false);
+	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
+			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
+			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
+		const recvBindings = createUnifyBindings();
+		unifyType(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		if (recvBindings.names.length > 0 && bindingsCoverDecl(recvBindings, extWinnerSym.declNode)) {
+			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
+			if (instSym != null) {
+				callNode.resolvedSym = instSym;
+				(callNode.data as CallExprData).callee.resolvedSym = instSym;
+			}
+		}
+	}
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
