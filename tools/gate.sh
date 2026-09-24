@@ -36,6 +36,7 @@ after another, and compare every red against src/test/known-red.json.
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
+  --self-test    check the routing table and the red parsers against fixed cases
 
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor.
@@ -99,7 +100,7 @@ reds_of() {
   local lane=$1 log=$2 rc=$3
   case "$lane" in
     build) [ "$rc" -eq 0 ] || echo "build" ;;
-    tools) sed -n 's/^FAIL \(.*\): bash -n$/\1/p' "$log" ;;
+    tools) sed -n 's/^FAIL \(.*\): \(bash -n\|self-test\|check\)$/\1/p' "$log" ;;
     suite|suite-orc|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
         /^NORESULT / { sub(/^NORESULT /,""); print; next }
@@ -127,6 +128,76 @@ route_paths() {
     }'
 }
 
+self_test() {
+  local bad=0 cases got want log
+  cases=$(cat <<'CASES'
+src/checker/checkPass.ms|build corpus suite tests
+src/parser/parser.ms|build corpus fmt suite tests
+src/lexer/lexer.ms|build corpus fmt suite tests
+std/meta/node.ms|build corpus fmt suite tests
+std/fs/index.ms|build corpus suite tests
+vendor/miniz/miniz.c|build corpus suite tests
+src/module/loader.ms|build corpus suite tests
+src/monomorphize/index.ms|build corpus suite tests
+src/utils/path.ms|build corpus suite tests
+src/index.ms|build corpus suite tests
+src/analyzer/inject.ms|build corpus guard san suite tests
+runtime/drc.h|build corpus guard san suite tests
+runtime/hcr.c|build corpus hcr suite tests
+src/codegen/c/expressions.ms|build corpus suite tests
+src/transform/lowering/deferLower.ms|build corpus guard san suite tests
+src/compiler/cc.ms|build corpus suite tests
+src/compiler/compile.ms|build corpus hcr suite tests
+src/compiler/meta/comptime.ms|build corpus suite tests
+src/compiler/lsp/server.ms|build suite
+src/compiler/transam/query.ms|build suite
+src/compiler/package/install.ms|build suite
+src/compiler/fmt/printer.ms|build fmt suite
+src/test/c/json.ms|build suite tests
+src/test/helpers.ms|build suite tests
+src/test/fmt/run.ms|build fmt suite tests
+src/test/corpus/programs/804-enumNegativeValue.ms|build corpus suite
+src/test/guard/run.ms|build guard suite
+src/test/hcr/run.ms|build hcr suite
+src/test/native/programs/x.ms|build suite
+examples/hcrProbe/main.ms|build hcr suite
+tools/gate.sh|tools
+tools/syncLocalBinary.ms|tools
+docs/TESTING.md|
+src/test/known-red.json|
+CASES
+)
+  got=$(printf '%s\n' "$cases" | cut -d'|' -f1 | route_paths | sort -u \
+    | awk -F'\t' '{ a[$2] = ($2 in a) ? a[$2] " " $1 : $1 } END { for (p in a) print p "|" a[p] }')
+  GOT=$got awk -F'|' '
+    BEGIN { n = split(ENVIRON["GOT"], g, "\n"); for (i = 1; i <= n; i++) { k = index(g[i], "|"); m[substr(g[i], 1, k - 1)] = substr(g[i], k + 1) } }
+    m[$1] != $2 { printf "FAIL route %s: want \"%s\", got \"%s\"\n", $1, $2, m[$1]; bad = 1 }
+    END { exit bad }' <<<"$cases" || bad=1
+  INERT_RE=$INERT BLIND_RE=$SELECT_BLIND awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["BLIND_RE"]) ? "blind" : "" }
+    got != $2 { printf "FAIL narrowing %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/checker/checkPass.ms|
+src/codegen/c/expressions.ms|
+src/compiler/cc.ms|blind
+src/compiler/compile.ms|blind
+src/compiler/toolchain.ms|blind
+std/fs/index.ms|blind
+runtime/drc.h|blind
+src/test/corpus/run.ms|blind
+src/test/corpus/programs/804-enumNegativeValue.ms|
+CASES
+  log=$(mktemp) || return 1
+  printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
+    "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
+  got=$(reds_of tests "$log" 1 | paste -sd'|' -)
+  want="src/test/c/json.ms > parses numbers|src/test/fixedbugs/index.ms > no result"
+  [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  rm -f "$log"
+  [ "$bad" -ne 0 ] || say "gate: self-test ok"
+  return $bad
+}
+
 base=main release=0 dry=0 record=0 reuse=0 lanes_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -140,6 +211,7 @@ while [ $# -gt 0 ]; do
     --emit-one) emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0 ;;
     --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
     --route) route_paths; exit 0 ;;
+    --self-test) self_test; exit $? ;;
     -h|--help|help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -252,7 +324,14 @@ lane_cmd() {
 run_tools_lane() {
   local p rc=0
   while IFS=$'\t' read -r _ p; do
-    case "$p" in *.sh) [ -f "$p" ] && { bash -n "$p" || { printf 'FAIL %s: bash -n\n' "$p"; rc=1; }; } ;; esac
+    [ -f "$p" ] || continue
+    case "$p" in
+      *.sh)
+        if ! bash -n "$p"; then printf 'FAIL %s: bash -n\n' "$p"; rc=1
+        elif [ "$p" = tools/gate.sh ] && ! bash "$p" --self-test; then printf 'FAIL %s: self-test\n' "$p"; rc=1
+        fi ;;
+      *.ms) "$BUILDER" check "$p" || { printf 'FAIL %s: check\n' "$p"; rc=1; } ;;
+    esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
   return $rc
 }
