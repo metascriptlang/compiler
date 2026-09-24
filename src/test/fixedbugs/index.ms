@@ -360,3 +360,4 @@ import "./bug598TupleIndexConstant";
 import "./bug599UnknownHoldsObjectsOnly";
 import "./bug600UnknownIsManagedTop";
 import "./bug601ObjectDownConversion";
+import "./bug232MatchAsMatchArmValue";
