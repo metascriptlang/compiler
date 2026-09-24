@@ -10,9 +10,6 @@ graphify-out/
 .zig-cache/
 zig-out/
 
-src/**/*.c
-!src/raiser/dispatch.c
-!src/test/corpus/programs/**/*.c
 std/**/*.c
 
 /a.o

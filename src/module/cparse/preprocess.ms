@@ -937,7 +937,7 @@ function detectIncludeGuard(tokens: CToken): string {
 	return guard;
 }
 
-function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir: string = ""): CToken {
+function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir: string, at: CToken): CToken {
 	// #pragma once check
 	if (ctx.pragmaOnce.has(filename)) return tok;
 
@@ -951,7 +951,7 @@ function includeFile(filename: string, tok: CToken, ctx: PPContext, includerDir:
 	}
 	if (resolved == "") resolved = searchIncludePaths(filename, ctx);
 	if (resolved == "") {
-		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col,
+		ctx.diags.push(makeDiag(DiagSeverity.Error, at.file, at.line, at.col,
 			`'${filename}' file not found`));
 		return tok;
 	}
@@ -1018,7 +1018,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 			const rest = skipLine(dir.next);
 			if (filename != "") {
 				const includerDir = dir.next.kind == CTokenKind.Str ? dirname(dir.file) : "";
-				const included = includeFile(filename, rest, ctx, includerDir);
+				const included = includeFile(filename, rest, ctx, includerDir, dir);
 				tok = included;
 			} else {
 				ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, "expected filename"));
@@ -1418,4 +1418,11 @@ test "preprocess include guard pattern" {
 	}
 	assert foundFirst == true;
 	assert foundSecond == false;
+}
+
+test "preprocess missing include is reported on its own line" {
+	const r0 = tokenizeFile("int a;\n#include <cparseNoSuchHeader.h>\nint b;", "test.h");
+	const r = preprocess(r0.head, targetLinuxX86_64(), []);
+	assert r.diagnostics.length == 1;
+	assert r.diagnostics[0].line == 2;
 }

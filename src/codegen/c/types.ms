@@ -745,6 +745,7 @@ export function getTypeForward(g: CGen, t: Type | null): string {
 	const key = typeKey(t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached != "") return cached;
+	if (t.kind == TypeKind.Struct && isImportedType(t)) return genObjectType(g, t);
 	// For Object/Enum — forward-declare only
 	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Enum) {
 		const name = (t.kind == TypeKind.Struct)
@@ -1161,8 +1162,8 @@ function genObjectType(g: CGen, t: Type): string {
 
 	if (isImportedType(t)) {
 		useImportedTypeHeader(g, t);
-		typeCacheSet(g.typeCache, key, t.typeName);
-		return t.typeName;
+		typeCacheSet(g.typeCache, key, name);
+		return name;
 	}
 
 	// Always value type — Ref<Object> adds the * via TypeKind.Ref path

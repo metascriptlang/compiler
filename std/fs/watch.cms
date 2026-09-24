@@ -1,0 +1,74 @@
+@include("runtime/io/engine.h");
+@compile("runtime/io/engineSelect.c");
+
+import { IoError, IoErrorKind, ioError, notFound, permissionDenied, notDirectory } from "../io/errors";
+
+extern function msFsWatchOpen_ms(path: string): int32;
+extern function msFsWatchLastError(): int32;
+extern function msIoWatchNext_ms(handle: int32, recursive: int32): Promise<string>;
+extern function msFsWatchClose(handle: int32): void;
+export extern function msIoRunOnce(timeoutMs: int32): int32;
+
+const UNSUPPORTED = -2;
+
+export class FsWatch {
+	root: string;
+	recursive: boolean;
+	handle: int32;
+	open: boolean;
+	armed: Promise<string>;
+
+	constructor(root: string, recursive: boolean, handle: int32) {
+		this.root = root;
+		this.recursive = recursive;
+		this.handle = handle;
+		this.open = true;
+		this.armed = msIoWatchNext_ms(handle, recursive ? 1 : 0);
+	}
+}
+
+export struct FsChanges {
+	paths: string[];
+	rescan: boolean;
+	ended: boolean;
+}
+
+function openFailure(path: string, code: int32): IoError {
+	return match (code) {
+		2 | 3 => notFound(path),
+		5 => permissionDenied(path),
+		267 => notDirectory(path),
+		_ => ioError(IoErrorKind.Unknown, path, `cannot watch ${path} (error ${code})`),
+	};
+}
+
+export function watch(path: string, recursive: boolean = true): Result<FsWatch, IoError> {
+	const handle = msFsWatchOpen_ms(path);
+	if (handle == UNSUPPORTED) {
+		return Result.err(ioError(IoErrorKind.Unknown, path, "file watching has no backend for this platform yet"));
+	}
+	if (handle < 0) return Result.err(openFailure(path, msFsWatchLastError()));
+	return Result.ok(new FsWatch(path, recursive, handle));
+}
+
+export async function nextChanges(w: FsWatch): Promise<FsChanges> {
+	if (!w.open) return { paths: [], rescan: false, ended: true };
+	const raw = await w.armed;
+	if (raw == "") {
+		w.open = false;
+		return { paths: [], rescan: false, ended: true };
+	}
+	if (w.open) w.armed = msIoWatchNext_ms(w.handle, w.recursive ? 1 : 0);
+	if (raw == "*") return { paths: [], rescan: true, ended: false };
+	const paths: string[] = [];
+	for (const path of raw.split("\n")) {
+		if (!paths.includes(path)) paths.push(path);
+	}
+	return { paths, rescan: false, ended: false };
+}
+
+export function closeWatch(w: FsWatch): void {
+	if (!w.open) return;
+	w.open = false;
+	msFsWatchClose(w.handle);
+}

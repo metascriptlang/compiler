@@ -27,6 +27,7 @@ typedef enum {
 	MS_IO_RECV    = 1,
 	MS_IO_SEND    = 2,
 	MS_IO_CLOSE   = 3,
+	MS_IO_WATCH   = 4,
 } msIoOp;
 
 /* ===== I/O Request (SQE equivalent) ===== */
@@ -67,6 +68,26 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len);
 
 /* Send with msString lifetime management (incref on submit, decref on complete) */
 void* msIoSendString(msIoEngine* e, int fd, msString data);
+
+#define MS_FS_WATCH_UNSUPPORTED (-2)
+
+#ifdef _WIN32
+int32_t msFsWatchOpen(msIoEngine* e, msString path);
+int32_t msFsWatchLastError(void);
+void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive);
+void msFsWatchClose(int32_t handle);
+#else
+#include <stdio.h>
+#include <stdlib.h>
+static inline int32_t msFsWatchOpen(msIoEngine* e, msString path) { (void)e; (void)path; return MS_FS_WATCH_UNSUPPORTED; }
+static inline int32_t msFsWatchLastError(void) { return 0; }
+static inline void msFsWatchUnsupported(void) {
+	fprintf(stderr, "std/fs/watch: file watching has no backend for this platform yet\n");
+	abort();
+}
+static inline void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) { (void)e; (void)handle; (void)recursive; msFsWatchUnsupported(); return NULL; }
+static inline void msFsWatchClose(int32_t handle) { (void)handle; msFsWatchUnsupported(); }
+#endif
 
 /* ===== Event Loop Integration ===== */
 
@@ -128,6 +149,14 @@ static inline void* msIoRecv_ms(int32_t fd, int32_t maxBytes) {
 
 static inline void* msIoSend_ms(int32_t fd, msString data) {
 	return msIoSendString(msGetIoEngine(), fd, data);
+}
+
+static inline int32_t msFsWatchOpen_ms(msString path) {
+	return msFsWatchOpen(msGetIoEngine(), path);
+}
+
+static inline void* msIoWatchNext_ms(int32_t handle, int32_t recursive) {
+	return msIoWatchNext(msGetIoEngine(), handle, recursive);
 }
 
 /* Poll engine + dispatcher together (for async server event loops) */

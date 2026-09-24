@@ -53,7 +53,7 @@ import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -63,6 +63,8 @@ import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
 import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { resolveRuntimeDir } from "../../utils/path";
+import { errorCount as checkErrorCount } from "../../checker/context";
 
 // ===== Stdlib Detection =====
 
@@ -98,8 +100,7 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 	if (source.length == 0) return;
 	const pr = parseSourceLenient(source);
 	if (!pr.ok) return;
-	const tmpCtx = createTempCollectContext();
-	tmpCtx.modulePath = filePath;
+	const tmpCtx = createTempCollectContext(filePath);
 	collectTopLevelLocal(tmpCtx, pr.value);
 	resolveDeclarations(tmpCtx, pr.value);
 	const exports = collectExports(tmpCtx, filePath);
@@ -430,7 +431,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
-		const tmpCtx = createTempCollectContext();
+		const tmpCtx = createTempCollectContext(depPath);
 		tmpCtx.exportRegistry = db.exportRegistry;
 		const depMod = createModule(depPath);
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
@@ -445,8 +446,9 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
-function createTempCollectContext(): CheckerContext {
+function createTempCollectContext(modulePath: string): CheckerContext {
 	const ctx = createContext();
+	ctx.modulePath = modulePath;
 	openScope(ctx.table, ScopeKind.Module);
 	return ctx;
 }
@@ -457,7 +459,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
 	if (program == null) return;
-	const tmpCtx = createTempCollectContext();
+	const tmpCtx = createTempCollectContext(filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
 	depMod.imports = buildImportEntries(db, filePath, program);
@@ -615,6 +617,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	}
 
 	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
+	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
@@ -1110,4 +1113,34 @@ test "module exports keep a decorated exported class" {
 	dbEnsureModuleExports(db, "decmod.ms");
 	const info = findExportedSymbol(db.exportRegistry, "decmod.ms", "Widget");
 	assert info != null;
+}
+
+test "a dependency's exported type keeps its declaring module" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/box.ms", "export class Box { v: int32 = 1; }\nexport struct Pair { a: int32; b: int32; }");
+	dbSetFileText(db, "/test/use.ms", 'import { Box, Pair } from "./box";\nexport function f(b: Box, p: Pair): int32 { return b.v + p.a; }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/test/use.ms"), getFileId(db.fileInput, "/test/box.ms"));
+	const visited: HashSet<string> = new HashSet<string>();
+	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
+	for (const name of ["Box", "Pair"]) {
+		const info = findExportedSymbol(db.exportRegistry, "/test/box.ms", name);
+		assert info != null;
+		assert info.sym.modulePath == "/test/box.ms";
+		const t = info.sym.symbolType;
+		const inner = t.typeReturn != null ? t.typeReturn : t;
+		assert inner.sym != null;
+		assert inner.sym.modulePath == "/test/box.ms";
+	}
+}
+
+test "an importer resolves members through a dependency's checked exports" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/test/holder.ms", "export interface Holder { items: Map<int32, string>; }\nexport function makeHolder(): Holder { return { items: new Map<int32, string>() }; }\nexport class Tags { names: Map<string, int32> = new Map<string, int32>(); }");
+	dbSetFileText(db, "/test/reader.ms", 'import { Holder, makeHolder, Tags } from "./holder";\nexport function count(): int32 { const h: Holder = makeHolder(); let n = 0; for (const v of h.items.values()) n += v.length; return n; }\nexport function tagged(t: Tags): boolean { return t.names.has("x"); }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/test/reader.ms"), getFileId(db.fileInput, "/test/holder.ms"));
+	dbTypeCheck(db, "/test/holder.ms");
+	const ctx = dbTypeCheck(db, "/test/reader.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
 }

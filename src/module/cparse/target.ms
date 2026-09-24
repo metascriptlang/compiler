@@ -150,7 +150,7 @@ export function predefinedMacros(t: TargetInfo): MacroDef[] {
 		},
 		TargetTriple.LinuxAarch64 => {
 			result.push(m("__linux__", "1")); result.push(m("__unix__", "1"));
-			result.push(m("__aarch64__", "1")); result.push(m("__LP64__", "1"));
+			result.push(m("__aarch64__", "1")); result.push(m("__LP64__", "1")); result.push(m("__CHAR_UNSIGNED__", "1"));
 			result.push(m("__GNUC__", "4")); result.push(m("__GNUC_MINOR__", "2"));
 		},
 		TargetTriple.MacosX86_64 => {

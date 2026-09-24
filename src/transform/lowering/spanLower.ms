@@ -12,6 +12,7 @@
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr, peelToStructOrUnion } from "../../checker/types";
+import { promotesToNullablePtr, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -74,6 +75,11 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 				const loc = node.location;
 				const addr = makeHiddenAddr(d.convExpr, loc);
 				addr.nodeType = targetType;
+				return addr;
+			}
+			if (promotesToNullablePtr(d.convExpr.nodeType, targetType)) {
+				const addr = makeHiddenAddr(d.convExpr, node.location);
+				addr.nodeType = nonNullMemberOfNullable(targetType);
 				return addr;
 			}
 		}

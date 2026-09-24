@@ -436,8 +436,37 @@ function windowsReload(): void {
 	console.log("ok   hcrWindowsReload");
 }
 
+function fsWatch(): void {
+	const tag = "hcrFsWatch";
+	const dir = freshDir(`${TMP}/fsWatch`);
+	copy(`${FIXTURES}/watch/watch.ms`, `${dir}/watch.ms`);
+	const exe = platform == "windows" ? "watch.exe" : "watch";
+	mustBuild(tag, dir, ["build", "watch.ms", `--output=${exe}`], "the watch fixture did not build");
+	const ran = execFileResult(`${dir}/${exe}`, [], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("WATCH ")) seen.push(line);
+	}
+	const want = platform == "windows" ? [
+		"WATCH missing: no such file or directory: missing",
+		"WATCH write before the first wait: true",
+		"WATCH write in a subdirectory: true",
+		"WATCH after close: ended true",
+		"WATCH closed while waiting: ended true",
+	] : [
+		"WATCH missing: file watching has no backend for this platform yet",
+		"WATCH open: file watching has no backend for this platform yet",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "std/fs/watch did not report the expected changes");
+	}
+	console.log("ok   hcrFsWatch");
+}
+
 console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
+fsWatch();
 moduleAbi();
 coreLinkClang();
 indirect();

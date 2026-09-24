@@ -3442,6 +3442,8 @@ function typeDisplayNameInner(t: Type | null): string {
 		return t.typeName + "<" + argsText + ">";
 	}
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an
@@ -3464,6 +3466,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		if (refElem != null) return typeDisplayName(refElem) + "[]";
 	}
 	if (name != "") return name;
+	if (t.kind == TypeKind.Ptr && t.typeReturn != null) return "Ptr<" + typeDisplayName(t.typeReturn) + ">";
 	return match (t.kind) {
 		TypeKind.Null => "null",
 		TypeKind.Void => "void",
