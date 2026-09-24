@@ -2515,6 +2515,16 @@ export function skipModifier(t: Type | null): Type | null {
 	return cur;
 }
 
+export function unwrapPointerLikeForVariant(t: Type | null): Type | null {
+	if (t == null) return null;
+	const k = t.kind;
+	if ((k == TypeKind.Ptr || k == TypeKind.Ref
+		|| k == TypeKind.Sink || k == TypeKind.Lent) && t.typeReturn != null) {
+		return t.typeReturn;
+	}
+	return t;
+}
+
 // ===== Generic Instantiation =====
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
