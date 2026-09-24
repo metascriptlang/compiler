@@ -1976,7 +1976,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
 			let isClassObj = false;
-			let refVariant: Type | null = null;
 			let unionWrapName = "";
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
@@ -2115,11 +2114,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					}
 					if (unionWrapIdx >= 0 && litType.kind == TypeKind.Union) {
 						const member = litType.typeChildren[unionWrapIdx];
-						if (member != null && member.kind == TypeKind.Ref && member.typeReturn != null
-								&& inlineVariantStruct(member) == null) {
-							cType = getTypeDesc(g, member.typeReturn);
-							isClassObj = true;
-							refVariant = member.typeReturn;
+						if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) {
+							addCGenError(g, "internal: object literal for reference member " + unionWrapIdx.toString() + " of " + unionWrapName + " reached codegen typed as the union in " + g.modulePath, node.location.line, node.location.column);
 						}
 					}
 				} else if (litType.kind == TypeKind.Ref && litType.typeReturn != null) {
@@ -2147,8 +2143,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
-					const innerStruct = refVariant != null ? refVariant
-						: (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					const innerStruct = (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
 					ensureTypeInfoDef(g, cType, innerStruct);
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
