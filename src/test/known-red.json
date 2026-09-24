@@ -18,6 +18,7 @@
   },
   "flaky": {
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
+    "410-awaitStructSpawnStored": {"since":"e5f0ec68","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; installed msc e5f0ec68 hung 4 of 5 default runs, and [drc]/[orc] hit cell TIMEOUT after 300s while [danger] passed in the same run, 2026-09-24"},
     "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"}
   },
   "guard": {},
