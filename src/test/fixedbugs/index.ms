@@ -362,3 +362,7 @@ import "./bug600UnknownIsManagedTop";
 import "./bug601ObjectDownConversion";
 import "./bug232MatchAsMatchArmValue";
 import "./bug233NakedReturnContextSkipsArguments";
+import "./bug234ArgumentsBindBeforeContext";
+import "./bug235GenericInstanceInvariant";
+import "./bug236TypedPointerToUntyped";
+import "./bug237ExplicitTypeArgsFitArguments";

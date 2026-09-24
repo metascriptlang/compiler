@@ -6,8 +6,9 @@
 // Root cause: deriveCallBindings bound `T` backward from the expected type before the argument
 //             walk, for every return shape; inferGenericReturn and tryInstantiateGenericCallee
 //             skip a naked `T` return and let the arguments alone bind it.
-// Fix:        deriveCallBindings takes the same naked-`T` gate, so a literal argument sees the
-//             binding the earlier arguments made (reference inheritBindings: arguments win).
+// Fix:        the context reaches an argument before the walk only when it has no type of its
+//             own, so a literal sees the binding the earlier arguments made (reference
+//             inheritBindings: arguments win); the general rule is pinned by bug234.
 
 import { compileToC, compileToJS } from "../helpers";
 
