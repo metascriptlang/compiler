@@ -1700,6 +1700,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		if (eb.names.length == 0) {
 			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
 		}
+		fitArgsToBoundFormals(ctx, node, fnType, eb);
 		returnType = applySubstitutions(returnType, eb);
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
 			const declParams = genericParamsOf(returnType);
@@ -1735,6 +1736,10 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	const genericParamName = findFirstGenericParamName(returnType);
 	// Single type arg → bind to first generic param found
 	if (genericParamName != "") {
+		const single = createUnifyBindings();
+		single.names.push(genericParamName);
+		single.types.push(concreteType);
+		fitArgsToBoundFormals(ctx, node, fnType, single);
 		returnType = substituteType(returnType, genericParamName, concreteType);
 		// Reference parity: eagerly instantiate body for concrete GenericInstance
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
@@ -1748,6 +1753,23 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		return errorType();
 	}
 	return returnType;
+}
+
+function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bindings: UnifyBindings): void {
+	const cd = node.data as CallExprData;
+	const lim = cd.arguments.length < fnType.typeChildren.length ? cd.arguments.length : fnType.typeChildren.length;
+	for (let ai = 0; ai < lim; ai += 1) {
+		const arg = cd.arguments[ai];
+		if (arg == null || arg.nodeType == null || arg.nodeType.kind == TypeKind.Error) continue;
+		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
+		if (formal == null || hasGenericParams(formal)) continue;
+		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal)) {
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal),
+				arg.location.line, arg.location.column);
+			continue;
+		}
+		cd.arguments[ai] = fitNode(ctx, arg, formal, arg.nodeType);
+	}
 }
 
 // Compute the column where the type arg name starts (after '<') in a call expression.
