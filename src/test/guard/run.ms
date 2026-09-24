@@ -64,6 +64,7 @@ const HAS_NODE = cmdExists("node");
 
 let fails = 0;
 let passes = 0;
+const unscoredOs: string[] = [];
 
 function ok(tag: string): void {
 	passes = passes + 1;
@@ -313,6 +314,11 @@ function runOsLane(probe: Probe): void {
 		return;
 	}
 	const b = buildProbe(probe, probe.os, ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`], buildLog);
+	if (!succeeded(b) && both(b).contains(`--os=${probe.os} requires `)) {
+		unscoredOs.push(tag);
+		console.log(`skip ${tag}: this host lacks the ${probe.os} toolchain (${buildLog})`);
+		return;
+	}
 	if (probe.checkfails.length > 0) {
 		if (succeeded(b)) {
 			fail(tag, "compiled clean — a checker rule was dropped");
@@ -477,6 +483,9 @@ function main(): void {
 	preludeGate("preludeMacroCycle", "pmc", `${GUARD_DIR}/fixtures/preludeMacroCycle/gi`, "preludeMacroCycleProbe",
 		"macro-emitted declaration never reached the entry module", "", "");
 
+	if (unscoredOs.length > 0) {
+		console.log(`nim-guard: !! ${unscoredOs.length} GUARD-OS cell(s) unscored on this host (no toolchain): ${unscoredOs.join(", ")}`);
+	}
 	const verdict = fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`;
 	console.log(verdict);
 	if (fails > 0) exit(1);
