@@ -512,7 +512,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	// Inline .h imports: replace `import { ... } from "*.h"` with extern declarations.
 	// reference parity: importc declarations live inline in the consuming module, no separate module.
 	const headerErrors: ModuleError[] = [];
-	mod.source = inlineHeaderImports(mod.source, path, provider, false, headerErrors);
+	mod.source = inlineHeaderImports(mod.source, path, provider, true, headerErrors);
 	for (const he of headerErrors) mod.errors.push(he);
 
 	// Parse with recovery — always get partial AST, errors in state.errors
