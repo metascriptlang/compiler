@@ -1152,8 +1152,8 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// ctorLower later lifts this node out of classBody, so a module that only
 			// reaches the class through an import can no longer read the signature off
 			// the AST. The shared registry is the order-independent carrier.
-			if (className != "" && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-				registerCtorDefaults(className + "_new", node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
+			if (className != "" && classType.sym != null && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
+				registerCtorDefaults(classType.sym, className, node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
 			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).

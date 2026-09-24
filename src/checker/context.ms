@@ -634,6 +634,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
+	const recvNominal = nominalTypeSym(recvT);
+	const objNominal = nominalTypeSym(objT);
+	if (recvNominal != null && objNominal != null) return recvNominal == objNominal;
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
 	if (ext.receiverTypeName != "") {
@@ -659,6 +662,14 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
 	}
 	return isAssignable(objType, receiverType);
+}
+
+function nominalTypeSym(t: Type): Symbol | null {
+	let s = t;
+	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
+	const kind = s.sym.symbolKind;
+	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
 }
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {

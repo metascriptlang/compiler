@@ -682,8 +682,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				mangledName = innerType.typeName;
 			}
 		}
-		const ctorFnName = mangledName + "_new";
-		const ctorEntry = mangledName != "" ? lookupCtorDefaults(ctorFnName) : null;
+		const ctorEntry = mangledName != "" ? lookupCtorDefaults(d.newCallee.resolvedSym, mangledName) : null;
 		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
 			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
 				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren);

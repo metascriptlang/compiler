@@ -95,25 +95,37 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): Ch
 // Each module has its own symbol table, so constructor symbols can't be shared
 // via scope. This registry is module-level (shared across all checker invocations)
 // and provides the concrete param types needed for default-fill in checkNewExpr.
-interface CtorEntry {
-	name: string;
+export interface CtorEntry {
+	className: string;
 	fnType: Type;
 	defaults: Node[];
+	initSym: Symbol | null;
 }
-let _ctorRegistry: CtorEntry[] = [];
+let _ctorRegistry: HashMap<Symbol, CtorEntry[]> = new HashMap<Symbol, CtorEntry[]>();
 
-export function registerCtorDefaults(name: string, fnType: Type, defaults: Node[]): void {
-	for (const e of _ctorRegistry) {
-		if (e.name == name) return; // already registered
-	}
-	_ctorRegistry.push({ name, fnType, defaults });
+export function registerCtorDefaults(classSym: Symbol, className: string, fnType: Type, defaults: Node[]): void {
+	if (lookupCtorDefaults(classSym, className) != null) return;
+	let entries: CtorEntry[] = [];
+	const known = _ctorRegistry.get(classSym);
+	if (known != null) entries = known;
+	entries.push({ className, fnType, defaults, initSym: null });
+	_ctorRegistry.set(classSym, entries);
 }
 
-export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
-	for (const e of _ctorRegistry) {
-		if (e.name == ctorFnName) return e;
+export function lookupCtorDefaults(classSym: Symbol | null, className: string): CtorEntry | null {
+	if (classSym == null) return null;
+	const entries = _ctorRegistry.get(classSym);
+	if (entries == null) return null;
+	for (const e of entries) {
+		if (e.className == className) return e;
 	}
-	return null as unknown as CtorEntry;
+	return null;
+}
+
+export function registerCtorInit(classSym: Symbol, className: string, fnType: Type, initSym: Symbol): void {
+	registerCtorDefaults(classSym, className, fnType, []);
+	const entry = lookupCtorDefaults(classSym, className);
+	if (entry != null) entry.initSym = initSym;
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
@@ -828,7 +840,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 	// Store constructor type + defaults for cross-module default-fill lookup.
 	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
-	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType!, fnDefaults);
+	registerCtorDefaults(classSym, mangledClass, ctorDeclNode.nodeType!, fnDefaults);
 
 	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes).
 	// Set classNode.nodeType to the concrete (instantiated) class type so the

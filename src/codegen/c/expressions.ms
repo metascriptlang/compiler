@@ -8,13 +8,13 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, isAtomicRef } from "../../checker/types";
-import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
-import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -22,7 +22,7 @@ import { findChar } from "../../utils/string";
 import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
-import { lookupCtorDefaults } from "../../checker/instantiate";
+import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
 import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -30,23 +30,6 @@ import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 // do not (ClassDecl AST is intentionally not propagated through ExportedSymInfo,
 // to avoid polluting the importer's type registry), but the Type.sym chain
 // bridges to the defining module's decl — the same bridge used for InterfaceDecl.
-function crossModuleCtorParamTypes(sym: Symbol): Type[] {
-	if (sym == null) return null as unknown as Type[];
-	let dn = sym.declNode;
-	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
-		dn = sym.symbolType.sym.declNode;
-	}
-	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
-	const body = (dn.data as ClassDeclData).classBody;
-	for (const member of body) {
-		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
-				&& member.nodeType.kind == TypeKind.Function) {
-			return member.nodeType.typeChildren;
-		}
-	}
-	return null as unknown as Type[];
-}
-
 // Every class carries a `<Class>_init(this)` — ctorLower synthesizes one when
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
@@ -64,8 +47,24 @@ function bareTypeName(g: CGen, cName: string): string {
 	return bare != "" ? bare : cName;
 }
 
-function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
-	const initName = classInitCName(cName);
+function classInit(g: CGen, classSym: Symbol | null, className: string, node: Readonly<Node>): CtorEntry | null {
+	const entry = lookupCtorDefaults(classSym, className);
+	if (entry == null || entry.initSym == null) {
+		addCGenError(g, `internal: class '${className}' has no init routine registered`, node.location.line, node.location.column);
+		return null;
+	}
+	return entry;
+}
+
+function initRoutineName(entry: CtorEntry): string {
+	const initSym = entry.initSym!;
+	return mangledFunctionName(initSym, initSym.name, 0);
+}
+
+function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string, classSym: Symbol | null, node: Readonly<Node>): void {
+	const entry = classInit(g, classSym, bareTypeName(g, cName), node);
+	if (entry == null) return;
+	const initName = initRoutineName(entry);
 	const protoKey = "proto:" + initName;
 	if (!nameSetHas(g.declaredProcs, protoKey)) {
 		nameSetAdd(g.declaredProcs, protoKey);
@@ -1016,17 +1015,12 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const bareNew = bareTypeName(g, cName);
-			const initName = classInitCName(cName);
-			const ctorEntry = lookupCtorDefaults(bareNew + "_new");
-			let ctorChildren: Type[] = null as unknown as Type[];
-			if (ctorEntry != null && ctorEntry.fnType != null) {
-				ctorChildren = ctorEntry.fnType.typeChildren;
-			} else {
-				ctorChildren = crossModuleCtorParamTypes(d.newCallee.resolvedSym);
-			}
+			const ctorEntry = classInit(g, d.newCallee.resolvedSym, bareTypeName(g, cName), node);
+			if (ctorEntry == null) { ctx.results.push("NULL"); return; }
+			const initName = initRoutineName(ctorEntry);
+			const ctorChildren = ctorEntry.fnType.typeChildren;
 			const ctorProtoKey = "proto:" + initName;
-			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
+			if (node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
 				const initParams: Type[] = [node.nodeType];
 				const initNames: string[] = ["this"];
@@ -1078,7 +1072,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
 					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType)};`);
-					emitClassInitCall(g, p, cType, tmp0);
+					emitClassInitCall(g, p, cType, tmp0, innerType.sym, node);
 					ctx.results.push(tmp0);
 				} else {
 					ctx.results.push(`${genAllocTyped(g, cType)}`);
@@ -1151,33 +1145,12 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName != "") {
-			const parentBare = bareTypeName(g, parentName);
-			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(parentBare + "_new");
-			let parentChildren: Type[] = null as unknown as Type[];
-			if (parentEntry != null && parentEntry.fnType != null) {
-				parentChildren = parentEntry.fnType.typeChildren;
-			} else {
-				parentChildren = crossModuleCtorParamTypes(parentSym);
-			}
+			const parentEntry = classInit(g, parentSym, bareTypeName(g, parentName), node);
+			if (parentEntry == null) { ctx.results.push("0"); return; }
+			const parentInitName = initRoutineName(parentEntry);
+			const parentChildren = parentEntry.fnType.typeChildren;
 			const parentProtoKey = "proto:" + parentInitName;
-			// ctorLower lifts the constructor OUT of classBody, so reading the
-			// parent's ClassDecl finds no ConstructorDecl once that module has been
-			// transformed — which depends on module order. The lifted function's
-			// own symbol is the order-independent source.
-			if (parentChildren == null) {
-				const lifted = dispatchEntryForLiftedName(initFnName(parentBare));
-				if (lifted != null && lifted.sym != null) {
-					ensureCrossModuleProto(g, parentInitName, lifted.sym.symbolType, lifted.sym);
-				}
-			}
-			// A same-module parent needs no prototype: its `_init` is defined in this
-			// translation unit. Only a foreign parent can end up called undeclared.
-			const parentIsForeign = parentSym.modulePath != "" && parentSym.modulePath != g.modulePath;
-			if (parentIsForeign && parentChildren == null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
-				addCGenError(g, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
-			}
-			if (parentChildren != null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
+			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
 				let parentProtoParams = `${parentName}* this`;
 				for (let ppi = 0; ppi < parentChildren.length; ppi += 1) {

@@ -1211,8 +1211,6 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		if (methName.length > prefix.length && methName.startsWith(prefix)) {
 			methName = methName.slice(prefix.length, methName.length);
 		}
-		// Only register if not already present
-		if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) != null) continue;
 		const methSym = expInfo.sym;
 		noteImported(ctx, methSym);
 		if (markExported) exportSymAs(ctx, methSym, expInfo.name);
