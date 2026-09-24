@@ -2874,6 +2874,12 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	return ctx;
 }
 
+export function createGraphPreludeContext(): CheckerContext {
+	const ctx = createContextWithCache(createIdentCache());
+	ctx.extensionRegistry = createExtensionRegistry();
+	return ctx;
+}
+
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	const imps = defaultGlobalImports();
 	const gensymMark = templateGensymMark();
@@ -2997,6 +3003,35 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		}
 		ei = ei + 1;
 	}
+}
+
+export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
+	if (ctx.extensionRegistry != null && preludeCtx.extensionRegistry != null) {
+		for (const ext of ctx.extensionRegistry.methods) {
+			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) registerExtension(preludeCtx.extensionRegistry, ext);
+		}
+	}
+	if (specifier == "") return;
+	for (const sym of ctx.interf) {
+		ensureShaped(sym, ctx);
+		for (const ov of sym.overloads) ensureShaped(ov, ctx);
+	}
+	promoteModuleIntoPrelude(preludeCtx, ctx);
+	preludeCtx.preludeInterf.set(specifier, ctx.interf);
+	preludeCtx.includeDirectives = appendDirectiveLines(preludeCtx.includeDirectives, ownDirectives(ctx, ctx.includeDirectives, injectedIncludes));
+	const ownFlags = ownDirectives(ctx, ctx.compilerFlags, injectedFlags);
+	if (ownFlags != "") preludeCtx.compilerFlags = appendFlag(preludeCtx.compilerFlags, ownFlags);
+	preludeCtx.compileDirectives = appendDirectiveLines(preludeCtx.compileDirectives, ctx.compileDirectives);
+}
+
+function ownDirectives(ctx: CheckerContext, full: string, injected: string): string {
+	if (!full.startsWith(injected)) throw new Error(`internal: ${ctx.modulePath} lost the prelude directives injected into it`);
+	return full.slice(injected.length, full.length).trimStart();
+}
+
+function appendDirectiveLines(lines: string, more: string): string {
+	if (more == "") return lines;
+	return lines == "" ? more : lines + "\n" + more;
 }
 
 let _pendingSeedSymbols: Symbol[] = [];

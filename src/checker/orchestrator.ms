@@ -6,8 +6,8 @@ import { Node, Symbol } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { threePassTimings, buildPreludeContext, preludeContextFor, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
+import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports, noteStdGlobalImportModule, stdGlobalImportSpecifier, isStdPreludeModule } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
@@ -41,6 +41,12 @@ export function createCheckSession(): CheckSession {
 	};
 }
 
+function graphHoldsPrelude(graph: ModuleGraph): boolean {
+	for (const path of graph.loadOrder) {
+		if (stdGlobalImportSpecifier(path) != "") return true;
+	}
+	return false;
+}
 
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
@@ -58,6 +64,19 @@ function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, co
 
 export function loadStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const entry of defaultGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, false);
+	noteStdGlobalImportModules(graph, provider, config);
+}
+
+export function noteStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
+	for (const path of graph.loadOrder) noteStdGlobalImportModule(path, "");
+	for (const entry of defaultGlobalImports()) {
+		for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
+			const identity = moduleIdentity(candidate, config, provider);
+			if (findModule(graph, identity) == null) continue;
+			noteStdGlobalImportModule(identity, entry);
+			break;
+		}
+	}
 }
 
 export function loadExtraGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
@@ -100,7 +119,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
-	const baseCtx = kept != null ? kept.preludeCtx : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
+	const baseCtx = kept != null ? kept.preludeCtx : graphHoldsPrelude(graph) ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
 	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
@@ -135,11 +154,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const mod = findModule(graph, path);
 		if (mod == null || mod.source == "") continue;
 		mod.exportNames = [];
+		const injectedIncludes = baseCtx.includeDirectives;
+		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
 		const instanceMark = pendingInstanceMark();
 		const typeInstanceMark = genericTypeInstMark();
 		const ctx = dbTypeCheck(db, path);
-		if (session != null && ctx != null && session.checks.get(path) != ctx) {
+		const fresh = session == null || session.checks.get(path) != ctx;
+		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, takePendingInstancesFrom(instanceMark));
 			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
@@ -153,7 +175,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			if (!hasModuleError(mod)) mod.errors.push(createModuleError(`internal: ${path} produced no check result`, 0, 0, ErrorSeverity.Error));
 			continue;
 		}
-		if (isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
+		if (fresh && isStdPreludeModule(path)) promoteStdModuleIntoPrelude(baseCtx, ctx, stdGlobalImportSpecifier(path), injectedIncludes, injectedFlags);
+		if (fresh && isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
 		for (const err of ctx.errors) {
 			if (err.severity == Severity.Hint) continue;
 			const sev = match (err.severity) {
@@ -203,6 +226,11 @@ function hasModuleError(mod: Module): boolean {
 import { hasExportName } from "../module/graph";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { setExtraGlobalImports } from "./prelude";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
+import { writeFile, ensureDir } from "std/fs";
+import { lookupSymbol } from "./symbol";
+import { findExtension } from "./context";
 test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
@@ -315,6 +343,31 @@ test "an import used by one module is still unused in another" {
 	}
 	assert idleWarned;
 	for (const e of user.errors) assert e.message != "'foo' is imported but never used";
+}
+
+function preludeDeclaresWhatMainBinds(backendExt: string): boolean {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const dir = `/tmp/msc-prelude-identity${backendExt}`;
+	ensureDir(dir);
+	const mainPath = `${dir}/main.ms`;
+	writeFile(mainPath, "const n = Math.floor(2.5); const t = \" a \".trim();");
+	const config = createDefaultConfig(backendOfExtension(backendExt), stdPath);
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, mainPath, provider, config, 1);
+	checkModuleGraph(graph, stdPath, backendExt);
+	const main = lookupModuleCtx(moduleIdentity(mainPath, config, provider));
+	if (main == null) return false;
+	const math = lookupSymbol(main.table, "Math");
+	const trim = findExtension(main.extensionRegistry, "string", "trim");
+	if (math == null || trim == null || trim.sym == null) return false;
+	return scopeSymbolOf(math.modulePath, "Math") == math && scopeSymbolOf(trim.sym.modulePath, "trim") == trim.sym;
+}
+
+test "a module binds the prelude module's own declarations, never a second copy" {
+	assert preludeDeclaresWhatMainBinds(".cms");
+	assert preludeDeclaresWhatMainBinds(".jms");
 }
 
 test "imported enum available" {

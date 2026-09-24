@@ -50,6 +50,21 @@ export function isExtraGlobalImportModule(moduleIdentity: string): boolean {
 	return _extraGlobalImportModules.has(moduleIdentity);
 }
 
+let _stdGlobalImportModules: Map<string, string> = new Map<string, string>();
+
+export function noteStdGlobalImportModule(moduleIdentity: string, specifier: string): void {
+	_stdGlobalImportModules.set(moduleIdentity, specifier);
+}
+
+export function isStdPreludeModule(moduleIdentity: string): boolean {
+	return _stdGlobalImportModules.has(moduleIdentity);
+}
+
+export function stdGlobalImportSpecifier(moduleIdentity: string): string {
+	const specifier = _stdGlobalImportModules.get(moduleIdentity);
+	return specifier != null ? specifier : "";
+}
+
 // ===== Tests =====
 test "setExtraGlobalImports keeps build.ms entries apart from the std defaults" {
 	const base = defaultGlobalImports().length;

@@ -9,7 +9,7 @@ import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, No
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, CheckSession } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -453,6 +453,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
 		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
+	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
 		if (config.stdPath != "") captureStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt));

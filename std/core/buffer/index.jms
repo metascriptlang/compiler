@@ -12,6 +12,8 @@
 // fromArray/slice all copy); subarray() appears only transiently inside
 // copyTo, never stored or returned.
 
+import { Math } from "std/core/math";
+
 export type Buffer = uint8[];
 
 // ===== private native bindings =====

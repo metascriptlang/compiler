@@ -1,0 +1,64 @@
+// MetaScript String Byte Tier — JavaScript Backend
+// A hand-rolled WTF-8 encode cached per string — TextEncoder is banned: it
+// rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
+
+// ===== WTF-8 byte tier =====
+
+export function wtf8Cached(s: string): uint8[] {
+	@emit(`var g = globalThis.__msWtf8Cache || (globalThis.__msWtf8Cache = new Map());
+	var c = g.get(${s});
+	if (c !== undefined) return c;
+	var r = [], i = 0;
+	while (i < ${s}.length) {
+		var ch = ${s}.charCodeAt(i);
+		if (ch < 128) { r.push(ch); }
+		else if (ch < 2048) { r.push((ch >> 6) | 192, (ch & 63) | 128); }
+		else if (ch < 55296 || ch >= 57344) { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); }
+		else { var lo = ${s}.charCodeAt(i + 1); if (ch < 56320 && lo >= 56320 && lo < 57344) { i++; var cp2 = 65536 + (((ch & 1023) << 10) | (lo & 1023)); r.push((cp2 >> 18) | 240, ((cp2 >> 12) & 63) | 128, ((cp2 >> 6) & 63) | 128, (cp2 & 63) | 128); } else { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); } }
+		i++;
+	}
+	if (g.size >= 512) g.clear();
+	g.set(${s}, r);
+	return r;`);
+	unreachable;
+}
+
+// Fresh mutable copy — the cache entry must never escape.
+export function asBytes(this s: string): uint8[] {
+	const c = wtf8Cached(s);
+	@emit(`return ${c}.slice();`);
+	unreachable;
+}
+
+// WTF-8 decode — 3-byte sequences may decode to lone surrogates (round-trip).
+export function asString(this arr: uint8[]): string {
+	@emit(`var b = ${arr}, r = "", i = 0;
+	while (i < b.length) {
+		var x = b[i];
+		if (x < 128) { r += String.fromCharCode(x); i++; }
+		else if (x < 224) { r += String.fromCharCode(((x & 31) << 6) | (b[i+1] & 63)); i += 2; }
+		else if (x < 240) { r += String.fromCharCode(((x & 15) << 12) | ((b[i+1] & 63) << 6) | (b[i+2] & 63)); i += 3; }
+		else { var cp = ((x & 7) << 18) | ((b[i+1] & 63) << 12) | ((b[i+2] & 63) << 6) | (b[i+3] & 63); cp -= 65536; r += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); i += 4; }
+	}
+	return r;`);
+	unreachable;
+}
+
+export function byteLength(this s: string): int32 {
+	return wtf8Cached(s).length;
+}
+
+export function byteAt(this s: string, idx: int32): int32 {
+	const b = wtf8Cached(s);
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int32, end: int32): string {
+	const b = wtf8Cached(s);
+	const sub: uint8[] = [];
+	for (let i = start < 0 ? 0 : start; i < end && i < b.length; i += 1) {
+		sub.push(b[i]);
+	}
+	return sub.asString();
+}
