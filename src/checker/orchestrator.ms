@@ -18,7 +18,7 @@ import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
 import { cloneNodeForCheck } from "../monomorphize/clone";
-import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbPreprocess, dbParse, dbTypeCheck } from "../compiler/transam/index";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck } from "../compiler/transam/index";
 
 
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
@@ -92,10 +92,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || mod.source == "") continue;
-		if (dbPreprocess(db, path) != mod.source) {
-			mod.errors.push(createModuleError(`internal: the checker preprocessed ${path} differently from the loader`, 0, 0, ErrorSeverity.Error));
-			continue;
-		}
 		const parsed = dbParse(db, path);
 		if (parsed != null) registerModuleProgram(path, cloneNodeForCheck(parsed));
 	}

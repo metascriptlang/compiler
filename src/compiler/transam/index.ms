@@ -313,8 +313,11 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 
 	const raw = getFileText(db.fileInput, fileId);
 	let out = raw;
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 
-	if (filePath.endsWith(".h")) {
+	if (graphMod != null && graphMod.source != "") {
+		out = graphMod.source;
+	} else if (filePath.endsWith(".h")) {
 		// .h → translate C to MS extern decls
 		out = translateCHeader(raw, []);
 	} else if (filePath.endsWith(".ms") || filePath.endsWith(".cms") || filePath.endsWith(".jms") || filePath.endsWith(".wms")) {
