@@ -369,12 +369,22 @@ function deriveCallBindings(
 			mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
 		}
 	}
+	mergeUnifyBindings(bindings, bindFromExpectedReturn(calleeType, expectedType));
+	return bindings;
+}
+
+function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): UnifyBindings {
+	const bindings = createUnifyBindings();
 	if (expectedType != null && calleeType != null && calleeType.typeReturn != null) {
-		const backBindings = createUnifyBindings();
-		unifyType(calleeType.typeReturn, expectedType, backBindings);
-		mergeUnifyBindings(bindings, backBindings);
+		unifyType(calleeType.typeReturn, expectedType, bindings);
 	}
 	return bindings;
+}
+
+function isShapedByContext(arg: Node): boolean {
+	return isContextSensitive(arg)
+		|| arg.kind == NodeKind.FunctionExpr
+		|| arg.kind == NodeKind.ArrayLiteral;
 }
 
 function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
@@ -1071,8 +1081,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		&& calleeType != null
 		&& calleeType.kind == TypeKind.Function
 		&& hasGenericParams(calleeType);
+	const _nakedReturn = _isGenericCall
+		&& calleeType.typeReturn != null
+		&& calleeType.typeReturn.kind == TypeKind.GenericParam;
+	let _returnContext: Type | null = expectedType;
+	if (_nakedReturn) _returnContext = null;
 	const _argBindings = _isGenericCall
-		? deriveCallBindings(ctx, node, node.resolvedSym, calleeType, expectedType)
+		? deriveCallBindings(ctx, node, node.resolvedSym, calleeType, _returnContext)
+		: createUnifyBindings();
+	const _contextBindings = _nakedReturn
+		? bindFromExpectedReturn(calleeType, expectedType)
 		: createUnifyBindings();
 	// Overloaded direct calls — delegate arg checking to resolveOverloadCall
 	// which re-checks per candidate with speculative rollback (Phase 5).
@@ -1101,6 +1119,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				paramExpected = instantiateGeneric(_formal, _argBindings.names, _argBindings.types);
 			} else {
 				paramExpected = _formal;
+			}
+			if (_contextBindings.names.length > 0 && hasGenericParams(paramExpected)
+				&& isShapedByContext(d.arguments[ai])) {
+				paramExpected = instantiateGeneric(paramExpected, _contextBindings.names, _contextBindings.types);
 			}
 			// Limitation case (Phase D): if paramExpected still contains
 			// GenericParam after substitution (no binding source covered it)
