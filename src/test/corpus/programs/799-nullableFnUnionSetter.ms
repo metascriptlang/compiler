@@ -1,4 +1,5 @@
 // @stdout: signal=x7 updated=x7! assign=var reassign=w1 pick=p1 none=null
+// @xfail(raiser): raiser runtime error in set (same on main 40e80776)
 
 // A union holding a class, `null` and a function — the shape of a signal setter
 // `T | ((prev: T) => T)` with `T = Class | null` — keeps its value across

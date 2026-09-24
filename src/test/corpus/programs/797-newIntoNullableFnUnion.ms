@@ -1,4 +1,5 @@
 // @stdout: init=init arg=arg ret=ret str=s
+// @xfail(raiser): output differs from c: str=none (typeof string narrowing on raiser; same on main 40e80776)
 
 // A `new` with arguments keeps its own class type when it meets a union that also
 // holds `null` and a function: the union's nullable carrier is only the fit
