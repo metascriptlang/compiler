@@ -1241,3 +1241,16 @@ test "a db bound to a loaded graph checks each module against the graph's module
 	assert checkErrorCount(ctx) == 0;
 	assert ctx.currentModule == findModule(graph, "/g/a.ms");
 }
+
+test "two dbs keep their own trees and contexts for the same file id" {
+	const first = createTransAmDb(100);
+	dbSetFileText(first, "/test/first.ms", "export const firstName = 1;");
+	const firstTree = dbParse(first, "/test/first.ms");
+	const firstCtx = dbTypeCheck(first, "/test/first.ms");
+	const second = createTransAmDb(100);
+	dbSetFileText(second, "/test/second.ms", "export const secondName = 2;");
+	dbParse(second, "/test/second.ms");
+	dbTypeCheck(second, "/test/second.ms");
+	assert dbParse(first, "/test/first.ms") == firstTree;
+	assert dbTypeCheck(first, "/test/first.ms") == firstCtx;
+}
