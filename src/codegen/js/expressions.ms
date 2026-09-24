@@ -17,6 +17,7 @@ import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverl
 import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
+import { isRuntimeProcSym } from "../../transform/util";
 
 // ===== Literal Emitters =====
 
@@ -407,9 +408,10 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// console.log (Echo builtin) → console.log (strings are native)
-	if (sym != null && sym.builtinKind == "Echo") {
-		markNamed(gen, calleeOriginNode(d.callee), "console.log");
+	// console.log (Echo builtin) and its lowered msPrintln → console.log (strings are native)
+	const isMsPrintln = isRuntimeProcSym(sym, "msPrintln");
+	if (isMsPrintln || (sym != null && sym.builtinKind == "Echo")) {
+		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
 		emit(gen, "console.log(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
