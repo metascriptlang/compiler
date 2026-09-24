@@ -28,8 +28,8 @@
 //
 // Kill-switches: MSC_PRELUDE_PACK=1 (opt-in gate), MSC_NO_PRELUDE_PACK=1
 // (hard off), MSC_NO_GLOBAL_CACHE=1 or unknown HOME (global cache off
-// entirely). Storage: ~/.metascript/cache/prelude/<key>.pk, marker-GC'd on
-// toolStamp change.
+// entirely). Storage: ~/.metascript/cache/prelude/<stamp>/<key>.pk, the
+// least recently used stamp directories collected past PACK_STAMP_CAP.
 
 import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, AttachedOp, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
@@ -40,7 +40,8 @@ import { makeSymbolState } from "./symbol";
 import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
-import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
+import { recordDirUse } from "../utils/lruDirs";
+import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
@@ -470,7 +471,7 @@ function nestedIdxsP(arrs: Node[][] | null): string {
 // graph that loadPreludeModules (compile.ms) produced — modules in
 // loadOrder order, their resolved import entries, circular-dep records —
 // so a warm build seeds the graph directly and skips the lex+parse+resolver
-// probe of the ~45 std modules. Same key/root/marker-GC/kill-switches as
+// probe of the ~45 std modules. Same key/directory/GC/kill-switches as
 // the .pk closure; this is pure DISCOVERY data (no symbols, no AST), so
 // none of the v1 identity traps apply.
 //
@@ -551,12 +552,7 @@ function writePreludeDeps(root: string, key: string): void {
 export function writePreludePack(key: string, ctx: CheckerContext): void {
 	const _w0 = performance.now();
 	if (packDisabled()) return;
-	const root = packRoot();
-	ensureDir(root);
-	// Marker check BEFORE writing: on the very first run in a tree the marker
-	// does not exist yet, and tryLoad's wipe would otherwise delete an entry
-	// written earlier in the same process (write-before-load order).
-	ensurePackMarker(root);
+	const root = packDir();
 
 	const syms: Symbol[] = [];
 	const symIdx = new HashMap<Symbol, int32>();
@@ -892,36 +888,49 @@ function splitTabs(line: string): string[] {
 	return out;
 }
 
-// Marker GC: entries are toolStamp-keyed, so a stamp change makes every entry
-// unreachable — wipe is pure garbage collection, never costs a hit.
-function ensurePackMarker(root: string): void {
-	const marker = `${root}/.version`;
-	const markerValue = `1:${toolStamp()}`;
-	const stored = try readFile(marker) catch "";
-	if (stored == markerValue) {
-		const entries = readDir(root);
-		for (const e of entries) {
-			if (e.length == 0) continue;
-			if (e.indexOf(".tmp.", 0) >= 0) remove(`${root}/${e}`);
-		}
-		return;
+const PACK_STAMP_CAP: int32 = 8;
+
+let _packDir = "";
+
+export function packDir(): string {
+	if (_packDir != "") return _packDir;
+	const root = packRoot();
+	if (root == "") return "";
+	ensureDir(root);
+	_packDir = packStampDir(root, toolStamp());
+	return _packDir;
+}
+
+function packStampDir(root: string, stamp: string): string {
+	const name = packHash(stamp);
+	const dir = `${root}/${name}`;
+	ensureDir(dir);
+	recordDirUse(root, name, PACK_STAMP_CAP);
+	for (const e of readDir(dir)) {
+		if (e.indexOf(".tmp.", 0) >= 0) remove(`${dir}/${e}`);
 	}
-	const entries = readDir(root);
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e == ".version") continue;
-		if (e.charAt(e.length - 1) == "/") continue;
-		remove(`${root}/${e}`);
-	}
-	writeFile(marker, markerValue);
+	return dir;
+}
+
+test "two tool stamps sharing one prelude root keep each other's packs" {
+	const base = env.get("TMPDIR");
+	const root = join(base != "" ? base : "/tmp", "msc-prelude-stamps-test");
+	removeAll(root);
+	ensureDir(root);
+	const dirA = packStampDir(root, "stampA");
+	writeFile(`${dirA}/a.pk`, "A");
+	const dirB = packStampDir(root, "stampB");
+	writeFile(`${dirB}/b.pk`, "B");
+	assert packStampDir(root, "stampA") == dirA;
+	assert exists(`${dirA}/a.pk`);
+	assert exists(`${dirB}/b.pk`);
+	removeAll(root);
 }
 
 export function tryLoadPreludePack(key: string): CheckerContext | null {
 	if (packDisabled()) return null;
 	const _l0 = performance.now();
-	const root = packRoot();
-	ensureDir(root);
-	ensurePackMarker(root);
+	const root = packDir();
 	const body = try readFile(`${root}/${key}.pk`) catch "";
 	if (!body.startsWith(PACK_MAGIC + "\n")) {
 		_loadMs = _loadMs + (performance.now() - _l0);
@@ -939,9 +948,7 @@ export function tryLoadPreludePack(key: string): CheckerContext | null {
 // path, which is always correct, just slower.
 export function tryLoadPreludeDeps(key: string): PreludeDepsSnapshot | null {
 	if (packDisabled()) return null;
-	const root = packRoot();
-	ensureDir(root);
-	ensurePackMarker(root);
+	const root = packDir();
 	const body = try readFile(`${root}/${key}.deps`) catch "";
 	if (!body.startsWith("K\t" + key + "\n")) return null;
 	const snap: PreludeDepsSnapshot = { mods: [], circulars: [] };
@@ -1532,7 +1539,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert loaded.extensionRegistry.methods.length == 1;
 		assert loaded.extensionRegistry.methods[0].methodName == "pkExt";
 		assert loaded.extensionRegistry.methods[0].sym == got;
-		remove(`${packRoot()}/${key}.pk`);
+		remove(`${packDir()}/${key}.pk`);
 	} finally {
 		env.delete("MSC_PRELUDE_PACK");
 	}
@@ -1585,7 +1592,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 				assert false;
 			}
 		}
-		remove(`${packRoot()}/${key}.pk`);
+		remove(`${packDir()}/${key}.pk`);
 	} finally {
 		env.delete("MSC_PRELUDE_PACK");
 	}
@@ -1595,9 +1602,8 @@ test "preludePack: corrupt entry is a miss" {
 	env.set("MSC_PRELUDE_PACK", "1");
 	try {
 		const key = preludePackKey("corrupt-probe", ".test");
-		const root = packRoot();
+		const root = packDir();
 		if (root != "") {
-			ensureDir(root);
 			writeFile(`${root}/${key}.pk`, "garbage\nnot a pack\n");
 			const loaded = tryLoadPreludePack(key);
 			assert loaded == null;
@@ -1652,12 +1658,12 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		assert loaded.circulars[0].cycle[2] == "/std/core/a.ms";
 		assert loaded.circulars[0].importLine == 3;
 		assert loaded.circulars[0].importNames[0] == "z";
-		remove(`${packRoot()}/${key}.deps`);
-		remove(`${packRoot()}/${key}.pk`);
+		remove(`${packDir()}/${key}.deps`);
+		remove(`${packDir()}/${key}.pk`);
 		const otherKey = preludePackKey("deps-roundtrip-probe", ".other-backend");
 		writePreludePack(otherKey, makeTestCtx());
 		assert tryLoadPreludeDeps(otherKey) == null;
-		remove(`${packRoot()}/${otherKey}.pk`);
+		remove(`${packDir()}/${otherKey}.pk`);
 	} finally {
 		setStdGraphDepsSnapshot(null, "");
 		env.delete("MSC_PRELUDE_PACK");
@@ -1668,9 +1674,8 @@ test "preludePack: corrupt deps file is a miss" {
 	env.set("MSC_PRELUDE_PACK", "1");
 	try {
 		const key = preludePackKey("deps-corrupt-probe", ".depstest");
-		const root = packRoot();
+		const root = packDir();
 		if (root != "") {
-			ensureDir(root);
 			writeFile(`${root}/${key}.deps`, "G\t/ok.ms\nQ\tbogus row\n");
 			const loaded = tryLoadPreludeDeps(key);
 			assert loaded == null;
