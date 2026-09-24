@@ -219,8 +219,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 		// Checker lowers E.Member to a flat E_Member identifier; the emitted
 		// enum declaration exports exactly those flat names.
 		emitted = safeJsName(name);
-		if (sym.modulePath != gen.currentModulePath) recordNeededImport(gen, sym.modulePath, emitted);
-		return emitted;
+		return sym.modulePath != gen.currentModulePath ? recordNeededImport(gen, sym.modulePath, emitted) : emitted;
 	}
 	if (sym.symbolKind == SymbolKind.Function) {
 		if (moduleExportsName(gen, effPath, baseName)) {
@@ -253,8 +252,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	} else {
 		return safeJsName(name);
 	}
-	if (effPath != gen.currentModulePath) recordNeededImport(gen, effPath, emitted);
-	return emitted;
+	return effPath != gen.currentModulePath ? recordNeededImport(gen, effPath, emitted) : emitted;
 }
 
 export function emitIdentifier(gen: JSGenerator, node: Node): void {

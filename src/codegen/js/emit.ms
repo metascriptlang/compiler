@@ -7,6 +7,7 @@ import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
+import { mangleModuleName } from "../c/names";
 
 
 // ===== JS Generator =====
@@ -37,6 +38,7 @@ export class JSGenerator {
 	modExportVals: string[][];
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
+	neededLocals: string[][];   // the binding each needed name takes in this module
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -59,7 +61,7 @@ export class JSGenerator {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [],
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [],
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], neededModules: [], neededNames: [], neededLocals: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -67,16 +69,36 @@ export function createJSGenerator(): JSGenerator {
 		inActorDecl: false };
 }
 
-export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): void {
+export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {
+	let at = -1;
 	for (let i = 0; i < gen.neededModules.length; i += 1) {
-		if (gen.neededModules[i] == modulePath) {
-			for (const n of gen.neededNames[i]) { if (n == name) return; }
-			gen.neededNames[i].push(name);
-			return;
+		if (gen.neededModules[i] != modulePath) continue;
+		at = i;
+		for (let j = 0; j < gen.neededNames[i].length; j += 1) {
+			if (gen.neededNames[i][j] == name) return gen.neededLocals[i][j];
 		}
 	}
-	gen.neededModules.push(modulePath);
-	gen.neededNames.push([name]);
+	const local = importBindingTaken(gen, name) ? `${name}__${mangleModuleName(modulePath)}` : name;
+	if (at < 0) {
+		gen.neededModules.push(modulePath);
+		gen.neededNames.push([]);
+		gen.neededLocals.push([]);
+		at = gen.neededModules.length - 1;
+	}
+	gen.neededNames[at].push(name);
+	gen.neededLocals[at].push(local);
+	return local;
+}
+
+function importBindingTaken(gen: JSGenerator, local: string): boolean {
+	for (const locals of gen.neededLocals) {
+		for (const taken of locals) { if (taken == local) return true; }
+	}
+	return moduleExportsName(gen, gen.currentModulePath, local);
+}
+
+export function importSpecifier(name: string, local: string): string {
+	return local == name ? name : `${name} as ${local}`;
 }
 
 export function lookupImportSpec(gen: JSGenerator, specifier: string): string {

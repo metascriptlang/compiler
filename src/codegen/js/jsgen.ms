@@ -4,7 +4,7 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData, FunctionDeclData, ExportDeclData } from "../../ast/node";
-import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec } from "./emit";
+import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
 import {
@@ -224,7 +224,9 @@ export function generateJSModule(
 	for (let mi = 0; mi < gen.neededModules.length; mi += 1) {
 		const spec = lookupModuleSpec(gen, gen.neededModules[mi]);
 		if (spec == "") continue;
-		front = front + "import { " + gen.neededNames[mi].join(", ") + ` } from "${spec}";\n`;
+		const specifiers: string[] = [];
+		for (let ni = 0; ni < gen.neededNames[mi].length; ni += 1) specifiers.push(importSpecifier(gen.neededNames[mi][ni], gen.neededLocals[mi][ni]));
+		front = front + "import { " + specifiers.join(", ") + ` } from "${spec}";\n`;
 	}
 	if (front == "" && !hasImport && hasTopLevelAwait(program)) front = "export {};\n";
 	insertAfterHeader(gen, headerChunks, front);
