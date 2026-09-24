@@ -271,7 +271,7 @@ function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 	const name = mangledTypeName(declTypeSym(node), d.enumName);
 
 	// Skip if already declared (check both declaration set and type cache)
-	const key = "enum:" + d.enumName;
+	const key = "enum:" + name;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, key)) return;
 	nameSetAdd(g.declaredThings, name);
 

@@ -425,6 +425,13 @@ function structKeyIdentity(t: Type): string {
 	return mangledTypeName(t.sym, t.typeName);
 }
 
+function enumKeyIdentity(t: Type): string {
+	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
+	const owner = getGlobalTypeOwner(t.typeName);
+	if (owner != "") return mangleQualified(t.typeName, mangleModuleName(owner));
+	return mangledTypeName(t.sym, t.typeName);
+}
+
 export function anonUnionCName(t: Type): string {
 	return "msUnion_" + hashToBase36(typeKey(t));
 }
@@ -453,8 +460,10 @@ export function typeKey(t: Type | null): string {
 		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
-		TypeKind.Enum => { return "enum:" + t.typeName; },
-		TypeKind.EnumLiteral => { return "enum:" + t.typeName; },
+		TypeKind.Enum => { return "enum:" + enumKeyIdentity(t); },
+		TypeKind.EnumLiteral => {
+			return "enum:" + enumKeyIdentity(t.typeReturn != null && t.typeReturn.kind == TypeKind.Enum ? t.typeReturn : t);
+		},
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
