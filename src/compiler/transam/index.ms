@@ -62,7 +62,7 @@ import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
-import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
+import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
@@ -1218,4 +1218,18 @@ test "both sides of an import cycle bind the symbols each side checks" {
 	assert fa != null && fb != null;
 	assert lookupLocal(ctxB.table, "fa") == fa;
 	assert lookupLocal(ctxA.table, "fb") == fb;
+}
+
+test "a db bound to a loaded graph checks each module against the graph's module" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/b.ms", entrySource: "export function two(): int32 { return 2; }" });
+	entries.push({ entryPath: "/g/a.ms", entrySource: 'import { two } from "./b";\nexport const four = two() + two();' });
+	const graph = loadModuleGraph("/g/a.ms", createMapProvider(entries));
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	for (const path of graph.loadOrder) dbTypeCheck(db, path);
+	const ctx = dbTypeCheck(db, "/g/a.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
+	assert ctx.currentModule == findModule(graph, "/g/a.ms");
 }
