@@ -40,10 +40,8 @@ test "union type param emits struct, not void" {
 			return kind;
 		}
 	`);
-	if (!r.ok) {
-		console.log("COMPILE ERROR: " + r.error);
-		assert false;
-	}
+	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
+	assert r.ok;
 	const cCode = r.value;
 	console.log("=== C OUTPUT ===");
 	console.log(cCode);
@@ -74,10 +72,8 @@ test "union type param in class factory" {
 			return d;
 		}
 	`);
-	if (!r.ok) {
-		console.log("COMPILE ERROR (class factory): " + r.error);
-		assert false;
-	}
+	if (!r.ok) console.log("COMPILE ERROR (class factory): " + r.error);
+	assert r.ok;
 	const cCode = r.value;
 	assert !cCode.contains("void data");
 	assert cCode.contains("DocData");
