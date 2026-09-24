@@ -1246,6 +1246,46 @@ test "a db bound to a loaded graph checks each module against the graph's module
 	assert ctx.currentModule == findModule(graph, "/g/a.ms");
 }
 
+const HEADER_API = "int apiValue(int x);";
+const HEADER_MAIN = "import { apiValue } from \"./api.h\";\nexport function twice(): int32 { return apiValue(1) + apiValue(2); }";
+
+function headerGraph(): ModuleGraph {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/api.h", entrySource: HEADER_API });
+	entries.push({ entryPath: "/g/main.ms", entrySource: HEADER_MAIN });
+	return loadModuleGraph("/g/main.ms", createMapProvider(entries));
+}
+
+test "a db bound to a loaded graph parses the header text the loader inlined" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	const ctx = dbTypeCheck(db, "/g/main.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
+	assert dbPreprocess(db, "/g/main.ms") == findModule(graph, "/g/main.ms")!.source;
+}
+
+test "an unbound db inlines a C header the way the loader does" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/g/api.h", HEADER_API);
+	dbSetFileText(db, "/g/main.ms", HEADER_MAIN);
+	assert dbPreprocess(db, "/g/main.ms") == findModule(graph, "/g/main.ms")!.source;
+}
+
+test "a graph-bound check marks its module registered at the current revision" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/b.ms", entrySource: "export function two(): int32 { return 2; }" });
+	entries.push({ entryPath: "/g/a.ms", entrySource: 'import { two } from "./b";\nexport const four = two() + two();' });
+	const graph = loadModuleGraph("/g/a.ms", createMapProvider(entries));
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	for (const path of graph.loadOrder) dbTypeCheck(db, path);
+	assert getRegisteredAt(db.moduleDeps, getFileId(db.fileInput, "/g/b.ms")) == db.revision.value;
+	assert getRegisteredAt(db.moduleDeps, getFileId(db.fileInput, "/g/a.ms")) == db.revision.value;
+}
+
 test "two dbs keep their own trees and contexts for the same file id" {
 	const first = createTransAmDb(100);
 	dbSetFileText(first, "/test/first.ms", "export const firstName = 1;");
