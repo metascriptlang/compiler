@@ -778,6 +778,7 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
 	const enumSym = declSymbol(ctx, node, d.enumName, SymbolKind.Enum, enumType, false);
 	enumType.sym = enumSym;
+	node.resolvedSym = enumSym;
 	if (node.flags.has(NodeFlag.ExternC)) {
 		setFlag(enumSym, SymbolFlag.ImportC);
 		enumSym.nativeName = d.enumName;
