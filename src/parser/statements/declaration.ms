@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, NumberLiteralData, UnaryExprData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -755,13 +755,14 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	return parseEnumBody(state, nameToken, enumToken);
 }
 
-// Parse `{ A, B = 2, C = -1 }` after the enum name, from the `{`. An initializer is an integer
-// literal, optionally negated; a member without one takes the previous value plus one.
+// Parse `{ A, B = 2, C = A | B }` after the enum name, from the `{`. The checker folds each
+// initializer; a member without one takes the previous value plus one.
 function parseEnumBody(state: ParserState, nameToken: Token, anchor: Token): NodeResult {
 	advance(state);
 	const members: string[] = [];
 	const memberLocs: SourceLocation[] = [];
 	const values: number[] = [];
+	const inits: Node[] = [];
 	let nextValue: number = 0;
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const member = current(state);
@@ -772,17 +773,13 @@ function parseEnumBody(state: ParserState, nameToken: Token, anchor: Token): Nod
 		members.push(member.value);
 		memberLocs.push(makeLocFromToken(member));
 		advance(state);
+		let init = null as unknown as Node;
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 			advance(state);
-			const negative = current(state).kind == TokenKind.Minus;
-			if (negative) advance(state);
-			const valTok = current(state);
-			if (valTok.kind != TokenKind.Number) {
-				return Result.err(`Enum member '${member.value}' needs an integer literal initializer at line ${valTok.line}`);
-			}
-			nextValue = negative ? -parseFloat(valTok.value) : parseFloat(valTok.value);
-			advance(state);
+			init = try callExprParser(state);
+			nextValue = literalEnumValue(init, nextValue);
 		}
+		inits.push(init);
 		values.push(nextValue);
 		nextValue = nextValue + 1;
 
@@ -802,7 +799,16 @@ function parseEnumBody(state: ParserState, nameToken: Token, anchor: Token): Nod
 		enumValues: values,
 		nameLocation: makeLocFromToken(nameToken),
 		memberLocations: memberLocs,
+		enumInits: inits,
 	}, anchor));
+}
+
+function literalEnumValue(init: Node, fallback: number): number {
+	if (init.kind == NodeKind.NumberLiteral) return (init.data as NumberLiteralData).value;
+	if (init.kind != NodeKind.UnaryExpr) return fallback;
+	const u = init.data as UnaryExprData;
+	if (u.unaryOp != "-" || u.operand.kind != NodeKind.NumberLiteral) return fallback;
+	return -(u.operand.data as NumberLiteralData).value;
 }
 
 // ===== Interface Declaration =====
@@ -1995,7 +2001,7 @@ test "ref param" { assert programOk("function update(ref v: number): void {}"); 
 
 test "ref struct param" { assert programOk("struct Vec2 { x: number; y: number; }\nfunction scale(ref v: Vec2): void {}"); }
 // Enum with complex values — exercises skipDefaultValue depth tracking
-test "enum non-literal value rejected" { assert !programOk("enum E { A = fn(1, 2), B = arr[0] }"); }
+test "enum initializer kept as an expression" { const d = stmtAt("enum E { A = 1 << 2, B, C = A | B }", 0).data as EnumDeclData; assert d.enumInits.length == 3 && d.enumInits[0].kind == NodeKind.BinaryExpr && d.enumInits[1] == null; }
 test "enum negative value" { const d = stmtAt("enum E { A = -1, B }", 0).data as EnumDeclData; assert d.enumValues[0] == -1 && d.enumValues[1] == 0; }
 test "extern enum negative value" { assert programOk("extern enum E { A = 0, B = -1, }"); }
 // Var declarations
