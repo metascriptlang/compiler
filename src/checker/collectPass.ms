@@ -1,7 +1,9 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
-import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
-import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
+import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType } from "./types";
+import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
+import { constantLiteralOf } from "./constFold";
+import { makeIntNumber } from "./literalNodes";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, addRuntimeConverter } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
@@ -10,7 +12,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { getGenericDecl } from "../parser/context";
-import { callDecoratorDefers } from "./checkerCallbacks";
+import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
 
 // ===== Top-Level Collector =====
@@ -774,7 +776,7 @@ export function collectStruct(ctx: CheckerContext, node: Node): void {
 
 export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as EnumDeclData;
-	const enumValues = d.enumValues != null ? d.enumValues : [] as number[];
+	const enumValues = foldEnumValues(ctx, node);
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
 	const enumSym = declSymbol(ctx, node, d.enumName, SymbolKind.Enum, enumType, false);
 	enumType.sym = enumSym;
@@ -798,6 +800,101 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 		mi = mi + 1;
 	}
 	node.nodeType = enumType;
+}
+
+const ENUM_INIT_NOT_CONSTANT = "needs a constant integer initializer: integer literals, earlier members and + - * / % << >> & | ^ ~";
+
+function foldEnumValues(ctx: CheckerContext, node: Node): number[] {
+	const d = node.data as EnumDeclData;
+	if (d.enumInits == null || d.enumInits.length == 0) return d.enumValues != null ? d.enumValues : [] as number[];
+	const values: number[] = [];
+	const slotType = node.flags.has(NodeFlag.ExternC) ? getSysType(TypeKind.Int64) : int32Type();
+	let counter: int64 = 0;
+	openScope(ctx.table, ScopeKind.Block);
+	for (let i = 0; i < d.enumMembers.length; i += 1) {
+		const init = i < d.enumInits.length ? d.enumInits[i] : null as unknown as Node;
+		if (init != null) {
+			const folded = foldEnumInitializer(ctx, node, i, init, slotType);
+			if (folded.ok) {
+				counter = folded.value;
+				d.enumInits[i] = makeIntNumber(counter, init.location);
+				d.enumInits[i].nodeType = slotType;
+			} else {
+				addError(ctx, folded.error, init.location.line, init.location.column);
+			}
+		}
+		values.push(counter as number);
+		defineEnumMemberConst(ctx, d.enumMembers[i], counter, slotType, init != null ? init.location : node.location);
+		counter = counter + 1;
+	}
+	closeScope(ctx.table);
+	d.enumValues = values;
+	return values;
+}
+
+function foldEnumInitializer(ctx: CheckerContext, node: Node, index: int32, init: Node, slotType: Type): Result<int64, string> {
+	const d = node.data as EnumDeclData;
+	const shape = enumInitShapeError(d, index, init);
+	if (shape != "") return Result.err(`Enum member '${d.enumMembers[index]}' ${shape}`);
+	callCheckExpr(ctx, init, slotType);
+	const literal = constantLiteralOf(init, 0);
+	if (literal == null || literal.kind != NodeKind.NumberLiteral || (literal.data as NumberLiteralData).isFloat) {
+		return Result.err(`Enum member '${d.enumMembers[index]}' initializer does not fold to an integer constant`);
+	}
+	return Result.ok((literal.data as NumberLiteralData).intVal);
+}
+
+function enumInitShapeError(d: EnumDeclData, index: int32, expr: Node): string {
+	match (expr.kind) {
+		NodeKind.NumberLiteral => { return ""; },
+		NodeKind.Identifier => { return enumMemberRefError(d, index, (expr.data as IdentifierData).name); },
+		NodeKind.MemberExpr => {
+			const m = expr.data as MemberExprData;
+			if (m.object.kind != NodeKind.Identifier || (m.object.data as IdentifierData).name != d.enumName) return ENUM_INIT_NOT_CONSTANT;
+			const refError = enumMemberRefError(d, index, m.property);
+			if (refError != "") return refError;
+			expr.kind = NodeKind.Identifier;
+			expr.data = { name: m.property };
+			return "";
+		},
+		NodeKind.UnaryExpr => {
+			const u = expr.data as UnaryExprData;
+			if (u.unaryOp != "-" && u.unaryOp != "+" && u.unaryOp != "~") return ENUM_INIT_NOT_CONSTANT;
+			return enumInitShapeError(d, index, u.operand);
+		},
+		NodeKind.BinaryExpr => {
+			const b = expr.data as BinaryExprData;
+			if (!isEnumInitOperator(b.operator)) return ENUM_INIT_NOT_CONSTANT;
+			const leftError = enumInitShapeError(d, index, b.left);
+			if (leftError != "") return leftError;
+			return enumInitShapeError(d, index, b.right);
+		},
+		_ => {},
+	};
+	return ENUM_INIT_NOT_CONSTANT;
+}
+
+function isEnumInitOperator(op: string): boolean {
+	return op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "<<" || op == ">>" || op == "&" || op == "|" || op == "^";
+}
+
+function enumMemberRefError(d: EnumDeclData, index: int32, name: string): string {
+	for (let j = 0; j < d.enumMembers.length; j += 1) {
+		if (d.enumMembers[j] == name) return j < index ? "" : `uses '${name}' before it is declared`;
+	}
+	return ENUM_INIT_NOT_CONSTANT;
+}
+
+function defineEnumMemberConst(ctx: CheckerContext, name: string, value: int64, slotType: Type, loc: SourceLocation): void {
+	const literal = makeIntNumber(value, loc);
+	literal.nodeType = slotType;
+	const decl = createNodeAt(NodeKind.VariableDecl, { declName: name, declType: "", initializer: literal, declKind: DeclKind.Const, nameLocation: loc }, loc);
+	decl.nodeType = slotType;
+	const sym = makeSymbolState(name, SymbolKind.Variable, slotType, false, SymbolState.Checked);
+	setFlag(sym, SymbolFlag.Global);
+	sym.declNode = decl;
+	sym.location = loc;
+	defineSymbol(ctx.table, sym);
 }
 
 export function collectTypeAlias(ctx: CheckerContext, node: Node): void {
