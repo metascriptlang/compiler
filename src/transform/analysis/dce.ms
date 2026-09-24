@@ -10,36 +10,21 @@
 //
 // Level 2 (this file): Symbol-level dead declaration elimination
 //   Mark-sweep reachability: seed entry points → transitive closure → sweep dead decls
-//   AliveSyms API for Phase 5 codegen: isAlive(syms, name) → boolean
 //
 // Pipeline position: step 19 of 20 (after constantFolding, matchLower, lambdaLifting;
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
-import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind } from "../../ast/node";
+import { TransformContext, createTransformContextWithChecker } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
 import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
+import { checkProgram } from "../../checker/checkPass";
 import { getDeclName } from "../../checker/collectPass";
 import { makeBlock } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
-
-// ===== AliveSyms (Level 2 — public API for Phase 5 codegen) =====
-
-export function createAliveSyms(): NameSet {
-	const syms: NameSet = createNameSet();
-	return syms;
-}
-
-export function markAlive(syms: NameSet, name: string): void {
-	nameSetAdd(syms, name);
-}
-
-export function isAlive(syms: NameSet, name: string): boolean {
-	return nameSetContains(syms, name);
-}
 
 // ===== Helpers =====
 
@@ -83,28 +68,26 @@ function isNeverCall(node: Node, ctx: TransformContext): boolean {
 // Standard reference equivalent: mark-sweep worklist
 // Reference equivalent: transform/dce.zig (computeAliveSymsMultiModule)
 
-// Collect all Identifier names referenced in a subtree.
-// Uses forEachChild from ast/visitor.ms for exhaustive 40+ node kind coverage.
-function collectIdentifiers(node: Node, refs: NameSet): void {
+// Every symbol a subtree references. An enum member use references its enum.
+function collectRefs(node: Node, refs: HashSet<Symbol>): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		nameSetAdd(refs, d.name);
-		// Also add resolvedSym.name for on-demand instantiated functions
-		// (the identifier keeps the original name "mapRawGet" but resolvedSym
-		// points to the instantiated "mapRawGet__string_string")
-		if (node.resolvedSym != null && node.resolvedSym.name != d.name) {
-			nameSetAdd(refs, node.resolvedSym.name);
-		}
-		return;
+	const sym = node.resolvedSym;
+	if (sym != null) {
+		refs.add(sym);
+		const owner = enumOwnerOf(sym);
+		if (owner != null) refs.add(owner);
 	}
-	// Also check resolvedSym on CallExpr (extension methods set sym on call, not callee)
-	if (node.resolvedSym != null && node.resolvedSym.name != "") {
-		nameSetAdd(refs, node.resolvedSym.name);
-	}
+	if (node.kind == NodeKind.Identifier) return;
 	forEachChild(node, (child: Node): void => {
-		collectIdentifiers(child, refs);
+		collectRefs(child, refs);
 	});
+}
+
+function enumOwnerOf(sym: Symbol): Symbol | null {
+	if (sym.symbolKind != SymbolKind.EnumMember) return null;
+	let t = sym.symbolType;
+	if (t != null && t.kind == TypeKind.EnumLiteral) t = t.typeReturn;
+	return t != null && t.kind == TypeKind.Enum ? t.sym : null;
 }
 
 // Returns true for declarations that can be eliminated if unreferenced.
@@ -143,21 +126,6 @@ function isEliminable(node: Node): boolean {
 	return false;
 }
 
-// Compiler-generated names are always alive (produced by transforms).
-function isCompilerGenerated(name: string): boolean {
-	if (name.length == 0) return false;
-	const first = name.slice(0, 1);
-	if (first == "$") return true;
-	if (name.length >= 8) {
-		const prefix = name.slice(0, 8);
-		if (prefix == "__lifted") return true;
-	}
-	return false;
-}
-
-// Pre-computed per-stmt name list (avoids repeated getDeclName calls — DRC string return bug)
-type StmtNames = string[];
-
 // Main Level 2 algorithm: mark-sweep reachability on top-level declarations.
 function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	if (program.kind != NodeKind.Program) return;
@@ -165,87 +133,45 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	const stmts = pd.programStmts;
 	if (stmts.length == 0) return;
 
-	// Phase 1: Pre-compute names for ALL stmts (one getDeclName call per stmt, stored safely)
-	const names: StmtNames = [];
-	const declNames: NameSet = createNameSet();
-	for (let idx = 0; idx < stmts.length; idx += 1) {
-		const n = getDeclName(stmts[idx]);
-		names.push(n);
-		if (n.length > 0 && isEliminable(stmts[idx])) {
-			nameSetAdd(declNames, n);
+	const declSyms: (Symbol | null)[] = [];
+	let anyEliminable = false;
+	for (const stmt of stmts) {
+		if (!isEliminable(stmt)) {
+			declSyms.push(null);
+			continue;
 		}
+		if (stmt.resolvedSym == null) {
+			ctx.errors.push(`internal: dead-declaration sweep met '${getDeclName(stmt)}' without a symbol`);
+			return;
+		}
+		declSyms.push(stmt.resolvedSym);
+		anyEliminable = true;
 	}
-	if (declNames.items.length == 0) return;
+	if (!anyEliminable) return;
 
-	// Phase 2: Seed — collect identifier refs from all non-eliminable stmts (entry points)
-	const refs: NameSet = createNameSet();
+	const refs = new HashSet<Symbol>();
 	for (let si = 0; si < stmts.length; si += 1) {
-		if (!isEliminable(stmts[si])) {
-			collectIdentifiers(stmts[si], refs);
-		}
+		if (declSyms[si] == null) collectRefs(stmts[si], refs);
 	}
 
-	// Phase 3: Transitive closure — fixpoint iteration using pre-computed names
-	const alive: NameSet = createNameSet();
-	// User-defined main() is always alive (called by dispatcher, not user code)
-	if (nameSetContains(declNames, "main")) {
-		nameSetAdd(alive, "main");
-		// Also seed refs from main's body
-		for (let mi = 0; mi < stmts.length; mi += 1) {
-			const mn = names[mi];
-			if (mn == "main") {
-				collectIdentifiers(stmts[mi], refs);
-			}
-		}
-	}
-	// Enum member refs are MANGLED by the checker (`Color.Red` becomes the
-	// identifier `Color_Red`, the enum-member rewrite in callResolve), so an
-	// enum's liveness cannot key on its own name alone: seed it alive when any
-	// member mangle is referenced. The C emitter inlines member values (no
-	// decl needed at link time), but the JS emitter needs the emitted flat
-	// `var Color_Red = 0;` constants — sweeping the decl while a mangled
-	// reference survives emitted `ReferenceError: Color_Red is not defined`
-	// at runtime (corpus 624/700, surfaced by the 2026-09-01 js audit).
-	for (let di = 0; di < stmts.length; di += 1) {
-		if (stmts[di].kind != NodeKind.EnumDecl) continue;
-		const en = names[di];
-		if (en.length == 0 || nameSetContains(alive, en)) continue;
-		const ed = stmts[di].data as EnumDeclData;
-		let hit = false;
-		for (const m of ed.enumMembers) {
-			if (nameSetContains(refs, en + "_" + m)) { hit = true; break; }
-		}
-		if (hit) {
-			nameSetAdd(alive, en);
-			collectIdentifiers(stmts[di], refs);
-		}
-	}
+	const alive = new HashSet<Symbol>();
 	let changed = true;
 	while (changed) {
 		changed = false;
 		for (let di = 0; di < stmts.length; di += 1) {
-			if (isEliminable(stmts[di])) {
-				const n = names[di];
-				if (n.length > 0 && nameSetContains(refs, n) && !nameSetContains(alive, n)) {
-					nameSetAdd(alive, n);
-					collectIdentifiers(stmts[di], refs);
-					changed = true;
-				}
+			const sym = declSyms[di];
+			if (sym != null && refs.has(sym) && !alive.has(sym)) {
+				alive.add(sym);
+				collectRefs(stmts[di], refs);
+				changed = true;
 			}
 		}
 	}
 
-	// Phase 4: Sweep — filter using pre-computed names (no getDeclName calls)
 	const result: Node[] = [];
 	for (let fi = 0; fi < stmts.length; fi += 1) {
-		if (!isEliminable(stmts[fi])) {
-			result.push(stmts[fi]);
-		} else {
-			const n = names[fi];
-			if (nameSetContains(alive, n) || isCompilerGenerated(n)) {
-				result.push(stmts[fi]);
-			}
-		}
+		const sym = declSyms[fi];
+		if (sym == null || alive.has(sym)) result.push(stmts[fi]);
 	}
 	pd.programStmts = result;
 }
@@ -649,21 +575,24 @@ test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;"
 
 test "transitive liveness" { assert stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) == 3; }
 
-test "unused enum removed" { assert stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) == 1; }
+function sweptStmtCount(input: string): int32 {
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const cc = checkProgram(pr.value);
+	return getStmts(lowerDCE(pr.value, createTransformContextWithChecker(cc))).length;
+}
+
+test "unused enum removed" { assert sweptStmtCount("enum Color { Red, Green } const x = 1;") == 1; }
+
+test "an enum used only through a member stays" { assert sweptStmtCount("enum Color { Red, Green } const x = Color.Green;") == 2; }
+
+test "a local that shares an enum's name does not keep the enum" {
+	assert sweptStmtCount("enum Color { Red } function f(): number { const Color = 1; return Color; } f();") == 2;
+}
 
 test "variable decl always kept" {
 	// Variable declarations have side effects (initializer runs)
 	assert stmtCountAfter("const x = 1;", lowerDCE) == 1;
 }
 
-test "isAlive false for empty" {
-	const syms = createAliveSyms();
-	assert !isAlive(syms, "anything");
-}
 
-test "markAlive then isAlive" {
-	const syms = createAliveSyms();
-	markAlive(syms, "foo");
-	assert isAlive(syms, "foo");
-	assert !isAlive(syms, "bar");
-}
