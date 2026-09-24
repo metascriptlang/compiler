@@ -1,8 +1,8 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
 import { Node, NodeKind, Symbol, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
-import { CheckerContext } from "./context";
-import { lookupSymbol, markUsed } from "./symbol";
+import { markUsedIn, CheckerContext } from "./context";
+import { lookupSymbol } from "./symbol";
 
 export interface DecoratorInfo {
 	builtinKind: string;
@@ -30,7 +30,7 @@ export function intrinsicBuiltinOf(ctx: CheckerContext, name: string): string {
 	if (sym == null || sym.builtinKind == "") return "";
 	for (const n of intrinsicBuiltins) {
 		if (n != sym.builtinKind) continue;
-		markUsed(sym);
+		markUsedIn(ctx, sym);
 		return sym.builtinKind;
 	}
 	return "";

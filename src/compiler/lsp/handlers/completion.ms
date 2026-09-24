@@ -81,7 +81,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 			for (const sym of entry.symbols) {
 				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
 				if (sym.extReceiverType.length > 0) continue;
-				const kindNum = lspCompletionItemKind(sym.kind, false);
+				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
 				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
 			}
 		}
@@ -260,15 +260,16 @@ function lspCrossModuleCandidates(
 			if (inScopeSet.has(sym.name)) continue;
 			// Type context: only suggest type-like symbols
 			if (isTypeCtx) {
-				if (sym.kind != SymbolKind.Interface && sym.kind != SymbolKind.Class
-					&& sym.kind != SymbolKind.Actor && sym.kind != SymbolKind.Enum && sym.kind != SymbolKind.TypeAlias) continue;
+				const k = sym.sym.symbolKind;
+				if (k != SymbolKind.Interface && k != SymbolKind.Class
+					&& k != SymbolKind.Actor && k != SymbolKind.Enum && k != SymbolKind.TypeAlias) continue;
 			}
 			// Compute import edit — included in initial response AND cached for resolve
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
 			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
-			const detail = sgTypeToString(sym.symType) + " (from " + importSpec + ")";
+			const detail = sgTypeToString(sym.sym.symbolType) + " (from " + importSpec + ")";
 			cacheResolveEdit(sym.name, detail, editJson);
-			const kindNum = lspCompletionItemKind(sym.kind, false);
+			const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
 			const hasExistingImport = sgFindImportBySource(program, importSpec) != null;
 			const sortText = hasExistingImport ? "20" : "25";
 			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
@@ -703,8 +704,8 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 		if (alreadyImported) continue;
 		// Prefix filter
 		if (namePrefix.length > 0 && !lspStartsWith(sym.name, namePrefix)) continue;
-		const kindNum = lspCompletionItemKind(sym.kind, false);
-		const detail = sgTypeToString(sym.symType);
+		const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
+		const detail = sgTypeToString(sym.sym.symbolType);
 		const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
 		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", "", ""));
 		idx = idx + 1;

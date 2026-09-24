@@ -228,7 +228,6 @@ export class Symbol {
 	symFlags: BitSet<SymbolFlag>;
 	defaultParams: Node[];
 	modulePath: string;
-	originalName: string;  // Original declared name, used for C mangling when imported with alias
 	headerPath: string;    // @include header for this extern symbol
 	jsModulePath: string;  // @import JS module for this extern symbol
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)

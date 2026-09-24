@@ -3159,7 +3159,6 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		symFlags: 0 as BitSet<SymbolFlag>,
 		defaultParams: [],
 		modulePath: "",
-		originalName: "",
 		headerPath: "",
 		jsModulePath: "",
 		overloadIdx: 0 as int32,

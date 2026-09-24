@@ -247,13 +247,18 @@ function symExternOrImportName(sym: Readonly<Symbol> | null, name: string): stri
 // Single source of truth for function C names. Reads sym.modulePath.
 // extern functions use nativeName. main() stays main_. Others get module-qualified.
 
+// A reference to a module-level symbol is named after its declaration: the text at the use site may be
+// an import alias.
+export function referenceName(sym: Symbol | null, text: string): string {
+	return sym != null && sym.modulePath != "" ? sym.name : text;
+}
+
 export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
 	if (name == "main") return safeName(name);
 	if (sym != null && sym.exportName != "") return sym.exportName;
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
-	// Use original declared name for mangling, not import alias
-	const baseName = (sym != null && sym.originalName != "") ? sym.originalName : name;
+	const baseName = name;
 	if (sym != null && sym.modulePath != "") {
 		// The _u suffix is the symbol's per-(module, name) ordinal minted at
 		// declaration — NOT the overload-set slot. A routine that never joins
@@ -335,7 +340,7 @@ export function isModuleGlobalVar(sym: Symbol | null): boolean {
 export function mangledGlobalName(sym: Symbol | null, name: string): string {
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
-	const baseName = (sym != null && sym.originalName != "") ? sym.originalName : name;
+	const baseName = name;
 	// A `static` decl inside a body shares the module namespace with every other
 	// body in the module, so the module qualifier alone does not separate two
 	// sites spelling the same name. Both the declaration and every read recompute
@@ -451,11 +456,10 @@ test "mangledGlobalName module-qualified" {
 	assert mangledGlobalName(sym, "MAX") == "MAX__srcZfooOms";
 }
 
-test "mangledGlobalName prefers originalName over import alias" {
-	const sym = makeSymbol("aliased", SymbolKind.Variable, noneType(), false);
+test "a reference through an import alias names the global after its declaration" {
+	const sym = makeSymbol("ORIG", SymbolKind.Variable, noneType(), false);
 	sym.modulePath = "src/foo.ms";
-	sym.originalName = "ORIG";
-	assert mangledGlobalName(sym, "aliased") == "ORIG__srcZfooOms";
+	assert mangledGlobalName(sym, referenceName(sym, "aliased")) == "ORIG__srcZfooOms";
 }
 
 test "mangledFunctionName main stays safe" {
@@ -494,11 +498,10 @@ test "mangledFunctionName disamb disambiguates" {
 	assert mangledFunctionName(sym, "foo", 0) == "foo__srcZbarOms_u2";
 }
 
-test "mangledFunctionName prefers originalName over import alias" {
-	const sym = makeSymbol("aliasedFn", SymbolKind.Function, noneType(), false);
+test "a reference through an import alias names the function after its declaration" {
+	const sym = makeSymbol("realFn", SymbolKind.Function, noneType(), false);
 	sym.modulePath = "src/bar.ms";
-	sym.originalName = "realFn";
-	assert mangledFunctionName(sym, "aliasedFn", 0) == "realFn__srcZbarOms_u0";
+	assert mangledFunctionName(sym, referenceName(sym, "aliasedFn"), 0) == "realFn__srcZbarOms_u0";
 }
 
 test "mangledFunctionName no modulePath with overloadIdx" {

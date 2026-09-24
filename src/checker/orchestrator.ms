@@ -2,14 +2,14 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation } from "../ast/node";
+import { Node, NodeKind, ProgramData, Symbol, Type } from "../ast/node";
 import {
 	CheckerContext, createModuleContextWithCache, Severity, GcMode,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
-	collectExports, registerExtension,
+	collectExports, registerExtension, isPreludeExport,
 } from "./context";
 import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
-import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
+import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
 import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
 import { createModuleGraph } from "../module/graph";
@@ -17,7 +17,7 @@ import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, So
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
 import { preludePackStats } from "./preludePack";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
-import { collectTopLevelLocal } from "./collectPass";
+import { collectTopLevelLocal, declOfStatement } from "./collectPass";
 import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
@@ -43,6 +43,29 @@ import "../parser/statements/core";
 //   Phase 1: Both registered with placeholder types
 //   Phase 2: B checked first — imports A → placeholder types. A checked second — imports B → resolved types.
 //   Matches standard partial visibility semantics for circular imports.
+
+// A module in an import cycle is imported before its own Phase 2 runs, so importers bind to the
+// symbols Phase 1 collected. Phase 2 parses the same source again and its collectors take those
+// symbols over for the same declarations, so each declaration keeps one Symbol.
+function adoptEarlySymbols(ctx: CheckerContext, mod: Module, early: Node, program: Node, earlyDeclSyms: HashMap<Node, Symbol>): void {
+	const earlyStmts = (early.data as ProgramData).programStmts;
+	const stmts = (program.data as ProgramData).programStmts;
+	if (earlyStmts.length != stmts.length) {
+		mod.errors.push(createModuleError(`internal: phase 2 parsed ${stmts.length} statements where phase 1 parsed ${earlyStmts.length}`, 0, 0, ErrorSeverity.Error));
+		return;
+	}
+	for (let i = 0; i < stmts.length; i += 1) {
+		const earlyDecl = declOfStatement(earlyStmts[i]);
+		const sym = earlyDeclSyms.get(earlyDecl);
+		if (sym == null) continue;
+		const decl = declOfStatement(stmts[i]);
+		if (decl.kind != earlyDecl.kind) {
+			mod.errors.push(createModuleError(`internal: statement ${i} is a ${decl.kind} in phase 2 and a ${earlyDecl.kind} in phase 1`, decl.location.line, decl.location.column, ErrorSeverity.Error));
+			continue;
+		}
+		ctx.adoptedDecls.set(decl, sym);
+	}
+}
 
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
@@ -122,6 +145,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.gcMode = gcMode;
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
+	const earlyPrograms = new HashMap<string, Node>();
+	const earlyDeclSyms = new HashMap<Node, Symbol>();
 
 	// ================================================================
 	// PHASE 1: Early export registration (Standard reference implementation)
@@ -157,7 +182,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		// With shared IdentCache, nameIds already match — no re-interning needed.
 		// Map iteration preserves insertion order (matches old array iteration).
 		for (const sym of baseCtx.table.current.symbols.values()) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
+			if (isPreludeExport(baseCtx, sym)) {
 				addSymbolToScope(p1ctx.table.current, sym);
 			}
 		}
@@ -179,34 +204,19 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 		// Register early exports (names + kinds, placeholder types)
 		const earlyExports: ExportedSymInfo[] = [];
+		earlyPrograms.set(path, pr.value);
 		for (const sym of p1ctx.table.current.symbols.values()) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				let memberLocs: SourceLocation[] = [];
-				if (sym.declNode != null && sym.declNode.kind == NodeKind.EnumDecl) {
-					memberLocs = (sym.declNode.data as EnumDeclData).memberLocations;
-				}
+				if (sym.declNode != null) earlyDeclSyms.set(sym.declNode, sym);
 				const info: ExportedSymInfo = {
-					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-					overloadTypes: [],
+					name: sym.name, sym,
 					extReceiverType: "", extIsStatic: false,
 					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-					nativeName: sym.nativeName, exportName: sym.exportName, builtinKind: sym.builtinKind, overloadExportNames: [],
-					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
-				definingModule: sym.modulePath != "" ? sym.modulePath : path,
-				originalName: sym.originalName,
-				headerPath: sym.headerPath,
-				jsModulePath: "",
-				hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
-				location: sym.location != null ? sym.location : makeLoc(0, 0),
-				memberLocations: memberLocs,
-				primaryFlags: sym.symFlags as uint32,
-				overloadFlags: [], disamb: 0, overloadDisambs: [],
-				macroBody: null as unknown as Node,
-				macroParams: [],
-				macroParamTypes: [],
-				declNode: null as unknown as Node,
-				overloadDeclNodes: [],
+					macroBody: null as unknown as Node,
+					converterTarget: "",
+					converterTargetType: null as unknown as Type,
+					macroParams: [],
+					macroParamTypes: [],
 				};
 				earlyExports.push(info);
 			}
@@ -255,6 +265,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const _t2i0 = performance.now();
 		const ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		ctx.exportRegistry = registry;
+		const early = earlyPrograms.get(path);
+		if (early != null) adoptEarlySymbols(ctx, mod, early, pr.value, earlyDeclSyms);
 		injectPrelude(ctx, baseCtx);
 		ctx.preludeCtx = baseCtx;
 

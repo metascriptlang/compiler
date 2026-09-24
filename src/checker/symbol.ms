@@ -186,6 +186,21 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 	return Result.ok(true);
 }
 
+export function defineSymbolAs(table: SymbolTable, name: string, sym: Symbol): Result<boolean, string> {
+	const nameId = getIdentId(table.identCache, name);
+	const existing = table.current.symbols.get(nameId);
+	if (existing == sym) return Result.ok(true);
+	if (existing != null) return Result.err(`Duplicate symbol '${name}'`);
+	table.current.symbols.set(nameId, sym);
+	return Result.ok(true);
+}
+
+export function redefineSymbol(table: SymbolTable, name: string, sym: Symbol): void {
+	const nameId = getIdentId(table.identCache, name);
+	if (sym.nameId == 0) sym.nameId = nameId;
+	table.current.symbols.set(nameId, sym);
+}
+
 // ===== Symbol Lookup =====
 
 // Walk scope chain, O(1) per scope via symbols index (populated by
@@ -281,6 +296,11 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type | null,
 
 export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): Symbol {
 	const sym = new Symbol();
+	initSymbol(sym, name, kind, symType, mutable, state);
+	return sym;
+}
+
+export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): void {
 	sym.name = name;
 	sym.nameId = 0;
 	sym.symbolKind = kind;
@@ -295,7 +315,6 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.defaultParams = [];
 	sym.symFlags = mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>);
 	sym.modulePath = "";
-	sym.originalName = "";
 	sym.headerPath = "";
 	sym.jsModulePath = "";
 	sym.overloadIdx = 0;
@@ -307,7 +326,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 	sym.metaValues = [];
 	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
-	return sym;
+	sym.mutatedParams = 0;
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for

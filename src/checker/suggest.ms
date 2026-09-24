@@ -520,8 +520,7 @@ function sgBuildExtensionNameSet(ctx: CheckerContext): HashSet<string> {
 
 function sgIsAlias(suggest: SgSuggest): boolean {
 	if (suggest.sym == null) return false;
-	const orig = suggest.sym.originalName;
-	return orig != null && orig != "" && orig != suggest.name;
+	return suggest.sym.name != suggest.name;
 }
 
 export function sgFormatHover(suggest: SgSuggest): string {

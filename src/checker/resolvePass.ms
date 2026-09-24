@@ -8,8 +8,8 @@
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
+import { markUsedIn, CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -614,7 +614,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				// This preserves hasGenericParams for unification + enables structural matching.
 				const baseSym = lookupSymbol(ctx.table, baseName);
 				if (baseSym != null) {
-					markUsed(baseSym);
+					markUsedIn(ctx, baseSym);
 					ensureShaped(baseSym, ctx);
 					const isRefBase = baseSym.symbolType.kind == TypeKind.Ref && refWrapsNominal(baseSym.symbolType);
 					let baseType = baseSym.symbolType;
@@ -634,7 +634,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
 			if (baseSym2 != null) {
-				markUsed(baseSym2);
+				markUsedIn(ctx, baseSym2);
 				ensureShaped(baseSym2, ctx);
 				const isRefBase2 = baseSym2.symbolType.kind == TypeKind.Ref && refWrapsNominal(baseSym2.symbolType);
 				let baseType2 = baseSym2.symbolType;
@@ -675,7 +675,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		// Non-generic: look up base type
 		const baseSym = lookupSymbol(ctx.table, baseName);
 		if (baseSym != null) {
-			markUsed(baseSym);
+			markUsedIn(ctx, baseSym);
 			// Demand-driven resolution: ensure the base symbol is shaped before using its type
 			ensureShaped(baseSym, ctx);
 			return baseSym.symbolType;
@@ -702,7 +702,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (enumName != "" && memberName != "") {
 				const enumSym = lookupSymbol(ctx.table, enumName);
 				if (enumSym != null && enumSym.symbolType != null && enumSym.symbolType.kind == TypeKind.Enum) {
-					markUsed(enumSym);
+					markUsedIn(ctx, enumSym);
 					ensureShaped(enumSym, ctx);
 					const enumType = enumSym.symbolType;
 					// Verify member exists
@@ -756,7 +756,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
 			if (sym != null) {
-				markUsed(sym);
+				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
 				// Circular type reference: sym still Unknown → return the SAME object
@@ -939,6 +939,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	}
 
 	if (ctx.decoratorsPending && hasFlag(sym, SymbolFlag.Forward)) return;
+	if (ctx.importSet.has(sym)) return;
 	fillForwardSymbol(ctx, sym);
 	sym.state = SymbolState.Shaping;
 	const node = sym.declNode;

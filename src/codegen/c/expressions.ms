@@ -14,7 +14,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -742,7 +742,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			&& node.nodeType != null) {
 			// Use the module-qualified name so the extern matches the defining
 			// module's declaration at link time (both sides emit the same C symbol).
-			const sName = mangledGlobalName(idSym, d.name);
+			const sName = mangledGlobalName(idSym, referenceName(idSym, d.name));
 			if (!nameSetHas(g.declaredGlobals, sName)) {
 				const cType = getTypeDesc(g, node.nodeType);
 				addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -756,7 +756,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		} else if (idSym != null && idSym.symbolKind == SymbolKind.Function) {
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
-			const calleeName = mangledFunctionName(idSym, d.name, idSym.overloadIdx);
+			const calleeName = mangledFunctionName(idSym, referenceName(idSym, d.name), idSym.overloadIdx);
 			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != "" && idSym.modulePath != g.modulePath) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
@@ -804,7 +804,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				// cross-module extern block emits. isModuleGlobalVar already excludes
 				// enum members (they are SymbolKind.EnumMember, not Variable), so we
 				// don't need a nodeType-based guard here.
-				cName = mangledGlobalName(idSym, d.name);
+				cName = mangledGlobalName(idSym, referenceName(idSym, d.name));
 			} else {
 				const mapped = lookupLocalName(p, safe);
 				cName = mapped != "" ? mapped : safe;
@@ -1383,14 +1383,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Module) {
 			const nsSym = node.resolvedSym;
 			if (nsSym != null && nsSym.symbolKind == SymbolKind.Function) {
-				const fnName = mangledFunctionName(nsSym, d.property, nsSym.overloadIdx);
+				const fnName = mangledFunctionName(nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
 				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
 				ctx.results.push(fnName);
 			} else if (nsSym != null) {
 				// Constants/variables: module-qualified name so the extern matches
 				// the defining module's declaration. Property name is the original
 				// identifier post-alias-unwrap (handled inside mangledGlobalName).
-				const sName = mangledGlobalName(nsSym, d.property);
+				const sName = mangledGlobalName(nsSym, referenceName(nsSym, d.property));
 				if (node.nodeType != null && !nameSetHas(g.declaredGlobals, sName)) {
 					const cType = getTypeDesc(g, node.nodeType);
 					addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -1592,7 +1592,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					} else if (idSym != null && idSym.nativeName != "") {
 						cName = idSym.nativeName;
 					} else if (isModuleGlobalVar(idSym)) {
-						cName = mangledGlobalName(idSym, rawName);
+						cName = mangledGlobalName(idSym, referenceName(idSym, rawName));
 					} else {
 						const mapped = lookupLocalName(p, safe);
 						cName = mapped != "" ? mapped : safe;

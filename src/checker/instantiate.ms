@@ -582,7 +582,6 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
-	instSym.originalName = mangledName;
 	let rootScope = ctx.table.current;
 	while (rootScope.parent != null) rootScope = rootScope.parent;
 	instSym.nameId = getIdentId(ctx.table.identCache, mangledName);
@@ -688,8 +687,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	let classDeclNode: Node | null = classSym.declNode;
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
 		const declCtx = pickBodyCtx(classSym.modulePath, ctx);
-		const declName = classSym.originalName != "" ? classSym.originalName : classSym.name;
-		const declSym = lookupSymbol(declCtx.table, declName);
+		const declSym = lookupSymbol(declCtx.table, classSym.name);
 		classDeclNode = declSym != null ? declSym.declNode : null;
 	}
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) return;

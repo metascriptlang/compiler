@@ -564,7 +564,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		if (depExports == null) continue;
 		let depHasMacro = false;
 		for (const es of depExports.symbols) {
-			if (es.kind == SymbolKind.Macro) {
+			if (es.sym.symbolKind == SymbolKind.Macro) {
 				depHasMacro = true;
 				break;
 			}
@@ -1077,7 +1077,7 @@ test "cross-module interface field resolution" {
 	// Foo should be registered with resolved fields
 	const fooInfo = findExportedSymbol(db.exportRegistry, "/test/b.ms", "Foo");
 	assert fooInfo != null;
-	const fooType = fooInfo.symType;
+	const fooType = fooInfo.sym.symbolType;
 	assert fooType != null;
 	// Interface = Ref<Struct>. Unwrap Ref to get inner Struct.
 	const inner = fooType.typeReturn != null ? fooType.typeReturn : fooType;
@@ -1100,8 +1100,8 @@ test "exported static extension carries its signature" {
 	const make = findExportedSymbol(db.exportRegistry, "/test/box.ms", "make");
 	assert make != null;
 	assert make.extIsStatic;
-	assert make.symType.kind == TypeKind.Function;
-	assert make.symType.typeChildren.length == 2;
+	assert make.sym.symbolType.kind == TypeKind.Function;
+	assert make.sym.symbolType.typeChildren.length == 2;
 }
 
 test "module exports keep a decorated exported class" {

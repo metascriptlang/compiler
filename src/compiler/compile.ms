@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, SymbolKind, Type, VariableDeclData } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
@@ -1347,53 +1347,28 @@ function hcrModuleId(modPath: string, root: string, stdPath: string): string {
 	return replaceExt(relative(root, modPath), "");
 }
 
-function hcrFunctionSymbol(
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): string {
+function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
 	if (info.name == "main") return safeName(info.name);
-	if (exportName != "") return exportName;
-	if (nativeName != "") return nativeName;
-	const baseName = info.originalName != "" ? info.originalName : info.name;
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
-	return mangleProcName(baseName, mangleModuleName(info.definingModule), disamb);
+	if (fn.exportName != "") return fn.exportName;
+	if (fn.nativeName != "") return fn.nativeName;
+	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
+	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
 }
-function hcrFunctionSlot(
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): string {
+function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 	if (info.name == "main") return safeName(info.name);
-	if (exportName != "") return exportName;
-	const baseName = info.originalName != "" ? info.originalName : info.name;
-	if (nativeName != "") return nativeName;
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
-	return `${baseName}#${disamb}`;
+	if (fn.exportName != "") return fn.exportName;
+	if (fn.nativeName != "") return fn.nativeName;
+	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
+	return `${fn.name}#${fn.disamb}`;
 }
 
 
-function appendHcrFunctionExport(
-	exports: HcrAbiExport[],
-	moduleId: string,
-	info: ExportedSymInfo,
-	t: Type,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): Result<void, string> {
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) return Result.ok(null);
-	if (hasGenericParams(t)) {
+function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
+	if (hasFlag(fn, SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasGenericParams(fn.symbolType)) {
 		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
 	}
-	const symbol = hcrFunctionSymbol(info, nativeName, exportName, flags, disamb);
-	const slot = hcrFunctionSlot(info, nativeName, exportName, flags, disamb);
-	exports.push(createHcrAbiExport(moduleId, symbol, hcrSignatureKey(t), slot));
+	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
 }
 
@@ -1402,29 +1377,11 @@ function hcrModuleExports(moduleId: string, modPath: string): Result<HcrAbiExpor
 	const moduleExports = findModuleExports(graphRegistry, modPath);
 	if (moduleExports == null) return Result.ok(exports);
 	for (const info of moduleExports.symbols) {
-		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
-		const primary = appendHcrFunctionExport(
-			exports,
-			moduleId,
-			info,
-			info.symType,
-			info.nativeName,
-			info.exportName,
-			info.primaryFlags,
-			info.disamb,
-		);
+		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
+		const primary = appendHcrFunctionExport(exports, moduleId, info, info.sym);
 		if (!primary.ok) return Result.err(primary.error);
-		for (let i = 0; i < info.overloadTypes.length; i += 1) {
-			const overload = appendHcrFunctionExport(
-				exports,
-				moduleId,
-				info,
-				info.overloadTypes[i],
-				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
-				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
-				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
-				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
-			);
+		for (const ov of info.sym.overloads) {
+			const overload = appendHcrFunctionExport(exports, moduleId, info, ov);
 			if (!overload.ok) return Result.err(overload.error);
 		}
 	}
@@ -1515,7 +1472,7 @@ function hcrSharedVariable(sourcePath: string, names: string[]): string {
 	if (moduleExports == null) return "";
 	for (const name of names) {
 		for (const info of moduleExports.symbols) {
-			if (info.name == name && info.definingModule == sourcePath && info.kind == SymbolKind.Variable) return name;
+			if (info.name == name && info.sym.modulePath == sourcePath && info.sym.symbolKind == SymbolKind.Variable) return name;
 		}
 	}
 	return "";
@@ -1526,35 +1483,16 @@ function hcrForeignSymbols(modPath: string): HashSet<string> {
 	const moduleExports = findModuleExports(graphRegistry, modPath);
 	if (moduleExports == null) return foreign;
 	for (const info of moduleExports.symbols) {
-		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
-		addHcrForeignSymbol(foreign, info, info.nativeName, info.exportName, info.primaryFlags, info.disamb);
-		for (let i = 0; i < info.overloadTypes.length; i += 1) {
-			addHcrForeignSymbol(
-				foreign,
-				info,
-				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
-				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
-				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
-				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
-			);
-		}
+		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
+		addHcrForeignSymbol(foreign, info, info.sym);
+		for (const ov of info.sym.overloads) addHcrForeignSymbol(foreign, info, ov);
 	}
 	return foreign;
 }
 
-function addHcrForeignSymbol(
-	foreign: HashSet<string>,
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): void {
-	const isImportC = (flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC);
-	const isBinding = exportName == "" && (nativeName != "" || isImportC);
-	if (info.name == "main" || isBinding) {
-		foreign.add(hcrFunctionSymbol(info, nativeName, exportName, flags, disamb));
-	}
+function addHcrForeignSymbol(foreign: HashSet<string>, info: ExportedSymInfo, fn: Symbol): void {
+	const isBinding = fn.exportName == "" && (fn.nativeName != "" || hasFlag(fn, SymbolFlag.ImportC));
+	if (info.name == "main" || isBinding) foreign.add(hcrFunctionSymbol(info, fn));
 }
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
@@ -1746,7 +1684,7 @@ function hcrRootFunctions(modulePaths: string[]): string[] {
 		const moduleExports = findModuleExports(graphRegistry, modPath);
 		if (moduleExports == null) continue;
 		for (const info of moduleExports.symbols) {
-			if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+			if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
 			roots.push(modPath + ":" + info.name);
 		}
 	}

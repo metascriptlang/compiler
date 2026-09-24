@@ -4,8 +4,8 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -480,7 +480,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
-			markUsed(sym);
+			markUsedIn(ctx, sym);
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
@@ -2587,7 +2587,6 @@ function registerSynthesizedFunction(
 	const instSym = makeSymbol(helperName, SymbolKind.Function, fnType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.modulePath = "";
-	instSym.originalName = helperName;
 	instSym.nameId = getIdentId(ctx.table.identCache, helperName);
 	let rootScope = ctx.table.current;
 	while (rootScope.parent != null) rootScope = rootScope.parent;

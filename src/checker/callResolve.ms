@@ -9,7 +9,7 @@ import { findCallTypeArg, getGenericDecl } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
-import { CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
+import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -19,7 +19,7 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
-import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, markUsed, setFlag } from "./symbol";
+import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
@@ -137,12 +137,7 @@ function resolveContainerModule(ctx: CheckerContext, typeName: string): Symbol |
 	// Fallback: search export registry for types not directly in scope (e.g. nested struct fields)
 	for (const entry of ctx.exportRegistry.entries) {
 		for (const exp of entry.symbols) {
-			if (exp.name == typeName) {
-				const synth = makeSymbolState(typeName, exp.kind, exp.symType, false, SymbolState.Shaped);
-				synth.modulePath = exp.definingModule != "" ? exp.definingModule : entry.modulePath;
-				if (exp.location != null && exp.location.line > 0) synth.location = exp.location;
-				return synth;
-			}
+			if (exp.name == typeName) return exp.sym;
 		}
 	}
 	return null;
@@ -291,7 +286,7 @@ export function foldComptimeNodeAliasArgs(ctx: CheckerContext, args: Node[]): vo
 		if (a.kind == NodeKind.Identifier) {
 			const sym = lookupSymbol(ctx.table, (a.data as IdentifierData).name);
 			if (sym != null && hasFlag(sym, SymbolFlag.ComptimeNodeAlias) && sym.declNode != null) {
-				markUsed(sym);
+				markUsedIn(ctx, sym);
 				args[i] = cloneNodeForCheck(sym.declNode);
 			}
 		}
@@ -879,7 +874,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Demand-driven: ensure callee signature is ready
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
-			markUsed(sym);
+			markUsedIn(ctx, sym);
 			sgRecordSym(ctx, d.callee.location.line, d.callee.location.column, d.callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
 			// Template: inline AST substitution (reference parity). Expand the
 			// template body at the call site — no function call emitted.
@@ -2780,74 +2775,6 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 }
 
 // Check if a type maps to a pointer in C (Ref, Ptr, Borrow — NOT Object/interface)
-// Build a one-off Symbol from ExportedSymInfo for namespace member access.
-// Same metadata as importSymFromRegistry, but NOT defined in any scope.
-function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symbol {
-	const sym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.symType, false, SymbolState.Shaped);
-	setFlag(sym, SymbolFlag.Imported);
-	sym.modulePath = expInfo.definingModule != "" ? expInfo.definingModule : sourcePath;
-	sym.disamb = expInfo.disamb;
-	if (expInfo.originalName != "") sym.originalName = expInfo.originalName;
-	if (expInfo.nativeName != "") sym.nativeName = expInfo.nativeName;
-	if (expInfo.exportName != "") sym.exportName = expInfo.exportName;
-	if (expInfo.builtinKind != "") sym.builtinKind = expInfo.builtinKind;
-	if (expInfo.headerPath != "") sym.headerPath = expInfo.headerPath;
-	if (expInfo.jsModulePath != "") sym.jsModulePath = expInfo.jsModulePath;
-	sym.defaultParams = expInfo.defaultParams;
-	// Cross-module generic mono — carry original AST so tryInstantiateGenericCallee
-	// can fire at `ns.f<T>(...)` namespace-access call sites (mirrors the
-	// importSymFromRegistry path for direct imports). Without this, namespace
-	// member access keeps the un-substituted Result<T, _> shape and codegen fails.
-	if (expInfo.declNode != null) sym.declNode = expInfo.declNode;
-	// Preserve OverloadSig flag on the primary sym for namespace access paths.
-	if ((expInfo.primaryFlags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
-		setFlag(sym, SymbolFlag.OverloadSig);
-	}
-	if (expInfo.overloadTypes.length > 0) {
-		sym.overloads = [];
-		let oi = 0;
-		while (oi < expInfo.overloadTypes.length) {
-			const overSym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.overloadTypes[oi], false, SymbolState.Shaped);
-			overSym.overloadIdx = oi + 1;
-			if (oi < expInfo.overloadDisambs.length) overSym.disamb = expInfo.overloadDisambs[oi];
-			overSym.modulePath = sym.modulePath;
-			if (oi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[oi] != "") {
-				overSym.nativeName = expInfo.overloadNativeNames[oi];
-			}
-			if (expInfo.overloadExportNames != null && oi < expInfo.overloadExportNames.length && expInfo.overloadExportNames[oi] != "") {
-				overSym.exportName = expInfo.overloadExportNames[oi];
-			}
-			if (oi < expInfo.overloadBuiltinKinds.length && expInfo.overloadBuiltinKinds[oi] != "") {
-				overSym.builtinKind = expInfo.overloadBuiltinKinds[oi];
-			}
-			if (oi < expInfo.overloadDefaultParamsCounts.length) {
-				const cnt = expInfo.overloadDefaultParamsCounts[oi];
-				if (cnt > 0) {
-					overSym.defaultParams = [];
-					let startIdx = 0;
-					let ci = 0;
-					while (ci < oi) { startIdx = startIdx + expInfo.overloadDefaultParamsCounts[ci]; ci = ci + 1; }
-					let di = 0;
-					while (di < cnt) { overSym.defaultParams.push(expInfo.overloadDefaultParamsFlat[startIdx + di]); di = di + 1; }
-				}
-			}
-			if (expInfo.overloadFlags != null && oi < expInfo.overloadFlags.length
-					&& (expInfo.overloadFlags[oi] as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) {
-				setFlag(overSym, SymbolFlag.OverloadSig);
-			}
-			// Cross-module mono parity with primary path.
-			if (expInfo.overloadDeclNodes != null
-					&& oi < expInfo.overloadDeclNodes.length
-					&& expInfo.overloadDeclNodes[oi] != null) {
-				overSym.declNode = expInfo.overloadDeclNodes[oi];
-			}
-			sym.overloads.push(overSym);
-			oi = oi + 1;
-		}
-	}
-	return sym;
-}
-
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Cursor) {
@@ -3121,10 +3048,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (nsModPath != "") {
 			const expInfo = findExportedSymbol(ctx.exportRegistry, nsModPath, d.property);
 			if (expInfo != null) {
-				const memSym = createSymFromExport(expInfo, nsModPath);
+				const memSym = expInfo.sym;
+				noteImported(ctx, memSym);
 				node.resolvedSym = memSym;
-				node.nodeType = expInfo.symType;
-				return expInfo.symType;
+				node.nodeType = memSym.symbolType;
+				return memSym.symbolType;
 			}
 			addError(ctx, `Module '${d.object.resolvedSym.name}' has no export '${d.property}'`, node.location.line, node.location.column);
 			return inferredType();
@@ -3588,10 +3516,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (ext.sym != null) {
 				ensureShaped(ext.sym, ctx);
 				node.resolvedSym = ext.sym;
-				markUsed(ext.sym);
+				markUsedIn(ctx, ext.sym);
 				// Also mark the imported symbol (may be a different object than ext.sym)
 				const importedSym = lookupSymbol(ctx.table, ext.sym.name);
-				if (importedSym != null) markUsed(importedSym);
+				if (importedSym != null) markUsedIn(ctx, importedSym);
 				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr

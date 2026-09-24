@@ -69,7 +69,7 @@ function reportCycleSites(ctx: CheckerContext, conv: Symbol): void {
 
 export function reportConverterCycles(ctx: CheckerContext): void {
 	for (const conv of ctx.runtimeConverters) {
-		if (hasFlag(conv, SymbolFlag.Imported) || conv.modulePath != ctx.modulePath) continue;
+		if (conv.modulePath != ctx.modulePath) continue;
 		reportCycleSites(ctx, conv);
 	}
 }

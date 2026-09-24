@@ -8,11 +8,10 @@
 // Reference analog: getCompilerProc — synthesized calls resolve to the real
 // runtime symbol rather than trusting a bare textual name to survive.
 
-import { Node, NodeKind, IdentifierData, Symbol, SymbolState } from "../../ast/node";
+import { Node, NodeKind, IdentifierData, SymbolState } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { ExportedSymInfo } from "../../checker/context";
-import { makeSymbolState } from "../../checker/symbol";
 
 let _ctx: TransformContext = null as unknown as TransformContext;
 
@@ -30,19 +29,8 @@ function bindSynthesizedIdent(node: Node): Node {
 	const d = node.data as IdentifierData;
 	const info = lookupRuntimeExport(d.name);
 	if (info == null) return node;
-	node.resolvedSym = runtimeSymOf(info);
+	node.resolvedSym = info.sym;
 	return node;
-}
-
-// Only the fields the JS naming oracle reads — a runtime routine is never
-// generic, overloaded or default-argumented, so the wider import-path symbol
-// construction would carry nothing this node can use.
-function runtimeSymOf(info: ExportedSymInfo): Symbol {
-	const sym = makeSymbolState(info.name, info.kind, info.symType, false, SymbolState.Shaped);
-	sym.modulePath = info.definingModule;
-	if (info.originalName != "") sym.originalName = info.originalName;
-	if (info.nativeName != "") sym.nativeName = info.nativeName;
-	return sym;
 }
 
 // An unresolved name may match exports from several modules; a runtime routine
@@ -54,7 +42,7 @@ function lookupRuntimeExport(name: string): ExportedSymInfo {
 	if (hits == null || hits.length == 0) return null as unknown as ExportedSymInfo;
 	if (hits.length == 1) return hits[0];
 	for (const info of hits) {
-		if (info.definingModule.indexOf("std/core/") >= 0) return info;
+		if (info.sym.modulePath.indexOf("std/core/") >= 0) return info;
 	}
 	return null as unknown as ExportedSymInfo;
 }

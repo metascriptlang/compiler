@@ -121,11 +121,7 @@ function walkBody(node: Node, modulePath: string): void {
 			return;
 		}
 		if (sym != null) {
-			// Use the symbol's home module + original declared name.
-			// originalName handles aliases: import { printNode as printAstNode }
-			// → sym.name="printAstNode", sym.originalName="printNode"
-			// We need "printNode" to find the declaration in the source module.
-			const targetName = (sym.originalName != "" && sym.originalName != null) ? sym.originalName : sym.name;
+			const targetName = sym.name;
 			if (sym.modulePath != "" && sym.modulePath != modulePath) {
 				markAndWalk(sym.modulePath, targetName);
 			} else {
@@ -168,7 +164,7 @@ function walkBody(node: Node, modulePath: string): void {
 		}
 		if (nd.newCallee.resolvedSym != null) {
 			const classSym = nd.newCallee.resolvedSym;
-			const className = (classSym.originalName != "" && classSym.originalName != null) ? classSym.originalName : classSym.name;
+			const className = classSym.name;
 			const initName = initFnName(className);
 			const ctorMod = classSym.modulePath != "" ? classSym.modulePath : modulePath;
 			markAndWalk(ctorMod, initName);
@@ -198,7 +194,7 @@ function walkBody(node: Node, modulePath: string): void {
 		walkBody(md.object, modulePath);
 		if (node.resolvedSym != null) {
 			const sym2 = node.resolvedSym;
-			const targetName2 = (sym2.originalName != "" && sym2.originalName != null) ? sym2.originalName : sym2.name;
+			const targetName2 = sym2.name;
 			if (sym2.modulePath != "" && sym2.modulePath != modulePath) {
 				markAndWalk(sym2.modulePath, targetName2);
 			} else {

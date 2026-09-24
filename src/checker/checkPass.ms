@@ -6,8 +6,8 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, isExportedBy, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
+import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -844,7 +844,7 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 	if (body.kind == NodeKind.Identifier) {
 		const d = body.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, d.name);
-		if (sym != null) markUsed(sym);
+		if (sym != null) markUsedIn(ctx, sym);
 	}
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
 }
@@ -2189,7 +2189,7 @@ function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
 	for (const paramType of d.macroDeclParamTypes) {
 		if (paramType != "") {
 			const sym = lookupSymbol(ctx.table, paramType);
-			if (sym != null) markUsed(sym);
+			if (sym != null) markUsedIn(ctx, sym);
 		}
 	}
 	markMacroBodyUsed(ctx, d.macroDeclBody);
@@ -2200,7 +2200,7 @@ function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
 	if (node.kind == NodeKind.Identifier) {
 		const id = node.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym != null) markUsed(sym);
+		if (sym != null) markUsedIn(ctx, sym);
 	}
 	forEachChild(node, (child: Node): void => {
 		markMacroBodyUsed(ctx, child);
@@ -2253,7 +2253,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		keepModuleStmt(ctx, stmt, out, emitted);
 		return;
 	}
-	markUsed(sym);
+	markUsedIn(ctx, sym);
 	if (call.kind == NodeKind.CallExpr) {
 		const callee = (call.data as CallExprData).callee;
 		const calleeName = (callee.data as IdentifierData).name;
@@ -2360,8 +2360,11 @@ function reportUnusedImports(ctx: CheckerContext, program: Node): void {
 			if (alias.charAt(0) == "_") continue;
 			const sym = lookupSymbol(ctx.table, alias);
 			if (sym == null) continue;
-			if (hasFlag(sym, SymbolFlag.Used)) continue;
-			if (hasFlag(sym, SymbolFlag.Exported)) continue;
+			if (ctx.importSet.has(sym)) {
+				if (ctx.usedImports.has(sym) || isExportedBy(ctx, sym)) continue;
+			} else if (hasFlag(sym, SymbolFlag.Used) || hasFlag(sym, SymbolFlag.Exported)) {
+				continue;
+			}
 			if (ii >= imp.nameLocations.length) continue;
 			const nameLoc = imp.nameLocations[ii];
 			if (nameLoc == null || nameLoc.line <= 0) continue;
@@ -2612,6 +2615,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			// imports inside this prelude resolve against the right directory.
 			const savedPath = ctx.modulePath;
 			ctx.modulePath = resolvedPath;
+			ctx.ownModules.add(resolvedPath);
 			// Dep-first: sub-modules compile first so their exports are in
 			// ExportRegistry when this module's re-exports run.
 			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath, backendExt);
@@ -2619,6 +2623,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			ctx.interfSet = new HashSet<Symbol>();
 			runThreePasses(ctx, pr.value);
 			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
+			for (const exported of ctx.interf) ctx.preludeExports.add(exported);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			stampHeaderPaths(ctx);
@@ -2837,7 +2842,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
 	for (const sym of preludeCtx.table.current.symbols.values()) {
-		if (hasFlag(sym, SymbolFlag.Exported)) {
+		if (isPreludeExport(preludeCtx, sym)) {
 			addSymbolToScope(ctx.table.current, sym);
 			if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
 			// Exported macros (converters included) expand per-module: mirror the
@@ -2899,6 +2904,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 	for (const sym of ctx.table.current.symbols.values()) {
 		if (!isExportedBy(ctx, sym)) continue;
 		addSymbolToScope(preludeCtx.table.current, sym);
+		preludeCtx.preludeExports.add(sym);
 		if (sym.symbolKind != SymbolKind.Macro) continue;
 		const body = ctx.macroBodyRegistry.get(sym.name);
 		const params = ctx.macroParamsRegistry.get(sym.name);
