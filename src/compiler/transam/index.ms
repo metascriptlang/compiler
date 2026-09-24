@@ -48,6 +48,7 @@ import {
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../checker/checkPass";
+import { registerModuleProgram } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -604,6 +605,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const graph = createModuleGraph();
 	addModule(graph, mod);
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	registerModuleProgram(filePath, program);
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion
