@@ -164,6 +164,13 @@ export function drainPendingInstances(): Node[] {
 
 // ===== Helpers =====
 
+function cachedInstance(generic: Symbol, instanceName: string): Symbol | null {
+	for (const inst of generic.instances) {
+		if (inst.name == instanceName) return inst;
+	}
+	return null;
+}
+
 // Deduplicate unify bindings (K=string may appear twice from HashMap<K,V> + K params)
 function deduplicateBindings(names: string[], types: Type[]): { names: string[], types: Type[] } {
 	const outNames: string[] = [];
@@ -556,10 +563,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	}
 	const mangledName = mangleMonoName(mangleBase, dedup.types) + readonlyViewSuffix(dedup.types);
 
-	// Cache check — skip if already instantiated.
-	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const existing = lookupSymbol(host.table, mangledName);
+	const existing = cachedInstance(sym, mangledName);
 	if (existing != null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		_igfHits = _igfHits + 1;
@@ -604,10 +609,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
-	let rootScope = host.table.current;
-	while (rootScope.parent != null) rootScope = rootScope.parent;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
-	addSymbolToScope(rootScope, instSym);
+	sym.instances.push(instSym);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope

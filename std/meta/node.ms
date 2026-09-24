@@ -240,6 +240,7 @@ export class Symbol {
 	metaValues: Node[];
 	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
+	instances: Symbol[];   // A generic's instances, one per type-argument list
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

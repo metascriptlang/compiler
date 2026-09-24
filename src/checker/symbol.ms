@@ -327,6 +327,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
 	sym.mutatedParams = 0;
+	sym.instances = [];
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for
