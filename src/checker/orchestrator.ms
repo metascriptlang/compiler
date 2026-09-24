@@ -2,7 +2,7 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, Symbol } from "../ast/node";
+import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
@@ -393,6 +393,34 @@ test "a declaration carries its module's index and an ordinal unique in that mod
 	const first = itemsOfModuleB();
 	assert first != "";
 	assert itemsOfModuleB() == first;
+}
+
+function showCallOwners(generic: boolean): string {
+	const params = generic ? "<T>" : "";
+	const field = generic ? "T" : "number";
+	const args = generic ? "<number>" : "";
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: `export class Box${params} { v: ${field}; constructor(v: ${field}) { this.v = v; } show(): string { return "a"; } }` });
+	entries.push({ entryPath: "/src/b.ms", entrySource: `export class Box${params} { w: ${field}; n: int32; constructor(w: ${field}) { this.w = w; this.n = 5; } show(): string { return "b"; } }` });
+	entries.push({ entryPath: "/src/main.ms", entrySource: `import { Box as BoxA } from "./a";\nimport { Box as BoxB } from "./b";\nconst sa = new BoxA${args}(1).show();\nconst sb = new BoxB${args}(2).show();` });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null || main.errors.length > 0) return "errors";
+	let owners = "";
+	for (const name of ["sa", "sb"]) {
+		const decl = scopeSymbolOf("/src/main.ms", name);
+		if (decl == null || decl.declNode == null) return "no " + name;
+		const init = (decl.declNode.data as VariableDeclData).initializer;
+		if (init.kind != NodeKind.CallExpr || init.resolvedSym == null) return "unresolved " + name;
+		owners = owners + init.resolvedSym.modulePath + " ";
+	}
+	return owners;
+}
+
+test "a method call on one of two same-named classes resolves to that class's own method" {
+	assert showCallOwners(false) == "/src/a.ms /src/b.ms ";
+	assert showCallOwners(true) == "/src/a.ms /src/b.ms ";
 }
 
 test "imported enum available" {

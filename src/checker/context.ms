@@ -611,6 +611,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
 	let objT = objType;
 	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
+	const recvNominal = nominalTypeSym(recvT);
+	const objNominal = nominalTypeSym(objT);
+	if (recvNominal != null && objNominal != null && recvNominal != objNominal) return false;
 	// Generic extensions: try unification on receiver param.
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
 	if (hasGenericParams(recvT)) {
@@ -634,9 +637,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
-	const recvNominal = nominalTypeSym(recvT);
-	const objNominal = nominalTypeSym(objT);
-	if (recvNominal != null && objNominal != null) return recvNominal == objNominal;
+	if (recvNominal != null && objNominal != null) return true;
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
 	if (ext.receiverTypeName != "") {
@@ -667,6 +668,10 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 function nominalTypeSym(t: Type): Symbol | null {
 	let s = t;
 	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) {
+		s = s.typeExtra;
+		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	}
 	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
 	const kind = s.sym.symbolKind;
 	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
