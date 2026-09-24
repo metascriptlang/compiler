@@ -1680,35 +1680,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 
-		// Union handling — two directions:
-		// 1. Narrowing: `unionExpr as { field: T }` → `(expr).vN` (access variant)
-		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = *(Union_vN*)&expr }`
-		//    (reinterpret needed for `{...} as unknown as Union` escape-hatch where
-		//    src's C type is anonymous struct, not the named variant struct).
-
-		// Case 1: Source is Union → access variant member
-		// Use getTypeDesc consistency: the type cache (first-write-wins in genUnionType)
-		// ensures structurally identical variants share one C typedef. Find the first
-		// variant whose cached C type matches the target — guaranteed consistent with
-		// variable type declarations. Self-hosting safe (no reference identity on value types).
 		if (srcType != null && srcType.kind == TypeKind.Union && node.nodeType != null
 			&& srcType.typeChildren != null) {
-			// Ensure union type is generated (populates variant type cache)
 			getTypeDesc(g, srcType);
 			const targetDesc = getTypeDesc(g, node.nodeType);
-			let varIdx = -1;
-			let vi = 0;
-			while (vi < srcType.typeChildren.length) {
+			for (let vi = 0; vi < srcType.typeChildren.length; vi += 1) {
 				const variant = srcType.typeChildren[vi];
 				if (variant != null && getTypeDesc(g, variant) == targetDesc) {
-					varIdx = vi;
-					vi = srcType.typeChildren.length;
+					addCGenError(g, "internal: `as " + d.asType + "` from a union to its member " + vi.toString() + " reached codegen unprojected at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+					ctx.results.push("MS_NIL");
+					return;
 				}
-				vi += 1;
-			}
-			if (varIdx >= 0) {
-				ctx.results.push(`(${expr}).v${varIdx}`);
-				return;
 			}
 		}
 
