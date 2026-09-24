@@ -63,6 +63,8 @@ import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
 import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { resolveRuntimeDir } from "../../utils/path";
+import { errorCount as checkErrorCount } from "../../checker/context";
 
 // ===== Stdlib Detection =====
 
@@ -1128,4 +1130,16 @@ test "a dependency's exported type keeps its declaring module" {
 		assert inner.sym != null;
 		assert inner.sym.modulePath == "/test/box.ms";
 	}
+}
+
+test "an importer resolves members through a dependency's checked exports" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/test/holder.ms", "export interface Holder { items: Map<int32, string>; }\nexport function makeHolder(): Holder { return { items: new Map<int32, string>() }; }\nexport class Tags { names: Map<string, int32> = new Map<string, int32>(); }");
+	dbSetFileText(db, "/test/reader.ms", 'import { Holder, makeHolder, Tags } from "./holder";\nexport function count(): int32 { const h: Holder = makeHolder(); let n = 0; for (const v of h.items.values()) n += v.length; return n; }\nexport function tagged(t: Tags): boolean { return t.names.has("x"); }');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/test/reader.ms"), getFileId(db.fileInput, "/test/holder.ms"));
+	dbTypeCheck(db, "/test/holder.ms");
+	const ctx = dbTypeCheck(db, "/test/reader.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
 }
