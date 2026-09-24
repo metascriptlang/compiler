@@ -102,6 +102,7 @@ reds_of() {
     tools) sed -n 's/^FAIL \(.*\): bash -n$/\1/p' "$log" ;;
     suite|suite-orc|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
+        /^NORESULT / { sub(/^NORESULT /,""); print; next }
         /^ FAIL  / { f=$0; sub(/^ FAIL  /,"",f); if (index(f,top)==1) f=substr(f,length(top)+1); next }
         /^  × / { t=$0; sub(/^  × /,"",t); print f " > " t }
       '
@@ -240,9 +241,6 @@ admit() {
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s && %s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$BUILDER" "$CC_FLAG" "$CAND" "$CAND" "$CAND" ;;
-    suite) printf '%s test src/index.ms' "$BUILDER" ;;
-    tests) printf 'rc=0; %s test src/test/js/index.ms || rc=1; %s test src/test/c/index.ms || rc=1; %s test src/test/fixedbugs/index.ms || rc=1; %s test src/test/handoff/index.ms || rc=1; %s test src/test/fmt/index.ms || rc=1; %s test src/test/checker3pass/index.ms || rc=1; %s test src/test/lang/index.ms || rc=1; exit $rc' "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" "$BUILDER" ;;
-    suite-orc) printf '%s test src/index.ms --gc=orc' "$BUILDER" ;;
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
@@ -256,6 +254,27 @@ run_tools_lane() {
   while IFS=$'\t' read -r _ p; do
     case "$p" in *.sh) [ -f "$p" ] && { bash -n "$p" || { printf 'FAIL %s: bash -n\n' "$p"; rc=1; }; } ;; esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
+  return $rc
+}
+
+TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms"
+
+run_test_lane() {
+  local files=src/index.ms flags="" rc=0 f part="$OUT/$1.part"
+  case "$1" in
+    suite-orc) flags=--gc=orc ;;
+    tests) files=$TIERS ;;
+  esac
+  for f in $files; do
+    env -u NO_COLOR -u FORCE_COLOR "$BUILDER" test "$f" $flags >"$part" 2>&1 || rc=1
+    cat "$part"
+    if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
+      printf 'NORESULT %s > no result\n' "$f"
+      sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
+      rc=1
+    fi
+  done
+  rm -f "$part"
   return $rc
 }
 
@@ -396,7 +415,7 @@ flaky_ids >"$OUT/flaky.ids"
 
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
-case " $lanes " in *" build "*|*" suite "*|*" hcr "*|*" suite-orc "*|*" fmt "*|*" corpus "*|*" san "*|*" guard "*) admit ;; esac
+[ "$lanes" = tools ] || admit
 
 for lane in $lanes; do
   if [ -n "$stopped" ]; then say "gate: $lane skipped, $stopped has a new red"; continue; fi
@@ -414,6 +433,7 @@ for lane in $lanes; do
     rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); reused=" (reused log)"
   else case "$lane" in
     tools) run_tools_lane >"$log" 2>&1; rc=$? ;;
+    suite|suite-orc|tests) run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
