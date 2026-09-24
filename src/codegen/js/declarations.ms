@@ -313,7 +313,11 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 		const spec = lookupImportSpec(gen, d.importSource);
 		if (spec == "") return;
 		emitIndent(gen);
-		emit(gen, `import "${spec}";\n`);
+		if (d.importNames.length == 1 && d.importNames[0] == "*") {
+			emit(gen, `import * as ${d.importAliases[0]} from "${spec}";\n`);
+		} else {
+			emit(gen, `import "${spec}";\n`);
+		}
 		return;
 	}
 	// Non-bundle mode: ES module import
