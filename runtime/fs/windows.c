@@ -35,13 +35,20 @@ msString msFsReadFile(msString path) {
 	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), "rb");
 	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
-	fseek(f, 0, SEEK_END);
-	long sz = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	if (sz <= 0 || sz > 67108864) { fclose(f); return MS_EMPTY_STRING; }
-	char* buf = (char*)malloc(sz + 1);
-	if (!buf) { fclose(f); return MS_EMPTY_STRING; }
-	size_t nread = fread(buf, 1, sz, f);
+	if (_fseeki64(f, 0, SEEK_END) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
+	__int64 sz = _ftelli64(f);
+	if (sz < 0 || _fseeki64(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
+	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
+	char* buf = (char*)malloc((size_t)sz + 1);
+	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
+	errno = 0;
+	size_t nread = fread(buf, 1, (size_t)sz, f);
+	if (nread != (size_t)sz && ferror(f)) {
+		_msFsLastErrno = errno != 0 ? errno : EIO;
+		free(buf);
+		fclose(f);
+		return MS_EMPTY_STRING;
+	}
 	fclose(f);
 	buf[nread] = '\0';
 	msString result = msStringNew(buf, (int64_t)nread);
