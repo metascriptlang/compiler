@@ -1,0 +1,1 @@
+@compile("./nativeChained.c");
