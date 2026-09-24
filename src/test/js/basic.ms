@@ -113,11 +113,11 @@ s.stripInPlace();
 // and bare names are reserved for the exported/@emit ABI surface.
 test "E2E JS: same-name private module decls get module-qualified names" {
 	const modA = `function dupPrivHelper(): int32 { return 1; }
-const dupPrivTag: int32 = 10;
+let dupPrivTag: int32 = 10;
 export function fromDupA(): int32 { return dupPrivHelper() + dupPrivTag; }
 `;
 	const modB = `function dupPrivHelper(): int32 { return 2; }
-const dupPrivTag: int32 = 20;
+let dupPrivTag: int32 = 20;
 export function fromDupB(): int32 { return dupPrivHelper() + dupPrivTag; }
 `;
 	const useMod = `import { fromDupA } from "./dupPrivA";

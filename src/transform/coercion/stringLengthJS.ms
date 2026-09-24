@@ -8,7 +8,7 @@
 import { Node, NodeKind, MemberExprData, ArrayAccessData, BinaryExprData, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent } from "../util";
+import { makeCall, runtimeRef } from "../util";
 
 export function lowerStringLengthJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, rewriteStringTsTier);
@@ -27,7 +27,7 @@ function rewriteLength(node: Node): Node {
 	const objType = d.object.nodeType;
 	if (objType == null || objType.kind != TypeKind.String) return node;
 	const callee = d.property == "length" ? "msStringLength" : d.property;
-	const result = makeCall(makeIdent(callee, node.location), [d.object], node.location);
+	const result = makeCall(runtimeRef(callee, node.location), [d.object], node.location);
 	result.nodeType = node.nodeType;
 	return result;
 }
@@ -40,7 +40,7 @@ function rewriteIndex(node: Node): Node {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") return node;
 	}
-	const result = makeCall(makeIdent("charAt", node.location), [d.array, d.index], node.location);
+	const result = makeCall(runtimeRef("charAt", node.location), [d.array, d.index], node.location);
 	result.nodeType = node.nodeType;
 	return result;
 }

@@ -16,6 +16,7 @@ export class IdentEntry {
 export class IdentCache {
 	buckets: IdentEntry[];
 	counter: int32;
+	names: string[];
 }
 
 // ===== Constructor =====
@@ -30,7 +31,7 @@ export function createIdentCache(): IdentCache {
 		buckets.push(null as unknown as IdentEntry);
 		i = i + 1;
 	}
-	return { buckets, counter: 0 };
+	return { buckets, counter: 0, names: [""] };
 }
 
 // ===== Core: Intern String → ID =====
@@ -62,7 +63,12 @@ export function getIdentId(cache: IdentCache, name: string): int32 {
 		hash: h,
 	};
 	cache.buckets[idx] = newEntry;
+	cache.names.push(name);
 	return newEntry.id;
+}
+
+export function identName(cache: Readonly<IdentCache>, id: int32): string {
+	return id > 0 && id < cache.names.length ? cache.names[id] : "";
 }
 
 export function findIdentId(cache: Readonly<IdentCache>, name: string): int32 {

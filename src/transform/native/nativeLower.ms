@@ -17,7 +17,7 @@ import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparen
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember, syntheticToken, runtimeRef } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef } from "../util";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
 // synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
@@ -220,7 +220,7 @@ function rewriteMemberExpr(node: Node): Node {
 	if (d.property == "length") {
 		if (objType.kind == TypeKind.CString) {
 			const loc = node.location;
-			const result = makeCall(makeIdent("strlen", loc), [d.object], loc);
+			const result = makeCall(runtimeRef("strlen", loc), [d.object], loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}

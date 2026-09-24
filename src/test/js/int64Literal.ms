@@ -53,13 +53,13 @@ test "uninitialized int64 array is a BigInt64Array" {
 // checker marks, so no Number ever meets a BigInt operator.
 
 test "int32 widened into an int64 slot becomes a BigInt" {
-	const result = compileToJS("const i: int32 = 7; const a: int64 = i;");
+	const result = compileToJS("let i: int32 = 7; let a: int64 = i;");
 	assert result.ok;
 	assert result.value.contains("BigInt(");
 }
 
 test "int64 narrowed into an int32 slot becomes a Number" {
-	const result = compileToJS("const a: int64 = 7; const i: int32 = a as int32;");
+	const result = compileToJS("let a: int64 = 7; let i: int32 = a as int32;");
 	assert result.ok;
 	assert result.value.contains("Number(");
 }

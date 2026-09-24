@@ -149,12 +149,12 @@ export function createCompState(): RaiserCompState {
 // Overloads share module and name and differ by the declaration-time disamb,
 // the same key C mangles routine names with.
 export function routineKey(sym: Symbol): string {
-	const name = sym.originalName != "" ? sym.originalName : sym.name;
+	const name = sym.name;
 	return sym.modulePath + ":" + name + "#" + sym.disamb;
 }
 
 export function globalSymbolKey(sym: Symbol): string {
-	const name = sym.originalName != "" ? sym.originalName : sym.name;
+	const name = sym.name;
 	return sym.modulePath + ":" + name + ":" + sym.disamb;
 }
 
@@ -356,8 +356,7 @@ export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: str
 		if (s.scopedFunctions && sym.modulePath != "") {
 			const exact = resolveFunc(s, routineKey(sym));
 			if (exact >= 0) return exact;
-			const originalName = sym.originalName != "" ? sym.originalName : sym.name;
-			return resolveFunc(s, sym.modulePath + ":" + originalName);
+			return resolveFunc(s, sym.modulePath + ":" + sym.name);
 		}
 		return resolveFunc(s, sym.name);
 	}

@@ -4,8 +4,8 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markUsed, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -480,7 +480,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
-			markUsed(sym);
+			markUsedIn(ctx, sym);
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
@@ -567,9 +567,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								d.left.location.line, d.left.location.column);
 						}
 						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
-						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring) && !isDeclaringStaticBlockWrite(ctx, declaring)) {
-							addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
-								d.left.location.line, d.left.location.column);
+						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
+							if (!isDeclaringStaticBlockWrite(ctx, declaring)) {
+								addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+									d.left.location.line, d.left.location.column);
+							} else if (d.left.resolvedSym != null && d.left.resolvedSym.symFlags.has(SymbolFlag.Static)) {
+								setFlag(d.left.resolvedSym, SymbolFlag.Mutable);
+							}
 						}
 					}
 				}
@@ -1512,7 +1516,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						while (pi < d.properties.length) {
 							const probe = cloneNodeForCheck(d.properties[pi]);
 							checkExpr(ctx, probe, null);
-							propTypes.push(probe.nodeType);
+							const probeType = probe.nodeType;
+							propTypes.push(probeType!);
 							pi = pi + 1;
 						}
 						const refined = findUnionVariant(objExpected, d.keys, propTypes);
@@ -1557,7 +1562,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
 					if (ft != rawFt) d.properties[pi] = fitNode(ctx, d.properties[pi], ft, rawFt);
 					if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
-					fieldTypes.push(ft);
+					fieldTypes.push(ft!);
 					pi = pi + 1;
 				}
 				const anonName = anonStructName(fieldNames, fieldTypes);
@@ -1696,7 +1701,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (elemExpected == null && d.elements.length > 1
 					&& !(elemType != null && isAwaitable(elemType))) {
 					const elemJoinTypes: Type[] = [];
-					for (const el of d.elements) elemJoinTypes.push(el.nodeType);
+					for (const el of d.elements) {
+						const elType = el.nodeType;
+						elemJoinTypes.push(elType!);
+					}
 					const joinedElem = joinBranchTypes(elemJoinTypes);
 					if (!isUnresolvedType(joinedElem)) {
 						let fi = 0;
@@ -2579,7 +2587,6 @@ function registerSynthesizedFunction(
 	const instSym = makeSymbol(helperName, SymbolKind.Function, fnType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.modulePath = "";
-	instSym.originalName = helperName;
 	instSym.nameId = getIdentId(ctx.table.identCache, helperName);
 	let rootScope = ctx.table.current;
 	while (rootScope.parent != null) rootScope = rootScope.parent;

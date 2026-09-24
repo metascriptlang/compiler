@@ -21,7 +21,7 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, Symbol, SymbolKind, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
 import { mapChildren } from "../walker";
-import { makeSymbol } from "../../checker/symbol";
+import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
@@ -512,6 +512,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	collectDeclNames(body, nc, false);
 
 	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	setFlag(stateSym, SymbolFlag.StateMachine);
 
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
 	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc, retFutSym, [], stateSym);

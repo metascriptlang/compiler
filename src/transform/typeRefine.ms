@@ -286,7 +286,7 @@ function registryLookup(name: string): Type | null {
 	if (_registryNameIndex == null) return null;
 	const list = _registryNameIndex.get(name);
 	if (list == null || list.length == 0) return null;
-	return list[0].symType;
+	return list[0].sym.symbolType;
 }
 
 // Registry Bridge: look up type by name (for TypeAssertion "x as Foo" and enum member access).
@@ -295,13 +295,14 @@ function registryTypeLookup(name: string): Type | null {
 	if (_registryNameIndex == null) return null;
 	const list = _registryNameIndex.get(name);
 	if (list == null) return null;
-	for (const sym of list) {
-		if (sym.symType != null) {
-			const k = sym.symType.kind;
+	for (const info of list) {
+		const t = info.sym.symbolType;
+		if (t != null) {
+			const k = t.kind;
 			if (k == TypeKind.Struct || k == TypeKind.Enum || k == TypeKind.Array ||
 				k == TypeKind.GenericInstance || k == TypeKind.Span || k == TypeKind.Tuple ||
 				k == TypeKind.Function || k == TypeKind.Ref || k == TypeKind.Ptr) {
-				return sym.symType;
+				return t;
 			}
 		}
 	}

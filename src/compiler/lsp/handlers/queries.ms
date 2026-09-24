@@ -228,8 +228,8 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	const range = lspGetObjectField(params, "range");
 	const rangeStart = lspGetObjectField(range, "start");
 	const rangeEnd = lspGetObjectField(range, "end");
-	const startLine = lspGetNumberField(rangeStart, "line") + 1;
-	const endLine = lspGetNumberField(rangeEnd, "line") + 1;
+	const startLine = (lspGetNumberField(rangeStart, "line") as int32) + 1;
+	const endLine = (lspGetNumberField(rangeEnd, "line") as int32) + 1;
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) return lspResponse(id, "[]");

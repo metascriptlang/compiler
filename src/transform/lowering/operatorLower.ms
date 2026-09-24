@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype } from "../../codegen/c/types";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
+import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
@@ -201,11 +201,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 
 function cloneLvalue(node: Node): Node {
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		const c = makeIdent(d.name, node.location);
-		c.nodeType = node.nodeType;
-		c.resolvedSym = node.resolvedSym;
-		return c;
+		return cloneIdent(node, node.location);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;

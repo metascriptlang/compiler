@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // Parity program — a parsed JSON value reads through the JSON converters: a
 // typed slot, an argument, `as U`, and an operand whose other side is typed
 // (arithmetic, comparison, string concatenation).

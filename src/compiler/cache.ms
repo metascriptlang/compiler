@@ -30,6 +30,7 @@ export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_$
 
 // Hash a file's content. Returns "hash:byteLength" string.
 function hashFile(path: string): string {
+	if (!exists(path)) return "absent";
 	const src = try readFile(path) catch "";
 	return `${hashContent(src)}:${src.byteLength}`;
 }
@@ -246,6 +247,10 @@ export function nativeDependenciesKnown(srcPath: string, compileCmd: string): bo
 export function registerNativeDependencies(srcPath: string, compileCmd: string): void {
 	registerNativeProjectDep(srcPath);
 	for (const path of nativeDependencyPaths(srcPath, compileCmd)) registerNativeProjectDep(path);
+}
+
+export function registerCompileTimeRead(path: string): void {
+	registerNativeProjectDep(path);
 }
 
 function registerNativeProjectDep(path: string): void {

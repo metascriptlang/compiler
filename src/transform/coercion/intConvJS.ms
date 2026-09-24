@@ -8,7 +8,7 @@
 import { Node, NodeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeIdent, makeMember, makeNumber } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
 import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
 import { isFloatKind } from "./bigIntJS";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
@@ -64,7 +64,7 @@ function floatKindOfName(name: string): TypeKind {
 }
 
 function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
-	const result = makeCall(makeIdent("Number", loc), [inner], loc);
+	const result = makeCall(runtimeRef("Number", loc), [inner], loc);
 	result.nodeType = createPrimitive(kind);
 	return result;
 }
@@ -80,7 +80,7 @@ export function truncateTo(inner: Node, kind: TypeKind, loc: SourceLocation): No
 		TypeKind.Uint8 => makeBinary(inner, "&", makeNumber(255, loc), loc),
 		TypeKind.Uint16 => makeBinary(inner, "&", makeNumber(65535, loc), loc),
 		TypeKind.Uint32 => makeBinary(inner, ">>>", makeNumber(0, loc), loc),
-		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(makeIdent("Math", loc), "trunc", loc), [inner], loc),
+		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(runtimeRef("Math", loc), "trunc", loc), [inner], loc),
 		_ => inner,
 	};
 	result.nodeType = createPrimitive(kind);

@@ -19,7 +19,7 @@
 
 function id(s: string): string { return s; }
 
-function main(): number {
+function main(): int32 {
 	let failures = 0;
 
 	let s = id("ab");

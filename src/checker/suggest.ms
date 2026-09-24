@@ -33,10 +33,10 @@ export interface SgSuggest {
 
 export interface SgDiagnostic {
 	message: string;
-	line: number;
-	column: number;
-	endLine: number;   // 0 = same as line (single-line range)
-	endColumn: number; // 0 = use column+1
+	line: int32;
+	column: int32;
+	endLine: int32;   // 0 = same as line (single-line range)
+	endColumn: int32; // 0 = use column+1
 	severity: number;  // 1=Error, 2=Warning, 3=Info, 4=Hint
 	tags: number;      // LSP DiagnosticTag (1=Unnecessary, 2=Deprecated)
 }
@@ -88,13 +88,13 @@ export interface SgSignatureInfo {
 let _callExprWalkDepth: int32 = 0;
 const CALL_EXPR_WALK_LIMIT: int32 = 200;
 
-export function sgFindCallExprByCalleeLocation(program: Node, line: number, col: number): Node | null {
+export function sgFindCallExprByCalleeLocation(program: Node, line: int32, col: int32): Node | null {
 	if (program == null) return null;
 	_callExprWalkDepth = 0;
 	return findCallExprHelper(program, line, col);
 }
 
-function findCallExprHelper(node: Node, line: number, col: number): Node | null {
+function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 	if (node == null) return null;
 	if (_callExprWalkDepth >= CALL_EXPR_WALK_LIMIT) return null;
 	_callExprWalkDepth = _callExprWalkDepth + 1;
@@ -126,7 +126,7 @@ function findCallExprHelper(node: Node, line: number, col: number): Node | null 
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
 
-export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number): SgSuggest {
+export function sgQueryAtPosition(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
 	const records = ctx.symRecords;
 	// Binary search for first record on this line
@@ -156,7 +156,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 // (sym === null, kind Interface). A macro-emitted call stamps its callee at the
 // literal's own position — that function record must not shadow the literal's
 // contextual type when completing object fields.
-export function sgQueryContextualTypeAt(ctx: CheckerContext, line: number, col: number): SgSuggest {
+export function sgQueryContextualTypeAt(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
 	const records = ctx.symRecords;
 	let lo = 0;
@@ -412,7 +412,7 @@ function sgTypeToStringDepth(t: Type | null, depth: number): string {
 // ===== sgFormatHover — markdown hover info =====
 
 // Find substring in string. Returns index or -1.
-function sgFindSubstring(haystack: string, needle: string): number {
+function sgFindSubstring(haystack: string, needle: string): int32 {
 	if (needle.byteLength == 0) return 0;
 	if (needle.byteLength > haystack.byteLength) return -1;
 	const limit = haystack.byteLength - needle.byteLength;
@@ -520,8 +520,7 @@ function sgBuildExtensionNameSet(ctx: CheckerContext): HashSet<string> {
 
 function sgIsAlias(suggest: SgSuggest): boolean {
 	if (suggest.sym == null) return false;
-	const orig = suggest.sym.originalName;
-	return orig != null && orig != "" && orig != suggest.name;
+	return suggest.sym.name != suggest.name;
 }
 
 export function sgFormatHover(suggest: SgSuggest): string {
@@ -698,7 +697,7 @@ export function sgBuiltinDoc(name: string, containerName: string): string {
 
 // Extract the line content at a given 1-indexed line number.
 // Returns "" if line is out of range.
-function sgExtractLine(source: string, line: number): string {
+function sgExtractLine(source: string, line: int32): string {
 	if (line < 1) return "";
 	const start = sgGetLineOffset(source, line);
 	if (start >= source.byteLength) return "";
@@ -723,7 +722,7 @@ function sgTrimLeft(s: string): string {
 
 // Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
 // TypeScript convention only: /** ... */ block comments.
-export function sgExtractDocComment(source: string, declLine: number): string {
+export function sgExtractDocComment(source: string, declLine: int32): string {
 	if (declLine <= 1) return "";
 	const lastCommentLine = declLine - 1;
 	const lastRaw = sgExtractLine(source, lastCommentLine);
@@ -736,7 +735,7 @@ export function sgExtractDocComment(source: string, declLine: number): string {
 
 // Extract a /** ... */ JSDoc block comment ending at `endLine` (1-indexed).
 // Scans upward to find the opening /**, collects lines, strips * prefixes.
-function sgExtractJsDocBlock(source: string, endLine: number): string {
+function sgExtractJsDocBlock(source: string, endLine: int32): string {
 	// Scan upward to find the line with /**
 	let startLine = endLine;
 	while (startLine >= 1) {
@@ -868,9 +867,9 @@ export function sgFindImportBySource(program: Node, importSource: string): Node 
 // Returns: { kind: 0=add-to-existing/1=new-import, line, col, endCol, newText }
 export interface SgImportEdit {
 	kind: number;
-	line: number;
-	col: number;
-	endCol: number;
+	line: int32;
+	col: int32;
+	endCol: int32;
 	newText: string;
 }
 
@@ -1012,7 +1011,7 @@ export function sgIsIdentChar(ch: string): boolean {
 	return sgIsIdentByte(c);
 }
 
-function sgIsIdentByte(c: number): boolean {
+function sgIsIdentByte(c: int32): boolean {
 	if (c == "_".code) return true;
 	if (c >= "a".code && c <= "z".code) return true;
 	if (c >= "A".code && c <= "Z".code) return true;
@@ -1020,7 +1019,7 @@ function sgIsIdentByte(c: number): boolean {
 	return false;
 }
 
-export function sgGetLineOffset(source: string, line: number): number {
+export function sgGetLineOffset(source: string, line: int32): int32 {
 	// line is 1-indexed. Returns offset of the first char on that line.
 	let offset = 0;
 	let currentLine = 1;
@@ -1034,7 +1033,7 @@ export function sgGetLineOffset(source: string, line: number): number {
 }
 
 // Extract full line text for a 1-based line number.
-function sgGetLineText(source: string, line: number): string {
+function sgGetLineText(source: string, line: int32): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	let lineEnd = lineOffset;
 	while (lineEnd < source.byteLength && source.byteAt(lineEnd) != "\n".code) {
@@ -1056,12 +1055,12 @@ function sgIsTypeKind(kind: SymbolKind): boolean {
 
 // ===== Completion Ranking =====
 
-function sgToLowerByte(c: number): number {
+function sgToLowerByte(c: int32): int32 {
 	if (c >= "A".code && c <= "Z".code) return c + 32;
 	return c;
 }
 
-function sgCaseEqualByte(a: number, b: number): boolean {
+function sgCaseEqualByte(a: int32, b: int32): boolean {
 	return sgToLowerByte(a) == sgToLowerByte(b);
 }
 
@@ -1145,7 +1144,7 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 
 // Find the innermost AST node at or before the given 1-based line:col.
 // Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
-export function findNodeAtPosition(root: Node, line: number, col: number): Node | null {
+export function findNodeAtPosition(root: Node, line: int32, col: int32): Node | null {
 	if (root == null) return null;
 	let best: Node | null = null;
 	if (root.location.line == line && root.location.column <= col) {
@@ -1164,7 +1163,7 @@ export function findNodeAtPosition(root: Node, line: number, col: number): Node 
 
 // Find a MemberExpr with empty property on the given line where cursor >= dot column.
 // Targeted search for incomplete dot access: `config.|`
-function findIncompleteMemberExpr(root: Node, line: number, col: number): Node | null {
+function findIncompleteMemberExpr(root: Node, line: int32, col: int32): Node | null {
 	if (root == null) return null;
 	if (root.kind == NodeKind.MemberExpr) {
 		const d = root.data as MemberExprData;
@@ -1189,7 +1188,7 @@ function findIncompleteMemberExpr(root: Node, line: number, col: number): Node |
 // Uses subtree check: an ObjectLiteral "contains" the cursor only if the cursor's
 // deepest node is inside that ObjectLiteral's subtree (prevents false positives
 // on closed ObjectLiterals from earlier lines).
-export function findEnclosingObjectLiteral(root: Node, line: number, col: number): Node | null {
+export function findEnclosingObjectLiteral(root: Node, line: int32, col: int32): Node | null {
 	if (root == null) return null;
 	let result: Node | null = null;
 	if (root.kind == NodeKind.ObjectLiteral) {
@@ -1216,7 +1215,7 @@ export function findEnclosingObjectLiteral(root: Node, line: number, col: number
 // Check if the subtree of node spans across the target line.
 // Returns true if any descendant is ON or PAST the target line.
 // This handles empty lines inside multi-line constructs (e.g. ObjectLiteral with blank lines).
-function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
+function sgSubtreeTouchesLine(node: Node, targetLine: int32): boolean {
 	if (node == null) return false;
 	let touches = false;
 	forEachChild(node, (child: Node): void => {
@@ -1239,7 +1238,7 @@ function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
 
 // Find the innermost CallExpr enclosing the cursor position.
 // Mirrors findEnclosingObjectLiteral pattern. Deepest (innermost) call wins.
-function findEnclosingCallExpr(root: Node, line: number, col: number): Node | null {
+function findEnclosingCallExpr(root: Node, line: int32, col: int32): Node | null {
 	if (root == null) return null;
 	let result: Node | null = null;
 	if (root.kind == NodeKind.CallExpr) {
@@ -1291,7 +1290,7 @@ function sgGetReceiverFromNode(callNode: Node): string {
 
 // Determine active parameter index from cursor position within CallExpr arguments.
 // Reference: count CallExpr arguments before cursor position.
-function sgGetActiveParamFromNode(callNode: Node, line: number, col: number): number {
+function sgGetActiveParamFromNode(callNode: Node, line: int32, col: int32): number {
 	const d = callNode.data as CallExprData;
 	if (d.arguments.length == 0) return 0;
 	// Count arguments whose start location is before cursor
@@ -1317,7 +1316,7 @@ export interface SgSignatureContext {
 	callNode: Node;
 }
 
-export function sgGetSignatureContext(program: Node, source: string, line: number, col: number): SgSignatureContext {
+export function sgGetSignatureContext(program: Node, source: string, line: int32, col: int32): SgSignatureContext {
 	// Primary: AST-based
 	const callNode = findEnclosingCallExpr(program, line, col);
 	if (callNode != null) {
@@ -1402,7 +1401,7 @@ export function sgPickActiveOverload(callNode: Node, sym: Symbol): int32 {
 // Find the ObjectLiteral nesting path from cursor to root.
 // For `{ fmt: { | } }`, returns ["fmt"] (the key whose value is the inner ObjectLiteral).
 // Walks from cursor's enclosing ObjectLiteral outward through parent ObjectLiterals.
-export function sgObjectFieldPathAST(root: Node, line: number, col: number): string[] {
+export function sgObjectFieldPathAST(root: Node, line: int32, col: int32): string[] {
 	const path: string[] = [];
 	// Collect all ObjectLiteral ancestors containing cursor, deepest first
 	sgCollectObjLiteralChain(root, line, col, path);
@@ -1411,7 +1410,7 @@ export function sgObjectFieldPathAST(root: Node, line: number, col: number): str
 
 // Recursively find ObjectLiteral nesting chain. For each nested ObjectLiteral
 // that is a property value of an outer ObjectLiteral, record the parent's key name.
-function sgCollectObjLiteralChain(node: Node, line: number, col: number, path: string[]): boolean {
+function sgCollectObjLiteralChain(node: Node, line: int32, col: int32, path: string[]): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
@@ -1454,7 +1453,7 @@ function sgCollectObjLiteralChain(node: Node, line: number, col: number, path: s
 
 // Find an ImportDecl node that spans the given line. Handles multi-line imports
 // by checking if cursor line is between this import and the next statement.
-function findImportDeclOnLine(program: Node, line: number): Node | null {
+function findImportDeclOnLine(program: Node, line: int32): Node | null {
 	if (program == null) return null;
 	let found: Node | null = null;
 	if (program.kind == NodeKind.Program && program.data != null) {
@@ -1512,7 +1511,7 @@ function importNodeFrom(stmt: Node): Node {
 // Determine import context from AST ImportDecl node.
 // Returns: "names" if cursor is in the names region, "path" if in the source string.
 // Reference: extractImportContextFromAst checks child node positions.
-function importContextFromAST(importNode: Node, col: number): string {
+function importContextFromAST(importNode: Node, col: int32): string {
 	const d = importNode.data as ImportDeclData;
 	// Side-effect import: `import "module"` — only path, no names.
 	if (d.importNames.length == 0 && d.importSource == "") return "path";
@@ -1550,7 +1549,7 @@ function importContextFromAST(importNode: Node, col: number): string {
 // Reference: declaration type-position check + inTypeContext flag.
 // We check if cursor is on a typeExpr or typeExprs node of any declaration.
 
-function isInTypeAnnotation(program: Node, line: number, col: number): boolean {
+function isInTypeAnnotation(program: Node, line: int32, col: int32): boolean {
 	let found = false;
 	forEachChild(program, (child: Node): void => {
 		if (found) return;
@@ -1566,7 +1565,7 @@ function isInTypeAnnotation(program: Node, line: number, col: number): boolean {
 }
 
 // Check if a node's typeExpr or typeExprs contains the cursor position.
-function sgCheckTypeExprAt(node: Node, line: number, col: number): boolean {
+function sgCheckTypeExprAt(node: Node, line: int32, col: int32): boolean {
 	// Check typeExpr (return type, variable type, type alias RHS)
 	if (node.typeExpr != null) {
 		const te = node.typeExpr;
@@ -1594,7 +1593,7 @@ function sgCheckTypeExprAt(node: Node, line: number, col: number): boolean {
 // - ObjectLiteral → ObjectField
 // - typeExpr/typeExprs → TypeAnnotation
 
-export function sgDetectCompletionContext(program: Node, line: number, col: number): SgCompletionKind {
+export function sgDetectCompletionContext(program: Node, line: int32, col: int32): SgCompletionKind {
 	// Import detection: find ImportDecl on cursor line (ref: findImportStmtOnLine)
 	const importNode = findImportDeclOnLine(program, line);
 	if (importNode != null) {
@@ -1628,7 +1627,7 @@ export function sgDetectCompletionContext(program: Node, line: number, col: numb
 
 // Extract the import source path from the ImportDecl AST node on cursor line.
 // `import { ... } from "std/build"` → "std/build"
-export function sgExtractImportSource(program: Node, line: number): string {
+export function sgExtractImportSource(program: Node, line: int32): string {
 	const importNode = findImportDeclOnLine(program, line);
 	if (importNode == null) return "";
 	const d = importNode.data as ImportDeclData;
@@ -1639,7 +1638,7 @@ export function sgExtractImportSource(program: Node, line: number): string {
 // For incomplete source like `from "std/bu|"` — the parser may not have the full string,
 // so we use source text to get the partial text between opening quote and cursor.
 // This is the ONE place where source text is needed: the parser only stores completed strings.
-export function sgExtractImportPath(source: string, line: number, col: number): string {
+export function sgExtractImportPath(source: string, line: int32, col: int32): string {
 	const lineText = sgGetLineText(source, line);
 	// Find opening quote on the line (after `from ` or `import `)
 	let fromIdx = sgFindPattern(lineText, "from ");
@@ -1656,7 +1655,7 @@ export function sgExtractImportPath(source: string, line: number, col: number): 
 
 // Extract existing imported names from ImportDecl AST node.
 // Reference: reads ImportDecl children directly.
-export function sgExtractExistingImportNames(program: Node, line: number, col: number): string[] {
+export function sgExtractExistingImportNames(program: Node, line: int32, col: int32): string[] {
 	const importNode = findImportDeclOnLine(program, line);
 	if (importNode == null) return [];
 	const d = importNode.data as ImportDeclData;
@@ -1680,7 +1679,7 @@ export function sgExtractExistingImportNames(program: Node, line: number, col: n
 // For import names: `import { re| }` → prefix is "re" — same as any identifier prefix.
 
 // Simple substring search (no indexOf on strings in MetaScript).
-function sgFindPattern(text: string, pattern: string): number {
+function sgFindPattern(text: string, pattern: string): int32 {
 	if (pattern.byteLength > text.byteLength) return -1;
 	let i = 0;
 	while (i <= text.byteLength - pattern.byteLength) {
@@ -1701,7 +1700,7 @@ function sgFindPattern(text: string, pattern: string): number {
 
 // Get existing field keys from the ObjectLiteral node at cursor position.
 // Reads keys directly from ObjectLiteralData — no text scanning needed.
-function sgExistingFieldKeysAST(program: Node, line: number, col: number): string[] {
+function sgExistingFieldKeysAST(program: Node, line: int32, col: int32): string[] {
 	const objNode = findEnclosingObjectLiteral(program, line, col);
 	if (objNode == null) return [];
 	const d = objNode.data as ObjectLiteralData;
@@ -1766,7 +1765,7 @@ export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, root
 
 // ===== sgGetPrefix — extract word fragment at cursor =====
 
-export function sgGetPrefix(source: string, line: number, col: number): string {
+export function sgGetPrefix(source: string, line: int32, col: int32): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let start = cursorOffset;
@@ -2182,7 +2181,7 @@ export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: str
 // the identifier before it (the callee name).
 // Returns "" if no enclosing call found.
 // Text-based fallback — used when parser can't produce CallExpr (incomplete source).
-function sgGetCalleeAtCursor(source: string, line: number, col: number): string {
+function sgGetCalleeAtCursor(source: string, line: int32, col: int32): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -2227,7 +2226,7 @@ function sgGetCalleeAtCursor(source: string, line: number, col: number): string 
 // For "console.log(x", returns "console". For "foo(x", returns "".
 // Scans backwards from the callee identifier to find "." + identifier pattern.
 
-function sgGetReceiverAtCursor(source: string, line: number, col: number): string {
+function sgGetReceiverAtCursor(source: string, line: int32, col: int32): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -2266,7 +2265,7 @@ function sgGetReceiverAtCursor(source: string, line: number, col: number): strin
 
 // ===== Active Parameter — count commas from nearest unclosed ( =====
 
-function sgCountActiveParam(source: string, line: number, col: number): number {
+function sgCountActiveParam(source: string, line: int32, col: int32): number {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -2295,8 +2294,8 @@ export enum SgInlayHintKind {
 
 export interface SgInlayHint {
 	label: string;
-	line: number;
-	col: number;
+	line: int32;
+	col: int32;
 	hintKind: SgInlayHintKind;
 }
 
@@ -2304,7 +2303,7 @@ export interface SgInlayHint {
 // Collect type hints for variables without annotations,
 // and parameter name hints at call sites.
 export function sgCollectInlayHints(
-	ctx: CheckerContext, program: Node, startLine: number, endLine: number
+	ctx: CheckerContext, program: Node, startLine: int32, endLine: int32
 ): SgInlayHint[] {
 	const result: SgInlayHint[] = [];
 	const pd = program.data as ProgramData;
@@ -2316,7 +2315,7 @@ export function sgCollectInlayHints(
 }
 
 function sgCollectHintsInNode(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	ctx: CheckerContext, node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	if (node == null) return;
 	const loc = node.location;
@@ -2364,7 +2363,7 @@ function sgCollectHintsInNode(
 }
 
 function sgCollectVarTypeHint(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	ctx: CheckerContext, node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	const vd = node.data as VariableDeclData;
 	if (node.location.line < startLine) return;
@@ -2425,7 +2424,7 @@ function sgExtractNewArraySize(init: Node): string {
 // For `const e: string[] = new Array(8)` → show trailing hint `string[8]` at end of line.
 // LSP inlay hints can only insert text, not replace — so we show the full sized type as trailing.
 function sgCollectArraySizeHint(
-	node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	if (node.location.line < startLine || node.location.line > endLine) return;
 	const vd = node.data as VariableDeclData;
@@ -2455,7 +2454,7 @@ function sgCollectArraySizeHint(
 }
 
 function sgCollectReturnTypeHint(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	ctx: CheckerContext, node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	if (node.location.line < startLine) return;
 	if (node.location.line > endLine) return;
@@ -2491,7 +2490,7 @@ function sgCollectReturnTypeHint(
 }
 
 function sgCollectCallParamHints(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	ctx: CheckerContext, node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	const cd = node.data as CallExprData;
 	if (node.location.line < startLine) return;
@@ -2630,7 +2629,7 @@ function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type | null {
 
 // Collect exception hints for try expressions and functions returning Result<T,E>.
 function sgCollectExceptionHints(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+	ctx: CheckerContext, node: Node, startLine: int32, endLine: int32, hints: SgInlayHint[]
 ): void {
 	// TryExpr: show the error type being caught
 	if (node.kind == NodeKind.TryExpr) {
@@ -2907,8 +2906,8 @@ export function sgSortTokens(tokens: SgSemanticToken[]): void {
 
 export interface SgSymbolRef {
 	name: string;
-	line: number;
-	col: number;
+	line: int32;
+	col: int32;
 	nameLen: number;
 	isDecl: boolean;
 }
@@ -3543,7 +3542,7 @@ test "skip param hint when arg matches param name" {
 
 // Helper for the leftmost-position tests below: returns the column of the
 // parameter hint matching `paramName` on the given line, or -1 if not found.
-function sgFindParamHintCol(hints: SgInlayHint[], line: number, paramName: string): number {
+function sgFindParamHintCol(hints: SgInlayHint[], line: int32, paramName: string): number {
 	for (let i = 0; i < hints.length; i = i + 1) {
 		const h = hints[i];
 		if (h.hintKind != SgInlayHintKind.Parameter) continue;

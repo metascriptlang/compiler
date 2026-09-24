@@ -89,6 +89,11 @@ import { useHeader } from "./context";
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _hookSymsSealed = false;
+
+export function sealHookSyms(sealed: boolean): void {
+	_hookSymsSealed = sealed;
+}
 
 export function resetHookSyms(): void {
 	_hookSyms = new HashMap<string, Symbol>();
@@ -101,6 +106,7 @@ export function lookupHookSym(name: string): Symbol | null {
 export function hookPrototype(name: string, fnType: Type | null): Symbol {
 	const existing = _hookSyms.get(name);
 	if (existing != null) return existing;
+	if (_hookSymsSealed) throw new Error(`internal: DRC hook '${name}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
 	_hookSyms.set(name, sym);
@@ -2064,4 +2070,19 @@ test "anonymous type emits struct with hash name" {
 	assert result != "empty_";
 	// Should start with msAnon_
 	assert result.length > 7;
+}
+
+test "a sealed hook table serves known hooks and refuses a new one" {
+	const known = hookPrototype("SealKnownDestroy", null);
+	sealHookSyms(true);
+	const again = hookPrototype("SealKnownDestroy", null);
+	let refused = "";
+	try {
+		hookPrototype("SealNewDestroy", null);
+	} catch (e) {
+		refused = e.message;
+	}
+	sealHookSyms(false);
+	assert again == known;
+	assert refused.contains("SealNewDestroy");
 }

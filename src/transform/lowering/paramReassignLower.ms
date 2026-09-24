@@ -117,7 +117,8 @@ function recordTarget(target: Node, params: string[], out: Symbol[]): void {
 	for (const s of out) {
 		if (s == target.resolvedSym) return;
 	}
-	out.push(target.resolvedSym);
+	const targetSym = target.resolvedSym;
+	out.push(targetSym!);
 }
 
 function isAssignOp(op: string): boolean {

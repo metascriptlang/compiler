@@ -5,8 +5,8 @@ import {
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
-import { CheckerContext, Severity, addError, createContext } from "../../checker/context";
-import { lookupSymbol, makeSymbol, hasFlag, markUsed, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
+import { markUsedIn, CheckerContext, Severity, addError, createContext } from "../../checker/context";
+import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -423,7 +423,7 @@ function containsArrow(t: string): boolean {
 }
 
 function declaringName(sym: Symbol): string {
-	return sym.originalName != "" ? sym.originalName : sym.name;
+	return sym.name;
 }
 
 function macroDeclNode(regCtx: CheckerContext, sym: Symbol): Node {
@@ -623,13 +623,10 @@ function resolveDecoratorSymbol(ctx: CheckerContext, name: string): Symbol {
 	const rest = name.slice(dot + 1, name.length);
 	const ns = lookupSymbol(ctx.table, head);
 	if (ns == null || ns.symbolKind != SymbolKind.Module) return null as unknown as Symbol;
-	markUsed(ns);
+	markUsedIn(ctx, ns);
 	const info = findExportedSymbol(ctx.exportRegistry, ns.modulePath, rest);
 	if (info == null) return null as unknown as Symbol;
-	const sym = makeSymbol(rest, info.kind, info.symType, false);
-	sym.declNode = info.declNode;
-	sym.modulePath = ns.modulePath;
-	return sym;
+	return info.sym;
 }
 
 function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, target: Node, plan: ClassPlan): Node {
@@ -644,7 +641,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		addError(ctx, `'${name}' is not callable as a decorator`, loc.line, loc.column);
 		return target;
 	}
-	markUsed(sym);
+	markUsedIn(ctx, sym);
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	const isFactory = md.macroHasParens;
 	const regCtx = declaringCtx(ctx, sym);

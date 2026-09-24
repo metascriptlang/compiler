@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon, takePendingComments } from "../context";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments } from "../context";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
@@ -231,6 +231,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
 		initNode.typeExpr = declTypeExpr;
+		stampEnd(state, initNode);
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 		}
@@ -258,8 +259,10 @@ export function parseForStmt(state: ParserState): NodeResult {
 	}
 
 	// C-style for with expression init: for (i = 0; ...)
+	const exprInitToken = current(state);
 	const exprInit = try callExprParser(state);
-	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, forToken);
+	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, exprInitToken);
+	stampEnd(state, exprInitNode);
 	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for init at line ${current(state).line}`);
 	}

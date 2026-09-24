@@ -144,7 +144,7 @@ export function describeFmtDiff(orig: string, fmt: string): string {
 //     Only flag when a space appears *before* a tab (interleaved).
 //   - Spaces-mode: any tab in leading whitespace -> wrong.
 export interface LineIndent {
-	indentEnd: number;
+	indentEnd: int32;
 	hasSpace: boolean;
 	hasTab: boolean;
 	isMixed: boolean;

@@ -26,7 +26,7 @@ export enum ProcessErrorKind {
 export interface ProcessError {
 	kind: ProcessErrorKind;
 	command: string;       // command that was attempted
-	exitCode: number;      // 0 if N/A (SpawnFailed, SignalTerminated)
+	exitCode: int32;       // 0 if N/A (SpawnFailed, SignalTerminated)
 	signal: number;        // 0 if not signal-terminated
 	output: string;        // "" if pipe failed before any data captured
 	errorOutput: string;   // "" if pipe failed before any data captured
@@ -71,7 +71,7 @@ export function notFound(command: string): ProcessError {
 	};
 }
 
-export function nonZeroExit(command: string, exitCode: number, output: string, errorOutput: string): ProcessError {
+export function nonZeroExit(command: string, exitCode: int32, output: string, errorOutput: string): ProcessError {
 	return {
 		kind: ProcessErrorKind.NonZeroExit,
 		command,

@@ -26,6 +26,14 @@ extern function warning(msg: string, loc: SourceLocation): void;
 extern function msNodeChildCount(n: Node): number;
 extern function msNodeChildAt(n: Node, i: number): Node;
 
+extern function msMetaDefine(name: string): string;
+
+export function define(name: string): string { return msMetaDefine(name); }
+
+extern function msMetaExpansionFile(): string;
+
+export function expansionFile(): string { return msMetaExpansionFile(); }
+
 export function childCount(n: Node): number { return msNodeChildCount(n); }
 export function childAt(n: Node, i: number): Node { return msNodeChildAt(n, i); }
 

@@ -253,11 +253,13 @@ export function monoConcreteTypeName(t: Type | null): string {
 		// (refSubstInner / refWrapperName) so this stays one rule, not two.
 		TypeKind.Ref => {
 			const wrapper = refWrapperName(t);
-			const inner = monoConcreteTypeName(refSubstInner(t));
+			const pointee = refSubstInner(t);
+			if (wrapper == "" && pointee != null && pointee.kind == TypeKind.Array) return `Array<${monoConcreteTypeName(pointee.typeReturn)}>`;
+			const inner = monoConcreteTypeName(pointee);
 			return wrapper == "" ? inner : `${wrapper}<${inner}>`;
 		},
 		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
-		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
+		TypeKind.Array => `Vec<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Set => `BitSet<${monoConcreteTypeName(t.typeReturn)}>`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,
 		TypeKind.EnumLiteral => t.typeNames.length > 0 ? `${t.typeName}.${t.typeNames[0]}` : t.typeName,

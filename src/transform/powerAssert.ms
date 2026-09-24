@@ -15,10 +15,11 @@
 // Only transforms AssertStmt nodes found inside TestDecl bodies.
 // Outside test blocks, AssertStmt is left untouched (codegen emits simple abort).
 
-import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { isIntegerType } from "../checker/types";
+import { makeSymbol } from "../checker/symbol";
 import { TransformContext } from "./context";
-import { makeIdent, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
+import { makeIdent, makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
 import { createNode } from "../ast/node";
 
 // ===== Type-based __paValue dispatch =====
@@ -34,7 +35,7 @@ function paValueFnForType(t: Type | null): string {
 // ===== Capture Entry =====
 
 interface CaptureEntry {
-	tempName: string;
+	tempSym: Symbol;
 	tempDecl: Node;
 	label: string;
 	column: number;
@@ -123,7 +124,7 @@ function instrumentAssert(assertNode: Node): Node {
 	// For each capture, call the type-appropriate capture function
 	for (let i = 0; i < captures.length; i += 1) {
 		const cap = captures[i];
-		const ref = makeIdent(cap.tempName, loc);
+		const ref = makeIdentResolved(cap.tempSym, loc);
 		const fnName = paValueFnForType(cap.tempDecl.nodeType);
 		failStmts.push(makeCallStmt(fnName, [
 			makeNumber(cap.column, loc),
@@ -258,10 +259,11 @@ function captureValue(
 ): Node {
 	const name = "__pa_" + paCounter.toString();
 	paCounter = paCounter + 1;
+	const tempSym = makeSymbol(name, SymbolKind.Temp, expr.nodeType, false);
 	const varDecl = makeVarDecl(name, expr, DeclKind.Const, loc);
-	const ref = makeIdent(name, loc);
-	if (expr.nodeType != null) ref.nodeType = expr.nodeType;
-	captures.push({ tempName: name, tempDecl: varDecl, label, column });
+	varDecl.resolvedSym = tempSym;
+	const ref = makeTypedIdentResolved(tempSym, expr.nodeType, loc);
+	captures.push({ tempSym, tempDecl: varDecl, label, column });
 	return ref;
 }
 
@@ -316,7 +318,7 @@ function exprLabel(node: Node): string {
 }
 
 function makeCallStmt(fnName: string, args: Node[], loc: SourceLocation): Node {
-	const callee = makeIdent(fnName, loc);
+	const callee = runtimeRef(fnName, loc);
 	const callNode = createNode(NodeKind.CallExpr, {
 		callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1,
 	}, syntheticToken(loc));

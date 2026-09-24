@@ -36,14 +36,6 @@ export class CModuleOutput {
 }
 
 function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
-	const sym = node.resolvedSym;
-	if (sym != null && sym.symbolKind == SymbolKind.Function
-			&& sym.symbolType != null && sym.symbolType.kind != TypeKind.Function
-			&& sym.modulePath != "" && ctx.exportRegistry != null) {
-		const lookupName = sym.originalName != "" ? sym.originalName : sym.name;
-		const info = findExportedSymbol(ctx.exportRegistry, sym.modulePath, lookupName);
-		if (info != null && info.symType != null && info.symType.kind == TypeKind.Function) sym.symbolType = info.symType;
-	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		if (d.initializer != null) {

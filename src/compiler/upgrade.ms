@@ -147,7 +147,7 @@ function isWindows(): boolean {
 	return env.get("OS") == "Windows_NT" || env.get("SystemRoot") != "";
 }
 
-export function cmdUpgrade(opts: CliOptions): number {
+export function cmdUpgrade(opts: CliOptions): int32 {
 	const cmd = isWindows()
 		? `powershell -ExecutionPolicy Bypass -NoProfile -Command "irm ${INSTALL_PS1_URL} | iex"`
 		: `curl -fsSL ${INSTALL_SH_URL} | sh`;

@@ -4,7 +4,7 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, SymbolKind, Type } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
@@ -14,7 +14,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule, generateJSModule } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
@@ -23,12 +23,13 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHas, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
-import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
-import { getSimpleTypeDesc } from "../codegen/c/types";
+import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
+import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
@@ -55,6 +56,7 @@ import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
+import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
@@ -601,6 +603,8 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	let next = 0;
 	let head = 0;
 	let failed = false;
+	sealRuntimeProcs(true);
+	sealHookSyms(true);
 	while (true) {
 		while (!failed && next < order.length && next - head < workers) {
 			const job = jobs[order[next]];
@@ -613,6 +617,8 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 		results[result.slot] = result;
 		if (result.failure != "" || result.output.errors.length > 0) failed = true;
 	}
+	sealRuntimeProcs(false);
+	sealHookSyms(false);
 	return results;
 }
 
@@ -1197,6 +1203,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 
 	// Phase 2 — backend transform + codegen
+	let anyTopLevelAwait = false;
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
@@ -1220,6 +1227,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap);
+		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;
@@ -1243,6 +1251,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 		output = output + ` } from "${extImportKeys[ei]}";\n`;
 	}
+	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
+	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle;
 
@@ -1342,53 +1352,28 @@ function hcrModuleId(modPath: string, root: string, stdPath: string): string {
 	return replaceExt(relative(root, modPath), "");
 }
 
-function hcrFunctionSymbol(
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): string {
+function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
 	if (info.name == "main") return safeName(info.name);
-	if (exportName != "") return exportName;
-	if (nativeName != "") return nativeName;
-	const baseName = info.originalName != "" ? info.originalName : info.name;
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
-	return mangleProcName(baseName, mangleModuleName(info.definingModule), disamb);
+	if (fn.exportName != "") return fn.exportName;
+	if (fn.nativeName != "") return fn.nativeName;
+	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
+	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
 }
-function hcrFunctionSlot(
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): string {
+function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 	if (info.name == "main") return safeName(info.name);
-	if (exportName != "") return exportName;
-	const baseName = info.originalName != "" ? info.originalName : info.name;
-	if (nativeName != "") return nativeName;
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC)) return safeName(baseName);
-	return `${baseName}#${disamb}`;
+	if (fn.exportName != "") return fn.exportName;
+	if (fn.nativeName != "") return fn.nativeName;
+	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
+	return `${fn.name}#${fn.disamb}`;
 }
 
 
-function appendHcrFunctionExport(
-	exports: HcrAbiExport[],
-	moduleId: string,
-	info: ExportedSymInfo,
-	t: Type,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): Result<void, string> {
-	if ((flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.OverloadSig)) return Result.ok(null);
-	if (hasGenericParams(t)) {
+function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
+	if (hasFlag(fn, SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasGenericParams(fn.symbolType)) {
 		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
 	}
-	const symbol = hcrFunctionSymbol(info, nativeName, exportName, flags, disamb);
-	const slot = hcrFunctionSlot(info, nativeName, exportName, flags, disamb);
-	exports.push(createHcrAbiExport(moduleId, symbol, hcrSignatureKey(t), slot));
+	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
 }
 
@@ -1397,29 +1382,11 @@ function hcrModuleExports(moduleId: string, modPath: string): Result<HcrAbiExpor
 	const moduleExports = findModuleExports(graphRegistry, modPath);
 	if (moduleExports == null) return Result.ok(exports);
 	for (const info of moduleExports.symbols) {
-		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
-		const primary = appendHcrFunctionExport(
-			exports,
-			moduleId,
-			info,
-			info.symType,
-			info.nativeName,
-			info.exportName,
-			info.primaryFlags,
-			info.disamb,
-		);
+		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
+		const primary = appendHcrFunctionExport(exports, moduleId, info, info.sym);
 		if (!primary.ok) return Result.err(primary.error);
-		for (let i = 0; i < info.overloadTypes.length; i += 1) {
-			const overload = appendHcrFunctionExport(
-				exports,
-				moduleId,
-				info,
-				info.overloadTypes[i],
-				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
-				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
-				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
-				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
-			);
+		for (const ov of info.sym.overloads) {
+			const overload = appendHcrFunctionExport(exports, moduleId, info, ov);
 			if (!overload.ok) return Result.err(overload.error);
 		}
 	}
@@ -1510,7 +1477,7 @@ function hcrSharedVariable(sourcePath: string, names: string[]): string {
 	if (moduleExports == null) return "";
 	for (const name of names) {
 		for (const info of moduleExports.symbols) {
-			if (info.name == name && info.definingModule == sourcePath && info.kind == SymbolKind.Variable) return name;
+			if (info.name == name && info.sym.modulePath == sourcePath && info.sym.symbolKind == SymbolKind.Variable) return name;
 		}
 	}
 	return "";
@@ -1521,35 +1488,16 @@ function hcrForeignSymbols(modPath: string): HashSet<string> {
 	const moduleExports = findModuleExports(graphRegistry, modPath);
 	if (moduleExports == null) return foreign;
 	for (const info of moduleExports.symbols) {
-		if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
-		addHcrForeignSymbol(foreign, info, info.nativeName, info.exportName, info.primaryFlags, info.disamb);
-		for (let i = 0; i < info.overloadTypes.length; i += 1) {
-			addHcrForeignSymbol(
-				foreign,
-				info,
-				i < info.overloadNativeNames.length ? info.overloadNativeNames[i] : "",
-				i < info.overloadExportNames.length ? info.overloadExportNames[i] : "",
-				i < info.overloadFlags.length ? info.overloadFlags[i] : 0,
-				i < info.overloadDisambs.length ? info.overloadDisambs[i] : i + 1,
-			);
-		}
+		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
+		addHcrForeignSymbol(foreign, info, info.sym);
+		for (const ov of info.sym.overloads) addHcrForeignSymbol(foreign, info, ov);
 	}
 	return foreign;
 }
 
-function addHcrForeignSymbol(
-	foreign: HashSet<string>,
-	info: ExportedSymInfo,
-	nativeName: string,
-	exportName: string,
-	flags: uint32,
-	disamb: int32,
-): void {
-	const isImportC = (flags as uint32 as BitSet<SymbolFlag>).has(SymbolFlag.ImportC);
-	const isBinding = exportName == "" && (nativeName != "" || isImportC);
-	if (info.name == "main" || isBinding) {
-		foreign.add(hcrFunctionSymbol(info, nativeName, exportName, flags, disamb));
-	}
+function addHcrForeignSymbol(foreign: HashSet<string>, info: ExportedSymInfo, fn: Symbol): void {
+	const isBinding = fn.exportName == "" && (fn.nativeName != "" || hasFlag(fn, SymbolFlag.ImportC));
+	if (info.name == "main" || isBinding) foreign.add(hcrFunctionSymbol(info, fn));
 }
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
@@ -1741,7 +1689,7 @@ function hcrRootFunctions(modulePaths: string[]): string[] {
 		const moduleExports = findModuleExports(graphRegistry, modPath);
 		if (moduleExports == null) continue;
 		for (const info of moduleExports.symbols) {
-			if (info.definingModule != modPath || info.kind != SymbolKind.Function) continue;
+			if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
 			roots.push(modPath + ":" + info.name);
 		}
 	}
@@ -1920,7 +1868,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	const buildIdentityFlags = cliLinkFlags(allFlags0, opts);
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines);
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
@@ -1977,6 +1925,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
 	const fsAsyncHits: { modPath: string, source: string, line: int32, column: int32 }[] = [];
+	const fsWritableHits: { modPath: string, source: string, name: string, line: int32, column: int32, message: string }[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
@@ -2167,6 +2116,19 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			printTiming(modPath, modT0);
 		}
 
+		if (opts.targetOs == "solana" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			for (const hitNode of collectWritableModuleBindings(nativeLowered)) {
+				const d = hitNode.data as VariableDeclData;
+				fsWritableHits.push({
+					modPath,
+					source: cm.source,
+					name: d.declName,
+					line: d.nameLocation.line,
+					column: d.nameLocation.column,
+					message: writableModuleBindingMessage(hitNode),
+				});
+			}
+		}
 		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
@@ -2219,6 +2181,21 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		}
 		if (fsReported > 0) exit(1);
 	}
+	if (fsWritableHits.length > 0) {
+		let fsReported = 0;
+		for (const h of fsWritableHits) {
+			if (!aliveSetHas(aliveSet, h.modPath, h.name)) continue;
+			renderModuleError(h.modPath, h.source, {
+				message: h.message,
+				line: h.line,
+				column: h.column,
+				severity: ErrorSeverity.Error,
+			});
+			fsReported = fsReported + 1;
+		}
+		if (fsReported > 0) exit(1);
+	}
+
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
 	const tC = performance.now();

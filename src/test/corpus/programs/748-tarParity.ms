@@ -14,9 +14,9 @@ function check(name: string, ok: boolean): boolean {
 	return ok;
 }
 
-function parseOctalAt(s: Buffer, offset: number, maxDigits: number): number {
+function parseOctalAt(s: Buffer, offset: int32, maxDigits: int32): number {
 	let v = 0;
-	let i = 0;
+	let i: int32 = 0;
 	while (i < maxDigits) {
 		const c = s.byteAt(offset + i);
 		if (c < 48 || c > 55) { break; }
@@ -26,9 +26,9 @@ function parseOctalAt(s: Buffer, offset: number, maxDigits: number): number {
 	return v;
 }
 
-function headerChecksum(s: Buffer, base: number): number {
+function headerChecksum(s: Buffer, base: int32): number {
 	let sum = 0;
-	let i = 0;
+	let i: int32 = 0;
 	while (i < 148) { sum += s.byteAt(base + i); i += 1; }
 	i = 0;
 	while (i < 8) { sum += 32; i += 1; }

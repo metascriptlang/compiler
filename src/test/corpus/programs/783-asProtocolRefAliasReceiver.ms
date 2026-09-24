@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // Parity program — `v as U`, a typed slot and an argument read through a converter
 // when the receiver is a named alias of `Ref<match-union>`, the shape of
 // `JsonValue`: a local alias, a parsed JSON value, and a member read through

@@ -6,13 +6,14 @@
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, TypeKind, Symbol } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
-	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
@@ -127,7 +128,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const producesFreshOwned = d.forOfIterable.kind == NodeKind.CallExpr
 			|| d.forOfIterable.kind == NodeKind.ArrayLiteral;
 		if (!producesFreshOwned) {
-			iterDecl.flags = iterDecl.flags.incl(NodeFlag.Cursor);
+			setFlag(iterSym, SymbolFlag.Cursor);
 		}
 		preamble.push(iterDecl);
 		iterExpr = makeIdentResolved(iterSym, loc);
@@ -182,11 +183,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = <iter>[$idx];
-		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
+		// The binding borrows from the array: its symbol is a cursor, so DRC skips destroy
 		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
-		itemDecl.flags = itemDecl.flags.incl(NodeFlag.Cursor);
-		if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
+		if (bindingSym != null) {
+			itemDecl.resolvedSym = bindingSym;
+			setFlag(bindingSym, SymbolFlag.Cursor);
+		}
 		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
 		// passes can see the monomorphized binding type. Same reason as the iterator
 		// path above — without this, generic for..of bindings degrade to `void*` in
@@ -221,10 +224,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 // Avoids sharing a single AST node across multiple parents.
 function cloneExpr(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		const clone = makeTypedIdent(d.name, node.nodeType, loc);
-		clone.resolvedSym = node.resolvedSym;
-		return clone;
+		return cloneIdent(node, loc);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;

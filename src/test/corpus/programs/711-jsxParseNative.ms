@@ -1,6 +1,6 @@
 // @xfail(raiser): raiser runtime error: cannot evaluate 'msStringHash' at comptime: symbol kind is Function
 // @ledger-slack(msStringArrayRefCell): 6
-// @ledger-slack(msRefArrayRefCell): 5
+// @ledger-slack(msRefArrayRefCell): 6
 // @maxrss: 40
 // @stdout: jsx-parse-native acc=5000
 // note: JSX parser (src/parser/expressions/jsx.ms) CRASH + CORRECTNESS guard: lex()+parseExpression() 5000× building a 3-child JSXElement (text + expr container + nested element), asserting the AST shape under the C runtime — catches over-free / UAF in JSX node construction (jsxChildren / jsxAttrs arrays, Result/try temporaries, nested nodes) that a type-level test cannot observe. NOT a leak guard: parseExpression accumulates per call regardless of JSX (A/B-proven — a plain `a + b * c` expr leaks the same ~2.7KB/iter; the parser frees per-compilation memory at process exit, not per call), so iterations are capped at 5000 (~14MB baseline) and the 40MB bound rides it while still catching a large JSX-specific leak on top. jsxLexNative is the leak guard.

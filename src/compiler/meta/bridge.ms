@@ -1452,7 +1452,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const arrowDefaults: Node[] = [];
 			let dpi = 0;
 			while (dpi < arrowParams.length) {
-				arrowDefaults.push(null);
+				arrowDefaults.push(null as unknown as Node);
 				dpi = dpi + 1;
 			}
 			return createNodeAt(NodeKind.ArrowFunction, {
@@ -3159,7 +3159,6 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		symFlags: 0 as BitSet<SymbolFlag>,
 		defaultParams: [],
 		modulePath: "",
-		originalName: "",
 		headerPath: "",
 		jsModulePath: "",
 		overloadIdx: 0 as int32,

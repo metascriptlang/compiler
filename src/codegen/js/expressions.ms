@@ -13,10 +13,11 @@ import {
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner } from "../c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
+import { isRuntimeProcSym } from "../../transform/util";
 
 // ===== Literal Emitters =====
 
@@ -123,17 +124,25 @@ export function safeJsName(name: string): string {
 // the bundle is one flat scope (mangle everything), while non-bundle emits one
 // ES module per file where the import/export pair binds public names.
 export function jsSymbolName(gen: JSGenerator, sym: Symbol | null, name: string): string {
+	return jsNameOf(gen, sym, name, name);
+}
+
+export function jsReferenceName(gen: JSGenerator, sym: Symbol | null, text: string): string {
+	return jsNameOf(gen, sym, text, referenceName(sym, text));
+}
+
+function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
 	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
-	if (gen.multiFile) return jsMultiFileName(gen, sym, name);
-	if (!gen.bundleMode && (hasFlag(sym, SymbolFlag.Exported) || hasFlag(sym, SymbolFlag.Imported))) return safeJsName(name);
+	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
+	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
-		return mangledFunctionName(sym, name, sym.overloadIdx);
+		return mangledFunctionName(sym, declared, sym.overloadIdx);
 	}
 	if (sym.symbolKind == SymbolKind.Class && sym.modulePath != null && sym.modulePath != "") {
-		return mangledGlobalName(sym, name);
+		return mangledGlobalName(sym, declared);
 	}
-	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, name);
+	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, declared);
 	return safeJsName(name);
 }
 
@@ -197,8 +206,8 @@ function exportedBindingName(baseName: string): string {
 	return isJsGlobalName(baseName) ? `${safeJsName(baseName)}_u0` : safeJsName(baseName);
 }
 
-function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
-	const baseName = (sym.originalName != null && sym.originalName != "") ? sym.originalName : name;
+function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: string): string {
+	const baseName = declared;
 	const hasModule = sym.modulePath != null && sym.modulePath != "";
 	// The declaring side sees its own symbols without a modulePath while the
 	// referencing side sees registry clones that carry one; naming must not
@@ -226,7 +235,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 			}
 			emitted = suffixed ? `${safeJsName(baseName)}_u${slot}` : exportedBindingName(baseName);
 		} else if (hasModule) {
-			emitted = mangledFunctionName(sym, name, sym.overloadIdx);
+			emitted = mangledFunctionName(sym, declared, sym.overloadIdx);
 		} else {
 			return safeJsName(name);
 		}
@@ -234,12 +243,12 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string): string {
 		if (moduleExportsName(gen, effPath, baseName)) {
 			emitted = exportedBindingName(baseName);
 		} else if (hasModule) {
-			emitted = mangledGlobalName(sym, name);
+			emitted = mangledGlobalName(sym, declared);
 		} else {
 			return safeJsName(name);
 		}
 	} else if (isModuleGlobalVar(sym)) {
-		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, name);
+		emitted = moduleExportsName(gen, sym.modulePath, baseName) ? safeJsName(baseName) : mangledGlobalName(sym, declared);
 	} else {
 		return safeJsName(name);
 	}
@@ -252,7 +261,7 @@ export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	if (d.name == "this") { emit(gen, gen.thisName); return; }
 	// The name recorded at a call site is what a debugger shows as the name of
 	// the frame it enters, so a renamed callee has to carry its .ms name here.
-	const emitted = jsSymbolName(gen, node.resolvedSym, d.name);
+	const emitted = jsReferenceName(gen, node.resolvedSym, d.name);
 	if (emitted != d.name) markNamed(gen, node, d.name);
 	emit(gen, emitted);
 }
@@ -407,13 +416,9 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// msPrintln / console.log → console.log (strings are native)
-	const isMsPrintln = d.callee.kind == NodeKind.Identifier && (d.callee.data as IdentifierData).name == "msPrintln";
-	const isConsoleLog = d.callee.kind == NodeKind.MemberExpr
-		&& (d.callee.data as MemberExprData).property == "log"
-		&& (d.callee.data as MemberExprData).object.kind == NodeKind.Identifier
-		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name == "console";
-	if (isMsPrintln || isConsoleLog) {
+	// console.log (Echo builtin) and its lowered msPrintln → console.log (strings are native)
+	const isMsPrintln = isRuntimeProcSym(sym, "msPrintln");
+	if (isMsPrintln || (sym != null && sym.builtinKind == "Echo")) {
 		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
 		emit(gen, "console.log(");
 		emitJoinedNodes(gen, d.arguments, ", ");
@@ -433,7 +438,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			return;
 		}
 		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);
-		emit(gen, jsSymbolName(gen, ws, (d.callee.data as IdentifierData).name));
+		emit(gen, jsReferenceName(gen, ws, (d.callee.data as IdentifierData).name));
 		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
@@ -478,6 +483,11 @@ export function jsMethodMemberName(methodName: string, sym: Symbol | null): stri
 
 export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MemberExprData;
+	const ns = d.object.resolvedSym;
+	if (gen.bundleMode && ns != null && ns.symbolKind == SymbolKind.Module && node.resolvedSym != null) {
+		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
+		return;
+	}
 	// Wrap number literals: (42).toString()
 	if (d.object.kind == NodeKind.NumberLiteral) {
 		emit(gen, "(");

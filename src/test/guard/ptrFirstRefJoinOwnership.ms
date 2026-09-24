@@ -41,7 +41,7 @@ function pickPtrFirst(arena: Node2[], i: int32, useBorrow: boolean): Node2 {
 	return r;
 }
 
-function main(): number {
+function main(): int32 {
 	const arena: Node2[] = [];
 	const root = new Node2();
 	root.id = 0;

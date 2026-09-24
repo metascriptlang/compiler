@@ -28,7 +28,7 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 	// Reference parity: pop entries before generating
 	// finally bodies, then restore. Prevents infinite recursion if a finally
 	// body contains return/break which would re-trigger blockLeaveActions.
-	const stack: Node[] = [];
+	const stack: Readonly<Node>[] = [];
 	for (let i = 0; i < howManyFinallys; i += 1) {
 		const fin = p.nestedFinally.pop();
 		stack.push(fin);
@@ -44,10 +44,6 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
-
-function isUndefinedIdent(node: Readonly<Node>): boolean {
-	return node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == "undefined";
-}
 
 // Fallback: detect value-type structs by C type name when nodeType is null.
 // Any non-pointer, non-primitive C type is a struct that needs {0} init.
@@ -392,11 +388,11 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			else { emitStmtsLine(p, `${cType} ${varName};`); }
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
 			emitStmtsLine(p, `${nrvoCall};`);
-		} else if ((d.initializer.kind == NodeKind.NullLiteral || isUndefinedIdent(d.initializer))
+		} else if (d.initializer.kind == NodeKind.NullLiteral
 			&& (isStructType(node.nodeType) || isStructCType(cType))) {
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = {0};`); }
-		} else if ((d.initializer.kind == NodeKind.NullLiteral || isUndefinedIdent(d.initializer)) && isNumericCType(cType)) {
+		} else if (d.initializer.kind == NodeKind.NullLiteral && isNumericCType(cType)) {
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (d.initializer.kind == NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length == 0) {
