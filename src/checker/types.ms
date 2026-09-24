@@ -3688,11 +3688,13 @@ function typeDisplayNameInner(t: Type | null): string {
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
-	// A generic instance over a distinct body erases to its base name, so two
-	// different instantiations render identically ("expected X, got X"). Spell
-	// the type arguments the user wrote.
-	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0
-		&& t.typeExtra != null && t.typeExtra.kind == TypeKind.Distinct) {
+	// A generic instance erases to its base name, so two different
+	// instantiations render identically ("expected X, got X"). Spell the type
+	// arguments the user wrote.
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance) {
+		return typeDisplayName(t.typeReturn);
+	}
+	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
 		let argsText = "";
 		for (let ai = 0; ai < t.typeChildren.length; ai += 1) {
 			if (ai > 0) { argsText = argsText + ", "; }
