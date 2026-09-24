@@ -53,7 +53,7 @@ import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -615,6 +615,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	}
 
 	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
+	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
