@@ -26,7 +26,7 @@ setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
-import { getGenericDecl } from "../parser/context";
+import { declGenericParams } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference } from "./flow";
@@ -252,7 +252,7 @@ function checkTypeAliasStmt(ctx: CheckerContext, node: Node): void {
 // mangling keys on symbol identity the way Nim's getTypeName does.
 function claimLocalTypeName(ctx: CheckerContext, node: Node, what: string): boolean {
 	const name = getDeclName(node);
-	if (lookupSymbol(ctx.table, name) != null || ctx.localTypeNames.get(name) != null || getGenericDecl(name) != "") {
+	if (lookupSymbol(ctx.table, name) != null || ctx.localTypeNames.get(name) != null) {
 		rejectLocalDecl(ctx, node, what);
 		return false;
 	}
@@ -977,7 +977,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	// falls back to unknown, and monomorphizes to `Map<unknown, unknown>`.
 	// Mirrors resolveClass (resolvePass.ms): opens a separate ScopeKind.Block nested
 	// inside the Class scope so generic-param symbols don't pollute the Class scope.
-	const genericStr = getGenericDecl(d.className);
+	const genericStr = declGenericParams(node);
 	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		ctx.inGenericContext += 1;

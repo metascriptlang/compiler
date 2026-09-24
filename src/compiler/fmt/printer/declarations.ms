@@ -13,7 +13,6 @@ import {
 	docLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
 import { Token } from "../../../lexer/token";
-import { getGenericDecl } from "../../../parser/context";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
@@ -296,7 +295,7 @@ function unoptionalized(type: string): string {
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
-	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, getGenericDecl(d.interfaceName)) + extendsClause;
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause;
 	if (d.interfaceFields.length == 0) return docText(head + " {}");
 
 	// Field source positions are stored on node.paramLocations
@@ -386,7 +385,7 @@ export function printStructDecl(node: Node, options: FormatOptions): Doc {
 
 export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ClassDeclData;
-	const generics = genericsFor(options, d.nameLocation, d.className, getGenericDecl(d.className));
+	const generics = genericsFor(options, d.nameLocation, d.className, node.typeArg);
 	const parts: Doc[] = [docText("class " + d.className + generics)];
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));

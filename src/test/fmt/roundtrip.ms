@@ -11,7 +11,7 @@
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core"; // side-effect: register sub-parsers
-import { resetAllSideChannels, getGenericDecl } from "../../parser/context";
+import { resetAllSideChannels } from "../../parser/context";
 import { Node, NodeKind,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
@@ -266,7 +266,7 @@ export function astShape(node: Node | null): string {
 		},
 		NodeKind.InterfaceDecl => {
 			const d = node.data as InterfaceDeclData;
-			const g = getGenericDecl(d.interfaceName);
+			const g = node.typeArg;
 			const generics = g !== "" ? "<" + g + ">" : "";
 			let fs = "";
 			for (let i = 0; i < d.interfaceFields.length; i = i + 1) {
@@ -277,7 +277,7 @@ export function astShape(node: Node | null): string {
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			const g = getGenericDecl(d.className);
+			const g = node.typeArg;
 			const generics = g !== "" ? "<" + g + ">" : "";
 			return k + "[" + d.className + generics + " extends " + d.classExtends + "{" + shapeList(d.classBody) + "}]";
 		},

@@ -66,7 +66,7 @@ import { Token, TokenKind, createToken } from "../../lexer/token";
 // substituted variants + disc info. Lazy-instantiate pattern from destructorLifting.
 import { instantiateGenericBody, isMaybeType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { getGenericDecl } from "../../parser/context";
+import { genericParamsOf } from "../../checker/types";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -278,7 +278,7 @@ function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	if (t.typeExtra != null && t.typeExtra.kind == TypeKind.Union) {
 		if (t.typeReturn == null) {
-			const decl = getGenericDecl(t.typeName);
+			const decl = genericParamsOf(t);
 			if (decl != "") instantiateGenericBody(t, decl);
 		}
 		if (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union) {

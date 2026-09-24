@@ -2,8 +2,8 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData } from "../../ast/node";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
@@ -568,9 +568,6 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	// Tier 3: capture optional generic params: type Box<T> = ...
 	const genericNames = captureGenericParams(state);
-	if (genericNames != "") {
-		addGenericDecl(nameToken.value, genericNames);
-	}
 
 	if (current(state).kind != TokenKind.Assign) {
 		return Result.err(`Expected '=' in type alias at line ${current(state).line}`);
@@ -811,10 +808,6 @@ function parseEnumBody(state: ParserState, nameToken: Token, anchor: Token): Nod
 // Parse interface body: { field: Type; ... } — shared by parseInterfaceDecl and extern interface.
 function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string, nodeKind: NodeKind, nameLoc: SourceLocation = null as unknown as SourceLocation): NodeResult {
 	const keyword = nodeKind == NodeKind.StructDecl ? "struct" : "interface";
-	let ifaceIsGeneric = genericNames != "";
-	if (ifaceIsGeneric) {
-		addGenericDecl(name, genericNames);
-	}
 
 	// Optional extends: interface X extends Y, Z { ... }
 	// Capture each parent type expression (e.g. "Y", "Container<int>", "A<T>")
@@ -880,17 +873,6 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 
 	advance(state);
 
-	if (ifaceIsGeneric) {
-		let fnJoined = "";
-		let ftJoined = "";
-		for (let fi = 0; fi < fields.length; fi += 1) {
-			if (fi > 0) { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
-			fnJoined = `${fnJoined}${fields[fi]}`;
-			if (fi < fieldTypes.length) { ftJoined = `${ftJoined}${fieldTypes[fi]}`; }
-		}
-		updateGenericDeclFields(name, fnJoined, ftJoined);
-	}
-
 	const ifaceNode = createNode(nodeKind, {
 		interfaceName: name,
 		interfaceFields: fields,
@@ -899,6 +881,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 	}, token);
+	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
 	// Repurpose paramLocations for per-field name source locations (used by resolvePass
 	// to emit correct symRecords for LSP documentHighlight/goto-def).
@@ -945,7 +928,6 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			const tp = p.trim();
 			if (tp != "") aliasExtends.push(tp);
 		}
-		if (genericNames != "") addGenericDecl(nameToken.value, genericNames);
 		const aliasNode = createNode(nodeKind, {
 			interfaceName: nameToken.value,
 			interfaceFields: [],
@@ -953,6 +935,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			interfaceExtends: aliasExtends,
 			nameLocation: nameLoc,
 		}, token);
+		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
 		aliasNode.paramLocations = [];
 		return Result.ok(aliasNode);
@@ -990,13 +973,9 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Optional generic type parameters: class Foo<T>
-	let classIsGeneric = false;
+	let classGenerics = "";
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
-		const genericNames = captureGenericParams(state);
-		if (genericNames != "") {
-			addGenericDecl(nameToken.value, genericNames);
-			classIsGeneric = true;
-		}
+		classGenerics = captureGenericParams(state);
 	}
 
 	// Optional extends: class Foo extends Bar / class Foo extends Bar<T>
@@ -1050,27 +1029,13 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Store property info in generic decl side-channel for checker/codegen
-	if (classIsGeneric) {
-		let fnJoined = "";
-		let ftJoined = "";
-		for (const member of members) {
-			if (member.kind == NodeKind.PropertyDecl) {
-				const pd = member.data as PropertyDeclData;
-				if (fnJoined != "") { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
-				fnJoined = `${fnJoined}${pd.propName}`;
-				ftJoined = `${ftJoined}${pd.propType}`;
-			}
-		}
-		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
-	}
-
 	const classNode = createNode(NodeKind.ClassDecl, {
 		className: nameToken.value,
 		classExtends: extendsName,
 		classBody: members,
 		nameLocation: makeLocFromToken(nameToken),
 	}, classToken);
+	classNode.typeArg = classGenerics;
 	classNode.comments = bodyComments;
 	return Result.ok(classNode);
 }
@@ -1092,11 +1057,9 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Optional generic type parameters: actor Foo<T>
+	let actorGenerics = "";
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
-		const genericNames = captureGenericParams(state);
-		if (genericNames != "") {
-			addGenericDecl(nameToken.value, genericNames);
-		}
+		actorGenerics = captureGenericParams(state);
 	}
 
 	if (current(state).kind != TokenKind.LBrace) {
@@ -1125,6 +1088,7 @@ export function parseActorDecl(state: ParserState): NodeResult {
 		actorBody: members,
 		nameLocation: makeLocFromToken(nameToken),
 	}, actorToken);
+	actorNode.typeArg = actorGenerics;
 	actorNode.comments = bodyComments;
 	return Result.ok(actorNode);
 }
@@ -1739,10 +1703,6 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Class body supports fields (name: Type) and extern methods (name(...): Type).
 	// parseClassMember already handles 'extern' modifier on methods.
 	if (externKind == ExternKind.Class && !isAtEnd(state)) {
-		// genericNames already captured before extern kind dispatch
-		if (genericNames != "") {
-			addGenericDecl(nameToken.value, genericNames);
-		}
 		let extendsName = "";
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 			advance(state);
@@ -1764,18 +1724,21 @@ export function parseExternDecl(state: ParserState): NodeResult {
 				classBody: members,
 				nameLocation: makeLocFromToken(nameToken),
 			}, externToken);
+			classNode.typeArg = genericNames;
 			classNode.flags = classNode.flags.incl(NodeFlag.ExternC);
 			return Result.ok(classNode);
 		} else {
 			// extern class FILE; — opaque type with optional `from "native"`.
 			const externNativeName = parseOptionalFromClause(state);
 			consumeSemicolon(state);
-			return Result.ok(createNode(NodeKind.ExternDecl, {
+			const opaqueNode = createNode(NodeKind.ExternDecl, {
 				externKind,
 				externName: nameToken.value,
 				nativeName: externNativeName,
 				externType: "",
-			}, externToken));
+			}, externToken);
+			opaqueNode.typeArg = genericNames;
+			return Result.ok(opaqueNode);
 		}
 	}
 

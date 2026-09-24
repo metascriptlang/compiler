@@ -26,7 +26,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
-import { getGenericDecl } from "../../parser/context";
+import { genericParamsOf } from "../../checker/types";
 import { mangleMonoName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
@@ -145,9 +145,9 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	// Lazy-instantiate body when encountering nested generics. Outer instantiation
 	// (instantiateGenericBody at checker types.ms:787) substitutes K/V → concrete types
 	// in the containing struct's fields, but doesn't recursively populate `typeReturn`
-	// on inner GIs. Codegen does the same lazy pattern at types.ms:601 via getGenericDecl.
+	// on inner GIs. Codegen does the same lazy pattern at types.ms:601 via genericParamsOf.
 	if (gi.typeReturn == null) {
-		const decl = getGenericDecl(gi.typeName);
+		const decl = genericParamsOf(gi);
 		if (decl != "") instantiateGenericBody(gi, decl);
 	}
 	if (gi.typeReturn == null) {

@@ -9,7 +9,7 @@ import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
-import { getGenericDecl } from "../parser/context";
+import { declGenericParams } from "./types";
 import { callDecoratorDefers } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
 
@@ -530,7 +530,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 	// Register methods as extensions — reference parity: procedures are separate from object types.
 	// Static → static extension (typeof ClassName). Instance → instance extension.
 	if (ctx.extensionRegistry != null) {
-		const classGenerics = getGenericDecl(d.className);
+		const classGenerics = declGenericParams(node);
 		const isExternClass = node.flags.has(NodeFlag.ExternC);
 		for (let si = 0; si < d.classBody.length; si += 1) {
 			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
@@ -599,7 +599,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 	}
 	// Register methods as extensions (reuse collectClassMethod)
 	if (ctx.extensionRegistry != null) {
-		const actorGenerics = getGenericDecl(d.actorName);
+		const actorGenerics = declGenericParams(node);
 		for (let mi = 0; mi < d.actorBody.length; mi += 1) {
 			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}

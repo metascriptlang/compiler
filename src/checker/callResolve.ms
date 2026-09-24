@@ -5,7 +5,7 @@ import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, Bo
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName } from "../monomorphize/registry";
-import { findCallTypeArg, getGenericDecl } from "../parser/context";
+import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
@@ -21,7 +21,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
+import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -63,7 +63,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (callee.kind != NodeKind.Identifier) return calleeType;
 	const calleeName = (callee.data as IdentifierData).name;
 	const ltCol = callee.location.column + calleeName.length;
-	const genericParams = getGenericDecl(calleeName);
+	const calleeSym = callee.resolvedSym != null ? callee.resolvedSym : lookupSymbol(ctx.table, calleeName);
+	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
 	if (genericParams == "") return calleeType;
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
 	const typeArgStr = astTypeArg;
@@ -109,8 +110,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 			args.push(monoConcreteTypeName(giCtx.typeChildren[pi]));
 		}
 	}
-	recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
-	const baseSym = lookupSymbol(ctx.table, calleeName);
+	recordGenericTypeInstantiation(calleeName, calleeSym != null ? calleeSym.declNode : null, args, ctx);
+	const baseSym = calleeSym;
 	if (baseSym == null) return calleeType;
 	ensureShaped(baseSym, ctx);
 	// Build GenericInstance — same structure as type annotation path in resolvePass.
@@ -596,7 +597,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// that we should report.
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const calleeName2 = (d.newCallee.data as IdentifierData).name;
-		const genericParams2 = getGenericDecl(calleeName2);
+		const genericParams2 = d.newCallee.resolvedSym != null ? symGenericParams(d.newCallee.resolvedSym) : builtinGenericParams(calleeName2);
 		if (genericParams2 != "") {
 			const noExplicit = node.typeArg == "";
 			// Treat the contextual-inference path as "satisfied" iff the
@@ -628,9 +629,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			ctorFormalTypes = rawCtorTypes;
 			// Substitute class generic params (T, U, ...) with explicit type
 			// args from `new X<int32, string>(...)`. Class generic param names
-			// come from the parser-recorded `getGenericDecl(className)`.
-			const className = d.newCallee.resolvedSym.name;
-			const classGenericDecl = getGenericDecl(className);
+			// come from the class declaration the callee resolved to.
+			const classGenericDecl = symGenericParams(d.newCallee.resolvedSym);
 			if (classGenericDecl != "") {
 				// Format: "T:Constraint,U" — strip constraints, split by comma
 				const classGenericNames: string[] = [];
@@ -1508,7 +1508,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 			if (cd.callee != null && cd.callee.kind == NodeKind.MemberExpr) {
 				const me = cd.callee.data as MemberExprData;
 				if (me.object != null && me.object.kind == NodeKind.Identifier) {
-					const classParams = getGenericDecl((me.object.data as IdentifierData).name);
+					const classParams = me.object.resolvedSym != null ? symGenericParams(me.object.resolvedSym) : genericParamsOf(me.object.nodeType);
 					if (classParams != "") {
 						genericNames = extractGenericNames("gen:" + classParams);
 					}
@@ -1533,7 +1533,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		}
 		returnType = applySubstitutions(returnType, eb);
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
-			const declParams = getGenericDecl(returnType.typeName);
+			const declParams = genericParamsOf(returnType);
 			if (declParams != "") {
 				instantiateGenericBody(returnType, declParams);
 			}
@@ -1569,7 +1569,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		returnType = substituteType(returnType, genericParamName, concreteType);
 		// Reference parity: eagerly instantiate body for concrete GenericInstance
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
-			const declParams = getGenericDecl(returnType.typeName);
+			const declParams = genericParamsOf(returnType);
 			instantiateGenericBody(returnType, declParams);
 		}
 	}
@@ -1726,10 +1726,9 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 	// inferGenericReturnWithExplicit. Without this, downstream peelToStructOrUnion
 	// falls back to the un-substituted typeExtra and `r.value.field` access
 	// leaks GenericParam (synthesizes getDynamicField against JsonValue).
-	// Built-in Result/Promise/Iterator get param names via the
-	// `getGenericDecl` fallback in `parser/context.ms`.
+	// Built-in Result/Promise/Iterator get param names via `builtinGenericParams`.
 	if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
-		const declParams = getGenericDecl(returnType.typeName);
+		const declParams = genericParamsOf(returnType);
 		if (declParams != "") {
 			instantiateGenericBody(returnType, declParams);
 		}
@@ -1788,7 +1787,7 @@ function hasBindingName(b: UnifyBindings, name: string): boolean {
 //
 // Source-agnostic: the caller is responsible for extracting paramNames from
 // the appropriate source — `extractGenericNames(fnFlags)` for FunctionDecl,
-// `getGenericDecl(className)` split-on-comma for classes/interfaces. Keeps
+// `symGenericParams(classSym)` split-on-comma for classes/interfaces. Keeps
 // this helper free of declaration-kind branching.
 //
 // DRY anchor: any call-pipeline code that needs to honor explicit type args
@@ -3144,7 +3143,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (tc != null && hasGenericParams(tc)) { allConcrete = false; break; }
 		}
 		if (allConcrete) {
-			const declParams = getGenericDecl(resolvedObjType.typeName);
+			const declParams = genericParamsOf(resolvedObjType);
 			if (declParams != "") {
 				instantiateGenericBody(resolvedObjType, declParams);
 			}

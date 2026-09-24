@@ -4,9 +4,9 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { getGenericDecl } from "../../parser/context";
+import { genericParamsOf } from "../../checker/types";
 import { monoTypeKey } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -1072,9 +1072,23 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// Peel Ref/GenericInstance to reach the underlying Struct/Union body
 			// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
 			const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
+			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (instBody != null && instBody.kind == TypeKind.Struct) {
+				const bodyNames: string[] = [];
+				for (const n of instBody.typeNames) bodyNames.push(n);
+				const bodyChildren: Type[] = [];
+				for (const c of instBody.typeChildren) bodyChildren.push(c);
+				return genObjectType(g, createStruct(instName, bodyNames, bodyChildren, isStructType(instBody)));
+			}
+			if (instBody != null && instBody.kind == TypeKind.Union) {
+				const renamed = emptyType();
+				assignType(renamed, instBody);
+				renamed.typeName = instName;
+				return genUnionType(g, renamed);
+			}
 			if (baseType != null && baseType.kind == TypeKind.Struct) {
 				// Substitute generic params in fields with concrete type args
-				const genericDecl = getGenericDecl(t.typeName);
+				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
 					const paramNames = splitTopLevel(genericDecl, ",");
 					let concType: Type = baseType;
@@ -1101,7 +1115,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// tagged union. Required for `Result<T, E> = Ref<ResultData<T, E>>` style
 			// types where ResultData is a generic match-type.
 			if (baseType != null && baseType.kind == TypeKind.Union) {
-				const genericDecl = getGenericDecl(t.typeName);
+				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
 					const paramNames = splitTopLevel(genericDecl, ",");
 					let concType: Type = baseType;
