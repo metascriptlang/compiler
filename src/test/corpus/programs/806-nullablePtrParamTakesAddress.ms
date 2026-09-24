@@ -1,21 +1,22 @@
 // @stdout: 9|0|5,5|7
 // @exit: 0
 
-// A struct value passed to a `Ptr<S> | null` parameter is passed by address, the way a Borrow<S>
-// argument is: the callee reads the caller's value and a write through the pointer lands in the
-// caller's local. Nothing checks that the callee does not keep the pointer past the call; this is
-// the site an escape analysis would have to cover.
-// Axes: a read, null, a write through the pointer, a struct field of a local.
+// A MetaScript function never receives a struct's address through a `Ptr<S> | null` parameter:
+// that promotion is for extern C functions only (corpus 805, 807; fixedbugs bug209). Code that
+// reads the caller's struct takes it by value, code that writes it takes `ref`, and the nullable
+// pointer parameter takes a pointer or `null`.
+// Axes: a read, null, a write through `ref`, a struct field of a local.
 
 struct P { a: int32; }
 struct Box { inner: P; tag: int32; }
 
-function read(p: Ptr<P> | null): int32 { return p == null ? 0 : p.a; }
-function write(p: Ptr<P> | null): void { if (p != null) p.a = 5; }
+function read(p: P): int32 { return p.a; }
+function readOpt(p: Ptr<P> | null): int32 { return p == null ? 0 : p.a; }
+function write(ref p: P): void { p.a = 5; }
 
 const v: P = { a: 9 };
 const before = read(v);
-const none = read(null);
+const none = readOpt(null);
 let w: P = { a: 1 };
 write(w);
 const b: Box = { inner: { a: 7 }, tag: 1 };
