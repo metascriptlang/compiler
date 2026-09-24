@@ -1329,7 +1329,7 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 export function requestEnumToString(cc: CheckerContext, t: Type): void {
 	if (cc == null || t == null || t.typeName == "") return;
 	for (const e of cc.pendingEnumToStrings) {
-		if (e.typeName == t.typeName) return;
+		if (e == t || (e.sym != null && e.sym == t.sym)) return;
 	}
 	cc.pendingEnumToStrings.push(t);
 }
