@@ -76,7 +76,7 @@ function main(): void {
 	// Narrowed reference through a generic (Result) and back out as the union.
 	const three = pick(2);
 	if (three.kind == "circle") {
-		const wrapped: Result<Shape, string> = Result.ok(three);
+		const wrapped: Result<Shape, string> = Result.ok<Shape, string>(three);
 		if (wrapped.ok) {
 			console.log("wrapped=" + label(wrapped.value));
 		}
