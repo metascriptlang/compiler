@@ -1233,6 +1233,38 @@ function readSourceText(path: string): string {
 	return r.value;
 }
 
+function unitProgramAt(paths: string[], programs: Node[], path: string): Node | null {
+	for (let i = 0; i < paths.length; i += 1) {
+		if (paths[i] == path) return programs[i];
+	}
+	return null;
+}
+
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, entryPath: string, place: boolean): HashMap<string, Node[]> {
+	const byHome = new HashMap<string, Node[]>();
+	const routed = new HashSet<string>();
+	for (const instNode of order) {
+		const key = pendingInstanceKeyOf(instNode);
+		if (key != "") {
+			if (routed.has(key)) continue;
+			routed.add(key);
+		}
+		const sym = instNode.resolvedSym;
+		if (instNode.nodeType == null && sym != null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
+		const home = sym != null && sym.modulePath != "" ? sym.modulePath : entryPath;
+		const program = programOf(home);
+		if (program == null) throw new Error(`internal: generic instance '${sym != null ? sym.name : ""}' belongs to ${home}, which is not a module of this build`);
+		if (!byHome.has(home)) byHome.set(home, []);
+		byHome.get(home).push(instNode);
+		if (place) (program.data as ProgramData).programStmts.push(instNode);
+	}
+	return byHome;
+}
+
+function placePendingInstances(programOf: (path: string) => Node | null, entryPath: string): void {
+	const _placed = routeInstances(drainPendingInstances(), programOf, entryPath, true);
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1343,28 +1375,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
-	const pendingInsts = drainPendingInstances();
-	for (const instNode of pendingInsts) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetIdx: int32 = -1;
-		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] == owner) { targetIdx = pi; }
-		}
-		if (targetIdx < 0) {
-			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] == entryPath) { targetIdx = pi; }
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), entryPath);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -2336,33 +2347,13 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		programByPath.set(modPath, program);
 	}
 
-	const instancesByOwner: HashMap<string, Node[]> = new HashMap<string, Node[]>();
-	const routedKeys: HashSet<string> = new HashSet<string>();
 	const routeOrder: Node[] = [];
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
 		if (created != null) for (const instNode of created) routeOrder.push(instNode);
 	}
 	for (const instNode of drainPendingInstances()) routeOrder.push(instNode);
-	for (const instNode of routeOrder) {
-		const key = pendingInstanceKeyOf(instNode);
-		if (key != "") {
-			if (routedKeys.has(key)) continue;
-			routedKeys.add(key);
-		}
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		const target = owner != "" && programByPath.has(owner) ? owner : programByPath.has(entryPath) ? entryPath : "";
-		if (target == "") continue;
-		if (!instancesByOwner.has(target)) instancesByOwner.set(target, []);
-		instancesByOwner.get(target).push(instNode);
-		if (!session.keep) (programByPath.get(target).data as ProgramData).programStmts.push(instNode);
-	}
+	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, entryPath, !session.keep);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
@@ -2966,26 +2957,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Single drain after A1 — route each pending generic instance to its OWNER module's
 	// program so the generic body's module-private helpers are visible in the same TU.
 	// Owner-less nodes fall back to the entry program.
-	const pendingInsts = drainPendingInstances();
-	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
-		const instNode = pendingInsts[ii];
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetProgram: Node | null = null;
-		if (owner != "" && programByPath.has(owner)) {
-			targetProgram = programByPath.get(owner);
-		} else if (programByPath.has(filePath)) {
-			targetProgram = programByPath.get(filePath);
-		}
-		if (targetProgram != null) {
-			(targetProgram.data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, filePath);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (const cm of checkedMods) {
@@ -3282,27 +3254,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// module that first asked for it — leaves the name pointing at one module
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
-	for (const instNode of drainPendingInstances()) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetIdx: int32 = -1;
-		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] == owner) { targetIdx = pi; }
-		}
-		if (targetIdx < 0) {
-			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] == filePath) { targetIdx = pi; }
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), filePath);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -3565,24 +3517,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		unitPrograms.push(program);
 		unitCtxs.push(modCtx);
 	}
-	for (const instNode of drainPendingInstances()) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		const owner = instNode.resolvedSym != null ? instNode.resolvedSym.modulePath : "";
-		let targetIdx: int32 = -1;
-		for (let i = 0; i < unitPaths.length; i += 1) {
-			if (unitPaths[i] == owner) targetIdx = i;
-		}
-		if (targetIdx < 0) {
-			for (let i = 0; i < unitPaths.length; i += 1) {
-				if (unitPaths[i] == entryCanonical) targetIdx = i;
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), entryCanonical);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
