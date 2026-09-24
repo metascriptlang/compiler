@@ -224,3 +224,4 @@ import "./bug207ReadonlyGenericBinding";
 import "./bug208StructIntoPtrVariable";
 import "./bug209ConstFoldIntegerTyped";
 import "./bug210StaticExtensionParamModifiers";
+import "./bug211EnumConstantExpression";
