@@ -8,7 +8,7 @@ import {
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	collectExports, registerExtension, isPreludeExport,
 } from "./context";
-import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag, lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
 import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
@@ -22,7 +22,7 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { registerModuleCtx, registerModuleProgram, instantiateProfile, instantiateTimings } from "./instantiate";
+import { registerModuleCtx, registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -409,6 +409,55 @@ test "imported function has Function type" {
 	assert modB != null;
 	assert modA.errors.length == 0;
 	assert modB.errors.length == 0;
+}
+
+function scopeSymbolOf(path: string, name: string): Symbol | null {
+	const ctx = lookupModuleCtx(path);
+	if (ctx == null) return null;
+	return lookupLocal(ctx.table, name);
+}
+
+test "an import binds the defining module's own symbol under every alias" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): number { return n; }" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo, foo as bar } from \"./b\"; const x = foo(1) + bar(2);" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const defining = scopeSymbolOf("/src/b.ms", "foo");
+	assert defining != null;
+	assert scopeSymbolOf("/src/a.ms", "foo") == defining;
+	assert scopeSymbolOf("/src/a.ms", "bar") == defining;
+}
+
+test "both sides of an import cycle bind the symbols the other side checks" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { fb } from \"./b\"; export function fa(n: number): number { return fb(n); }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "import { fa } from \"./a\"; export function fb(n: number): number { return n <= 0 ? 0 : fa(n - 1); }" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const fa = scopeSymbolOf("/src/a.ms", "fa");
+	const fb = scopeSymbolOf("/src/b.ms", "fb");
+	assert fa != null && fb != null;
+	assert scopeSymbolOf("/src/b.ms", "fa") == fa;
+	assert scopeSymbolOf("/src/a.ms", "fb") == fb;
+}
+
+test "an import used by one module is still unused in another" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/lib.ms", entrySource: "export function foo(): number { return 1; }" });
+	entries.push({ entryPath: "/src/idle.ms", entrySource: "import { foo } from \"./lib\"; export const idle = 0;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib\"; import { idle } from \"./idle\"; const x = foo() + idle;" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const idle = findModule(graph, "/src/idle.ms");
+	const user = findModule(graph, "/src/a.ms");
+	assert idle != null && user != null;
+	let idleWarned = false;
+	for (const e of idle.errors) {
+		if (e.message == "'foo' is imported but never used") idleWarned = true;
+	}
+	assert idleWarned;
+	for (const e of user.errors) assert e.message != "'foo' is imported but never used";
 }
 
 test "imported enum available" {
