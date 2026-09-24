@@ -140,7 +140,7 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
 		return mangledFunctionName(sym, declared, sym.overloadIdx);
 	}
-	if (sym.symbolKind == SymbolKind.Class && sym.modulePath != null && sym.modulePath != "") {
+	if ((sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor) && sym.modulePath != null && sym.modulePath != "") {
 		return mangledGlobalName(sym, declared);
 	}
 	if (isModuleGlobalVar(sym)) return mangledGlobalName(sym, declared);
