@@ -365,7 +365,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
-			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues);
+			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues); h = hNodes(h, d.enumInits);
 		},
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
