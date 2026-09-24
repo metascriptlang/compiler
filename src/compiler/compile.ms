@@ -44,7 +44,7 @@ import { createTransformContextWithChecker, createNameSet } from "../transform/c
 import { setGlobalHookOwners, useHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
-import { registerPreludeStampFn, preludePackKey, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
+import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -442,7 +442,7 @@ let _preludeSeedHit: boolean = false;
 function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
 	_preludeSeedHit = false;
 	if (config.stdPath != "") {
-		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt));
+		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
 		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
 	if (!_preludeSeedHit) {

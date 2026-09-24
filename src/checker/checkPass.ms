@@ -38,7 +38,7 @@ import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSe
 import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
-import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
+import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
@@ -2808,7 +2808,8 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
 	const imps = defaultGlobalImports();
 	const packKey = preludePackKey(stdPath, backendExt);
-	const packed = tryLoadPreludePack(packKey);
+	const packStamp = preludePackStamp(stdPath);
+	const packed = tryLoadPreludePack(packKey, packStamp);
 	if (packed != null) return packed;
 	const gensymMark = templateGensymMark();
 	const instanceMark = pendingInstanceMark();
@@ -2824,7 +2825,7 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
-	writePreludePack(packKey, ctx);
+	writePreludePack(packKey, packStamp, ctx);
 	rewindTemplateGensym(gensymMark);
 	discardPendingInstancesFrom(instanceMark);
 	return ctx;
