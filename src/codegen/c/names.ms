@@ -222,6 +222,10 @@ export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): str
 	return mangle(name);
 }
 
+export function classInitCName(classCName: string): string {
+	return classCName + "_init";
+}
+
 // Static field global name: "Counter.total" → "Counter__total"
 export function staticFieldCName(qualifiedName: string): string {
 	const dotIdx = qualifiedName.indexOf(".");

@@ -29,6 +29,7 @@ import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
+import { classInitCName, mangledTypeName } from "../../codegen/c/names";
 
 // ===== Synthesize FunctionDecl from MethodDecl =====
 //
@@ -142,6 +143,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// that becomes a problem, propagate the bitfield here from the class symbol.
 	const initSym = makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
 	setFlag(initSym, SymbolFlag.Exported);
+	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));
 	initSym.location = ctorNode.location;
 	initSym.declNode = fnNode;
 	if (defaults.length > 0) initSym.defaultParams = defaults;

@@ -14,7 +14,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
+import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -65,7 +65,7 @@ function bareTypeName(g: CGen, cName: string): string {
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
-	const initName = initFnName(bareTypeName(g, cName));
+	const initName = classInitCName(cName);
 	const protoKey = "proto:" + initName;
 	if (!nameSetHas(g.declaredProcs, protoKey)) {
 		nameSetAdd(g.declaredProcs, protoKey);
@@ -999,7 +999,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const bareNew = bareTypeName(g, cName);
-			const initName = initFnName(bareNew);
+			const initName = classInitCName(cName);
 			const ctorEntry = lookupCtorDefaults(bareNew + "_new");
 			let ctorChildren: Type[] = null as unknown as Type[];
 			if (ctorEntry != null && ctorEntry.fnType != null) {
@@ -1129,7 +1129,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		}
 		if (parentName != "") {
 			const parentBare = bareTypeName(g, parentName);
-			const parentInitName = initFnName(parentBare);
+			const parentInitName = classInitCName(parentName);
 			const parentEntry = lookupCtorDefaults(parentBare + "_new");
 			let parentChildren: Type[] = null as unknown as Type[];
 			if (parentEntry != null && parentEntry.fnType != null) {
@@ -1143,7 +1143,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			// transformed — which depends on module order. The lifted function's
 			// own symbol is the order-independent source.
 			if (parentChildren == null) {
-				const lifted = dispatchEntryForLiftedName(parentInitName);
+				const lifted = dispatchEntryForLiftedName(initFnName(parentBare));
 				if (lifted != null && lifted.sym != null) {
 					ensureCrossModuleProto(g, parentInitName, lifted.sym.symbolType, lifted.sym);
 				}
