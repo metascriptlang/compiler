@@ -11,7 +11,7 @@ import { Node, NodeKind, Symbol, SymbolKind, TypeKind, nodeCacheStore, nodeCache
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, isExportedBy, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision,
@@ -1173,4 +1173,22 @@ test "a module's type check registers the program it checked" {
 	const program = lookupModuleProgram("/test/registered.ms");
 	assert program != null;
 	assert program == dbGetCheckedProgram(db, "/test/registered.ms");
+}
+
+test "both sides of an import cycle bind the symbols each side checks" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/ca.ms", 'import { fb } from "./cb";\nexport function fa(n: int32): int32 { return fb(n); }');
+	dbSetFileText(db, "/test/cb.ms", 'import { fa } from "./ca";\nexport function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }');
+	const aId = getFileId(db.fileInput, "/test/ca.ms");
+	const bId = getFileId(db.fileInput, "/test/cb.ms");
+	recordModuleImport(db.moduleDeps, aId, bId);
+	recordModuleImport(db.moduleDeps, bId, aId);
+	const ctxB = dbTypeCheck(db, "/test/cb.ms");
+	const ctxA = dbTypeCheck(db, "/test/ca.ms");
+	assert ctxA != null && ctxB != null;
+	const fa = lookupLocal(ctxA.table, "fa");
+	const fb = lookupLocal(ctxB.table, "fb");
+	assert fa != null && fb != null;
+	assert lookupLocal(ctxB.table, "fa") == fa;
+	assert lookupLocal(ctxA.table, "fb") == fb;
 }
