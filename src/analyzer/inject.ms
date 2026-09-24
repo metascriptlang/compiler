@@ -202,8 +202,21 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 
 function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ta = node.data as TypeAssertionData;
+	// Reference parity: a cast between a managed and an unmanaged representation is nkCast,
+	// copied whole into a sink (injectdestructors p sinkArg → passCopyToSink); a conversion
+	// between managed types forwards the mode to its operand like nkConv/nkObjUpConv.
+	if (mode == DrcMode.SinkArg && isReprCast(node, dctx)) {
+		ta.asExpr = processNode(ta.asExpr, dctx, DrcMode.Normal);
+		return passCopyToSink(node, dctx);
+	}
 	ta.asExpr = processNode(ta.asExpr, dctx, mode);
 	return node;
+}
+
+function isReprCast(node: Node, dctx: DrcContext): boolean {
+	const operand = (node.data as TypeAssertionData).asExpr;
+	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
+	return sinkClassify(operand.nodeType, dctx).needsCleanup != sinkClassify(node.nodeType, dctx).needsCleanup;
 }
 
 function rhsMode(rhs: Node): DrcMode {
@@ -1080,12 +1093,8 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
-		// Conversions sink; their operand was walked in SinkArg mode (Reference: nkHiddenSubConv/nkConv → genSink(p(ri, sinkArg)))
+		// Conversions sink; their operand was walked in SinkArg mode (Reference: nkHiddenSubConv/nkConv/nkCast → genSink(p(ri, sinkArg)))
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => {
-			const operand = skipConversionWrappers(rhs);
-			const operandOwns = isFreshExpr(operand.kind)
-				|| (operand.nodeType != null && classifyRc(operand.nodeType, dctx).needsCleanup);
-			if (!operandOwns) return genCopy(stmt, dest, destSym, rhs, rcInfo, flags, dctx, loc);
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
 		// Move expression → sink + wasMoved on source
