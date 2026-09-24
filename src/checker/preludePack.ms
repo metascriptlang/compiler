@@ -1417,6 +1417,19 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 // end-to-end "pack-loaded prelude behaves like a fresh one" contract is
 // guarded by the emitted-C fixpoint ladder.
 
+function pkEnterPrivateCache(): string {
+	const prevHome = env.get("HOME");
+	env.set("HOME", "out/test/preludePackHome");
+	env.set("MSC_PRELUDE_PACK", "1");
+	return prevHome;
+}
+
+function pkLeavePrivateCache(prevHome: string): void {
+	env.delete("MSC_PRELUDE_PACK");
+	if (prevHome == "") env.delete("HOME");
+	else env.set("HOME", prevHome);
+}
+
 function makeTestCtx(): CheckerContext {
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
@@ -1452,7 +1465,7 @@ test "preludePack: escape/unescape roundtrip incl separators" {
 }
 
 test "preludePack: write then load reconstructs symbols, types, nodes, exts, directives" {
-	env.set("MSC_PRELUDE_PACK", "1");
+	const prevHome = pkEnterPrivateCache();
 	try {
 		const ctx = makeTestCtx();
 		const sym = makeSymbolState("pkTestFn", SymbolKind.Function, null, false, SymbolState.Hollow);
@@ -1493,6 +1506,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
+		assert packRoot().startsWith("out/test/"), `a pack test reached the machine-wide cache: ${packRoot()}`;
 		writePreludePack(key, ctx);
 		const loaded = tryLoadPreludePack(key);
 		assert loaded != null;
@@ -1534,13 +1548,13 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert loaded.extensionRegistry.methods[0].sym == got;
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
-		env.delete("MSC_PRELUDE_PACK");
+		pkLeavePrivateCache(prevHome);
 	}
 }
 
 
 test "preludePack: exhaustive per-kind node roundtrip" {
-	env.set("MSC_PRELUDE_PACK", "1");
+	const prevHome = pkEnterPrivateCache();
 	try {
 		const ctx = makeTestCtx();
 		const sym = makeSymbolState("pkKindFn", SymbolKind.Function, null, false, SymbolState.Hollow);
@@ -1587,12 +1601,12 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		}
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
-		env.delete("MSC_PRELUDE_PACK");
+		pkLeavePrivateCache(prevHome);
 	}
 }
 
 test "preludePack: corrupt entry is a miss" {
-	env.set("MSC_PRELUDE_PACK", "1");
+	const prevHome = pkEnterPrivateCache();
 	try {
 		const key = preludePackKey("corrupt-probe", ".test");
 		const root = packRoot();
@@ -1604,12 +1618,12 @@ test "preludePack: corrupt entry is a miss" {
 			remove(`${root}/${key}.pk`);
 		}
 	} finally {
-		env.delete("MSC_PRELUDE_PACK");
+		pkLeavePrivateCache(prevHome);
 	}
 }
 
 test "preludePack: deps snapshot roundtrip through the .deps file" {
-	env.set("MSC_PRELUDE_PACK", "1");
+	const prevHome = pkEnterPrivateCache();
 	try {
 		const key = preludePackKey("deps-roundtrip-probe", ".depstest");
 		// Snapshot with the awkward corners: empty name/alias lists, an
@@ -1660,12 +1674,12 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		remove(`${packRoot()}/${otherKey}.pk`);
 	} finally {
 		setStdGraphDepsSnapshot(null, "");
-		env.delete("MSC_PRELUDE_PACK");
+		pkLeavePrivateCache(prevHome);
 	}
 }
 
 test "preludePack: corrupt deps file is a miss" {
-	env.set("MSC_PRELUDE_PACK", "1");
+	const prevHome = pkEnterPrivateCache();
 	try {
 		const key = preludePackKey("deps-corrupt-probe", ".depstest");
 		const root = packRoot();
@@ -1677,7 +1691,7 @@ test "preludePack: corrupt deps file is a miss" {
 			remove(`${root}/${key}.deps`);
 		}
 	} finally {
-		env.delete("MSC_PRELUDE_PACK");
+		pkLeavePrivateCache(prevHome);
 	}
 }
 
