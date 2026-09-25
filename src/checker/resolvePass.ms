@@ -9,7 +9,7 @@
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
+import { markUsedIn, CheckerContext, findExtension, getExtTypeName, extractGenericParamDecls, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1248,7 +1248,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 	// Open temp scope with GenericParam types
  // so resolveAnnotation finds "T" -> GenericParam("T")
-	const genericNames = extractGenericNames(d.fnFlags);
+	const genericNames = extractGenericParamDecls(d.fnFlags);
 
 	if (genericNames.length > 0) {
 		openScope(ctx.table, ScopeKind.Block);
@@ -1912,7 +1912,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			const md = member.data as MethodDeclData;
 			// Method-level generic params (e.g. parse<T>) — define in temp scope
 			// so resolveAnnotation finds "T" → GenericParam("T"), same as resolveFunctionDecl.
-			const methodGenericNames = extractGenericNames(md.methodFlags);
+			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) {
 				openScope(ctx.table, ScopeKind.Block);
@@ -2129,7 +2129,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 		}
 		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
-			const methodGenericNames = extractGenericNames(md.methodFlags);
+			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) {
 				openScope(ctx.table, ScopeKind.Block);

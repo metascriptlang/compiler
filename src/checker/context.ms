@@ -911,6 +911,15 @@ export function getExtTypeName(flags: string): string {
 
 export function extractGenericNames(flags: string): string[] {
 	const result: string[] = [];
+	for (const decl of extractGenericParamDecls(flags)) {
+		const colonPos = findChar(decl, ":");
+		result.push(colonPos > 0 ? decl.slice(0, colonPos).trim() : decl);
+	}
+	return result;
+}
+
+export function extractGenericParamDecls(flags: string): string[] {
+	const result: string[] = [];
 	if (flags == "") return result;
 	const parts = splitTopLevel(flags, "|");
 	for (let pi = 0; pi < parts.length; pi += 1) {
@@ -1610,6 +1619,20 @@ test "extractGenericNames empty" {
 test "extractGenericNames no gen" {
 	const names = extractGenericNames("async");
 	assert names.length == 0;
+}
+
+test "extractGenericNames drops the constraint" {
+	const names = extractGenericNames("gen:T:Animal,U");
+	assert names.length == 2;
+	assert names[0] == "T";
+	assert names[1] == "U";
+}
+
+test "extractGenericParamDecls keeps the constraint" {
+	const decls = extractGenericParamDecls("gen:T:Animal,U");
+	assert decls.length == 2;
+	assert decls[0] == "T:Animal";
+	assert decls[1] == "U";
 }
 
 test "stripGenFlag simple" { assert stripGenFlag("gen:T") == ""; }
