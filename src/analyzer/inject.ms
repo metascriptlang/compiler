@@ -600,12 +600,12 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// (cleanup destroys unconditionally — it never suppresses the scope-exit destroy).
 	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
 	const moveType = md.moveArg.nodeType;
-	if (moveType != null) {
+	if (moveType != null && consume) {
 		const rcInfo = classifyRc(moveType, dctx);
 		if (rcInfo.needsCleanup) {
 			if (md.moveArg.kind == NodeKind.Identifier) {
 				recordMoveInContext(dctx, md.moveArg.resolvedSym);
-			} else if (consume) {
+			} else {
 				if (md.moveArg.kind == NodeKind.MemberExpr) {
 					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
 					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
