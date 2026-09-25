@@ -71,3 +71,9 @@ test "bug520: widening, void lambdas, a ternary under a cast and a ternary into 
 	const r = compileToC(src);
 	assert r.ok, r.error;
 }
+
+test "bug520: a literal for a generic interface inside a generic class body stays accepted" {
+	assert !hasError("interface Op520<T> { v: T; }\ninterface Q520<T> { ops: Op520<T>[]; reset: boolean; }\n"
+		+ "class H520<T> {\n\tattach(): Q520<T> {\n\t\tconst q: Q520<T> = { ops: [], reset: false };\n\t\treturn q;\n\t}\n}\n",
+		"is not assignable");
+}

@@ -1213,6 +1213,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 
 function refusedOnlyForNull(exprType: Type, formal: Type): boolean {
 	if (exprType.kind == TypeKind.Null) return true;
+	if (isMaybeType(exprType) && exprType.typeReturn != null) return isAssignable(exprType.typeReturn, formal);
 	if (exprType.kind != TypeKind.Union) return false;
 	let carriesNull = false;
 	for (const member of exprType.typeChildren) {
@@ -1224,6 +1225,7 @@ function refusedOnlyForNull(exprType: Type, formal: Type): boolean {
 }
 
 export function slotRefuses(exprType: Type, formal: Type): boolean {
+	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
 	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal) && !refusedOnlyForNull(exprType, formal);
 }
 
