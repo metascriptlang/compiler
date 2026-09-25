@@ -588,7 +588,7 @@ function fsWatch(): void {
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("WATCH ")) seen.push(line);
 	}
-	const want = platform == "windows" ? [
+	const want = platform == "windows" || platform == "linux" ? [
 		"WATCH missing: no such file or directory: missing",
 		"WATCH write before the first wait: true",
 		"WATCH write in a subdirectory: true",
