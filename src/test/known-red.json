@@ -1,4 +1,5 @@
 {
+  "boundary": {},
   "corpus": {
     "619-mapTupleValueLeak [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-tuple-value done acc=0'; measured 2026-09-21"},
     "628-mapMutationGuardOk [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'map-guard-ok sum=280 sum2=288 set=4 hmk=6 hs=4'; measured 2026-09-21"},
@@ -20,7 +21,9 @@
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
     "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"}
   },
+  "fmt": {},
   "guard": {},
+  "hcr": {},
   "san": {
     "253-duVariantWiden [san]": {"since":"52ae61ea","note":"DRC ledger leak: Tag alloc=25008 destroy=25004; measured 2026-09-21"},
     "254-duSinkPayload [san]": {"since":"52ae61ea","note":"DRC ledger leak: Alpha alloc=10007 destroy=10003; measured 2026-09-21"},
@@ -37,7 +40,7 @@
   "suite-orc": {},
   "tests": {
     "src/test/c/actor.ms > E2E C: 100 actors fan-out compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
-    "src/test/c/actor.ms > E2E C: S1/S3 \u2014 read-only field borrow in spawn thunk compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
+    "src/test/c/actor.ms > E2E C: S1/S3 — read-only field borrow in spawn thunk compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/buffer.ms > E2E C: Buffer uses msStringConcat (no msBufferConcat)": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/buffer.ms > E2E C: Buffer uses string byteAt (no msBufferGet)": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/buffer.ms > E2E C: Buffer uses string byteSlice (no msBufferSlice)": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
@@ -68,6 +71,26 @@
     "src/test/c/jsx.ms > E2E C: unconsumed JSX fragment is rejected by the checker": {"since":"3ed7bc2c","note":"E2E C tier, group \"checker accepts what the case expects rejected\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/result.ms > E2E C: Result field access .ok .value .error": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/toycodec.ms > E2E A4 smoke: toyEncode macro fires and returns a string": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
-    "src/test/c/variables.ms > E2E C: enum member access": {"since":"3ed7bc2c","note":"E2E C tier, group \"emitted C lacks the pinned text Color_Green\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"}
+    "src/test/c/variables.ms > E2E C: enum member access": {"since":"3ed7bc2c","note":"E2E C tier, group \"emitted C lacks the pinned text Color_Green\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
+    "src/test/fixedbugs/bug016.ms > bug016: linear header scan finds FIRST CRLFCRLF on chunked-terminated buffer": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug016.ms > bug016: pipelined POST + GET — buffer ending with \\r\\n\\r\\n still parses to FIRST CRLFCRLF": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug021.ms > bug021: zero-param async arrow with return type parses": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug023.ms > bug023: Result<T[], E> instantiates as single-wrap Array, not Array<Array<T>>": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug023.ms > bug023: Result<T[][], E> intentionally double-wraps (user-written nested array)": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug030.ms > bug030: nested ObjectLiteral with inline call passes object handle": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug031.ms > bug031: async for..of with break compiles": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug031.ms > bug031: async while with continue compiles": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug035.ms > bug035: distinct string array routes to msArrayStringDestroy": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug036.ms > bug036: interface (Ref-wrapped Struct) stays on ptr path — regression": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug045.ms > bug045: union literals construct tagged payloads": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug085TernaryEmptyArrayElem.ms > bug085: match arm empty array adopts the other arm's type": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug088PredicateNarrowUnknownMember.ms > bug088: narrowed PARAM member read casts too": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug088PredicateNarrowUnknownMember.ms > bug088: narrowed local member read casts void* to the narrowed struct ptr": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug088PredicateNarrowUnknownMember.ms > bug088: the (u as Box).n spelling gets the same cast": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug097UnionAliasHookTypedef.ms > bug097: union alias through JSON.parse across modules reaches C": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug103MacroExprHoist.ms > bug103: a macro can mark the decl it hoists as static storage": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug127RaiserArrayTier.ms > bug127: array methods fold inside macro bodies": {"since":"07cc56dc","note":"old red: same count alone on main 0b7087d5 (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/fixedbugs/bug174ComptimeMathSurface.ms > bug174: signed narrowing out of range is an error, as at runtime": {"since":"07cc56dc","note":"old red, fails on main source too (measured 2026-09-25) — 2026-09-25-fixedbugs-tier-old-reds.md"},
+    "src/test/handoff/index.ms > no result": {"since":"07cc56dc","note":"handoff index does not compile until 213df8d7 lands from wt/hcr-cross-module (sink parameter read through its modifier); measured 2026-09-25"}
   }
 }
