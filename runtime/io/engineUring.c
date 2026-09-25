@@ -43,6 +43,7 @@ static int io_uring_enter(int fd, unsigned to_submit, unsigned min_complete, uns
  * it can never equal a real msIoRequest* (calloc'd → ≥16-byte aligned), letting msIoEnginePoll
  * distinguish + re-arm the wake instead of dispatching it as a completion. */
 #define MS_URING_WAKE_UD ((uint64_t)0xACC0DE17EFD1ULL)
+#define MS_URING_TIMEOUT_UD ((uint64_t)0xACC0DE17EFD3ULL)
 
 struct msUring {
 	int fd;
@@ -346,6 +347,17 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 
 	if (cqHead == cqTail) {
 		if (timeoutMs == 0) return 0;
+		struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
+		struct io_uring_sqe* timer = timeoutMs > 0 ? uringGetSqe(ring) : NULL;
+		if (timer != NULL) {
+			timer->opcode = IORING_OP_TIMEOUT;
+			timer->fd = -1;
+			timer->addr = (uint64_t)(uintptr_t)&wait;
+			timer->len = 1;
+			timer->user_data = MS_URING_TIMEOUT_UD;
+			uringSubmitSqe(ring);
+			uringSubmit(ring);
+		}
 		int ret = uringSubmitAndWait(ring, 1);
 		if (ret < 0) return 0;
 		cqHead = atomic_load_explicit((_Atomic unsigned*)ring->cqHead, memory_order_acquire);
@@ -356,6 +368,11 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 	int count = 0;
 	while (cqHead != cqTail) {
 		struct io_uring_cqe* cqe = &ring->cqes[cqHead & *ring->cqMask];
+
+		if (cqe->user_data == MS_URING_TIMEOUT_UD) {
+			cqHead++;
+			continue;
+		}
 
 		if (cqe->user_data == MS_URING_WAKE_UD) {
 			/* Targeted cross-thread wake fired (Amendment B / I16): drain the eventfd counter
