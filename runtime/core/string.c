@@ -361,8 +361,11 @@ static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) 
 /* Public char-based indexOf — JavaScript/TypeScript semantics.
  * start and return value are char positions (UTF-16 code units). */
 int64_t msStringIndexOf(msString s, msString sub, int64_t start) {
-	if (sub.len == 0) return start <= s.len ? start : -1;
 	if (start < 0) start = 0;
+	if (sub.len == 0) {
+		int64_t n = msStringLength(s);
+		return start < n ? start : n;
+	}
 	if (sub.len > s.len || s.p == NULL) return -1;
 
 	/* ASCII fast path: byte positions == char positions */
@@ -402,7 +405,10 @@ int64_t msStringIndexOf(msString s, msString sub, int64_t start) {
 }
 
 int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx) {
-	if (sub.len == 0) return msStringIsAscii(s) ? s.len : msStringLength(s);
+	if (sub.len == 0) {
+		int64_t n = msStringLength(s);
+		return startIdx >= 0 && startIdx < n ? startIdx : n;
+	}
 	if (sub.len > s.len || s.p == NULL) return -1;
 
 	/* Determine start byte position for backward search */
