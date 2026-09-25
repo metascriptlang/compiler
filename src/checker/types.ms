@@ -1874,6 +1874,7 @@ export function builtinGenericParams(name: string): string {
 		"Result" => "T,E",
 		"Promise" => "T",
 		"Iterator" => "T",
+		"IteratorResult" => "T",
 		"Arc" => "T",
 		"Locked" => "T",
 		_ => "",
