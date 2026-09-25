@@ -166,7 +166,10 @@ void* msFutureFinally(void* input, msClosure onSettled);
  * Preconditions: input->value was written via msFutureCompleteT on the same fut_type.
  * Passing a boxed-storage input (spawn legacy path) reinterprets the heap pointer
  * as T — undefined behavior. A Session-3 assert will catch this at runtime. */
-#define MS_DEFINE_FUTURE_THEN(name, fut_type, T, arg_type) \
+#define MS_NO_DROP(value) ((void)(value))
+#define MS_DROP_REF_SLOT(slot) do { void* dropped_ = *(slot); *(slot) = NULL; msDecref(dropped_); } while (0)
+#define MS_DROP_STRING_SLOT(slot) do { msString dropped_ = *(slot); *(slot) = MS_EMPTY_STRING; msStringDestroy(dropped_); } while (0)
+#define MS_DEFINE_FUTURE_THEN(name, fut_type, T, arg_type, drop) \
 static inline void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
@@ -179,6 +182,7 @@ static inline void name##_cb(void* raw) { \
     void* env = e->onFulfilled.env; \
     if (env) ((void(*)(arg_type, void*))fn)(val, env); \
     else ((void(*)(arg_type))fn)(val); \
+    drop(&((fut_type*)e->input)->value); \
     if (msErr) { \
         msFutureFail(e->output, (void*)msCurrException); \
         msErr = false; msCurrException = NULL; \
@@ -201,7 +205,6 @@ static inline void* name(void* input, msClosure onFulfilled) { \
  * struct indirectly), then runs `drop` on them: the callee borrows the parameter, so the
  * caller owns the value once the callback returns.
  * Instantiated per T by codegen (ensureFutureThenBoxedInstance). */
-#define MS_NO_DROP(value) ((void)(value))
 #define MS_PASS_VALUE(value) (value)
 #define MS_PASS_REF(value) (&(value))
 #define MS_DEFINE_FUTURE_THEN_BOXED(name, T, arg_type, pass, drop) \
@@ -300,11 +303,12 @@ static inline void* name(void* input, msClosure onRejected) { \
     return output; \
 }
 
-MS_DEFINE_FUTURE_THEN(msFutureThen_double, msFuture_double, double, double)
-MS_DEFINE_FUTURE_THEN(msFutureThen_int32,  msFuture_int32,  int32_t, int32_t)
-MS_DEFINE_FUTURE_THEN(msFutureThen_int64,  msFuture_int64,  int64_t, int64_t)
-MS_DEFINE_FUTURE_THEN(msFutureThen_bool,   msFuture_bool,   bool,    bool)
-MS_DEFINE_FUTURE_THEN(msFutureThen_ptr,    msFuture_ptr,    void*,   void*)
+MS_DEFINE_FUTURE_THEN(msFutureThen_double, msFuture_double, double, double, MS_NO_DROP)
+MS_DEFINE_FUTURE_THEN(msFutureThen_int32,  msFuture_int32,  int32_t, int32_t, MS_NO_DROP)
+MS_DEFINE_FUTURE_THEN(msFutureThen_int64,  msFuture_int64,  int64_t, int64_t, MS_NO_DROP)
+MS_DEFINE_FUTURE_THEN(msFutureThen_bool,   msFuture_bool,   bool,    bool, MS_NO_DROP)
+MS_DEFINE_FUTURE_THEN(msFutureThen_ptr,    msFuture_ptr,    void*,   void*, MS_NO_DROP)
+MS_DEFINE_FUTURE_THEN(msFutureThen_ref,    msFuture_ptr,    void*,   void*, MS_DROP_REF_SLOT)
 
 MS_DEFINE_FUTURE_FINALLY(msFutureFinally_double, msFuture_double)
 MS_DEFINE_FUTURE_FINALLY(msFutureFinally_int32,  msFuture_int32)

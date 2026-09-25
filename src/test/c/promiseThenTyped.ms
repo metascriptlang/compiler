@@ -25,3 +25,15 @@ test "a then callback on a struct wider than three words takes it by pointer and
 	assert result.value.contains(", MS_PASS_REF, ");
 	assert !result.value.contains(", MS_PASS_REF, MS_NO_DROP)");
 }
+
+test "a then callback on an array promise goes through the variant that releases the value" {
+	const result = compileToC("async function names(): Promise<string[]> { return [\"a\"]; }\nlet n: int32 = 0;\nnames().then((v: string[]): void => { n = v.length; });");
+	assert result.ok;
+	assert result.value.contains("msFutureThen_ref(");
+}
+
+test "a then callback on a class promise goes through the variant that releases the value" {
+	const result = compileToC("class Leaf { label: string; constructor(label: string) { this.label = label; } }\nasync function leaf(): Promise<Leaf> { return new Leaf(\"x\"); }\nlet s = \"\";\nleaf().then((l: Leaf): void => { s = l.label; });");
+	assert result.ok;
+	assert result.value.contains("msFutureThen_ref(");
+}

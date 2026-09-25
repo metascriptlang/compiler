@@ -64,6 +64,7 @@ function futureTypedSuffix(t: Type | null): string {
 }
 
 function futureThenFnForInner(t: Type | null): string {
+	if (t != null && t.kind == TypeKind.Ref) return "msFutureThen_ref";
 	const suffix = futureTypedSuffix(t);
 	return suffix == "" ? "" : "msFutureThen_" + suffix;
 }

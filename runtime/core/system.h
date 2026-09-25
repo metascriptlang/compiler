@@ -430,7 +430,7 @@ static inline msString msUnboxString(void* p) {
 #define msFuture_msString_DEFINED
 MS_FUTURE_STRUCT(msFuture_msString, msString);
 MS_DEFINE_FUTURE_CHAIN(msFutureChain_msString, msFuture_msString)
-MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString)
+MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString, MS_DROP_STRING_SLOT)
 MS_DEFINE_FUTURE_FINALLY(msFutureFinally_msString, msFuture_msString)
 
 /* Typed .catch — error handler always receives msString.
