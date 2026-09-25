@@ -231,6 +231,7 @@ function walkCheckExpr(node: Node | null): void {
 // ===== Main Entry Point =====
 
 export function lowerAsync(program: Node, ctx: TransformContext): Node {
+	_retAwaitCounter = 0;
 	walkAsync(program);
 	return program;
 }
