@@ -273,7 +273,11 @@ saw the same checker output as before.
 
 **`tools/gate.sh` runs this recipe itself** whenever the diff pulls in the
 corpus or SAN lane. Control = the compiler at the merge base (`git archive src`
-built into `out/gate/ctl/msc`, kept per sha); both binaries sit under
+built into `out/gate/ctl-<key>/msc`, `<key>` hashing the merge base's `src/` minus
+`src/test` plus `std/`, the three newest kept). A select on a clean tree files its
+candidate and emits under the candidate's key, so after a land the next gate
+finds its control built and every unchanged program's emit reused. A program
+whose C emit fails on either side counts as changed. Both binaries sit under
 `out/gate/`, so they resolve the same `std/` and `runtime/`, and every program
 emits from its own cwd at one path (`out/gate/emit/work/<name>`, moved to
 `emit/ctl` and `emit/cand` afterwards for diffing). The signature per program
