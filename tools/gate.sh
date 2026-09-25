@@ -19,6 +19,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite hcr tests suite-orc fmt corpus san guard"
 LADDER="build boundary suite hcr tests suite-orc fmt corpus san guard"
 KNOWN_LANES="boundary suite hcr suite-orc tests fmt corpus san guard"
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
 usage() {
@@ -209,6 +210,19 @@ runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
 CASES
+  INERT_RE=$INERT RAISER_RE=$RAISER_PATHS awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["RAISER_RE"]) ? "raiser" : "" }
+    got != $2 { printf "FAIL raiser lane %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/raiser/vm.ms|raiser
+src/codegen/raiser/emit.ms|raiser
+src/transform/raiserLowering.ms|raiser
+std/core/date/index.rms|raiser
+src/test/corpus/run.ms|raiser
+src/checker/checkPass.ms|
+src/codegen/c/expressions.ms|
+std/core/date/index.cms|
+CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
     "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
@@ -296,6 +310,13 @@ case " $lanes " in *" corpus "*|*" san "*)
   fi ;;
 esac
 
+raiser_on=0 raiser_why=""
+if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
+else
+  raiser_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RAISER_PATHS" | head -1)
+  [ -z "$raiser_why" ] || raiser_on=1
+fi
+
 explain() {
   local l n
   for l in $lanes; do
@@ -307,6 +328,9 @@ explain() {
   elif [ -n "$select_why" ] && [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ]; then
     say "gate: no narrowing for $select_label ($select_why)"
   fi
+  case " $lanes " in *" corpus "*)
+    if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
+  esac
 }
 
 if [ -z "$lanes" ]; then
@@ -348,9 +372,8 @@ lane_cmd() {
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$CAND" "$CAND" ;;
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
-    corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
+    corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
   esac
 }
@@ -370,24 +393,37 @@ run_tools_lane() {
   return $rc
 }
 
-TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms"
+TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/helpers.ms"
+
+part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
+
+test_one() {
+  local bin=$1 f=$2 part=$3; shift 3
+  env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" "$@" >"$part" 2>&1
+  echo $? >"$part.rc"
+}
 
 run_test_lane() {
-  local bin=$BUILDER files=src/index.ms flags="" rc=0 f part="$OUT/$1.part"
+  local rc=0 f part files=src/index.ms
   case "$1" in
-    suite-orc) flags=--gc=orc ;;
-    tests) bin=$CAND files=$TIERS ;;
+    suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
+    suite-orc) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite-orc src/index.ms)" --gc=orc ;;
+    tests)
+      files=$TIERS
+      for f in $files; do with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir & done
+      wait ;;
   esac
   for f in $files; do
-    env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" $flags >"$part" 2>&1 || rc=1
+    part=$(part_of "$1" "$f")
     cat "$part"
+    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
       printf 'NORESULT %s > no result\n' "$f"
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
     fi
+    rm -f "$part" "$part.rc"
   done
-  rm -f "$part"
   return $rc
 }
 
@@ -442,7 +478,7 @@ list_programs() {
 
 emit_side() {
   local jobs
-  jobs=$(( $(cores) / 2 )); [ "$jobs" -ge 1 ] || jobs=1
+  jobs=$(share_of_cores 2)
   mkdir -p "$2"
   bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
 }
@@ -522,12 +558,12 @@ narrow_for() {
 }
 
 scope_known() {
-  if [ -z "$only_csv" ]; then cat; return; fi
-  awk -v only="$only_csv" -v lanes="$lanes_csv" '
+  awk -v only="$only_csv" -v lanes="$lanes_csv" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
     BEGIN { n = split(only, a, ","); for (i = 1; i <= n; i++) keep[a[i]] = 1
             m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1 }
     { prog = $0; sub(/ \[.*$/, "", prog); lane = $0; sub(/^.*\[/, "", lane); sub(/\].*$/, "", lane)
-      if (!(prog in keep)) next
+      if (drop_raiser == 1 && lane == "raiser") next
+      if (n > 0 && !(prog in keep)) next
       if (m > 0 && lane != "parity" && !(lane in lane_kept)) next
       print }'
 }
@@ -584,38 +620,138 @@ fi
 mkdir -p "$OUT"
 flaky_ids >"$OUT/flaky.ids"
 
+GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+
+live_gates() {
+  local f n=0
+  for f in "$GATES_DIR"/*; do
+    [ -e "$f" ] || continue
+    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
+  done
+  [ "$n" -ge 1 ] || n=1
+  echo "$n"
+}
+
+share_of_cores() {
+  local w=$(( $(cores) / $(live_gates) / $1 ))
+  [ "$w" -ge 1 ] || w=1
+  echo "$w"
+}
+
+SLOTS_DIR="$OUT/slots"
+
+take_slot() {
+  local i
+  while :; do
+    for ((i = 0; i < PAR; i++)); do mkdir "$SLOTS_DIR/$i" 2>/dev/null && { echo "$i"; return; }; done
+    sleep 1
+  done
+}
+
+with_slot() {
+  local s rc
+  s=$(take_slot)
+  "$@"; rc=$?
+  rmdir "$SLOTS_DIR/$s" 2>/dev/null
+  return $rc
+}
+
+with_test_binary() {
+  until mkdir "$SLOTS_DIR/test-binary" 2>/dev/null; do sleep 1; done
+  "$@"; local rc=$?
+  rmdir "$SLOTS_DIR/test-binary" 2>/dev/null
+  return $rc
+}
+
+run_guard_lane() {
+  local i n=${GATE_GUARD_SHARDS:-$PAR} rc=0 part
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run src/test/guard/run.ms --target=raiser >"$part" 2>&1; echo $? >"$part.rc") &
+  done
+  wait
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    cat "$part"
+    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
+    rm -f "$part" "$part.rc"
+  done
+  return $rc
+}
+
+lane_body() {
+  local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
+  case "$lane" in
+    tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
+    tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+  esac
+  printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
+}
+
+PHASES=("tools build" "boundary suite suite-orc hcr tests fmt" "corpus guard" "san")
+
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
+mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
+trap 'rm -f "$GATES_DIR/$$"' EXIT
+PAR=${GATE_PAR:-$(share_of_cores 10)}
+rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
 
-for lane in $lanes; do
-  if [ -n "$stopped" ]; then say "gate: $lane skipped, $stopped has a new red"; continue; fi
-  log="$OUT/$lane.log"
-  narrow="" only_csv="" lanes_csv=""
-  case "$lane" in corpus|san)
-    need_cand "$lane"
-    [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
-    narrow_for "$lane"
-    if [ "$select" -eq 1 ] && [ -z "$only_csv" ]; then say "gate: $lane skipped, no program's emitted $([ "$lane" = san ] && printf 'C' || printf 'C or JS') differs"; continue; fi ;;
-  esac
-  t0=$SECONDS
-  reused=""
-  if [ "$reuse" -eq 1 ] && [ "$(tail -1 "$log" 2>/dev/null)" = END ]; then
-    rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); reused=" (reused log)"
-  else case "$lane" in
-    tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
-    tests) need_cand "$lane"; bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|guard|hcr) need_cand "$lane"; bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
-    *) bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
-  esac
-  printf '\nRC=%d\nEND\n' "$rc" >>"$log"
+for phase in "${PHASES[@]}"; do
+  todo=""
+  for lane in $phase; do case " $lanes " in *" $lane "*) todo="$todo $lane" ;; esac; done
+  [ -n "$todo" ] || continue
+  if [ -n "$stopped" ]; then
+    for lane in $todo; do say "gate: $lane skipped, $stopped has a new red"; done
+    continue
   fi
+  [ "$todo" = " tools" ] || [ "$phase" = "${PHASES[0]}" ] || admit
+  heavy=0
+  for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
+  [ "$heavy" -ge 1 ] || heavy=1
+  export MSCORPUS_BUILD_JOBS
+  MSCORPUS_BUILD_JOBS=$(share_of_cores "$heavy")
+  select_pid=""
+  case " $todo " in *" suite "*|*" tests "*)
+    if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
+      (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
+    fi ;;
+  esac
+  pids="" launched=""
+  for lane in $todo; do
+    log="$OUT/$lane.log"
+    : >"$OUT/$lane.scope"
+    case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
+    case "$lane" in corpus|san)
+      if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
+      [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
+      narrow="" only_csv="" lanes_csv=""
+      narrow_for "$lane"
+      if [ "$select" -eq 1 ] && [ -z "$only_csv" ]; then say "gate: $lane skipped, no program's emitted $([ "$lane" = san ] && printf 'C' || printf 'C or JS') differs"; continue; fi
+      printf '%s\n%s\n' "$only_csv" "$lanes_csv" >"$OUT/$lane.scope" ;;
+    esac
+    launched="$launched $lane"
+    if [ "$reuse" -eq 1 ] && [ "$(tail -1 "$log" 2>/dev/null)" = END ]; then continue; fi
+    lane_body "$lane" & pids="$pids $!"
+  done
+  [ -z "$pids" ] || wait $pids
+  if [ -n "$select_pid" ]; then wait "$select_pid"; read -r select selected <"$OUT/select.state"; fi
+  for lane in $launched; do
+  log="$OUT/$lane.log"
+  rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
+  secs=$(sed -n 's/^SECS=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1)
+  { read -r only_csv; read -r lanes_csv; } <"$OUT/$lane.scope" || { only_csv=""; lanes_csv=""; }
+  reused=""
+  [ "$reuse" -eq 0 ] || reused=" (reused log)"
   { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
-  known_of "$lane" | scope_known >"$OUT/$lane.known"
+  known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
@@ -623,7 +759,7 @@ for lane in $lanes; do
   n_fixed=$(grep -c . "$OUT/$lane.fixed" | tr -d ' ')
   n_flaky=$(grep -c . "$OUT/$lane.flaky" | tr -d ' ')
   [ -z "$only_csv" ] || reused="$reused on $(printf '%s' "$only_csv" | tr ',' '\n' | grep -c . | tr -d ' ') program(s)${lanes_csv:+, lanes $lanes_csv}"
-  line="gate: $lane$reused $(fmt_secs $((SECONDS - t0))) · $n_red red · $((n_red - n_new)) known · $n_new new"
+  line="gate: $lane$reused $(fmt_secs "${secs:-0}") · $n_red red · $((n_red - n_new)) known · $n_new new"
   [ "$n_fixed" -eq 0 ] || line="$line · $n_fixed known-now-green ($(head -3 "$OUT/$lane.fixed" | paste -sd, - | sed 's/,/, /g'))"
   xp=$(sed -n 's/^.* \([0-9][0-9]*\) xpass$/\1/p' "$log" | tail -1)
   [ -z "$xp" ] || [ "$xp" = 0 ] || line="$line · $xp xpass"
@@ -647,6 +783,7 @@ for lane in $lanes; do
     done <"$OUT/$lane.new"
     say "  log: $log"
   fi
+  done
 done
 
 if [ "$record" -eq 1 ]; then

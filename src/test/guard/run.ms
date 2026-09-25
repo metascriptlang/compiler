@@ -54,7 +54,10 @@ const OUT = `${ROOT}/out/guard`;
 // `out/<mode>/.cache` resolves against the cwd, so probes build from a private
 // sandbox: sharing the repo-root cache with a concurrent build produced link
 // errors on a DIFFERENT probe every run.
-const WORK = `${OUT}/work`;
+const SHARD = envOr("GUARD_SHARD", "0/1").split("/");
+const SHARD_INDEX = SHARD[0].parseInt() as int32;
+const SHARD_COUNT = SHARD.length == 2 ? SHARD[1].parseInt() as int32 : 0;
+const WORK = SHARD_COUNT > 1 ? `${OUT}/work${SHARD_INDEX}` : `${OUT}/work`;
 const BIN_DIR = `${OUT}/bin`;
 const LOG_DIR = `${OUT}/logs`;
 
@@ -450,6 +453,10 @@ function preludeGate(tag: string, name: string, globalImport: string, probeCall:
 }
 
 function main(): void {
+	if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
+		console.log(`nim-guard: GUARD_SHARD must be <index>/<count> with 0 <= index < count, got '${envOr("GUARD_SHARD", "")}'`);
+		exit(2);
+	}
 	ensureDir(WORK);
 	ensureDir(BIN_DIR);
 	ensureDir(LOG_DIR);
@@ -462,7 +469,10 @@ function main(): void {
 		console.log("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target, but their GUARD-OK run is unscored on this host");
 	}
 
-	for (const probe of discoverProbes()) {
+	const probes = discoverProbes();
+	for (let i = 0; i < probes.length; i++) {
+		if (i % SHARD_COUNT != SHARD_INDEX) continue;
+		const probe = probes[i];
 		if (probe.os != "") {
 			runOsLane(probe);
 			continue;
@@ -470,6 +480,11 @@ function main(): void {
 		for (const gc of modes) runGcLane(probe, gc);
 		if (probe.wantJs) runJsLane(probe);
 		if (probe.testBalance.length > 0) runTestLane(probe);
+	}
+	if (SHARD_INDEX > 0) {
+		console.log(fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`);
+		if (fails > 0) exit(1);
+		return;
 	}
 
 	helloEmitClean();

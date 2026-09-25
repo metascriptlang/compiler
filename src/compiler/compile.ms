@@ -2775,7 +2775,12 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
-	const dispatcher = genTestDispatcher(graph.loadOrder, filePath);
+	const entryDir = `${dirname(filePath)}/`;
+	const tested: string[] = [];
+	for (const p of graph.loadOrder) {
+		if (!opts.testsInDir || p.startsWith(entryDir)) tested.push(p);
+	}
+	const dispatcher = genTestDispatcher(graph.loadOrder, tested, filePath);
 	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
 	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
 	writeCSource("_test_dispatch", dispFp, dispatcher);
@@ -2810,7 +2815,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Link and execute
 	ensureDir("out/debug");
-	const testBin = "out/debug/_test_" + replaceExt(basename(filePath), "");
+	const pathKey = hashContent(filePath);
+	const testBin = `out/debug/_test_${replaceExt(basename(filePath), "")}_${pathKey.slice(0, pathKey.indexOf("_"))}`;
 	// Same link flags as cmdBuildC. cmdTest used to assemble its own and so
 	// silently dropped everything cliLinkFlags contributes: the per-target
 	// system libraries and --passL. On Windows that is fatal — without

@@ -88,7 +88,7 @@ export function emitTestTable(g: CGen): void {
 // Replaces genProjectDispatcher for test builds.
 // Runs all module DatInit + Init, then calls each module's test runner.
 
-export function genTestDispatcher(modulePaths: string[], entryPath: string): string {
+export function genTestDispatcher(modulePaths: string[], testedPaths: string[], entryPath: string): string {
 	const b = createBuilder();
 
 	addLine(b, "#define MS_TEST_BUILD 1");
@@ -101,7 +101,9 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 		const modName = mangleModuleName(mp);
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
-		addLine(b, `extern MsTestEntry __ms_tests_${modName}[];`);
+	}
+	for (const mp of testedPaths) {
+		addLine(b, `extern MsTestEntry __ms_tests_${mangleModuleName(mp)}[];`);
 	}
 	addNewline(b);
 
@@ -139,7 +141,7 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 
 	// Build module descriptor table and call runtime
 	addLine(b, "  MsTestModule __ms_modules[] = {");
-	for (const mp of modulePaths) {
+	for (const mp of testedPaths) {
 		const modName = mangleModuleName(mp);
 		const escaped = escapeCString(mp);
 		addLine(b, `    {"${escaped}", __ms_tests_${modName}},`);

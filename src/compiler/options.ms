@@ -52,6 +52,7 @@ export interface CliOptions {
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
+	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
 	gcExplicit: boolean;       // true when --gc= was passed. Distinguishes an explicit
 	                           // --gc=orc from the default, so target-implied modes
@@ -141,6 +142,7 @@ export function parseArgs(): CliOptions {
 		appMode: "console",
 		strictDefs: false,
 		strictNullChecks: false,
+		testsInDir: false,
 		gcMode: "orc",
 		gcExplicit: false,
 		lto: "",
@@ -256,6 +258,8 @@ export function parseArgs(): CliOptions {
 			opts.strictDefs = true;
 		} else if (arg == "--strict-nil") {
 			opts.strictNullChecks = true;
+		} else if (arg == "--tests-in-dir") {
+			opts.testsInDir = true;
 		} else if (arg == "--gc=none") {
 			opts.gcMode = "none";
 			opts.gcExplicit = true;

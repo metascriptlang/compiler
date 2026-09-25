@@ -1002,11 +1002,9 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 	if (exprType.kind == TypeKind.Union) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
-	let operand = expr;
-	while (operand.kind == NodeKind.TypeAssertion) {
-		operand = (operand.data as TypeAssertionData).asExpr;
-	}
-	return projectTagUnionMember(operand, declared, exprType);
+	const projected = projectTagUnionMember(expr, declared, exprType);
+	if (projected != null as unknown as Node && expr.kind == NodeKind.Identifier) expr.nodeType = declared;
+	return projected;
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
