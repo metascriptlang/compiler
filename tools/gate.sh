@@ -77,6 +77,8 @@ inert_range() {
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
+
 LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
 kill_group() {
   local w
@@ -266,6 +268,11 @@ CASES
     | program_keys | sort | paste -sd'|' -)
   want="100-file o1|200-dir o2|802-nested o4"
   [ "$got" = "$want" ] || { printf 'FAIL control reuse: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  got=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    same c1 j1 0 9 c1 j1 0 9  changed c1 j1 0 9 c2 j1 0 9  bothfail c1 j1 1 9 c1 j1 1 9  candfail c1 j1 0 9 c1 j1 1 9 \
+    | differ_c | paste -sd'|' -)
+  want="changed|bothfail|candfail"
+  [ "$got" = "$want" ] || { printf 'FAIL differ in C: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   log=$(mktemp) || return 1
   printf 'x\ny\n' >"$log"
   got=$({ bounded cat; } <"$log" | paste -sd'|' -)
@@ -563,7 +570,7 @@ select_programs() {
     select_whole "a clean --emit=c left no C file to compare"; return
   fi
   join -t "$(printf '\t')" "$EMIT/ctl.sig" "$EMIT/cand.sig" >"$EMIT/both"
-  awk -F'\t' '$2 != $6 { print $1 }' "$EMIT/both" >"$EMIT/differ.c"
+  differ_c <"$EMIT/both" >"$EMIT/differ.c"
   awk -F'\t' '$3 != $7 { print $1 }' "$EMIT/both" >"$EMIT/differ.js"
   printf '%s\n' "$paths" | sed -n 's|^src/test/corpus/programs/\([^/]*\).*$|\1|p' | sed 's/\.ms$//' | sort -u >"$EMIT/touched.all"
   cut -d' ' -f1 "$EMIT/programs" | sort | comm -12 - "$EMIT/touched.all" >"$EMIT/touched"
