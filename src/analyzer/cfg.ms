@@ -353,12 +353,24 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
 			walkExpr(d.switchDisc, ctx);
-			for (const c of d.switchCases) { walkStmt(c, ctx); }
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			for (const t of d.caseTests) { walkExpr(t, ctx); }
-			for (const s of d.caseStmts) { walkStmt(s, ctx); }
+			for (const c of d.switchCases) {
+				for (const t of (c.data as SwitchCaseData).caseTests) { walkExpr(t, ctx); }
+			}
+			const endings: int32[] = [];
+			let defaultStmts: Node[] = [];
+			for (const c of d.switchCases) {
+				const cd = c.data as SwitchCaseData;
+				if (cd.isDefault) {
+					defaultStmts = cd.caseStmts;
+					continue;
+				}
+				const forkIdx = emitFork(ctx);
+				for (const s of cd.caseStmts) { walkStmt(s, ctx); }
+				endings.push(emitGoto(ctx));
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+			}
+			for (const s of defaultStmts) { walkStmt(s, ctx); }
+			patchAllHere(ctx, endings);
 		},
 		NodeKind.ExportDecl => {
 			walkStmt((node.data as ExportDeclData).exportedDecl, ctx);
@@ -682,6 +694,13 @@ function firstUseIsLastRead(code: string, name: string): boolean {
 	if (body == null) throw new Error(`parse failed: ${code}`);
 	const cfg = buildCfgForName(body, name);
 	return isLastReadCfgNode(cfg, findFirstUse(cfg).n);
+}
+
+test "a def in one switch case does not end the path through a later case" {
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; case 2: use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { default: use(x); case 1: x = 2; }", "x");
+	assert firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: x = 3; }", "x");
 }
 
 test "continue goes through the loop condition or update" {
