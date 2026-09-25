@@ -31,7 +31,7 @@ import {
 import { isLastReadInContext } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
-import { isLastReadCfgNodeCached, clearCfgCache } from "./cfg";
+import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
@@ -72,6 +72,9 @@ function scanFinallyBlocks(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 
 	match (node.kind) {
+		NodeKind.Program => {
+			for (const s of (node.data as ProgramData).programStmts) { scanFinallyBlocks(s, result); }
+		},
 		NodeKind.TryCatchStmt => {
 			const td = node.data as TryCatchStmtData;
 			if (td.finallyBody != null) {
@@ -1606,6 +1609,11 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	pushOuterStmts(dctx, [], 0, true);
 	pushScope(dctx, false, true);
 
+	const outerFinallyVars = dctx.finallyProtectedVars;
+	const outerBody = dctx.currentFuncBody;
+	const outerName = dctx.currentFuncName;
+	const outerCache = dctx.cfgCache;
+
 	// Phase A: scan finally blocks for protected variables
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
@@ -1615,7 +1623,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
 	dctx.currentFuncName = fnName;
-	clearCfgCache(dctx.cfgCache);
+	dctx.cfgCache = createCfgCache();
 
 	// Register RC-typed params for cleanup.
 	// Reference parity: ALWAYS use the function's type (owner.typ), never scope lookupSymbol.
@@ -1640,6 +1648,11 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const cleanup = generateCleanup(scope, loc);
 	popOuterStmts(dctx);  // pop function boundary sentinel
+
+	dctx.finallyProtectedVars = outerFinallyVars;
+	dctx.currentFuncBody = outerBody;
+	dctx.currentFuncName = outerName;
+	dctx.cfgCache = outerCache;
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
@@ -2340,6 +2353,9 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	// (s.parent == nil) go to graph.globalDestructors, NOT scope.final.
 	// Module globals persist for the program's lifetime — Init000 must not destroy them.
 	pushScope(dctx, false, false);
+	dctx.finallyProtectedVars = collectFinallyVars(program);
+	dctx.currentFuncBody = program;
+	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
 	popScope(dctx); // discard cleanup — module globals outlive Init000
 
