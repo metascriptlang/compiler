@@ -67,7 +67,8 @@ function materializeVoidSlots(expr: Node, ctx: TransformContext): Node[] {
 		// The literal's struct type is the binding's own type object, so retyping the
 		// void fields in place reaches the declaration too.
 		if (voidCount > 0) {
-			const t = expr.nodeType;
+			const lit = expr.nodeType;
+			const t = lit != null && lit.kind == TypeKind.Ref && lit.typeReturn != null ? lit.typeReturn : lit;
 			if (t != null && t.typeChildren != null) {
 				for (let i = 0; i < t.typeChildren.length; i += 1) {
 					if (t.typeChildren[i] != null && t.typeChildren[i].kind == TypeKind.Void) {
