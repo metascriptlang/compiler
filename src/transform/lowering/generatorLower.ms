@@ -402,11 +402,9 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			if (isDirectYield(ed.expr)) {
 				// yield expr; → emit return { value: expr, done: false }, transition
 				const yd = ed.expr.data as YieldExprData;
-				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+				const nextSt = allocState(sc);
 				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
-				if (i + 1 < stmts.length) {
-					currentState = nextSt;
-				}
+				currentState = nextSt;
 				i += 1;
 			} else {
 				reportUnsplit(stmt, YIELD_IN_EXPR);
@@ -418,14 +416,12 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			if (vd.initializer != null && isDirectYield(vd.initializer)) {
 				// const x = yield expr; → yield, then assign on resume
 				const yd = vd.initializer.data as YieldExprData;
-				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+				const nextSt = allocState(sc);
 				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
 				sc.items[currentState].yieldVarName = vd.declName;
 				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)
-				if (i + 1 < stmts.length) {
-					currentState = nextSt;
-				}
+				currentState = nextSt;
 				i += 1;
 			} else {
 				reportUnsplit(stmt, YIELD_IN_EXPR);
