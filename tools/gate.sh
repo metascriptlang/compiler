@@ -84,6 +84,20 @@ tree_key() {
 }
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
+TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
+SHARDED_TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms"
+TEST_SHARDS=${GATE_TEST_SHARDS:-3}
+
+test_jobs() {
+  local f i
+  for f in $TIERS; do
+    case " $SHARDED_TIERS " in
+      *" $f "*) if [ "$TEST_SHARDS" -gt 1 ]; then for ((i = 0; i < TEST_SHARDS; i++)); do printf '%s %s\n' "$f" "$i/$TEST_SHARDS"; done; continue; fi ;;
+    esac
+    printf '%s -\n' "$f"
+  done
+}
+
 LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
 kill_group() {
   local w
@@ -283,6 +297,10 @@ CASES
   got=$({ bounded cat; } <"$log" | paste -sd'|' -)
   rm -f "$log"
   [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
+  got=$(TEST_SHARDS=3; test_jobs | awk '{ n++; if ($2 != "-") s++ } NR == 1 { first = $0 } END { printf "%d %d %s", n, s, first }')
+  [ "$got" = "12 6 src/test/fixedbugs/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
+  got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
+  [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -437,7 +455,6 @@ run_tools_lane() {
   return $rc
 }
 
-TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/helpers.ms"
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
@@ -448,26 +465,32 @@ test_one() {
 }
 
 run_test_lane() {
-  local rc=0 f part files=src/index.ms
+  local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     suite-orc) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite-orc src/index.ms)" --gc=orc ;;
     tests)
-      files=$TIERS
-      for f in $files; do with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir & done
+      jobs=$(test_jobs)
+      while read -r f shard; do
+        if [ "$shard" = - ]; then
+          with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
+        else
+          with_slot test_one "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
+        fi
+      done <<<"$jobs"
       wait ;;
   esac
-  for f in $files; do
-    part=$(part_of "$1" "$f")
+  while read -r f shard; do
+    if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
-      printf 'NORESULT %s > no result\n' "$f"
+      case "$noresult" in *" $f "*) ;; *) printf 'NORESULT %s > no result\n' "$f"; noresult="$noresult$f " ;; esac
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
     fi
     rm -f "$part" "$part.rc"
-  done
+  done <<<"$jobs"
   return $rc
 }
 
