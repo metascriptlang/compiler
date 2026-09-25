@@ -21,7 +21,8 @@ import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -71,9 +72,20 @@ export function isNullExpr(node: Node): boolean {
 // Excludes Maybe<T> types which need special null comparison handling.
 function isValueObject(t: Type): boolean {
 	if (t == null) return false;
+	if (t.kind == TypeKind.GenericInstance) return isStructInstance(t);
 	if (t.kind != TypeKind.Struct) return false;
 	if (isMaybeType(t)) return false;
 	return t.typeName != "";
+}
+
+function isStructInstance(t: Type): boolean {
+	if (t.typeName == "" || isAwaitable(t)) return false;
+	const nominal = peelToStructOrUnion(t.typeExtra);
+	return nominal != null && nominal.kind == TypeKind.Struct;
+}
+
+function eqTypeName(t: Type, typeName: string): string {
+	return t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : typeName;
 }
 
 
@@ -157,11 +169,12 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName, leftType);
+		const eqName = eqTypeName(leftType, typeName);
+		registerStructEq(ctx, eqName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(typeName + "Eq", loc);
+		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;
-		callee.resolvedSym = hookPrototype(typeName + "Eq", fnType);
+		callee.resolvedSym = hookPrototype(eqName + "Eq", fnType);
 		return makeCall(callee, [left, right], loc);
 	}
 	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
@@ -411,11 +424,12 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
 	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		registerStructEq(ctx, typeName, leftType);
+		const eqName = eqTypeName(leftType, typeName);
+		registerStructEq(ctx, eqName, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(typeName + "Eq", loc);
+		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;
-		callee.resolvedSym = hookPrototype(typeName + "Eq", fnType);
+		callee.resolvedSym = hookPrototype(eqName + "Eq", fnType);
 		return makeCall(callee, [d.left, d.right], loc);
 	}
 
