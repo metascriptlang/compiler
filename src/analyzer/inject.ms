@@ -25,10 +25,8 @@ import {
 	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
 	setNeedsTryAll, addPending, hasPending, clearPendingForVar, symListHas, symListAdd,
 	addPre,
-	pushOuterStmts, popOuterStmts,
 	testStringRc, classifyRc,
 } from "./scope";
-import { isLastReadInContext } from "./lastRead";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -1411,9 +1409,6 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 	dctx.stmtBorrowReads = [];
 	setNeedsTryIfRaises(stmt, dctx);
 
-	// Push outer context for cross-scope last-read analysis
-	pushOuterStmts(dctx, stmts, idx + 1, false);
-
 	const result = match (stmt.kind) {
 		NodeKind.VariableDecl => processVarDecl(stmt, idx, stmts, dctx, sloc),
 		NodeKind.ReturnStmt => processReturn(stmt, dctx, sloc),
@@ -1435,8 +1430,6 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.TestDecl => processTestDecl(stmt, dctx, sloc),
 		_ => stmt,
 	};
-
-	popOuterStmts(dctx);
 
 	return result;
 }
@@ -1514,16 +1507,8 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	if (vi != null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
 	if (symListHas(dctx.finallyProtectedVars, sym)) return false;
-	// Phase C: use CFG-based analysis when function body is available
-	if (dctx.currentFuncBody != null && node != null) {
-		return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
-	}
-	// Fallback: conservative forward scan
-	if (!isLastReadInContext(sym, idx, stmts, dctx.outerCtx)) return false;
-	// If variable is from a scope outside a loop, it's not truly last-read
-	// inside the loop body (the loop will repeat and use it again).
-	if (isVarFromOuterLoopScope(sym, dctx)) return false;
-	return true;
+	if (dctx.currentFuncBody == null || node == null) return false;
+	return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
 }
 
 // ===== Field-Level Last-Read Safety (Phase B) =====
@@ -1605,8 +1590,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	// Reference: `if sfGeneratedOp in owner.flags: return n` at top of injectDestructorCalls.
 	if (ownerSym != null && hasFlag(ownerSym, SymbolFlag.GeneratedOp)) return body;
 
-	// Function boundary — prevent cross-scope last-read from looking past this
-	pushOuterStmts(dctx, [], 0, true);
 	pushScope(dctx, false, true);
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
@@ -1647,7 +1630,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	}
 
 	const cleanup = generateCleanup(scope, loc);
-	popOuterStmts(dctx);  // pop function boundary sentinel
 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;

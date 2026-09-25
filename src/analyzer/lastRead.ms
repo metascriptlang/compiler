@@ -13,7 +13,6 @@ import { Node, NodeKind, ProgramData, IdentifierData, BinaryExprData, UnaryExprD
 import { forEachChild } from "../ast/visitor";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
-import { OuterEntry } from "./scope";
 import { parseInput } from "../transform/testUtil";
 
 // ===== nodeReferencesVar — recursive check =====
@@ -126,103 +125,9 @@ export function isLastReadInBlock(targetSym: Symbol, stmtIndex: number, stmts: N
 	return true;
 }
 
-// ===== Termination Analysis (lightweight CFG) =====
-// Determines if control flow from a given point will DEFINITELY terminate
-// (via return/break/throw/continue) before reaching the end of the block.
-// When a block definitely terminates, outer scope references are unreachable
-// from this code path — enabling move optimizations inside terminated branches.
-//
-// This replaces a full CFG builder with a focused analysis that captures the
-// most common optimization: guard clause patterns (if (err) return; use(x);)
-// and exhaustive if/else where both branches terminate.
-
-function isTerminatingStmt(node: Node): boolean {
-	if (node == null) return false;
-	const k = node.kind;
-	return k == NodeKind.ReturnStmt
-		|| k == NodeKind.ThrowStmt
-		|| k == NodeKind.BreakStmt
-		|| k == NodeKind.ContinueStmt;
-}
-
-// Returns true if block contents definitely terminate (never fall through).
-function blockDefinitelyTerminates(node: Node): boolean {
-	if (node == null) return false;
-	if (node.kind != NodeKind.BlockStmt) return isTerminatingStmt(node);
-	const stmts = (node.data as BlockStmtData).statements;
-	return stmtsDefinitelyTerminate(stmts, 0);
-}
-
-// Returns true if stmts[fromIndex..] definitely terminate before reaching end.
-function stmtsDefinitelyTerminate(stmts: Node[], fromIndex: number): boolean {
-	let i = fromIndex;
-	while (i < stmts.length) {
-		const stmt = stmts[i];
-		if (stmt == null) {
-			i = i + 1;
-			continue;
-		}
-		// Direct terminating statement
-		if (isTerminatingStmt(stmt)) return true;
-		// If-else: terminates if BOTH branches terminate
-		if (stmt.kind == NodeKind.IfStmt) {
-			const d = stmt.data as IfStmtData;
-			if (d.alternate != null && !isEmptyBlock(d.alternate)) {
-				if (blockDefinitelyTerminates(d.consequent)
-					&& blockDefinitelyTerminates(d.alternate)) {
-					return true;
-				}
-			}
-		}
-		i = i + 1;
-	}
-	return false;
-}
-
-
-// ===== isLastReadInContext — cross-scope forward scan with termination analysis =====
-// Like isLastReadInBlock, but also checks remaining statements in outer scopes.
-// Stops at function boundaries (variables don't escape function scope).
-//
-// CFG enhancement: if the remaining statements in the current block definitely
-// terminate (return/break/throw/continue), outer scope references are unreachable
-// from this path — skip the outer scope check and return true.
-
-export function isLastReadInContext(targetSym: Symbol, stmtIndex: number, stmts: Node[], outerCtx: OuterEntry[]): boolean {
-	// Check remaining stmts in current block
-	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
-		if (nodeReferencesVar(stmts[i], targetSym)) return false;
-	}
-	// CFG enhancement: if remaining stmts definitely terminate, outer scope
-	// is unreachable from this path — variable IS last-read regardless of outer uses.
-	if (stmtsDefinitelyTerminate(stmts, stmtIndex + 1)) return true;
-	// Check outer scopes (innermost first)
-	let oi = outerCtx.length;
-	while (oi > 0) {
-		oi -= 1;
-		const entry = outerCtx[oi];
-		if (entry.isFunctionBoundary) break;  // don't look past function boundaries
-		// CFG enhancement: if outer scope's remaining stmts terminate,
-		// skip further outer scope checks (that scope never falls through either)
-		if (stmtsDefinitelyTerminate(entry.outerStmts, entry.fromIndex)) {
-			// Still check this scope's remaining stmts for references
-			let j = entry.fromIndex;
-			while (j < entry.outerStmts.length) {
-				if (nodeReferencesVar(entry.outerStmts[j], targetSym)) return false;
-				j = j + 1;
-			}
-			return true;  // this scope terminates, no need to check further outer
-		}
-		for (let j = entry.fromIndex; j < entry.outerStmts.length; j += 1) {
-			if (nodeReferencesVar(entry.outerStmts[j], targetSym)) return false;
-		}
-	}
-	return true;
-}
-
 // ===== deepAliases — MOVED to alias.ms =====
 // Path-level alias analysis now lives in src/analyzer/alias.ms.
-// nodeReferencesVar is still used by isLastReadInBlock/isLastReadInContext.
+// nodeReferencesVar is still used by isLastReadInBlock.
 
 // ===== Test Helpers =====
 
@@ -337,97 +242,4 @@ test "different var is last read" {
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
 	assert isLastReadInBlock(symA, 1, stmts);
-}
-
-test "no outer context = same as isLastReadInBlock" {
-	const stmts = getStmts("const a = 1; const b = a;");
-	const symA = makeTestSym("a");
-	attachSym(stmts, "a", symA);
-	const emptyOuter: OuterEntry[] = [];
-	assert isLastReadInContext(symA, 1, stmts, emptyOuter);
-}
-
-test "not last when used in outer scope" {
-	const outerStmts = getStmts("const a = 1; const c = a;");
-	const innerStmts = getStmts("const b = a;");
-	const symA = makeTestSym("a");
-	attachSym(outerStmts, "a", symA);
-	attachSym(innerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
-	];
-	assert !isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "function boundary stops outer search" {
-	const outerStmts = getStmts("const a = 1; const c = a;");
-	const innerStmts = getStmts("const b = a;");
-	const symA = makeTestSym("a");
-	attachSym(outerStmts, "a", symA);
-	attachSym(innerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
-		{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
-	];
-	assert isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "return terminates block" {
-	const innerStmts = getStmts("const b = a; return b;");
-	const outerStmts = getStmts("foo(a);");
-	const symA = makeTestSym("a");
-	attachSym(innerStmts, "a", symA);
-	attachSym(outerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-	];
-	assert isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "throw terminates block" {
-	const innerStmts = getStmts("const b = a; throw b;");
-	const outerStmts = getStmts("foo(a);");
-	const symA = makeTestSym("a");
-	attachSym(innerStmts, "a", symA);
-	attachSym(outerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-	];
-	assert isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "no termination checks outer normally" {
-	const innerStmts = getStmts("const b = a;");
-	const outerStmts = getStmts("foo(a);");
-	const symA = makeTestSym("a");
-	attachSym(innerStmts, "a", symA);
-	attachSym(outerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-	];
-	assert !isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "exhaustive if-else terminates" {
-	const innerStmts = getStmts("const b = a; if (c) { return x; } else { return y; }");
-	const outerStmts = getStmts("foo(a);");
-	const symA = makeTestSym("a");
-	attachSym(innerStmts, "a", symA);
-	attachSym(outerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-	];
-	assert isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "non-exhaustive if does not terminate" {
-	const innerStmts = getStmts("const b = a; if (c) { return x; }");
-	const outerStmts = getStmts("foo(a);");
-	const symA = makeTestSym("a");
-	attachSym(innerStmts, "a", symA);
-	attachSym(outerStmts, "a", symA);
-	const outer: OuterEntry[] = [
-		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-	];
-	assert !isLastReadInContext(symA, 0, innerStmts, outer);
 }
