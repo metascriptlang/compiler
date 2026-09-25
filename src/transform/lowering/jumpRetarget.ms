@@ -34,13 +34,21 @@ export function retargetJumps(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-function isFnBoundary(kind: NodeKind): boolean {
+export function isFnBoundary(kind: NodeKind): boolean {
 	return kind == NodeKind.FunctionDecl
 		|| kind == NodeKind.FunctionExpr
 		|| kind == NodeKind.ArrowFunction
 		|| kind == NodeKind.MethodDecl
 		|| kind == NodeKind.ConstructorDecl
 		|| kind == NodeKind.TestDecl;
+}
+
+export function isLoopKind(kind: NodeKind): boolean {
+	return kind == NodeKind.WhileStmt
+		|| kind == NodeKind.DoWhileStmt
+		|| kind == NodeKind.ForStmt
+		|| kind == NodeKind.ForOfStmt
+		|| kind == NodeKind.ForInStmt;
 }
 
 function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {
