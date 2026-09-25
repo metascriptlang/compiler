@@ -443,6 +443,38 @@ export function addGenericTypeInst(baseName: string, typeArgKey: string, mangled
 	_genericTypeInstStore.fieldTypes.push(fieldTypesJoined);
 }
 
+export interface GenericTypeInstRow {
+	key: string;
+	baseName: string;
+	typeArgKey: string;
+	fieldNames: string;
+	fieldTypes: string;
+}
+
+export function genericTypeInstMark(): int32 {
+	return _genericTypeInstStore.keys.length;
+}
+
+export function takeGenericTypeInstsFrom(mark: int32): GenericTypeInstRow[] {
+	const rows: GenericTypeInstRow[] = [];
+	const store = _genericTypeInstStore;
+	for (let i = mark; i < store.keys.length; i += 1) {
+		rows.push({ key: store.keys[i], baseName: store.baseNames[i], typeArgKey: store.typeArgKeys[i], fieldNames: store.fieldNames[i], fieldTypes: store.fieldTypes[i] });
+	}
+	while (store.keys.length > mark) {
+		store.keys.pop();
+		store.baseNames.pop();
+		store.typeArgKeys.pop();
+		store.fieldNames.pop();
+		store.fieldTypes.pop();
+	}
+	return rows;
+}
+
+export function addGenericTypeInstRow(row: GenericTypeInstRow): void {
+	addGenericTypeInst(row.baseName, row.typeArgKey, row.key, row.fieldNames, row.fieldTypes);
+}
+
 export function getGenericTypeInstCount(): int32 {
 	return _genericTypeInstStore.keys.length;
 }

@@ -19,11 +19,14 @@ import { checkCallExprProfile } from "./callResolve";
 import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx, pendingInstanceMark, takePendingInstancesFrom, drainPendingInstances } from "./instantiate";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
+import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
 
 export class CheckSession {
 	db: TransAmDb | null;
 	checks: HashMap<string, CheckerContext>;
 	instances: HashMap<string, Node[]>;
+	typeInstances: HashMap<string, GenericTypeInstRow[]>;
+	preludeTypeInstances: GenericTypeInstRow[];
 	rechecked: HashSet<string>;
 }
 
@@ -32,6 +35,8 @@ export function createCheckSession(): CheckSession {
 		db: null,
 		checks: new HashMap<string, CheckerContext>(),
 		instances: new HashMap<string, Node[]>(),
+		typeInstances: new HashMap<string, GenericTypeInstRow[]>(),
+		preludeTypeInstances: [],
 		rechecked: new HashSet<string>(),
 	};
 }
@@ -93,6 +98,7 @@ export function setGraphCheckTiming(on: boolean): void {
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
+	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
 	const baseCtx = kept != null ? kept.preludeCtx : buildPreludeContext(stdPath, backendExt);
 	const tPrelude = performance.now() - _tpre0;
@@ -111,6 +117,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		session.db = db;
 		session.rechecked = new HashSet<string>();
 		const _stale = drainPendingInstances();
+		const preludeRows = takeGenericTypeInstsFrom(0);
+		if (kept == null) session.preludeTypeInstances = preludeRows;
 	}
 	dbBindGraph(db, graph);
 	for (const path of graph.loadOrder) {
@@ -129,10 +137,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		mod.exportNames = [];
 		const _tm0 = performance.now();
 		const instanceMark = pendingInstanceMark();
+		const typeInstanceMark = genericTypeInstMark();
 		const ctx = dbTypeCheck(db, path);
 		if (session != null && ctx != null && session.checks.get(path) != ctx) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, takePendingInstancesFrom(instanceMark));
+			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
 			session.rechecked.add(path);
 		}
 		const _tm1 = performance.now();
