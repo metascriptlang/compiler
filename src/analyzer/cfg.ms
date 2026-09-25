@@ -38,8 +38,8 @@ export interface Cfg {
 // ===== Builder State =====
 
 interface LoopInfo {
-	conditionIdx: int32;   // index of loop condition start (for continue → loop)
-	breakPatches: int32[];  // indices of goto instrs needing patch (for break)
+	breakPatches: int32[];
+	continuePatches: int32[];
 	label: string;         // loop label — labeled break/continue resolve by it
 }
 
@@ -86,6 +86,16 @@ function emitLoop(ctx: BuildCtx, targetIdx: int32): void {
 
 function patchDest(ctx: BuildCtx, instrIdx: int32, targetIdx: int32): void {
 	ctx.cfg[instrIdx].dest = targetIdx - instrIdx;
+}
+
+function patchAllHere(ctx: BuildCtx, instrIdxs: int32[]): void {
+	for (const idx of instrIdxs) { patchDest(ctx, idx, ctx.cfg.length); }
+}
+
+function pushLoop(ctx: BuildCtx, label: string): LoopInfo {
+	const loopInfo: LoopInfo = { breakPatches: [], continuePatches: [], label };
+	ctx.loops.push(loopInfo);
+	return loopInfo;
 }
 
 // ===== Root matching helper =====
@@ -294,30 +304,27 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [], label: d.whileLabel };
-			ctx.loops.push(loopInfo);
+			const condIdx = ctx.cfg.length;
+			const loopInfo = pushLoop(ctx, d.whileLabel);
 			walkExpr(d.whileCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.whileBody, ctx);
-			emitLoop(ctx, loopInfo.conditionIdx);
+			patchAllHere(ctx, loopInfo.continuePatches);
+			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			const loopStart = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [], label: d.dwLabel };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.dwLabel);
 			walkStmt(d.doBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			walkExpr(d.doCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			patchDest(ctx, forkIdx, loopStart);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.BreakStmt => {
@@ -330,7 +337,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		NodeKind.ContinueStmt => {
 			if (ctx.loops.length > 0) {
 				const loop = findLoopByLabel(ctx, (node.data as ContinueStmtData).continueLabel);
-				emitLoop(ctx, loop.conditionIdx);
+				loop.continuePatches.push(emitGoto(ctx));
 			}
 		},
 		NodeKind.TryCatchStmt => {
@@ -360,32 +367,28 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as ForStmtData;
 			walkStmt(d.forInit, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.forLabel);
 			walkExpr(d.forCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.forBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			walkStmt(d.forUpdate, ctx);
 			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
 			walkExpr(d.forOfIterable, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.forOfLabel);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.forOfBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		// Default: for any unknown statement kind, descend via the canonical
@@ -672,6 +675,18 @@ test "def in one branch makes other last-read" {
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
 	const use = findFirstUse(cfg);
 	assert !isLastReadCfgNode(cfg, use.n);
+}
+
+function firstUseIsLastRead(code: string, name: string): boolean {
+	const body = getBody(code);
+	if (body == null) throw new Error(`parse failed: ${code}`);
+	const cfg = buildCfgForName(body, name);
+	return isLastReadCfgNode(cfg, findFirstUse(cfg).n);
+}
+
+test "continue goes through the loop condition or update" {
+	assert !firstUseIsLastRead("let x = 1; do { x = 2; const y = x; if (c) { continue; } x = 3; } while (x > 0);", "x");
+	assert !firstUseIsLastRead("let x = 1; for (let i = 0; i < n; i = x) { x = 2; const y = x; if (c) { continue; } x = 3; }", "x");
 }
 
 test "return terminates path" {
