@@ -16,24 +16,19 @@ function projectNode(node: Node): Node {
 		if (projected != null as unknown as Node) return projected;
 		return node;
 	}
-	if (node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) unnestProjection(node);
+	if (node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) return unnestProjection(node);
 	return node;
 }
 
-function unnestProjection(outer: Node): void {
+function unnestProjection(outer: Node): Node {
 	const d = outer.data as HiddenStdConvData;
-	if (d.convType.kind == TypeKind.Union) return;
-	let holder: Node = outer;
+	if (d.convType.kind == TypeKind.Union) return outer;
 	let leaf: Node = d.convExpr;
-	while (leaf != null && leaf.kind == NodeKind.TypeAssertion) {
-		holder = leaf;
-		leaf = (leaf.data as TypeAssertionData).asExpr;
+	while (leaf != null && leaf.kind == NodeKind.TypeAssertion) leaf = (leaf.data as TypeAssertionData).asExpr;
+	if (leaf == null || leaf.kind != NodeKind.HiddenSubConv || leaf.variantSlot != outer.variantSlot) return outer;
+	if (leaf == d.convExpr) {
+		d.convExpr = (leaf.data as HiddenStdConvData).convExpr;
+		return outer;
 	}
-	if (leaf == null || leaf.kind != NodeKind.HiddenSubConv || leaf.variantSlot != outer.variantSlot) return;
-	const inner = (leaf.data as HiddenStdConvData).convExpr;
-	if (holder == outer) {
-		d.convExpr = inner;
-	} else {
-		(holder.data as TypeAssertionData).asExpr = inner;
-	}
+	return d.convExpr;
 }
