@@ -337,6 +337,7 @@ function commaList(text: string): string[] {
 
 const ONLY: string[] = commaList(envOr("MSCORPUS_ONLY", ""));
 const LANES: string[] = commaList(envOr("MSCORPUS_LANES", ""));
+const RAISER = envOr("MSCORPUS_RAISER", "") == "1" || listHas(LANES, "raiser");
 const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm", "raiser"];
 
 function narrowingError(specs: Spec[]): string {
@@ -845,7 +846,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 				jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
 			}
 		}
-		if (!spec.skipRaiser) { jobs.push({ spec, lane: "raiser", cmd: "", cell: makeCell(spec, "raiser", spec.entry) }); }
+		if (RAISER && !spec.skipRaiser) { jobs.push({ spec, lane: "raiser", cmd: "", cell: makeCell(spec, "raiser", spec.entry) }); }
 	}
 	return jobs;
 }
@@ -997,6 +998,9 @@ function main(): void {
 	}
 	if (LANES.length > 0) {
 		progress("  !! MSCORPUS_LANES — only " + joinWith(LANES, "/") + " cells are built; parity compares those lanes alone");
+	}
+	if (!RAISER && !SAN) {
+		progress("  !! raiser lane off — no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on");
 	}
 
 	const stale = stalenessWarning();
