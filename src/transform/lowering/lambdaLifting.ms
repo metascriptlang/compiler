@@ -37,7 +37,7 @@ import {
 	DetectionState, createDetectionState, detectPass,
 	detectionGetCaptures, detectionGetCapturedIdents,
 } from "./lambdaLiftingDetect";
-import { renameShadowedBindings } from "./lambdaLiftingRename";
+import { renameRepeatedBindings } from "./lambdaLiftingRename";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary,
 	pushLoopBoundary, popLoopBoundary, isLoopLocalVar,
@@ -1939,7 +1939,7 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	normalizeArrowBodies(program);
 	// Pass 0: one name is one binding, so the string-keyed machinery below
 	// cannot confuse a shadow with the binding it shadows.
-	renameShadowedBindings(program);
+	renameRepeatedBindings(program);
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.

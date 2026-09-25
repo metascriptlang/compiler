@@ -1,15 +1,3 @@
-// Shadowed-binding uniquification (Pass 0 of lambda lifting).
-//
-// Reference keys captures and env fields by symbol id, never by name:
-// `capturedVars.incl(s.id)` (lambdalifting.nim:516) and `addField` →
-// `lookupInRecord(obj.n, s.itemId)` (lowerings.nim:241), whose own comment
-// records that two distinct same-named captures legitimately get distinct
-// fields. Our lift machinery is string-keyed throughout — capture sets, env
-// field names, active rewrites, loop redirects — so a binding that shadows a
-// captured name aliases the outer binding's env slot instead of getting its
-// own. Renaming the inner binding restores "one name is one binding" for the
-// whole lifting universe without introducing a second identity channel.
-
 import {
 	Node, NodeKind, IdentifierData, VariableDeclData, BlockStmtData,
 	ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData,
@@ -25,8 +13,26 @@ interface RenameScope {
 
 interface RenameState {
 	scopes: RenameScope[];
-	frameDepth: int32;
 	counter: int32;
+	frameNames: string[];
+	frameStarts: int32[];
+}
+
+function boundInOpenFrame(st: RenameState, name: string): boolean {
+	for (const n of st.frameNames) { if (n == name) return true; }
+	return false;
+}
+
+function pushFrame(st: RenameState): void {
+	pushScope(st);
+	st.frameStarts.push(st.frameNames.length);
+}
+
+function popFrame(st: RenameState): void {
+	const start = st.frameStarts[st.frameStarts.length - 1];
+	while (st.frameNames.length > start) st.frameNames.pop();
+	st.frameStarts.pop();
+	popScope(st);
 }
 
 function pushScope(st: RenameState): void {
@@ -56,33 +62,36 @@ function lookupRenamed(st: RenameState, name: string): string {
 
 function declareParam(st: RenameState, name: string): void {
 	defineIn(st, name, name);
+	if (st.frameStarts.length > 0) st.frameNames.push(name);
 }
 
 // Module-scope bindings keep their names: they are C globals, cross-module
 // references resolve to them by name, and lifting never puts them in an env.
-function declareBinding(st: RenameState, name: string): string {
+function declareBinding(st: RenameState, name: string, renameSiblings: boolean = true): string {
 	if (name == "" || name == "this" || name.startsWith("$")) {
 		defineIn(st, name, name);
 		return name;
 	}
-	if (st.frameDepth == 0 || lookupRenamed(st, name) == "") {
+	if (st.frameStarts.length == 0) {
 		defineIn(st, name, name);
 		return name;
 	}
-	st.counter += 1;
-	const fresh = name + "$s" + st.counter.toString();
-	defineIn(st, name, fresh);
-	return fresh;
+	let bound = name;
+	if (lookupRenamed(st, name) != "" || (renameSiblings && boundInOpenFrame(st, name))) {
+		st.counter += 1;
+		bound = name + "$s" + st.counter.toString();
+	}
+	defineIn(st, name, bound);
+	st.frameNames.push(name);
+	return bound;
 }
 
 function walkFrame(st: RenameState, params: string[], body: Node, defaults: Node[]): void {
-	pushScope(st);
-	st.frameDepth += 1;
+	pushFrame(st);
 	for (const p of params) declareParam(st, p);
 	for (const dv of defaults) walkRename(dv, st);
 	walkRename(body, st);
-	st.frameDepth -= 1;
-	popScope(st);
+	popFrame(st);
 }
 
 function walkRename(node: Node | null, st: RenameState): void {
@@ -135,13 +144,11 @@ function walkRename(node: Node | null, st: RenameState): void {
 	}
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		pushScope(st);
-		st.frameDepth += 1;
+		pushFrame(st);
 		for (const p of d.arrowParams) declareParam(st, p);
 		for (const dv of d.arrowDefaults) { if (dv != null) walkRename(dv, st); }
 		walkRename(d.arrowBody, st);
-		st.frameDepth -= 1;
-		popScope(st);
+		popFrame(st);
 		return;
 	}
 	if (node.kind == NodeKind.FunctionExpr) {
@@ -173,7 +180,7 @@ function walkRename(node: Node | null, st: RenameState): void {
 		const d = node.data as TryCatchStmtData;
 		walkRename(d.tryBody, st);
 		pushScope(st);
-		if (d.catchName != "") d.catchName = declareBinding(st, d.catchName);
+		if (d.catchName != "") d.catchName = declareBinding(st, d.catchName, false);
 		walkRename(d.catchBody, st);
 		popScope(st);
 		walkRename(d.finallyBody, st);
@@ -182,8 +189,8 @@ function walkRename(node: Node | null, st: RenameState): void {
 	mapChildren(node, (child: Node): Node => { walkRename(child, st); return child; });
 }
 
-export function renameShadowedBindings(program: Node): Node {
-	const st: RenameState = { scopes: [], frameDepth: 0, counter: 0 };
+export function renameRepeatedBindings(program: Node): Node {
+	const st: RenameState = { scopes: [], counter: 0, frameNames: [], frameStarts: [] };
 	pushScope(st);
 	walkRename(program, st);
 	popScope(st);
