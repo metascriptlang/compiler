@@ -1,6 +1,6 @@
 # Trans-Am: Incremental Computation Engine
 
-Incremental query engine of the MetaScript compiler, in `src/compiler/transam/`. Inspired by Salsa / rust-analyzer. It powers LSP responsiveness: `src/compiler/lsp/` and `src/module/loader.ms` are its callers.
+Incremental query engine of the MetaScript compiler, in `src/compiler/transam/`. Inspired by Salsa / rust-analyzer. Two callers: the LSP (`src/compiler/lsp/`), which keeps one db across edits, and `checkModuleGraph` (`src/checker/orchestrator.ms`), the graph check every `build`, `check`, `test` and `run` goes through, which binds a fresh db to the module graph the loader built (§5, "Bound to a loaded graph").
 
 Rules for editing the module: [`src/compiler/transam/CLAUDE.md`](../src/compiler/transam/CLAUDE.md). The code is the source of truth for types and signatures; this file holds the design and the reasons.
 
@@ -42,7 +42,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
 
 `TransAmDb` (`index.ms`) is a thin facade over one store per concern: revision, file input, dependency stack, cache, module dep graph, cancel context, interner, plus the checker's `ExportRegistry`, the resolver config, the prelude context and a preprocess cache.
 
-`Node` and `CheckerContext` values are not held in the Trans-Am cache. They live in caches inside `src/ast/node.ms` and `src/checker/context.ms`, keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
+`Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude with extra `globalImports`) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
 
 ## 3. Red-Green
 
@@ -74,7 +74,7 @@ Dependency tracking is frame-based on purpose: a sub-query records itself into w
 | Kind | Role | Computed by |
 |------|------|-------------|
 | `FileText` | input: raw source, set by the caller | `dbSetFileText` |
-| `Preprocess` | raw text to preprocessed source (`.h` translation, `.h` import inlining) | `dbPreprocess` |
+| `Preprocess` | raw text to preprocessed source (`.h` translation, `.h` import inlining); in a graph-bound db, the graph module's `source` | `dbPreprocess` |
 | `Parse` | source to AST | `dbParse` |
 | `TypeCheck` | AST to `CheckerContext` | `dbTypeCheck` |
 | `Transform` | typed AST to transformed AST | `dbTransform` |
@@ -105,6 +105,24 @@ Import edges are recorded into the module dep graph while a module's exports are
 6. The next query call verifies lazily through `tryMarkGreen`.
 
 A type check of a module whose dependency declares a macro runs a full check of that dependency first; `checkInProgress` guards that pre-check against cycles.
+
+### Bound to a loaded graph
+
+`dbBindGraph` gives a db the loader's module graph: each module's `rawSource` becomes its `FileText`, the loader's import edges its module deps, and `dbTypeCheck` checks against the graph's own `Module` (the imports the loader resolved, circular back edges included). Two queries then take what the loader already computed:
+
+- `Preprocess` serves the graph module's `source`, the loader's header inlining, instead of inlining again. A bound db therefore records no dependency on a `.h` file: a header change reaches it only through module text the loader re-inlines, so a bound db kept across builds (`--watch`, [`HCR.md`](HCR.md)) has to rerun the loader for every build. The LSP keeps TransAm's own inlining; the test "an unbound db inlines a C header the way the loader does" pins that both produce the same text.
+- A bound check stamps its module registered at the current revision, so a later dependent's export walk (`dbEnsureExportsRegistered`) stops at modules already checked. The walk still registers the collect-level exports of a dependency not checked yet, which is what an import cycle's back edge needs.
+
+Kept on purpose: `checkModuleGraph` registers a clone of every parse before any check. The two-phase driver it replaced did the same so that a cross-module `@comptime` could reach a sibling's AST before that sibling's check (a race seen on Linux ARM, not reproducible on the host that measured this); it costs the 0.46–0.49 s clone below.
+
+Self-host (`src/index.ms`, 353 modules), `msc build src/index.ms --gc=drc --danger --emit=c --time`, Windows x64, four interleaved rounds per session on a machine shared with other gates (68–76 % load of 32 threads), `graph load+check` in seconds:
+
+| session | two-phase driver (tree `5cf5c51d`) | bound db |
+|---|---|---|
+| 1 | 8.2 / 9.0 / 8.2 / 9.6 | 13.4 / 11.1 / 12.0 / 13.2, re-inlining headers and re-walking exports (tree `111db8e3`) |
+| 2 | 8.95 / 11.78 / 9.97 / 9.84 | 11.73 / 11.32 / 10.47 / 10.16, as described above (tree `8ae178d0`) |
+
+Split on tree `8ae178d0` with temporary timers, two runs: loader half ~3.1 s (the same as the old driver); prelude 1.12–1.16 s; one parse per module 1.33 s (the old driver parsed twice, ~2.1 s); the pre-check clone 0.46–0.49 s and the per-check clone 0.57–0.58 s; export walk 0.011 s (0.83–1.08 s before the stamp); dependency recording 0.25 s; the checker itself 2.65–2.76 s. On tree `111db8e3` the header re-inlining cost 0.57–0.74 s. Peak working set, tree `111db8e3`: 1.86 GB bound vs 2.02 GB for the two-phase driver.
 
 ## 6. Design decisions
 
@@ -167,4 +185,4 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 
 ## Not verified here
 
-The "Reference" columns describe a Zig implementation that was not available when this file was written; its file names are carried over from the original design notes, its line numbers were dropped. Performance effects (the speedup from durability, eviction behaviour under load) are not measured in this document.
+The "Reference" columns describe a Zig implementation that was not available when this file was written; its file names are carried over from the original design notes, its line numbers were dropped. Performance effects (the speedup from durability, eviction behaviour under load) are not measured in this document. The graph-bound timings in §5 come from one loaded Windows host; Linux and macOS were not measured, and the LSP path was not re-timed after the bound-db changes (they do not run there).

@@ -1,6 +1,6 @@
 # Trans-Am — incremental query engine
 
-Demand-driven cache of compilation results with red-green invalidation and output-hash early cutoff. Callers: `src/compiler/lsp/`, `src/module/loader.ms`. Design, query DAG and the comparison with the reference: [`docs/TRANSAM.md`](../../../docs/TRANSAM.md).
+Demand-driven cache of compilation results with red-green invalidation and output-hash early cutoff. Callers: `src/compiler/lsp/` and `checkModuleGraph` (`src/checker/orchestrator.ms`), the graph check of every batch command. Design, query DAG and the comparison with the reference: [`docs/TRANSAM.md`](../../../docs/TRANSAM.md).
 
 ## Rules
 
