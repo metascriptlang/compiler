@@ -61,7 +61,7 @@ export extern function includes(this arr: number[], value: number): boolean from
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: number[], start: number, end: number): number[] from "&msNumberArraySlice";
+export extern function slice(this arr: number[], start: number, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -142,7 +142,7 @@ export extern function includes(this arr: string[], value: string): boolean from
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: string[], start: number, end: number): string[] from "&msStringArraySlice";
+export extern function slice(this arr: string[], start: number, end: number = 9007199254740991): string[] from "&msStringArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -274,7 +274,7 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export function slice<T>(this arr: T[], start: number, end: number): T[] {
+export function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
