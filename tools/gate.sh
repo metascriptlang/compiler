@@ -444,7 +444,7 @@ emit_side() {
   local jobs
   jobs=$(( $(cores) / 2 )); [ "$jobs" -ge 1 ] || jobs=1
   mkdir -p "$2"
-  env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+  bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
 }
 
 reusable_programs() {
@@ -480,7 +480,7 @@ select_programs() {
     rm -rf "$OUT/ctl" "$OUT/ctl-src"
     mkdir -p "$OUT/ctl" "$OUT/ctl-src"
     git archive "$sha" src | tar -x -C "$OUT/ctl-src" || { select_whole "cannot unpack src at $sha"; return; }
-    (cd "$OUT/ctl-src" && env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
+    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
     [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
     printf '%s\n' "$sha" >"$OUT/ctl/sha"
   fi
@@ -532,6 +532,32 @@ scope_known() {
       print }'
 }
 
+LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
+
+kill_group() {
+  local w
+  if [ -r "/proc/$1/winpid" ]; then
+    for w in $(ps | awk -v g="$1" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do
+      taskkill //T //F //PID "$w" >/dev/null 2>&1
+    done
+  fi
+  kill -KILL -- "-$1" 2>/dev/null
+}
+
+bounded() {
+  local pid waited=0
+  set -m; "$@" & pid=$!; set +m
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$LANE_LIMIT" ]; then
+      kill_group "$pid"; wait "$pid" 2>/dev/null
+      printf '\nTIMEOUT after %ss, process tree killed: %s\n' "$LANE_LIMIT" "$*" >&2
+      return 124
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 need_cand() {
   [ -x "$CAND" ] || die "lane '$1' tests the candidate compiler; include the build lane"
 }
@@ -577,15 +603,15 @@ for lane in $lanes; do
   if [ "$reuse" -eq 1 ] && [ "$(tail -1 "$log" 2>/dev/null)" = END ]; then
     rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); reused=" (reused log)"
   else case "$lane" in
-    tools) run_tools_lane >"$log" 2>&1; rc=$? ;;
-    tests) need_cand "$lane"; run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    suite|suite-orc) run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|guard|hcr) need_cand "$lane"; env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
-    *) env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
+    tests) need_cand "$lane"; bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|guard|hcr) need_cand "$lane"; bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    *) bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   printf '\nRC=%d\nEND\n' "$rc" >>"$log"
   fi
-  reds_of "$lane" "$log" "$rc" >"$OUT/$lane.red.all"
+  { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
