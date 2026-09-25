@@ -14,7 +14,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol,
+	Node, NodeKind, Symbol, Type, TypeKind,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -27,6 +27,7 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isPrimitiveKind } from "../checker/types";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
@@ -220,16 +221,55 @@ function getIdentSym(node: Node): Symbol | null {
 	return null;
 }
 
-// Find root identifiers in a path expression (e.g., obj.field → "obj")
-function collectPathRoots(node: Node, result: Symbol[]): void {
+function containsPointer(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 8) return true;
+	if (isPrimitiveKind(t.kind)) return false;
+	return match (t.kind) {
+		TypeKind.String | TypeKind.BigInt => false,
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => {
+			for (const c of t.typeChildren) {
+				if (containsPointer(c, depth + 1)) return true;
+			}
+			return false;
+		},
+		TypeKind.SizedArray => containsPointer(t.typeReturn, depth + 1),
+		_ => true,
+	};
+}
+
+function allRoots(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Identifier => { if (node.resolvedSym != null) result.push(node.resolvedSym); },
-		NodeKind.MemberExpr => collectPathRoots((node.data as MemberExprData).object, result),
-		NodeKind.ArrayAccess => collectPathRoots((node.data as ArrayAccessData).array, result),
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => collectPathRoots((node.data as { expr: Node }).expr, result),
+		NodeKind.MemberExpr => allRoots((node.data as MemberExprData).object, result),
+		NodeKind.ArrayAccess => allRoots((node.data as ArrayAccessData).array, result),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => allRoots((node.data as { expr: Node }).expr, result),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => allRoots((node.data as HiddenStdConvData).convExpr, result),
+		NodeKind.TypeAssertion => allRoots((node.data as TypeAssertionData).asExpr, result),
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			allRoots(d.ternaryConsequent, result);
+			allRoots(d.ternaryAlternate, result);
+		},
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { allRoots(e, result); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { allRoots(e, result); } },
+		NodeKind.SpreadExpr => allRoots((node.data as SpreadExprData).spreadArg, result),
+		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(a, result); } },
+		NodeKind.CallExpr => {
+			if (containsPointer(node.nodeType, 0)) {
+				for (const a of (node.data as CallExprData).arguments) { allRoots(a, result); }
+			}
+		},
 		_ => {},
 	};
+}
+
+function potentialMutationViaArg(p: Partitions, arg: Node): void {
+	if (arg == null || arg.kind == NodeKind.HiddenAddr) return;
+	if (!containsPointer(arg.nodeType, 0)) return;
+	const roots: Symbol[] = [];
+	allRoots(arg, roots);
+	for (const r of roots) { potentialMutation(p, r); }
 }
 
 // ===== destMightOwn — determines if dest OWNS data from src =====
@@ -531,7 +571,7 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
-	collectPathRoots(src, srcRoots);
+	allRoots(src, srcRoots);
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
@@ -581,7 +621,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 				// Assignment to variable → mutation on LHS graph
 				const lhsRoots: Symbol[] = [];
-				collectPathRoots(d.left, lhsRoots);
+				allRoots(d.left, lhsRoots);
 				for (const r of lhsRoots) { potentialMutation(p, r); }
 
 				// Cursor deps for assignment
@@ -604,7 +644,7 @@ function trav(p: Partitions, node: Node | null): void {
 			// Method call (obj.method(...)) → obj is potentially mutated
 			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
 				const objRoots: Symbol[] = [];
-				collectPathRoots((d.callee.data as MemberExprData).object, objRoots);
+				allRoots((d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
 			}
 
@@ -612,7 +652,7 @@ function trav(p: Partitions, node: Node | null): void {
 			for (const arg of d.arguments) {
 				if (arg != null && arg.kind == NodeKind.HiddenAddr) {
 					const addrRoots: Symbol[] = [];
-					collectPathRoots((arg.data as { expr: Node }).expr, addrRoots);
+					allRoots((arg.data as { expr: Node }).expr, addrRoots);
 					for (const r of addrRoots) {
 						potentialMutation(p, r);
 						// Also prevent cursor on the variable itself
@@ -623,6 +663,7 @@ function trav(p: Partitions, node: Node | null): void {
 					}
 				}
 			}
+			for (const arg of d.arguments) { potentialMutationViaArg(p, arg); }
 		},
 
 		// Loops: double traverse for soundness
@@ -728,6 +769,7 @@ function trav(p: Partitions, node: Node | null): void {
 			const d = node.data as NewExprData;
 			trav(p, d.newCallee);
 			for (const a of d.newArguments) { trav(p, a); }
+			for (const a of d.newArguments) { potentialMutationViaArg(p, a); }
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			trav(p, (node.data as HiddenStdConvData).convExpr);
@@ -1009,4 +1051,22 @@ test "borrow from an exported module global is NOT cursor" {
 	const body = getFuncNamed(BOXES + "export let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "c");
+}
+
+test "passing the borrowed-from object to a function mutates its graph" {
+	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; replaceChild(h); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "passing the array an element was borrowed from mutates its graph" {
+	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { const b = boxes[0]; replaceFirst(boxes); show(b.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "b");
+}
+
+test "passing a value without references keeps the borrow a cursor" {
+	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
 }
