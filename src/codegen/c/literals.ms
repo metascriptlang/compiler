@@ -72,9 +72,11 @@ export function cStringLiteral(s: string): string {
 // MS would emit as `(0 / 0)` and trap as integer divide-by-zero instead of producing
 // IEEE 754 NaN.
 export function formatCNumber(value: number, type: Type | null = null): string {
-	const isFloat = type != null
-		&& (type.kind == TypeKind.Number || type.kind == TypeKind.Float32 || type.kind == TypeKind.Float64);
+	if (type != null && type.kind == TypeKind.Float32) return formatCFloat32(value);
+	return spellCNumber(value, type != null && (type.kind == TypeKind.Number || type.kind == TypeKind.Float64));
+}
 
+function spellCNumber(value: number, isFloat: boolean): string {
 	// Non-finite doubles have no C literal spelling — emit the C99 math.h
 	// macros (constant expressions, linker/runtime neutral).
 	if (value != value) return "NAN";
@@ -159,7 +161,9 @@ export function formatCUint64(v: uint64): string {
 
 // Format as float32
 export function formatCFloat32(value: number): string {
-	return `${value}f`;
+	const narrowed: float32 = value as float32;
+	const text = spellCNumber(narrowed, true);
+	return text == "NAN" || text.endsWith("INFINITY") ? text : `${text}f`;
 }
 
 // ===== String Pool Emission =====
@@ -297,7 +301,21 @@ test "uint64 max spells the digits" { assert formatCUint64(18446744073709551615)
 
 test "uint32 suffix" { assert formatCUint32(42) == "42U"; }
 
-test "float32 suffix" { assert formatCFloat32(3.14) == "3.14f"; }
+test "float32 spells its own value with the suffix" {
+	assert formatCFloat32(0.42) == "0.41999998688697815f";
+	assert formatCFloat32(16777217.0) == "16777216.0f";
+}
+
+test "float32 keeps a point on integral values" {
+	assert formatCFloat32(22.0) == "22.0f";
+	assert formatCFloat32(-1.0) == "-1.0f";
+}
+
+test "float32 number literal takes the suffix" {
+	const t: Type = { kind: TypeKind.Float32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const d: NumberLiteralData = { value: 0.5, isFloat: true, intVal: 0, outOfRangeText: "", isBitPattern: false };
+	assert formatCNumberLit(d, t) == "0.5f";
+}
 
 test "emit pool declarations as msStrPayload" {
 	const pool = createStringPool();
