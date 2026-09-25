@@ -7,7 +7,7 @@ import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER } from "./options";
-import { renameReplace, atomicWriteFile } from "./io";
+import { renameReplace, atomicWriteFile, stopBuild } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -467,7 +467,7 @@ export function resolveLto(opts: CliOptions): void {
 		const hint = mac ? "re-run with --cc=clang, or drop --lto" : "drop --lto";
 		writeStderr(`error: ${ccName} cannot link with LTO targeting ${opts.targetOs}.\n`);
 		writeStderr(`  → ${hint}.\n`);
-		exit(1);
+		stopBuild();
 	}
 }
 

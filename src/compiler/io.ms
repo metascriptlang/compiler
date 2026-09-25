@@ -93,6 +93,18 @@ export function soSuffix(): string {
 
 // -- Output directory based on build mode --
 
+export const BUILD_STOPPED = "msc: build stopped";
+let _recoverableBuild = false;
+
+export function setRecoverableBuild(on: boolean): void {
+	_recoverableBuild = on;
+}
+
+export function stopBuild(): void {
+	if (_recoverableBuild) throw new Error(BUILD_STOPPED);
+	exit(1);
+}
+
 export function outDirForMode(mode: number): string {
 	if (mode > 0) return "out/release";
 	return "out/debug";
@@ -113,7 +125,7 @@ export function writeOutput(filePath: string, content: string): void {
 	const result = writeFile(filePath, content);
 	if (!result.ok) {
 		console.log(error("error") + ": " + result.error.message);
-		exit(1);
+		stopBuild();
 	}
 }
 
