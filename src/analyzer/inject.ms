@@ -2207,13 +2207,13 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 		if (d.catchName != "" && catchType != null && !isUnresolvedType(catchType) && catchType.kind != TypeKind.Error) {
 			const rcInfo = classifyRc(catchType, dctx);
 			if (rcInfo.needsCleanup) {
+				const body = d.catchBody.kind == NodeKind.BlockStmt ? d.catchBody : makeBlock([d.catchBody], loc);
 				pushScope(dctx, false, false);
 				registerVar(dctx, rcInfo, false, stmt.resolvedSym);
-				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
+				const processed = processStmtList((body.data as BlockStmtData).statements, dctx, loc);
 				const scope = popScope(dctx);
 				const cleanup = generateCleanup(scope, loc);
-				const cbd = d.catchBody.data as BlockStmtData;
-				for (const cs of cleanup) { cbd.statements.push(cs); }
+				d.catchBody = makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 				handled = true;
 			}
 		}
