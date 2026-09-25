@@ -618,6 +618,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const parseEntry = cacheGet(db.cache, pKey);
 	const parseHash = parseEntry != null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
+	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 	const inputHashes: number[] = [parseHash];
 
 	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
@@ -1323,4 +1324,12 @@ test "a line shift in a module rechecks it at the new positions" {
 export function one(): int32 { return 1; }");
 	checkChain(db, ["/shift/a.ms"]);
 	assert (dbGetCheckedProgram(db, "/shift/a.ms").data as ProgramData).programStmts[0].location.line == 3;
+}
+
+test "a user module's check keeps its file's durability" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/durable/a.ms", "export function one(): int32 { return 1; }");
+	dbTypeCheck(db, "/durable/a.ms");
+	const entry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, "/durable/a.ms")));
+	assert entry.durability == TaDurability.Low;
 }
