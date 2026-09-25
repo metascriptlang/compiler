@@ -12,7 +12,7 @@ import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
+	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
@@ -1103,8 +1103,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		return;
 	}
 
-	// Fallback
-	ctx.results.push(`/* unsupported expression: kind=${kind.toString()} */`);
+	addUnloweredError(g, p, node);
+	ctx.results.push("MS_NIL");
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -2256,9 +2256,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 	// NewExpr handled entirely in discover phase (inline allocation)
 
-	// Fallback
 	truncResults(ctx, cc);
-	ctx.results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
+	addUnloweredError(g, p, node);
+	ctx.results.push("MS_NIL");
 }
 
 // ===== Primitive-union lowering (float32 | string payloads) =====
@@ -3213,4 +3213,24 @@ test "deeply nested ternary (30 levels)" {
 	input = input + "c;";
 	const result = exprSnippet(input);
 	assert result.length > 0;
+}
+
+function exprErrors(input: string): string {
+	const pr = parseSource(input);
+	if (!pr.ok) return "PARSE_ERROR";
+	const pd = pr.value.data as ProgramData;
+	const es = pd.programStmts[0].data as ExprStmtData;
+	const g = createCGen(null as unknown as CheckerContext, "");
+	genExpr(g, createProc("test", voidType()), es.expr);
+	let messages = "";
+	for (const e of g.errors) messages = messages + e.message + "\n";
+	return messages;
+}
+
+test "an await that reaches codegen unlowered is an internal error naming it" {
+	assert exprErrors("await p;").contains("internal: AwaitExpr reached C codegen unlowered at 1:");
+}
+
+test "an unlowered kind nested in a lowered one is still an internal error" {
+	assert exprErrors("a + (await p);").contains("internal: AwaitExpr reached C codegen unlowered");
 }
