@@ -36,13 +36,15 @@ backend and DRC/ORC runtime.
 | Full transactional current/old/candidate module registry | Windows x64: `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); POSIX loader not implemented (the engine aborts loud) |
 | `@beforeReload` / `@afterReload` lifecycle handlers | Implemented on Windows x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
 | TypeInfo across reloads | Windows x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
-| iOS and automated watch/deploy loops | Not implemented |
+| Watch build (`msc build --hcr --watch`) | Windows x64: rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence); POSIX has no file-watch backend, so only `--watch-replay` runs there (not verified) |
+| iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 `src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
-`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.ms`, and the
-`--hcr` branch in the compiler build driver.
+`runtime/hcrHost.c`, `examples/hcrProbe/hostWindows.ms`, `src/test/hcr/run.ms`, the
+`--hcr` branch in the compiler build driver, and `src/compiler/buildSession.ms` with
+`cmdWatchC` for `--watch`.
 
 ## Architecture decision
 
@@ -511,6 +513,67 @@ Not verified:
 - A struct passed by value through an export: its layout key covers the declaring module,
   but no fixture exercises one.
 - Destroy counts under the DRC ledger or ASan (this host has no `libasan`).
+
+### Watch builds (S6)
+
+`msc build <entry> --hcr --watch` builds once, then rebuilds after every save of a `.ms`,
+`.cms` or `.h` file under the project root (`std/fs/watch`), until it is killed.
+`--watch-replay=<file>` drives the same loop from a file of `<source> <target>` lines instead
+of the file system, one copy and one build per line; `hcrWatchWarm` runs it. With `--emit=c`,
+build *n* writes its C to `out/<mode>/watch<n>/`. Each build prints
+`watch: build <n> <built|rebuilt|up-to-date|failed> in <ms> ms (checked a/b, lowered c)`, and
+each trigger `watch: changed <paths>`. `--watch` without `--hcr` is refused: a non-HCR build
+shares one hook-owner set across project modules, so one module's lowering depends on which
+module claimed a hook first.
+
+The session (`src/compiler/buildSession.ms` `BuildSession`, `src/checker/orchestrator.ms`
+`CheckSession`) keeps, between builds, the graph-bound TransAm db and prelude context, each
+module's check with the generic function and type instances that check created, and each
+module's native lowering (the TransAm `Lower` query, run on a clone of the checked tree so the
+kept tree stays usable for later instantiations). Every build reruns the loader (a bound db
+records no `.h` dependency, [`TRANSAM.md`](TRANSAM.md) §5), DCE, C emission, cc of changed C,
+the link of changed images and the ABI bundle. A compile error ends the build, not the watch;
+the next save continues from the kept session.
+
+A module is checked again when its text, or any module it imports transitively, changed
+([`TRANSAM.md`](TRANSAM.md) §3), and lowered again when it was checked again. A warm build has to
+emit the C a cold build emits, and four inputs of a module's lowering come from other modules.
+Each is compared with the previous build; a change makes the build start from scratch, with the
+reason printed (`watch: rebuilding from scratch: …`):
+
+| Input from other modules | Why it couples modules | Compared by |
+|---|---|---|
+| HCR export tables and the shapes of project types | every image carries every image's slot and TypeInfo macros (`hcrIndirect.ms` `lowerHcrIndirection`) | `hcrTablesFingerprint`, `projectTypesFingerprint` |
+| generic function instances routed to the module | an instance is emitted in its owner's unit, usually a std module: one `Map<string, Item>` in a project module put 84 lines naming `Item` into `std/core/struct.c` | `instancesFingerprint` per owner |
+| generic type instances | `monoEmitTypeInstNodes` emits every one into the first module lowered | the first module's fingerprint |
+| hook symbols and TypeInfo owners | per-build global tables that lowering fills and emission reads (`codegen/c/types.ms` `_hookSyms`, `destructorLifting.ms` `_globalTypeInfoOwners`) | recorded per lowering, replayed when it is reused, compared when it reruns |
+
+So body edits stay warm; an added or changed export, a new generic use over a project type or a
+changed type shape rebuilds from scratch.
+
+Measured on tree `8981c4823812`, Windows x64 with the machine at 65 % load of 32 threads, the
+`hcrWatchWarm` fixture (5 project and 46 std modules), `--watch-replay`, two rounds each:
+
+| Step | `--emit=c` | `--output` (through cc and link) |
+|---|---|---|
+| first build | 1.06–1.36 s | 3.0–9.3 s |
+| body edit (4 or 2 of 51 modules checked and lowered) | 99–107 ms | 0.94–2.12 s |
+| type error | 27–29 ms | 26–28 ms |
+| rebuild from scratch | 0.79–0.86 s | 2.2–6.2 s |
+
+The same edits as one `msc build --hcr --emit=c` process each took 1.6–4.9 s (2026-09-25, same
+host). A warm `--output` build is dominated by cc and link of the changed module; `reload()` in
+the running app adds 0.45–0.56 s (measured 2026-09-24).
+
+Rejected: relowering one green std module inside a warm build. Its output depends on the
+instances routed to it from other modules and on hook ownership decided in load order across std
+modules, so it is not equivalent to a cold build. Nim's per-module backend avoids the coupling by
+emitting every definition a module demands into that module's unit and keeping one per C name at
+merge (`cgen.nim` `findPendingModule`); that placement is a new mechanism, not taken here.
+
+Not verified: a live watch on macOS or Linux (no inotify/kqueue backend), timings off this host,
+edit-to-visible latency with a running host, a project with import cycles, and edits to
+`build.ms` during a watch (it is not re-read).
 
 ## Neon Fast Refresh boundary
 
