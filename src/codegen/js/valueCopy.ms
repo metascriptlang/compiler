@@ -184,3 +184,9 @@ export function emitCopyOnRead(gen: JSGenerator, node: Node): void {
 	emitNode(gen, node);
 	emit(gen, ")");
 }
+
+export function valueCopyFnName(gen: JSGenerator, t: Type | null): string {
+	const repr = jsValueRepr(t);
+	if (!needsValueCopy(repr)) return "";
+	return copyFnName(gen, repr as Type);
+}
