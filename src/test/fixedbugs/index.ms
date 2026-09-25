@@ -228,3 +228,4 @@ import "./bug211SinkParamTakesUnknown";
 import "./bug212Float32ConstFold";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug300VecRefSinkTakesPayload";
+import "./bug480UnsignedShiftC";

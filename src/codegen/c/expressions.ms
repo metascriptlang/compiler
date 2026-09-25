@@ -12,7 +12,7 @@ import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
+	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, hookBaseCName, ensureDrcProto } from "./types";
@@ -1103,8 +1103,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		return;
 	}
 
-	// Fallback
-	ctx.results.push(`/* unsupported expression: kind=${kind.toString()} */`);
+	addUnloweredError(g, p, node);
+	ctx.results.push("MS_NIL");
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -1300,6 +1300,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push(`fmod(${left}, ${finalRight})`);
 				return;
 			}
+		}
+		if (d.operator == ">>>") {
+			ctx.results.push(genLogicalShr(g, node, d.left.nodeType, left, finalRight));
+			return;
 		}
 		// C has no exponent operator; pow() is the call form, same shape as fmod
 		// above. An integer result type casts back — pow is double-valued.
@@ -2256,9 +2260,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 	// NewExpr handled entirely in discover phase (inline allocation)
 
-	// Fallback
 	truncResults(ctx, cc);
-	ctx.results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
+	addUnloweredError(g, p, node);
+	ctx.results.push("MS_NIL");
 }
 
 // ===== Primitive-union lowering (float32 | string payloads) =====
@@ -2893,6 +2897,24 @@ function mapBinaryOp(g: CGen, op: string): string {
 	return mapped;
 }
 
+function shiftOperandBits(t: Type | null): int32 {
+	if (t == null) return 32;
+	if (t.kind == TypeKind.Distinct && t.typeReturn != null) return shiftOperandBits(t.typeReturn);
+	return match (t.kind) {
+		TypeKind.Int8 | TypeKind.Uint8 => 8,
+		TypeKind.Int16 | TypeKind.Uint16 => 16,
+		TypeKind.Int64 | TypeKind.Uint64 => 64,
+		_ => 32,
+	};
+}
+
+function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, left: string, right: string): string {
+	const bits = shiftOperandBits(leftType);
+	const unsignedType = `uint${bits}_t`;
+	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
+	return `((${resultType})((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+}
+
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
 //  absorbed into iterative discoverExpr/emitExpr above)
 
@@ -3213,4 +3235,28 @@ test "deeply nested ternary (30 levels)" {
 	input = input + "c;";
 	const result = exprSnippet(input);
 	assert result.length > 0;
+}
+
+function exprErrors(input: string): string {
+	const pr = parseSource(input);
+	if (!pr.ok) return "PARSE_ERROR";
+	const pd = pr.value.data as ProgramData;
+	const es = pd.programStmts[0].data as ExprStmtData;
+	const g = createCGen(null as unknown as CheckerContext, "");
+	genExpr(g, createProc("test", voidType()), es.expr);
+	let messages = "";
+	for (const e of g.errors) messages = messages + e.message + "\n";
+	return messages;
+}
+
+test "an await that reaches codegen unlowered is an internal error naming it" {
+	assert exprErrors("await p;").contains("internal: AwaitExpr reached C codegen unlowered at 1:");
+}
+
+test "an unlowered kind nested in a lowered one is still an internal error" {
+	assert exprErrors("a + (await p);").contains("internal: AwaitExpr reached C codegen unlowered");
+}
+
+test "unsigned right shift is a logical shift of the operand width with a masked count" {
+	assert exprSnippet("a >>> b;") == "((uint32_t)((uint32_t)(a) >> ((uint32_t)(b) & 31)))";
 }
