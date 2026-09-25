@@ -84,6 +84,15 @@ tree_key() {
 }
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
+control_todo() {
+  awk -v dir="$1" -v keys="$2" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    { f = dir "/" $1; have = ""; sig = ""
+      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0 \
+        && split(sig, s, "\t") >= 4 && s[4] == "0") { close(f ".key"); close(f ".sig"); next }
+      close(f ".key"); close(f ".sig"); print }'
+}
+
 TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
 SHARDED_TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
@@ -126,7 +135,7 @@ bounded() {
 hash_files() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
 
 emit_one() {
-  local bin=$1 name=$2 entry=$3 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
+  local bin=$1 name=$3 entry=$4 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
   rm -rf "$d"; mkdir -p "$d" && cd "$d" || exit 1
   "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
   "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
@@ -137,7 +146,7 @@ emit_one() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "${#cs[@]}"
 }
 
-if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0; fi
+if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}" "${5:?}"; exit 0; fi
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
@@ -301,6 +310,14 @@ CASES
   [ "$got" = "12 6 src/test/fixedbugs/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
   [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
+  log=$(mktemp -d) || return 1
+  printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
+  printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"
+  printf 'k2\n' >"$log/failed.key"; printf 'failed\tc\tj\t1\t9\n' >"$log/failed.sig"
+  printf 'k0\n' >"$log/stale.key"; printf 'stale\tc\tj\t0\t9\n' >"$log/stale.sig"
+  got=$(printf '%s p\n' ok failed stale new | control_todo "$log" "$log/keys" | cut -d' ' -f1 | paste -sd'|' -)
+  rm -rf "$log"
+  [ "$got" = "failed|stale|new" ] || { printf 'FAIL control reuse of emits: want "failed|stale|new", got "%s"\n' "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -547,7 +564,7 @@ emit_side() {
   local jobs
   jobs=$(share_of_cores 2)
   mkdir -p "$2"
-  bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
 }
 
 reusable_programs() {
@@ -581,12 +598,8 @@ emit_control() {
   local dir="$2/emit"
   mkdir -p "$dir"
   reusable_programs >"$EMIT/ctl.keys"
-  awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
-    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
-    { f = dir "/" $1; have = ""
-      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0) { close(f ".key"); close(f ".sig"); next }
-      close(f ".key"); close(f ".sig"); print }' "$EMIT/programs" >"$EMIT/ctl.todo"
-  emit_side "$1" "$dir" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/ctl.todo"
+  emit_side "$1" "$EMIT/ctrl" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
     BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
     { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); printf "%s", (($1 in key) ? key[$1] "\n" : "") > (f ".key"); close(f ".key") }'
   awk -v dir="$dir" '{ f = dir "/" $1 ".sig"; if ((getline l < f) > 0) print l; close(f) }' "$EMIT/programs" | sort >"$EMIT/ctl.sig"
