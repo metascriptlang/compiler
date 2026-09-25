@@ -3030,6 +3030,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	callCheckExpr(ctx, d.object, null);
 	const objType = d.object.nodeType;
 	if (objType == null) return inferredType();
+	if (objType.kind == TypeKind.Never) {
+		addError(ctx, `Property '${d.property}' does not exist on type 'never': the conditions that lead here leave no value for the object`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).

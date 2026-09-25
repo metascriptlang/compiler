@@ -1506,7 +1506,8 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 		for (const m of members) {
 			if (typeofStringMatches(m, d.value) == assumeTrue) kept.push(m);
 		}
-		if (kept.length == 0 || kept.length == members.length) return t;
+		if (kept.length == 0) return noValueLeft(t, t);
+		if (kept.length == members.length) return t;
 		if (kept.length == 1) return kept[0];
 		return nullableUnionOf(kept);
 	}
@@ -1522,16 +1523,25 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 				if (isMatch == assumeTrue) remaining.push(v);
 			}
 		}
-		if (remaining.length == 0 || remaining.length == t.typeChildren.length) return t;
+		if (remaining.length == 0) return noValueLeft(t, t);
+		if (remaining.length == t.typeChildren.length) return t;
 		if (remaining.length == 1) return remaining[0];
 		return createUnion(remaining);
 	}
 	// For non-union types: if the kind matches, keep/drop based on assumeTrue.
 	const matches = typeofStringMatches(t, d.value);
 	if (assumeTrue) {
-		return matches ? t : inferredType();
+		return matches ? t : noValueLeft(t, inferredType());
 	}
-	return matches ? inferredType() : t;
+	return matches ? noValueLeft(t, inferredType()) : t;
+}
+
+function noValueLeft(t: Type, unresolved: Type): Type {
+	if (hasGenericParams(t) || t.kind == TypeKind.GenericParam || t.kind == TypeKind.Unknown
+			|| t.kind == TypeKind.Inferred || t.kind == TypeKind.Error) {
+		return unresolved;
+	}
+	return neverType();
 }
 
 function typeofStringMatches(v: Type, s: string): boolean {
