@@ -89,6 +89,7 @@ import { useHeader } from "./context";
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _hookSymOrder: Symbol[] = [];
 let _hookSymsSealed = false;
 
 export function sealHookSyms(sealed: boolean): void {
@@ -97,6 +98,25 @@ export function sealHookSyms(sealed: boolean): void {
 
 export function resetHookSyms(): void {
 	_hookSyms = new HashMap<string, Symbol>();
+	_hookSymOrder = [];
+}
+
+export function hookSymMark(): int32 {
+	return _hookSymOrder.length as int32;
+}
+
+export function hookSymsFrom(mark: int32): Symbol[] {
+	const taken: Symbol[] = [];
+	for (let i = mark; i < _hookSymOrder.length; i += 1) taken.push(_hookSymOrder[i]);
+	return taken;
+}
+
+export function replayHookSyms(syms: Symbol[]): void {
+	for (const sym of syms) {
+		if (_hookSyms.get(sym.name) != null) continue;
+		_hookSyms.set(sym.name, sym);
+		_hookSymOrder.push(sym);
+	}
 }
 
 export function lookupHookSym(name: string): Symbol | null {
@@ -110,6 +130,7 @@ export function hookPrototype(name: string, fnType: Type | null): Symbol {
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
 	_hookSyms.set(name, sym);
+	_hookSymOrder.push(sym);
 	return sym;
 }
 
