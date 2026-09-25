@@ -497,14 +497,15 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
-function isPtrField(objType: Type | null, fieldIdx: number): boolean {
+function isPtrField(objType: Type | null, fieldName: string): boolean {
 	if (objType == null) return false;
 	let t = objType;
 	if (t.kind == TypeKind.Ref && t.typeReturn != null) {
 		t = t.typeReturn;
 	}
-	if (t.typeChildren == null) return false;
-	if (fieldIdx >= t.typeChildren.length) return false;
+	if (t.typeChildren == null || t.typeNames == null) return false;
+	const fieldIdx = t.typeNames.indexOf(fieldName);
+	if (fieldIdx < 0 || fieldIdx >= t.typeChildren.length) return false;
 	const ft = t.typeChildren[fieldIdx];
 	if (ft == null) return false;
 	return ft.kind == TypeKind.Ptr || ft.kind == TypeKind.Cursor;
@@ -543,7 +544,7 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	const fieldDefault = isRefConstr ? DrcMode.SinkArg
 		: (mode == DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < od.properties.length; i += 1) {
-		const fieldMode = isPtrField(node.nodeType, i) ? DrcMode.Normal : fieldDefault;
+		const fieldMode = i < od.keys.length && isPtrField(node.nodeType, od.keys[i]) ? DrcMode.Normal : fieldDefault;
 		od.properties[i] = processNode(od.properties[i], dctx, fieldMode);
 	}
 	// The fresh-owned capture (Normal mode → ensureDestruction) is consolidated in processNode.
