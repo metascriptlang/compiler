@@ -2240,6 +2240,7 @@ function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation
 
 function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as SwitchStmtData;
+	d.switchDisc = processNonRcRead(d.switchDisc, dctx);
 	for (const c of d.switchCases) {
 		if (c.kind == NodeKind.SwitchCase) {
 			processSwitchCase(c, dctx, loc);
