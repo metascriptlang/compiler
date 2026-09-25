@@ -2,11 +2,13 @@
 //
 // Symptom:    with `function create(this typeof R, ref c: Ctx, k: int32)`, `R.create(c, 7)` was refused
 //             with "arg 1: out parameter requires a variable", `c.n = …` in the body was refused as a
-//             write to a value parameter, and `bump(c)` in the body changed a copy.
+//             write to a value parameter, and `bump(c)` in the body changed a copy. An extern static
+//             extension called without its defaulted argument emitted `f()`.
 // Root cause: the parser counted `out`/`ref`/`readonly`/`sink` positions and parameter locations with
-//             the `this typeof R` receiver, then dropped the receiver from the declaration's parameters.
-// Fix:        positions and locations index the parameters the declaration keeps; fmt prints the
-//             receiver ahead of them.
+//             the `this typeof R` receiver, then dropped the receiver from the declaration's parameters;
+//             an extern kept the receiver's slot in its defaults.
+// Fix:        positions, locations and extern defaults index the parameters the declaration keeps;
+//             fmt prints the receiver ahead of them.
 
 import { compileToC, compileToJS } from "../helpers";
 
@@ -72,4 +74,17 @@ test "bug210: the parameter after a readonly one stays writable" {
 
 test "bug210: the JS backend takes a ref in the second and the third position" {
 	assert jsErrorOf("R.create(c, seven());\nR.make(7, \"ab\", c);") == "";
+}
+
+function emittedC(body: string): string {
+	const out = compileToC(header + body);
+	return out.ok ? out.value : out.error;
+}
+
+test "bug210: an extern static extension fills its only defaulted argument" {
+	assert emittedC("extern function lowest(this typeof R, k: int32 = -5): int32;\nconst lo: int32 = R.lowest();").indexOf("lowest(-5)") >= 0;
+}
+
+test "bug210: an extern static extension fills a default after a given argument" {
+	assert emittedC("extern function lowest(this typeof R, a: int32, k: int32 = -5): int32;\nconst lo: int32 = R.lowest(1);").indexOf("lowest(1, -5)") >= 0;
 }
