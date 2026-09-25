@@ -229,3 +229,4 @@ import "./bug520SlotFitIsTheArgumentRelation";
 import "./bug521GenericInstanceArgsInvariant";
 import "./bug522UnionAndTupleRelateByMember";
 import "./bug523IntegerIsNotAnEnum";
+import "./bug524OverloadArgumentsRelated";

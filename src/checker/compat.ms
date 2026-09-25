@@ -939,7 +939,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind == actual.kind) {
 		return match (formal.kind) {
 			TypeKind.Struct => {
-				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
+				if (formal == actual || (formal.typeName != "" && formal.typeName == actual.typeName)) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
@@ -1047,6 +1047,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
+	if (isIntegerType(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
+		return TypeRelation.None;
+	}
 	if (isNumeric(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
 		return TypeRelation.FromLiteral;
 	}
@@ -1695,8 +1698,8 @@ test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), creat
 
 test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) == TypeRelation.None; }
 
-test "from literal" {
-	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) == TypeRelation.FromLiteral;
+test "a float into an integer formal does not match; into a float formal it is from-literal" {
+	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) == TypeRelation.None;
 	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.FromLiteral;
 }
 
@@ -1718,8 +1721,8 @@ test "exact beats subtype-sum" {
 }
 
 test "FromLiteral weight intConvMatches += 256" {
-	// formal=Int32, actual=Number → FromLiteral (number literal to sized param)
-	const params = [createPrimitive(TypeKind.Int32)];
+	// formal=Float32, actual=Number → FromLiteral (number literal to sized param)
+	const params = [createPrimitive(TypeKind.Float32)];
 	const args = [numberType()];
 	const score = scoreCandidatePriority(params, args, params.length);
 	assert !isNoMatch(score);
