@@ -13,6 +13,7 @@ import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, regi
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
+import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
@@ -634,7 +635,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturn = instType.typeReturn != null ? instType.typeReturn : inferredType();
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
+		const outerGensym = beginGensymUnit();
 		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		rewindTemplateGensym(outerGensym);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -795,7 +798,9 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
 		ctorSym.state = SymbolState.Checked;
+		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		rewindTemplateGensym(outerGensym);
 		bodyCtx.modulePath = savedModulePath;
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		truncateCallerExtensions(bodyCtx, extPreCount);
