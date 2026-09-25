@@ -221,24 +221,17 @@ msString msAsString(msUint8Array* arr);
 
 /* Access element at index with negative index support. Returns value. */
 #define msGenericArrayAt(arr_ptr, idx) ({ \
-	int64_t _gi = (idx); \
-	if (_gi < 0) _gi = (arr_ptr)->len + _gi; \
-	__typeof__((arr_ptr)->p->data[0]) _gv; \
-	if (_gi >= 0 && _gi < (arr_ptr)->len) _gv = (arr_ptr)->p->data[_gi]; \
-	else memset(&_gv, 0, sizeof(_gv)); \
-	_gv; \
+	int64_t _gx = (idx); \
+	int64_t _gi = _gx < 0 ? (arr_ptr)->len + _gx : _gx; \
+	if ((uint64_t)_gi >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_gx, (arr_ptr)->len); \
+	(arr_ptr)->p->data[_gi]; \
 })
 
 /* Pop last element. Returns the value. */
 #define msGenericArrayPop(arr_ptr) ({ \
-	__typeof__((arr_ptr)->p->data[0]) _pv; \
-	if ((arr_ptr)->len > 0) { \
-		(arr_ptr)->len--; \
-		_pv = (arr_ptr)->p->data[(arr_ptr)->len]; \
-	} else { \
-		memset(&_pv, 0, sizeof(_pv)); \
-	} \
-	_pv; \
+	if ((arr_ptr)->len <= 0) msRaiseIndexError((arr_ptr)->len - 1, (arr_ptr)->len); \
+	(arr_ptr)->len--; \
+	(arr_ptr)->p->data[(arr_ptr)->len]; \
 })
 
 /* Set length. Grows with zero-fill if needed. */

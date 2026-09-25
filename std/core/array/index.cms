@@ -31,7 +31,7 @@ export extern function push(this arr: number[], sink value: number): void from "
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
 
@@ -41,7 +41,7 @@ export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
  */
 export extern function shift(this arr: number[]): number from "&msNumberArrayShift";
 
-/** Returns the element at the specified index. */
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
 export extern function at(this arr: number[], idx: number): number from "&msNumberArrayAt";
 
 /**
@@ -112,7 +112,7 @@ export extern function push(this arr: string[], sink value: string): void from "
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop(this arr: string[]): string from "&msStringArrayPop";
 
@@ -122,7 +122,7 @@ export extern function pop(this arr: string[]): string from "&msStringArrayPop";
  */
 export extern function shift(this arr: string[]): string from "&msStringArrayShift";
 
-/** Returns the element at the specified index. */
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
 export extern function at(this arr: string[], idx: number): string from "&msStringArrayAt";
 
 /**
@@ -195,11 +195,11 @@ export extern function push<T>(this arr: T[], sink value: T): void from "&msGene
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 
-/** Returns the element at the specified index. */
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
 export extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 
 extern function growLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
