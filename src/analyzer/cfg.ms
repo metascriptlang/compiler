@@ -38,15 +38,20 @@ export interface Cfg {
 // ===== Builder State =====
 
 interface LoopInfo {
-	conditionIdx: int32;   // index of loop condition start (for continue → loop)
-	breakPatches: int32[];  // indices of goto instrs needing patch (for break)
+	breakPatches: int32[];
+	continuePatches: int32[];
 	label: string;         // loop label — labeled break/continue resolve by it
+}
+
+interface TryInfo {
+	raisePatches: int32[];
 }
 
 interface BuildCtx {
 	cfg: CfgInstr[];
 	rootSym: Symbol;
 	loops: LoopInfo[];
+	tries: TryInfo[];
 }
 
 // ===== Instruction Emitters =====
@@ -88,6 +93,32 @@ function patchDest(ctx: BuildCtx, instrIdx: int32, targetIdx: int32): void {
 	ctx.cfg[instrIdx].dest = targetIdx - instrIdx;
 }
 
+function patchAllHere(ctx: BuildCtx, instrIdxs: int32[]): void {
+	for (const idx of instrIdxs) { patchDest(ctx, idx, ctx.cfg.length); }
+}
+
+function pushLoop(ctx: BuildCtx, label: string): LoopInfo {
+	const loopInfo: LoopInfo = { breakPatches: [], continuePatches: [], label };
+	ctx.loops.push(loopInfo);
+	return loopInfo;
+}
+
+function emitRaise(ctx: BuildCtx): void {
+	const gotoIdx = emitGoto(ctx);
+	if (ctx.tries.length > 0) {
+		ctx.tries[ctx.tries.length - 1].raisePatches.push(gotoIdx);
+	} else {
+		patchDest(ctx, gotoIdx, 99999);
+	}
+}
+
+function emitCallRaiseEdge(ctx: BuildCtx): void {
+	if (ctx.tries.length == 0) return;
+	const forkIdx = emitFork(ctx);
+	emitRaise(ctx);
+	patchDest(ctx, forkIdx, ctx.cfg.length);
+}
+
 // ===== Root matching helper =====
 
 function matchesRoot(node: Node, ctx: BuildCtx): boolean {
@@ -127,6 +158,7 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 			const d = node.data as CallExprData;
 			walkExpr(d.callee, ctx);
 			for (const arg of d.arguments) { walkExpr(arg, ctx); }
+			emitCallRaiseEdge(ctx);
 		},
 		NodeKind.MemberExpr => {
 			// Field-level: if root matches, emit use for full path and don't descend
@@ -168,6 +200,7 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 			const d = node.data as NewExprData;
 			walkExpr(d.newCallee, ctx);
 			for (const a of d.newArguments) { walkExpr(a, ctx); }
+			emitCallRaiseEdge(ctx);
 		},
 		NodeKind.TypeAssertion => {
 			walkExpr((node.data as TypeAssertionData).asExpr, ctx);
@@ -275,8 +308,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.ThrowStmt => {
 			walkExpr((node.data as ThrowStmtData).throwArg, ctx);
-			const gotoIdx = emitGoto(ctx);
-			patchDest(ctx, gotoIdx, 99999);
+			emitRaise(ctx);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
@@ -294,30 +326,27 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [], label: d.whileLabel };
-			ctx.loops.push(loopInfo);
+			const condIdx = ctx.cfg.length;
+			const loopInfo = pushLoop(ctx, d.whileLabel);
 			walkExpr(d.whileCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.whileBody, ctx);
-			emitLoop(ctx, loopInfo.conditionIdx);
+			patchAllHere(ctx, loopInfo.continuePatches);
+			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			const loopStart = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [], label: d.dwLabel };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.dwLabel);
 			walkStmt(d.doBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			walkExpr(d.doCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			patchDest(ctx, forkIdx, loopStart);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.BreakStmt => {
@@ -330,28 +359,44 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		NodeKind.ContinueStmt => {
 			if (ctx.loops.length > 0) {
 				const loop = findLoopByLabel(ctx, (node.data as ContinueStmtData).continueLabel);
-				emitLoop(ctx, loop.conditionIdx);
+				loop.continuePatches.push(emitGoto(ctx));
 			}
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
+			const tryInfo: TryInfo = { raisePatches: [] };
+			ctx.tries.push(tryInfo);
 			walkStmt(d.tryBody, ctx);
-			const forkIdx = emitFork(ctx);
-			const gotoIdx = emitGoto(ctx);
-			patchDest(ctx, forkIdx, ctx.cfg.length);
-			walkStmt(d.catchBody, ctx);
-			patchDest(ctx, gotoIdx, ctx.cfg.length);
+			ctx.tries.pop();
+			patchAllHere(ctx, tryInfo.raisePatches);
+			if (d.catchBody != null) {
+				const forkIdx = emitFork(ctx);
+				walkStmt(d.catchBody, ctx);
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+			}
 			walkStmt(d.finallyBody, ctx);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
 			walkExpr(d.switchDisc, ctx);
-			for (const c of d.switchCases) { walkStmt(c, ctx); }
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			for (const t of d.caseTests) { walkExpr(t, ctx); }
-			for (const s of d.caseStmts) { walkStmt(s, ctx); }
+			for (const c of d.switchCases) {
+				for (const t of (c.data as SwitchCaseData).caseTests) { walkExpr(t, ctx); }
+			}
+			const endings: int32[] = [];
+			let defaultStmts: Node[] = [];
+			for (const c of d.switchCases) {
+				const cd = c.data as SwitchCaseData;
+				if (cd.isDefault) {
+					defaultStmts = cd.caseStmts;
+					continue;
+				}
+				const forkIdx = emitFork(ctx);
+				for (const s of cd.caseStmts) { walkStmt(s, ctx); }
+				endings.push(emitGoto(ctx));
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+			}
+			for (const s of defaultStmts) { walkStmt(s, ctx); }
+			patchAllHere(ctx, endings);
 		},
 		NodeKind.ExportDecl => {
 			walkStmt((node.data as ExportDeclData).exportedDecl, ctx);
@@ -360,32 +405,28 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as ForStmtData;
 			walkStmt(d.forInit, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.forLabel);
 			walkExpr(d.forCondition, ctx);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.forBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			walkStmt(d.forUpdate, ctx);
 			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
 			walkExpr(d.forOfIterable, ctx);
 			const condIdx = ctx.cfg.length;
-			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [], label: "" };
-			ctx.loops.push(loopInfo);
+			const loopInfo = pushLoop(ctx, d.forOfLabel);
 			const forkIdx = emitFork(ctx);
 			walkStmt(d.forOfBody, ctx);
+			patchAllHere(ctx, loopInfo.continuePatches);
 			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			for (const bIdx of loopInfo.breakPatches) {
-				patchDest(ctx, bIdx, ctx.cfg.length);
-			}
+			patchAllHere(ctx, loopInfo.breakPatches);
 			ctx.loops.pop();
 		},
 		// Default: for any unknown statement kind, descend via the canonical
@@ -418,6 +459,7 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 		cfg: [],
 		rootSym,
 		loops: [],
+		tries: [],
 	};
 	walkStmt(body, ctx);
 	return finalizeCfg(ctx);
@@ -672,6 +714,37 @@ test "def in one branch makes other last-read" {
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
 	const use = findFirstUse(cfg);
 	assert !isLastReadCfgNode(cfg, use.n);
+}
+
+function firstUseIsLastRead(code: string, name: string): boolean {
+	const body = getBody(code);
+	if (body == null) throw new Error(`parse failed: ${code}`);
+	const cfg = buildCfgForName(body, name);
+	return isLastReadCfgNode(cfg, findFirstUse(cfg).n);
+}
+
+test "a def in one switch case does not end the path through a later case" {
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; case 2: use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { default: use(x); case 1: x = 2; }", "x");
+	assert firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: x = 3; }", "x");
+}
+
+test "a throw inside try reaches the catch" {
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; throw e; } catch (e) { use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; try { try { const y = x; throw e; } finally { } } catch (e) { use(x); }", "x");
+	assert firstUseIsLastRead("let x = 1; try { const y = x; throw e; } catch (e) { x = 2; }", "x");
+}
+
+test "a call inside try forks to the catch before a later def" {
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; boom(); x = 2; } catch (e) { use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; const z = new Box(); x = 2; } catch (e) { use(x); }", "x");
+	assert firstUseIsLastRead("let x = 1; const y = x; boom(); x = 2; try { } catch (e) { use(x); }", "x");
+}
+
+test "continue goes through the loop condition or update" {
+	assert !firstUseIsLastRead("let x = 1; do { x = 2; const y = x; if (c) { continue; } x = 3; } while (x > 0);", "x");
+	assert !firstUseIsLastRead("let x = 1; for (let i = 0; i < n; i = x) { x = 2; const y = x; if (c) { continue; } x = 3; }", "x");
 }
 
 test "return terminates path" {
