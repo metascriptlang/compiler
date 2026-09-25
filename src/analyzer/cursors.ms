@@ -264,6 +264,15 @@ function allRoots(node: Node, result: Symbol[]): void {
 	};
 }
 
+function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
+	if (!containsPointer(destType, 0)) return;
+	const sources: Symbol[] = [];
+	allRoots(src, sources);
+	for (const t of targets) {
+		for (const s of sources) { ufConnect(p, t, s); }
+	}
+}
+
 function potentialMutationViaArg(p: Partitions, arg: Node): void {
 	if (arg == null || arg.kind == NodeKind.HiddenAddr) return;
 	if (!containsPointer(arg.nodeType, 0)) return;
@@ -608,6 +617,9 @@ function trav(p: Partitions, node: Node | null): void {
 			p.inAsgnSource += 1;
 			trav(p, d.initializer);
 			p.inAsgnSource -= 1;
+			if (node.resolvedSym != null && d.initializer != null) {
+				connectStore(p, [node.resolvedSym], node.resolvedSym.symbolType, d.initializer);
+			}
 			deps(p, node.resolvedSym, d.initializer);
 		},
 
@@ -623,6 +635,7 @@ function trav(p: Partitions, node: Node | null): void {
 				const lhsRoots: Symbol[] = [];
 				allRoots(d.left, lhsRoots);
 				for (const r of lhsRoots) { potentialMutation(p, r); }
+				connectStore(p, lhsRoots, d.left.nodeType, d.right);
 
 				// Cursor deps for assignment
 				const lhs = getIdentSym(d.left);
@@ -1069,4 +1082,28 @@ test "passing a value without references keeps the borrow a cursor" {
 	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
 	inferCursors(body);
 	assert isCursorNamed(body, "c");
+}
+
+test "a field store joins the stored object to the target's graph" {
+	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mid = m; const z = m.child; t.mid.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "z");
+}
+
+test "an element store joins the stored object to the array's graph" {
+	const body = getFuncNamed(BOXES + "function f(arr: Holder[]): void { const m = new Holder(\"o\"); arr[0] = m; const z = m.child; arr[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "z");
+}
+
+test "a declaration holding a local joins the local to its graph" {
+	const body = getFuncNamed(BOXES + "class Wrap { h: Holder; constructor(h: Holder) { this.h = h; } }\nfunction f(): void { const m = new Holder(\"o\"); const w = new Wrap(m); const z = m.child; w.h.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "z");
+}
+
+test "storing an array literal joins its elements to the target's graph" {
+	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mids = [m]; const z = m.child; t.mids[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "z");
 }
