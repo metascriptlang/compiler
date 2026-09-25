@@ -14,6 +14,8 @@ import {
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
+	UpdateExprData, HiddenDerefData,
+	ArrayLiteralData, ObjectLiteralData, SpreadExprData,
 } from "../ast/node";
 import {
 	createUnion, inferredType, nullType, neverType,
@@ -1154,15 +1156,6 @@ function extractNullFromType(t: Type | null): Type | null {
 	return t;
 }
 
-// narrowByAssignment — called when walking a FlowFlag.Assignment node.
-// Returns the RHS type if the assignment's target matches `refNode`, else
-// null. Constrains the result to a subtype of `declared` (assignment
-// narrowing is always bounded by the declared type). Handles:
-//   1. BinaryExpr with `=`            — `x = rhs`
-//   2. VariableDecl with initializer  — `let x = rhs` / `const x = rhs`
-// Compound assignments (`+=`, `-=`), UpdateExpr (`x++`, `--x`), and
-// destructuring assignments fall through to `null` — the caller widens to
-// `declared` by tail-recursing to the antecedent, which is the safe default.
 // Hidden conversions are repr plumbing (fitNode's variant↔union wrap/project);
 // the flow fact lives on the expression underneath.
 function skipHiddenConv(n: Node): Node {
@@ -1176,10 +1169,15 @@ function skipHiddenConv(n: Node): Node {
 
 function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): Type | null {
 	if (node == null) return null;
+	if (node.kind == NodeKind.UpdateExpr) {
+		const target = (node.data as UpdateExprData).updateArg;
+		return target != null && holdsBelowTop(refNode, target) ? declared : null;
+	}
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator != "=") return null;
 		if (d.left == null) return null;
+		if (patternWritesInto(d.left, refNode)) return declared;
+		if (d.operator != "=") return null;
 		if (!isMatchingReference(d.left, refNode)) {
 			return assignsUncheckedName(d.left, refNode) ? declared : null;
 		}
@@ -1206,6 +1204,72 @@ function assignsUncheckedName(left: Node, refNode: Node): boolean {
 	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
 	if (left.resolvedSym != null) return false;
 	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
+}
+
+function stripHidden(n: Node | null): Node | null {
+	let walk = n;
+	while (walk != null) {
+		if (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr) {
+			walk = (walk.data as HiddenDerefData).expr;
+		} else if (walk.kind == NodeKind.HiddenStdConv || walk.kind == NodeKind.HiddenSubConv) {
+			walk = (walk.data as HiddenStdConvData).convExpr;
+		} else {
+			return walk;
+		}
+	}
+	return walk;
+}
+
+function sameLocation(part: Node | null, target: Node): boolean {
+	const p = stripHidden(part);
+	const t = stripHidden(target);
+	if (p == null || t == null) return false;
+	if (isMatchingReference(p, t)) return true;
+	if (p.kind != t.kind) return false;
+	if (t.kind == NodeKind.Identifier) {
+		return t.resolvedSym == null
+			&& (t.data as IdentifierData).name == (p.data as IdentifierData).name;
+	}
+	if (t.kind == NodeKind.MemberExpr) {
+		const pd = p.data as MemberExprData;
+		const td = t.data as MemberExprData;
+		return pd.property == td.property && sameLocation(pd.object, td.object);
+	}
+	return false;
+}
+
+function holdsBelowTop(refNode: Node, target: Node): boolean {
+	const top = stripHidden(refNode);
+	if (top == null) return false;
+	if (top.kind == NodeKind.MemberExpr) {
+		const obj = (top.data as MemberExprData).object;
+		return sameLocation(obj, target) || holdsBelowTop(obj, target);
+	}
+	if (top.kind == NodeKind.ArrayAccess) {
+		const ad = top.data as ArrayAccessData;
+		return sameLocation(ad.array, target) || sameLocation(ad.index, target)
+			|| holdsBelowTop(ad.array, target);
+	}
+	return false;
+}
+
+function patternWritesInto(target: Node, refNode: Node): boolean {
+	const t = stripHidden(target);
+	if (t == null) return false;
+	if (t.kind == NodeKind.ArrayLiteral) {
+		for (const el of (t.data as ArrayLiteralData).elements) {
+			const inner = el.kind == NodeKind.SpreadExpr ? (el.data as SpreadExprData).spreadArg : el;
+			if (inner != null && (sameLocation(refNode, inner) || patternWritesInto(inner, refNode))) return true;
+		}
+		return false;
+	}
+	if (t.kind == NodeKind.ObjectLiteral) {
+		for (const prop of (t.data as ObjectLiteralData).properties) {
+			if (prop != null && (sameLocation(refNode, prop) || patternWritesInto(prop, refNode))) return true;
+		}
+		return false;
+	}
+	return holdsBelowTop(refNode, t);
 }
 
 // Constrain an assigned value's type to remain within the variable's declared
