@@ -5,8 +5,8 @@
 // or reaches a closure (reference tyProc ccClosure arm).
 //
 // Identity for the back-edge check and the recursion guard is the resolved
-// type NAME (typeName | anonTypeName | monoInstanceName) — the MS-native ItemId
-// under per-module type copies (NIM-REF CK-19).
+// type NAME (typeName | anonTypeName | monoInstanceName; typeKey for an array) —
+// the MS-native ItemId under per-module type copies (NIM-REF CK-19).
 //
 // Intermediate results depend on the walk origin and MUST NOT be memoized;
 // only entry-level answers go to the caller-owned caches (reference: Nim uses
@@ -19,7 +19,7 @@
 import { Type, TypeKind, TypeFlag } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
 import { isAwaitable, unwrapRefNullUnion, isUnresolvedType } from "../checker/types";
-import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
 function typeIdentity(t: Type): string {
@@ -27,6 +27,7 @@ function typeIdentity(t: Type): string {
 		if (t.typeName != "") return monoInstanceName(t);
 		return "";
 	}
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) return typeKey(t);
 	if (t.typeName != "" && !isAnonTypeName(t.typeName)) return t.typeName;
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
@@ -87,7 +88,13 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			}
 			return cfaAux(t.typeReturn, origKey, withRef, marker);
 		},
-		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => cfaAux(t.typeReturn, origKey, withRef, marker),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => {
+			const key = typeIdentity(t);
+			if (withRef && key == origKey) return true;
+			if (nameSetContains(marker, key)) return false;
+			nameSetAdd(marker, key);
+			return cfaAux(t.typeReturn, origKey, withRef, marker);
+		},
 		TypeKind.Varargs => {
 			if (t.typeChildren.length > 0) return cfaAux(t.typeChildren[0], origKey, withRef, marker);
 			return false;
