@@ -1053,6 +1053,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (isNumeric(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
 		return TypeRelation.FromLiteral;
 	}
+	if (isIntegerType(actual) && isNumeric(formal) && !isIntegerType(formal)) {
+		return TypeRelation.Convertible;
+	}
 	// Numeric widening: sized → Number
 	if (isNumeric(actual) && formal.kind == TypeKind.Number) {
 		return TypeRelation.IntConv;
@@ -1176,7 +1179,7 @@ export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], min
 // matches (context-sensitive args in two-pass overload resolution — object
 // literals and arrow functions are re-checked with the winner's param types in
 // Pass 2, so Pass 1 scoring must not reject them for partial/incomplete typing).
-export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[]): CandidateScore {
+export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[], literalRels: int32[] | null = null): CandidateScore {
 	const score = emptyCandidateScore();
 	if (argTypes.length < minArity || argTypes.length > paramTypes.length) {
 		score.exactMatches = -1;
@@ -1188,7 +1191,9 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			score.subtypeMatches = score.subtypeMatches + 1;
 			continue;
 		}
-		const rel = typeRelation(paramTypes[i], argTypes[i]);
+		const rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
+			? literalRels[i] as TypeRelation
+			: typeRelation(paramTypes[i], argTypes[i]);
 		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
@@ -1476,7 +1481,7 @@ test "unknown = generic" {
 	assert typeRelation(inferredType(), numberType()) == TypeRelation.Generic;
 }
 
-test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.IntConv; }
+test "an integer into a float formal is a conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.Convertible; }
 
 test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.Subtype; }
 
@@ -1491,7 +1496,7 @@ test "type mismatch" { assert scoreCandidate([numberType()], [stringType()]) == 
 
 test "mixed scoring" {
 	const score = scoreCandidate([numberType(), numberType()], [numberType(), createPrimitive(TypeKind.Int32)]);
-	assert score == 8; // 6 (exact) + 2 (intconv)
+	assert score == 7; // 6 (exact) + 1 (convertible)
 }
 
 test "source union all match" {
