@@ -706,9 +706,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// TU (consumer claimed hook ownership first via split-ownership design),
 		// emit extern forward prototypes so the linker resolves them.
 		ensureDrcProto(g, d.name, node.resolvedSym);
-		// Built-in numeric constants → C99 macros
-		if (d.name == "NaN") { ctx.results.push("NAN"); return; }
-		if (d.name == "Infinity") { ctx.results.push("INFINITY"); return; }
+		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
+		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
+		if (builtin == "Infinity") { ctx.results.push("INFINITY"); return; }
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (d.name.startsWith("$sink_") && p != null) {
 			let alreadySeen = false;
@@ -1303,6 +1303,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == ">>>") {
 			ctx.results.push(genLogicalShr(g, node, d.left.nodeType, left, finalRight));
+			return;
+		}
+		if ((d.operator == "<<" || d.operator == ">>") && isShiftOperand(d.left.nodeType)) {
+			ctx.results.push(genShift(g, node, d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
 		// C has no exponent operator; pow() is the call form, same shape as fmod
@@ -2899,7 +2903,7 @@ function mapBinaryOp(g: CGen, op: string): string {
 
 function shiftOperandBits(t: Type | null): int32 {
 	if (t == null) return 32;
-	if (t.kind == TypeKind.Distinct && t.typeReturn != null) return shiftOperandBits(t.typeReturn);
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return shiftOperandBits(t.typeReturn);
 	return match (t.kind) {
 		TypeKind.Int8 | TypeKind.Uint8 => 8,
 		TypeKind.Int16 | TypeKind.Uint16 => 16,
@@ -2913,6 +2917,34 @@ function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, lef
 	const unsignedType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
 	return `((${resultType})((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+}
+
+function integerTypeOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return integerTypeOf(t.typeReturn);
+	return isIntegerType(t) ? t : null;
+}
+
+function isShiftOperand(t: Type | null): boolean {
+	return t == null || integerTypeOf(t) != null;
+}
+
+function isUnsignedInteger(t: Type): boolean {
+	return t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64;
+}
+
+function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | null, left: string, right: string): string {
+	const bits = shiftOperandBits(leftType);
+	if (bits < 32) {
+		const promoted = op == "<<" ? `(uint32_t)(${left}) << ((uint32_t)(${right}) & 31)` : `(int32_t)(${left}) >> ((uint32_t)(${right}) & 31)`;
+		return `((int32_t)(${promoted}))`;
+	}
+	const lt = integerTypeOf(leftType);
+	if (op == ">>" && lt != null && isUnsignedInteger(lt)) return genLogicalShr(g, node, leftType, left, right);
+	const countType = `uint${bits}_t`;
+	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : `int${bits}_t`;
+	const operandType = op == "<<" ? countType : `int${bits}_t`;
+	return `((${resultType})((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
 }
 
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion

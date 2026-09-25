@@ -362,7 +362,7 @@ export function mangledGlobalName(sym: Symbol | null, name: string): string {
 
 export function mangleFieldName(name: string): string {
 	const mangled = mangle(name);
-	if (isCKeyword(mangled)) return mangled + "_0";
+	if (isCKeyword(mangled) || isCMacroName(mangled)) return mangled + "_0";
 	return mangled;
 }
 
@@ -385,7 +385,14 @@ function isCStdlibName(name: string): boolean {
 		"read" | "write" | "open" | "close" | "stat" | "fstat" | "lstat" => true,
 		"getenv" | "setenv" | "system" | "remove" | "rename" => true,
 		"isdigit" | "isalpha" | "isalnum" | "isspace" | "toupper" | "tolower" => true,
-		"stdin" | "stdout" | "stderr" => true,
+		_ => false,
+	};
+}
+
+function isCMacroName(name: string): boolean {
+	return match (name) {
+		"stdin" | "stdout" | "stderr" | "errno" | "EOF" => true,
+		"NAN" | "INFINITY" | "assert" | "offsetof" => true,
 		_ => false,
 	};
 }
@@ -394,7 +401,7 @@ function isCStdlibName(name: string): boolean {
 
 export function safeName(name: string): string {
 	const mangled = mangle(name);
-	if (isCKeyword(mangled) || isCStdlibName(mangled)) return mangled + "_";
+	if (isCKeyword(mangled) || isCStdlibName(mangled) || isCMacroName(mangled)) return mangled + "_";
 	return mangled;
 }
 
@@ -515,6 +522,17 @@ test "mangledFunctionName no modulePath with overloadIdx" {
 test "normal field" {
 	assert mangleFieldName("x") == "x";
 	assert mangleFieldName("myField") == "myField";
+}
+
+test "a field named after a standard-header macro is escaped" {
+	assert mangleFieldName("errno") == "errno_0";
+	assert mangleFieldName("stdout") == "stdout_0";
+	assert mangleFieldName("NAN") == "NAN_0";
+}
+
+test "a stdlib function name is a valid field name" {
+	assert mangleFieldName("time") == "time";
+	assert mangleFieldName("read") == "read";
 }
 
 test "keyword field" {

@@ -229,3 +229,8 @@ import "./bug212Float32ConstFold";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug300VecRefSinkTakesPayload";
 import "./bug480UnsignedShiftC";
+import "./bug481ShiftCountMaskC";
+import "./bug482ShadowedNanInfinityC";
+import "./bug483LibcMacroFieldNamesC";
+import "./bug484FinallyLeavesItsTryC";
+import "./bug485ExceptionInFlightAcrossFinallyC";
