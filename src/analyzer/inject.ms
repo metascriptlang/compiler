@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -202,14 +202,49 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 
 function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ta = node.data as TypeAssertionData;
+	// Reference parity: a cast between a managed and an unmanaged representation is nkCast,
+	// copied whole into a sink (injectdestructors p sinkArg → passCopyToSink); a conversion
+	// between managed types forwards the mode to its operand like nkConv/nkObjUpConv.
+	if (mode == DrcMode.SinkArg && isReprCast(node, dctx)) {
+		ta.asExpr = processNode(ta.asExpr, dctx, DrcMode.Normal);
+		return passCopyToSink(node, dctx);
+	}
 	ta.asExpr = processNode(ta.asExpr, dctx, mode);
 	return node;
 }
 
+function isReprCast(node: Node, dctx: DrcContext): boolean {
+	const operand = (node.data as TypeAssertionData).asExpr;
+	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
+	return sinkClassify(operand.nodeType, dctx).needsCleanup != sinkClassify(node.nodeType, dctx).needsCleanup;
+}
+
+function rhsMode(rhs: Node): DrcMode {
+	return rhs.kind == NodeKind.HiddenStdConv || rhs.kind == NodeKind.HiddenSubConv || rhs.kind == NodeKind.TypeAssertion
+		? DrcMode.SinkArg : DrcMode.Consumed;
+}
+
 function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cv = node.data as HiddenStdConvData;
+	if (isUnionProjection(node)) {
+		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
+		if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null
+				&& sinkClassify(node.nodeType, dctx).needsCleanup) {
+			return passCopyToSink(node, dctx);
+		}
+		return node;
+	}
 	cv.convExpr = processNode(cv.convExpr, dctx, mode);
 	return node;
+}
+
+function isUnionProjection(node: Node): boolean {
+	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
+	const target = (node.data as HiddenStdConvData).convType;
+	if (target == null) return false;
+	if (unwrapRefNullUnion(target) != null) return true;
+	if (isMaybeType(target)) return !isTagCarriedUnion(unwrapMaybeType(target));
+	return !isTagCarriedUnion(target);
 }
 
 function processUnaryWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -1059,6 +1094,10 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
 		},
+		// Conversions sink; their operand was walked in SinkArg mode (Reference: nkHiddenSubConv/nkConv/nkCast → genSink(p(ri, sinkArg)))
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => {
+			return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+		},
 		// Move expression → sink + wasMoved on source
 		NodeKind.MoveExpr => {
 			const md = rhs.data as MoveExprData;
@@ -1699,7 +1738,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// depth so processCallExpr keeps its args as borrows (scope outlives flight).
 	const parkedFutInit = stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.AwaitHandle);
 	if (parkedFutInit) dctx.parkedInitDepth += 1;
-	d.initializer = processNode(d.initializer, dctx, DrcMode.Consumed);
+	d.initializer = processNode(d.initializer, dctx, rhsMode(d.initializer));
 	if (parkedFutInit) dctx.parkedInitDepth -= 1;
 	const init = d.initializer;
 
@@ -1879,8 +1918,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
 	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, sym);
 
-	// Process RHS recursively with Consumed mode
-	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
+	bd.right = processNode(bd.right, dctx, rhsMode(bd.right));
 
 	// Reference parity: when dest appears in the RHS (e.g., result = f(result)),
 	// processNode emits wasMoved(dest) as pending because isLastRead is true
@@ -1939,14 +1977,6 @@ function skipConversionWrappers(expr: Node): Node {
 // ONLY returns true for RcKind.Ref — strings/arrays/named types need passCopyToSink
 // (deep copy), not msIncref (pointer refcount bump). See processReturn for those.
 function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
-	// A stamped union→member projection (narrowUnionToVariant) with a pointer
-	// surface re-materializes the payload as a fresh owned heap cell in codegen;
-	// increfing by the underlying borrowed reference strands that cell one ref
-	// high (measured: guard ledger Fake alloc=5 destroy=3).
-	if (expr.kind == NodeKind.HiddenSubConv && expr.variantSlot > 0) {
-		const cv = expr.data as HiddenStdConvData;
-		if (cv.convType != null && cv.convType.kind == TypeKind.Ref) return false;
-	}
 	return needsReturnIncrefBare(skipConversionWrappers(expr), dctx);
 }
 

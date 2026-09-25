@@ -245,3 +245,4 @@ import "./bug527NarrowingDiesWithItsPrefix";
 import "./bug531CallByAddressDropsNarrowing";
 import "./bug528AliasedConditionGoesStale";
 import "./bug529MemberOnNever";
+import "./bug213ExternScalarTakesAddress";

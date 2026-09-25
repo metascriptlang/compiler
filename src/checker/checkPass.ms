@@ -1100,6 +1100,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					openStaticReceiverScope(ctx, classType.sym);
 				}
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
+					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
+				}
 				if (pd.propIsStatic) closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
 			}
@@ -4000,7 +4003,7 @@ function findFlowRef(root: Node | null, targetName: string): Node {
 			const d = root.data as HiddenStdConvData;
 			if (hit == null) hit = findFlowRef(d.convExpr, targetName);
 		},
-		NodeKind.ExprStmt => {
+		NodeKind.ExprStmt | NodeKind.HiddenDeref => {
 			const d = root.data as ExprStmtData;
 			if (hit == null) hit = findFlowRef(d.expr, targetName);
 		},
@@ -4119,11 +4122,11 @@ test "flow: string DU narrowing produces correct variant" {
 	// Query the flow — should narrow to the "circle" variant (a struct)
 	const narrowed = getFlowTypeOfReference(sRef, declared);
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	// The "circle" variant has `kind` and `radius` fields
-	assert narrowed.typeNames != null;
+	assert narrowed.typeReturn!.typeNames != null;
 	let hasRadius = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn!.typeNames) {
 		if (fn == "radius") { hasRadius = true; break; }
 	}
 	assert hasRadius;
@@ -4156,10 +4159,10 @@ test "flow: string DU negative narrowing (else branch)" {
 	// After the if-then returns early, `s` is narrowed to NOT "circle" →
 	// the "square" variant (only remaining).
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
-	assert narrowed.typeNames != null;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
+	assert narrowed.typeReturn!.typeNames != null;
 	let hasSide = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn!.typeNames) {
 		if (fn == "side") { hasSide = true; break; }
 	}
 	assert hasSide;
@@ -4243,9 +4246,9 @@ test "flow: narrowing inside loop body via discriminant check" {
 	// must traverse the TrueCondition(s.kind === "circle") correctly.
 	const narrowed = getFlowTypeOfReference(sRef, declared);
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	let hasRadius = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn!.typeNames) {
 		if (fn == "radius") { hasRadius = true; break; }
 	}
 	assert hasRadius;
@@ -4308,7 +4311,7 @@ test "flow: do-while narrowing inside body" {
 	assert declared.kind == TypeKind.Union;
 	const narrowed = getFlowTypeOfReference(sRef, declared);
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 }
 
 test "flow: classic for loop narrowing inside body" {
@@ -4339,10 +4342,10 @@ test "flow: classic for loop narrowing inside body" {
 	assert declared.kind == TypeKind.Union;
 	const narrowed = getFlowTypeOfReference(sRef, declared);
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	// Narrowed to the "square" variant
 	let hasSide = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn!.typeNames) {
 		if (fn == "side") { hasSide = true; break; }
 	}
 	assert hasSide;
@@ -4465,9 +4468,9 @@ test "flow: switch clause narrows DU" {
 	assert declared.kind == TypeKind.Union;
 	const narrowed = getFlowTypeOfReference(sRef, declared);
 	assert narrowed != null;
-	assert narrowed.kind == TypeKind.Struct;
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	let hasRadius = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn!.typeNames) {
 		if (fn == "radius") { hasRadius = true; break; }
 	}
 	assert hasRadius;

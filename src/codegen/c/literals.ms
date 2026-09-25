@@ -111,7 +111,7 @@ function spellCNumber(value: number, isFloat: boolean): string {
 
 // Literal emission for a NumberLiteral node: integers take the exact int64,
 // floats (and integer literals in float position) keep the double formatter.
-export function formatCNumberLit(d: NumberLiteralData, ty: Type | null = null): string {
+export function formatCNumberLit(d: Readonly<NumberLiteralData>, ty: Type | null = null): string {
 	const wantsFloat = ty != null
 		&& (ty.kind == TypeKind.Number || ty.kind == TypeKind.Float32 || ty.kind == TypeKind.Float64);
 	const wantsUint64 = ty != null && ty.kind == TypeKind.Uint64;
