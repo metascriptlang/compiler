@@ -137,7 +137,7 @@ export class CBlock {
 	init: Builder;         // cpsInit for this block
 	stmts: Builder;        // cpsStmts for this block
 	isLoop: boolean;
-	nestedFinallyDepth: number;  // snapshot of nestedFinally.length at block entry (reference: TBlock.nestedTryStmts)
+	nestedTryDepth: number;  // snapshot of CProc.nestedTryStmts.length at block entry
 	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
 	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
 }
@@ -150,10 +150,15 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		init: createBuilder(),
 		stmts: createBuilder(),
 		isLoop,
-		nestedFinallyDepth: 0,
+		nestedTryDepth: 0,
 		breakUsed: false,
 		continueUsed: false,
 	};
+}
+
+export interface CTryEntry {
+	fin: Readonly<Node>;
+	label: string;
 }
 
 // ===== CProc — per-function state (standard reference parity) =====
@@ -170,8 +175,7 @@ export class CProc {
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
-	nestedFinally: Readonly<Node>[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
-	errorTargets: string[];    // stack of goto labels for error propagation (reference: p.nestedTryStmts[].label → raiseExit)
+	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
@@ -217,8 +221,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		seenSinks: [],
 		indirectParams: [],
 		indirectLocals: [],
-		nestedFinally: [],
-		errorTargets: [],
+		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
 		sigConflicts: [],
@@ -434,7 +437,7 @@ export function pProcStmts(p: CProc): Builder {
 export function pushBlock(p: CProc, isLoop: boolean): void {
 	p.labels += 1;
 	const block = createBlock(p.labels, isLoop);
-	block.nestedFinallyDepth = p.nestedFinally.length;  // reference: TBlock.nestedTryStmts snapshot
+	block.nestedTryDepth = p.nestedTryStmts.length;
 	p.blocks.push(block);
 	if (isLoop) p.withinLoop += 1;
 }

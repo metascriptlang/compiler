@@ -7,7 +7,7 @@ import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtDat
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
-	CGen, CProc,
+	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
 	CSection, addLine, sec, nameSetAdd, addCGenError,
@@ -23,22 +23,22 @@ import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, 
 // try/finally blocks (break, continue, return), inline the finally body
 // before the jump. Delta = current nesting minus snapshot at target block.
 
-function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
-	if (howManyFinallys <= 0) return;
+function blockLeaveActions(g: CGen, p: CProc, howManyTrys: number): void {
+	if (howManyTrys <= 0) return;
 	// Reference parity: pop entries before generating
 	// finally bodies, then restore. Prevents infinite recursion if a finally
 	// body contains return/break which would re-trigger blockLeaveActions.
-	const stack: Readonly<Node>[] = [];
-	for (let i = 0; i < howManyFinallys; i += 1) {
-		const fin = p.nestedFinally.pop();
-		stack.push(fin);
-		if (fin != null) {
-			genStmt(g, p, fin);
+	const stack: CTryEntry[] = [];
+	for (let i = 0; i < howManyTrys; i += 1) {
+		const entry = p.nestedTryStmts.pop();
+		stack.push(entry);
+		if (entry.fin != null) {
+			genStmt(g, p, entry.fin);
 		}
 	}
 	// Restore in reverse order (innermost last)
 	for (let j = stack.length - 1; j >= 0; j -= 1) {
-		p.nestedFinally.push(stack[j]);
+		p.nestedTryStmts.push(stack[j]);
 	}
 }
 
@@ -216,15 +216,18 @@ function exprTopIsRaisingCall(exprNode: Readonly<Node>): boolean {
 	return false;
 }
 
+function raiseTarget(p: CProc): string {
+	if (p.nestedTryStmts.length == 0) {
+		p.beforeRetNeeded = true;
+		return "BeforeRet_";
+	}
+	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
+}
+
 function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!exprTopIsRaisingCall(exprNode)) return;
-	if (p.errorTargets.length == 0) {
-		p.beforeRetNeeded = true;
-		emitStmtsLine(p, "if (msErr) goto BeforeRet_;");
-		return;
-	}
-	emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
@@ -535,7 +538,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// can find the loop boundary and run pending finally cleanup before jumping.
 	// Without it, genBreak/genContinue find no loop block and emit a bare
 	// break/continue that skips finally — leaking DRC temps and violating the
-	// try/finally contract. nestedFinallyDepth is snapshot here so the delta is
+	// try/finally contract. nestedTryDepth is snapshot here so the delta is
 	// relative to finallys *enclosing* the loop, not those opened inside the body.
 	pushBlock(p, true);
 	const whileBlk = p.blocks[p.blocks.length - 1];
@@ -623,7 +626,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			emitStmtsLine(p, `${snippet};`);
 			emitCallRaiseCheck(p, d.argument);
 		}
-		blockLeaveActions(g, p, p.nestedFinally.length);
+		blockLeaveActions(g, p, p.nestedTryStmts.length);
 		emitStmtsLine(p, "return;");
 		return;
 	}
@@ -639,7 +642,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				emitStmtsLine(p, `*__result = ${snippet};`);
 			}
 		} else {
-			if (p.nestedFinally.length > 0) {
+			if (p.nestedTryStmts.length > 0) {
 				// Reference parity: save return value to temp before finally cleanup.
 				// blockLeaveActions may emit wasMoved that zeros the returned local.
 				// Store in temp first, then run cleanup, then return temp.
@@ -647,10 +650,10 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				if (retType != "" && retType != "void") {
 					const tmp = getTemp(p, retType);
 					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
-					blockLeaveActions(g, p, p.nestedFinally.length);
+					blockLeaveActions(g, p, p.nestedTryStmts.length);
 					emitStmtsLine(p, `return ${tmp.snippet};`);
 				} else {
-					blockLeaveActions(g, p, p.nestedFinally.length);
+					blockLeaveActions(g, p, p.nestedTryStmts.length);
 					emitStmtsLine(p, `return ${snippet};`);
 				}
 			} else {
@@ -660,7 +663,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		}
 	}
 	// Reference parity: return must run all enclosing finally blocks
-	blockLeaveActions(g, p, p.nestedFinally.length);
+	blockLeaveActions(g, p, p.nestedTryStmts.length);
 	emitStmtsLine(p, "return;");
 }
 
@@ -678,7 +681,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
 	}
 	if (idx >= 0) {
-		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		const delta = p.nestedTryStmts.length - p.blocks[idx].nestedTryDepth;
 		blockLeaveActions(g, p, delta);
 	}
 	if (d.breakLabel != "" && idx >= 0) {
@@ -699,7 +702,7 @@ function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
 	}
 	if (idx >= 0) {
-		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		const delta = p.nestedTryStmts.length - p.blocks[idx].nestedTryDepth;
 		blockLeaveActions(g, p, delta);
 		if (d.continueLabel != "") { p.blocks[idx].continueUsed = true; }
 	}
@@ -711,12 +714,7 @@ function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 // A raise transfers control to the nearest enclosing error target (catch/finally),
 // or to the BeforeRet_ epilogue when there is no enclosing try (raiseInstr L==0).
 function emitErrorGoto(p: CProc): void {
-	if (p.errorTargets.length > 0) {
-		emitStmtsLine(p, `goto ${p.errorTargets[p.errorTargets.length - 1]};`);
-		return;
-	}
-	p.beforeRetNeeded = true;
-	emitStmtsLine(p, "goto BeforeRet_;");
+	emitStmtsLine(p, `goto ${raiseTarget(p)};`);
 }
 
 function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
@@ -763,11 +761,6 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const finallyLabel = "__finally_" + labelId;
 	const endLabel = "__end_" + labelId;
 
-	// Reference parity: push finally body onto stack
-	// so that break/continue/return inside the try body can emit cleanup.
-	const fin = d.finallyBody;
-	p.nestedFinally.push(fin);
-
 	emitStmtsLine(p, "{");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
@@ -782,15 +775,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// still swallows.
 	const hasCatch = d.hasCatchClause;
 
-	// Error-propagation target for throws / raising calls inside the try body.
-	// A raise transfers control here instead of falling through — required for
-	// correctness in straight-line code and to escape async state-dispatch loops.
-	p.errorTargets.push(hasCatch ? catchLabel : finallyLabel);
+	p.nestedTryStmts.push({ fin: d.finallyBody, label: hasCatch ? catchLabel : finallyLabel });
 
-	// Try body
 	genStmt(g, p, d.tryBody);
-
-	p.errorTargets.pop();
 
 	if (hasCatch) {
 		// After try body, check error flag
@@ -824,15 +811,16 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		// `LA<nextExcept>_:` right after the branch body, so a raise inside a
 		// handler still falls into this try's finally before propagating.
 		const afterCatchLabel = "__aftercatch_" + labelId;
-		p.errorTargets.push(afterCatchLabel);
+		p.nestedTryStmts.pop();
+		p.nestedTryStmts.push({ fin: d.finallyBody, label: afterCatchLabel });
 		genStmt(g, p, d.catchBody);
-		p.errorTargets.pop();
 		emitStmtsLine(p, afterCatchLabel + ": ;");
 		setStmtsIndent(p, oldIndent + 1);
 		emitStmtsLine(p, "}");
 	}
 
-	// Finally label
+	p.nestedTryStmts.pop();
+
 	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody != null) {
@@ -845,11 +833,8 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, `msErr = ${errSave};`);
 	}
 
-	// Pop the finally entry — cleanup is now handled by the label above
-	p.nestedFinally.pop();
-
 	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after
-	// the finally must reach the ENCLOSING handler (errorTargets already popped).
+	// the finally must reach the ENCLOSING handler.
 	emitStmtsLine(p, "if (msErr) {");
 	setStmtsIndent(p, oldIndent + 2);
 	emitErrorGoto(p);
