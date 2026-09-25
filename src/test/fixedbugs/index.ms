@@ -230,3 +230,4 @@ import "./bug481ShiftCountMaskC";
 import "./bug482ShadowedNanInfinityC";
 import "./bug483LibcMacroFieldNamesC";
 import "./bug484FinallyLeavesItsTryC";
+import "./bug485ExceptionInFlightAcrossFinallyC";

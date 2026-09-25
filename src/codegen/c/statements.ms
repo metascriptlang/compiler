@@ -35,6 +35,9 @@ function blockLeaveActions(g: CGen, p: CProc, howManyTrys: number): void {
 		if (entry.fin != null) {
 			genStmt(g, p, entry.fin);
 		}
+		if (entry.inFlightException != "") {
+			emitStmtsLine(p, `msDecref((void*)${entry.inFlightException});`);
+		}
 	}
 	// Restore in reverse order (innermost last)
 	for (let j = stack.length - 1; j >= 0; j -= 1) {
@@ -766,7 +769,11 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	setStmtsIndent(p, oldIndent + 1);
 
 	const errSave = "__oldErr_" + labelId;
+	const excSave = "__oldExc_" + labelId;
 	emitStmtsLine(p, `bool ${errSave} = MS_FALSE;`);
+	if (d.finallyBody != null) {
+		emitStmtsLine(p, `msException* ${excSave} = NULL;`);
+	}
 
 	// Reference parity (ccgstmts.nim genTryGoto: `hasExcept = t[1].kind ==
 	// nkExceptBranch`): handler presence is STRUCTURAL. `try/finally` carries a
@@ -775,7 +782,11 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// still swallows.
 	const hasCatch = d.hasCatchClause;
 
-	p.nestedTryStmts.push({ fin: d.finallyBody, label: hasCatch ? catchLabel : finallyLabel });
+	p.nestedTryStmts.push({
+		fin: d.finallyBody,
+		label: hasCatch ? catchLabel : finallyLabel,
+		inFlightException: "",
+	});
 
 	genStmt(g, p, d.tryBody);
 
@@ -812,7 +823,11 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		// handler still falls into this try's finally before propagating.
 		const afterCatchLabel = "__aftercatch_" + labelId;
 		p.nestedTryStmts.pop();
-		p.nestedTryStmts.push({ fin: d.finallyBody, label: afterCatchLabel });
+		p.nestedTryStmts.push({
+			fin: d.finallyBody,
+			label: afterCatchLabel,
+			inFlightException: "",
+		});
 		genStmt(g, p, d.catchBody);
 		emitStmtsLine(p, afterCatchLabel + ": ;");
 		setStmtsIndent(p, oldIndent + 1);
@@ -828,9 +843,18 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		// error flag cleared so its own raise-checks don't misfire, then restore
 		// it so a propagating exception keeps propagating.
 		emitStmtsLine(p, `${errSave} = msErr;`);
+		emitStmtsLine(p, `${excSave} = msCurrException;`);
 		emitStmtsLine(p, "msErr = MS_FALSE;");
+		emitStmtsLine(p, "msCurrException = NULL;");
+		const finRaiseLabel = "__finraise_" + labelId;
+		p.nestedTryStmts.push({ fin: null, label: finRaiseLabel, inFlightException: excSave });
 		genStmt(g, p, d.finallyBody);
+		p.nestedTryStmts.pop();
 		emitStmtsLine(p, `msErr = ${errSave};`);
+		emitStmtsLine(p, `msCurrException = ${excSave};`);
+		emitStmtsLine(p, `${excSave} = NULL;`);
+		emitStmtsLine(p, `${finRaiseLabel}:`);
+		emitStmtsLine(p, `msDecref((void*)${excSave});`);
 	}
 
 	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after

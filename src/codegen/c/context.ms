@@ -157,8 +157,9 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 }
 
 export interface CTryEntry {
-	fin: Readonly<Node>;
+	fin: Readonly<Node> | null;
 	label: string;
+	inFlightException: string;
 }
 
 // ===== CProc — per-function state (standard reference parity) =====
