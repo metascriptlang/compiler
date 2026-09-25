@@ -231,5 +231,6 @@ import "./bug482ShadowedNanInfinityC";
 import "./bug483LibcMacroFieldNamesC";
 import "./bug484FinallyLeavesItsTryC";
 import "./bug485ExceptionInFlightAcrossFinallyC";
+import "./bug486UnionDiscriminantFromTagC";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
