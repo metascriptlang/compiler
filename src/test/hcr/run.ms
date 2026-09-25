@@ -168,6 +168,48 @@ function moduleAbi(): void {
 	console.log("ok   hcrModuleAbi");
 }
 
+function emittedModuleC(dir: string, stem: string): string {
+	const debug = `${dir}/out/debug`;
+	for (const e of readDir(debug)) {
+		if (!e.startsWith("_") && e.endsWith(`Z${stem}Oms.c`)) return read(`${debug}/${e}`);
+	}
+	return "";
+}
+
+function bundleSection(bundle: string, stem: string): string {
+	const kept: string[] = [];
+	let inside = false;
+	for (const line of lines(bundle)) {
+		if (line.startsWith("// --- Module: ")) inside = line.endsWith(`/${stem} ---`);
+		if (inside) kept.push(line);
+	}
+	return kept.join("\n");
+}
+
+function localNames(): void {
+	const tag = "hcrModuleLocalNames";
+	const dir = freshDir(`${TMP}/localNames`);
+	for (const f of ["app.ms", "a.ms", "b.ms", "tpl.ms"]) copy(`${FIXTURES}/localNames/${f}`, `${dir}/${f}`);
+	const edits = ["a.ms", "aAsyncEdit.ms", "aTemplateEdit.ms"];
+	const cOf: string[] = [];
+	const jsOf: string[] = [];
+	for (const edit of edits) {
+		copy(`${FIXTURES}/localNames/${edit}`, `${dir}/a.ms`);
+		removeAll(`${dir}/out`);
+		mustBuild(tag, dir, ["build", "app.ms", "--emit=c"], `C emission failed with ${edit}`);
+		cOf.push(emittedModuleC(dir, "b"));
+		mustBuild(tag, dir, ["build", "app.ms", "--target=js", "--output=bundle.js"], `JS emission failed with ${edit}`);
+		jsOf.push(bundleSection(read(`${dir}/bundle.js`), "b"));
+	}
+	need(tag, cOf[0].contains("dollarretFut") && cOf[0].contains("tdollart"), "b's C lost its generated async and template names");
+	need(tag, jsOf[0].contains("tdollart"), "b's JS lost its generated template names");
+	for (let i = 1; i < edits.length; i += 1) {
+		need(tag, cOf[i] == cOf[0], `${edits[i]} changed the C of the untouched module b`);
+		need(tag, jsOf[i] == jsOf[0], `${edits[i]} changed the JS of the untouched module b`);
+	}
+	console.log("ok   hcrModuleLocalNames");
+}
+
 // ---- hcrIndirect: cross-module calls lowered through module tables ----
 
 interface Emitted {
@@ -468,5 +510,6 @@ console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 fsWatch();
 moduleAbi();
+localNames();
 coreLinkClang();
 indirect();
