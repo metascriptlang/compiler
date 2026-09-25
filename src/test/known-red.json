@@ -20,7 +20,8 @@
   "flaky": {
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
     "410-awaitStructSpawnStored": {"since":"e5f0ec68","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; installed msc e5f0ec68 hung 4 of 5 default runs, and [drc]/[orc] hit cell TIMEOUT after 300s while [danger] passed in the same run, 2026-09-24"},
-    "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"}
+    "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"},
+    "746-spawnStoredUnawaited": {"since":"22d2cb8f","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; [danger] cell TIMEOUT after 300s at load ~45 with every thread in msSpawnWorkerRun → write; a --danger build by the origin/main 24422bf5 compiler hung 3 of 48 runs under 60s at load ~20, 2026-09-25"}
   },
   "fmt": {},
   "guard": {},
