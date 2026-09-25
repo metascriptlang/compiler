@@ -3,8 +3,14 @@
 
 #include <string.h>
 #include "runtime/hcr.h"
+#include "runtime/core/string.h"
 
-static inline void* hcrFixtureCore(void) { return (void*)GetModuleHandleA("module.core.dll"); }
+#if defined(_WIN32)
+static inline void* hcrFixtureCore(void) { return (void*)GetModuleHandleA("module.core" MS_HCR_IMAGE_EXT); }
+#else
+static inline void* hcrFixtureCore(void) { return dlopen("module.core" MS_HCR_IMAGE_EXT, RTLD_NOW | RTLD_NOLOAD); }
+#endif
+static inline msString hcrFixtureImageExt(void) { return msStringFromCStr(MS_HCR_IMAGE_EXT); }
 static inline void hcrFixtureCallName(void* raw, const char* name) { ((void (*)(const char*))raw)(name); }
 static inline int32_t hcrFixtureCallNameInt(void* raw, const char* name) { return ((int32_t (*)(const char*))raw)(name); }
 
