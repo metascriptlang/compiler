@@ -273,6 +273,7 @@ static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
 	if (e->input->base.failed || e->input->base.cancelled) {
 		msFutureFail(e->output, e->input->base.error);
+		msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
 		free(e);
 		return;
 	}
@@ -316,6 +317,7 @@ static void msFutureThenCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, NULL);
 	}
+	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
 	free(e);
 }
 
@@ -326,7 +328,7 @@ msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
 void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
-	env->output = output; env->input = (msFuture*)input; env->onFulfilled = onFulfilled; env->typeTag = typeTag;
+	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
 	return output;
 }
@@ -362,6 +364,7 @@ static void msFutureCatchCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}
+	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected);
 	free(e);
 }
 
@@ -372,7 +375,7 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv));
-	env->output = output; env->input = (msFuture*)input; env->onRejected = onRejected; env->typeTag = typeTag;
+	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
 	return output;
 }
@@ -391,13 +394,14 @@ static void msFutureFinallyCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}
+	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
 	free(e);
 }
 
 void* msFutureFinally(void* input, msClosure onSettled) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv));
-	env->output = output; env->input = (msFuture*)input; env->onSettled = onSettled;
+	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});
 	return output;
 }

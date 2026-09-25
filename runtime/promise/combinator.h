@@ -171,7 +171,7 @@ static inline void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
         msFutureFail(e->output, e->input->base.error); \
-        free(e); \
+        msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
         return; \
     } \
     T val = ((fut_type*)e->input)->value; \
@@ -185,12 +185,12 @@ static inline void name##_cb(void* raw) { \
     } else { \
         msFutureComplete(e->output, NULL); \
     } \
-    free(e); \
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
     msFuture* output = (msFuture*)msFutureCreate(); \
     msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv)); \
-    env->output = output; env->input = (msFuture*)input; env->onFulfilled = onFulfilled; env->typeTag = 0; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = 0; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }
@@ -209,7 +209,7 @@ static void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
         msFutureFail(e->output, e->input->base.error); \
-        free(e); \
+        msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
         return; \
     } \
     void* box = e->input->value; \
@@ -227,12 +227,12 @@ static void name##_cb(void* raw) { \
     drop(&val); \
     if (failed) msFutureFail(e->output, exception); \
     else msFutureComplete(e->output, NULL); \
-    free(e); \
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
     msFuture* output = (msFuture*)msFutureCreate(); \
     msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv)); \
-    env->output = output; env->input = (msFuture*)input; env->onFulfilled = onFulfilled; env->typeTag = 0; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = 0; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }
@@ -255,12 +255,12 @@ static inline void name##_cb(void* raw) { \
         fut_type* dstT = (fut_type*)e->output; \
         msFutureCompleteT(dstT, srcT->value); \
     } \
-    free(e); \
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled); free(e); \
 } \
 static inline void* name(void* input, msClosure onSettled) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
     msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv)); \
-    env->output = output; env->input = (msFuture*)input; env->onSettled = onSettled; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }
@@ -290,12 +290,12 @@ static inline void name##_cb(void* raw) { \
         fut_type* dstT = (fut_type*)e->output; \
         msFutureCompleteT(dstT, srcT->value); \
     } \
-    free(e); \
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected); free(e); \
 } \
 static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
     msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv)); \
-    env->output = output; env->input = (msFuture*)input; env->onRejected = onRejected; env->typeTag = 3; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = 3; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }
