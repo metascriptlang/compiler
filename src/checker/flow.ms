@@ -960,7 +960,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// (matches the reference's getTypeOfDottedName + narrowTypeByAliasedCondition).
 	if (expr.kind == NodeKind.Identifier) {
 		const aliased = getAliasedCondition(expr);
-		if (aliased != null) {
+		if (aliased != null && aliasStillHolds(expr, refNode)) {
 			return narrowType(t, aliased, refNode, assumeTrue);
 		}
 	}
@@ -1381,6 +1381,54 @@ function getAliasedCondition(idNode: Node): Node {
 		return init;
 	}
 	return null as unknown as Node;
+}
+
+function isConstBinding(refNode: Node): boolean {
+	const top = stripHidden(refNode);
+	if (top == null || top.kind != NodeKind.Identifier || top.resolvedSym == null) return false;
+	const decl = top.resolvedSym.declNode;
+	return decl != null && decl.kind == NodeKind.VariableDecl
+		&& (decl.data as VariableDeclData).declKind == DeclKind.Const;
+}
+
+function writesReference(node: Node | null, refNode: Node): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const left = (node.data as BinaryExprData).left;
+		return left != null && (sameLocation(refNode, left) || patternWritesInto(left, refNode));
+	}
+	if (node.kind == NodeKind.UpdateExpr) {
+		const target = (node.data as UpdateExprData).updateArg;
+		return target != null && (sameLocation(refNode, target) || holdsBelowTop(refNode, target));
+	}
+	return false;
+}
+
+function aliasStillHolds(aliasId: Node, refNode: Node): boolean {
+	if (isConstBinding(refNode)) return true;
+	if (aliasId.flowNode == null || aliasId.resolvedSym == null) return false;
+	const decl = aliasId.resolvedSym.declNode;
+	const seen = new HashSet<FlowNode>();
+	const todo: FlowNode[] = [aliasId.flowNode];
+	while (todo.length > 0) {
+		const flow = todo.pop();
+		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
+		seen.add(flow);
+		if (flow.flags.has(FlowFlag.Start)) return false;
+		if (flow.flags.has(FlowFlag.Assignment)) {
+			if (flow.node == decl) continue;
+			if (writesReference(flow.node, refNode)) return false;
+		} else if (flow.flags.has(FlowFlag.Call) && callWritesInto(flow.node, refNode)) {
+			return false;
+		}
+		if (flow.antecedent != null) todo.push(flow.antecedent);
+		let list: FlowList | null = flow.antecedents;
+		while (list != null) {
+			todo.push(list.flow);
+			list = list.next;
+		}
+	}
+	return true;
 }
 
 function narrowTypeByEquality(

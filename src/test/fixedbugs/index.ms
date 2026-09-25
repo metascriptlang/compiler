@@ -234,3 +234,4 @@ import "./bug525RelationCycleNotDepth";
 import "./bug526EnumEqualityAndPatterns";
 import "./bug527NarrowingDiesWithItsPrefix";
 import "./bug531CallByAddressDropsNarrowing";
+import "./bug528AliasedConditionGoesStale";
