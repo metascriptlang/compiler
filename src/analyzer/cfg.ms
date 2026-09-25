@@ -43,10 +43,15 @@ interface LoopInfo {
 	label: string;         // loop label — labeled break/continue resolve by it
 }
 
+interface TryInfo {
+	raisePatches: int32[];
+}
+
 interface BuildCtx {
 	cfg: CfgInstr[];
 	rootSym: Symbol;
 	loops: LoopInfo[];
+	tries: TryInfo[];
 }
 
 // ===== Instruction Emitters =====
@@ -98,6 +103,22 @@ function pushLoop(ctx: BuildCtx, label: string): LoopInfo {
 	return loopInfo;
 }
 
+function emitRaise(ctx: BuildCtx): void {
+	const gotoIdx = emitGoto(ctx);
+	if (ctx.tries.length > 0) {
+		ctx.tries[ctx.tries.length - 1].raisePatches.push(gotoIdx);
+	} else {
+		patchDest(ctx, gotoIdx, 99999);
+	}
+}
+
+function emitCallRaiseEdge(ctx: BuildCtx): void {
+	if (ctx.tries.length == 0) return;
+	const forkIdx = emitFork(ctx);
+	emitRaise(ctx);
+	patchDest(ctx, forkIdx, ctx.cfg.length);
+}
+
 // ===== Root matching helper =====
 
 function matchesRoot(node: Node, ctx: BuildCtx): boolean {
@@ -137,6 +158,7 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 			const d = node.data as CallExprData;
 			walkExpr(d.callee, ctx);
 			for (const arg of d.arguments) { walkExpr(arg, ctx); }
+			emitCallRaiseEdge(ctx);
 		},
 		NodeKind.MemberExpr => {
 			// Field-level: if root matches, emit use for full path and don't descend
@@ -178,6 +200,7 @@ function walkExpr(node: Node | null, ctx: BuildCtx): void {
 			const d = node.data as NewExprData;
 			walkExpr(d.newCallee, ctx);
 			for (const a of d.newArguments) { walkExpr(a, ctx); }
+			emitCallRaiseEdge(ctx);
 		},
 		NodeKind.TypeAssertion => {
 			walkExpr((node.data as TypeAssertionData).asExpr, ctx);
@@ -285,8 +308,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.ThrowStmt => {
 			walkExpr((node.data as ThrowStmtData).throwArg, ctx);
-			const gotoIdx = emitGoto(ctx);
-			patchDest(ctx, gotoIdx, 99999);
+			emitRaise(ctx);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
@@ -342,12 +364,16 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
+			const tryInfo: TryInfo = { raisePatches: [] };
+			ctx.tries.push(tryInfo);
 			walkStmt(d.tryBody, ctx);
-			const forkIdx = emitFork(ctx);
-			const gotoIdx = emitGoto(ctx);
-			patchDest(ctx, forkIdx, ctx.cfg.length);
-			walkStmt(d.catchBody, ctx);
-			patchDest(ctx, gotoIdx, ctx.cfg.length);
+			ctx.tries.pop();
+			patchAllHere(ctx, tryInfo.raisePatches);
+			if (d.catchBody != null) {
+				const forkIdx = emitFork(ctx);
+				walkStmt(d.catchBody, ctx);
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+			}
 			walkStmt(d.finallyBody, ctx);
 		},
 		NodeKind.SwitchStmt => {
@@ -433,6 +459,7 @@ export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
 		cfg: [],
 		rootSym,
 		loops: [],
+		tries: [],
 	};
 	walkStmt(body, ctx);
 	return finalizeCfg(ctx);
@@ -701,6 +728,18 @@ test "a def in one switch case does not end the path through a later case" {
 	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: use(x); }", "x");
 	assert !firstUseIsLastRead("let x = 1; const y = x; switch (k) { default: use(x); case 1: x = 2; }", "x");
 	assert firstUseIsLastRead("let x = 1; const y = x; switch (k) { case 1: x = 2; default: x = 3; }", "x");
+}
+
+test "a throw inside try reaches the catch" {
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; throw e; } catch (e) { use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; try { try { const y = x; throw e; } finally { } } catch (e) { use(x); }", "x");
+	assert firstUseIsLastRead("let x = 1; try { const y = x; throw e; } catch (e) { x = 2; }", "x");
+}
+
+test "a call inside try forks to the catch before a later def" {
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; boom(); x = 2; } catch (e) { use(x); }", "x");
+	assert !firstUseIsLastRead("let x = 1; try { const y = x; const z = new Box(); x = 2; } catch (e) { use(x); }", "x");
+	assert firstUseIsLastRead("let x = 1; const y = x; boom(); x = 2; try { } catch (e) { use(x); }", "x");
 }
 
 test "continue goes through the loop condition or update" {
