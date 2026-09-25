@@ -3,14 +3,13 @@
 // note: a jump inside a finally does not run that finally again, and a raise from a finally inlined at a return or break leaves the try being left (inject-scopes-9 / -10: C ran the finally twice or caught the raise in the same try).
 
 let calls: int32 = 0;
-let out: string[] = [];
 
 function flaky(): void {
 	calls += 1;
 	if (calls == 1) throw new Error("flaky");
 }
 
-function retInFinally(): int32 {
+function retInFinally(out: string[]): int32 {
 	try {
 		calls += 0;
 	} finally {
@@ -20,7 +19,7 @@ function retInFinally(): int32 {
 	return 0;
 }
 
-function breakInFinally(): int32 {
+function breakInFinally(out: string[]): int32 {
 	let n: int32 = 0;
 	while (n < 5) {
 		n += 1;
@@ -34,7 +33,7 @@ function breakInFinally(): int32 {
 	return n;
 }
 
-function continueInFinally(): int32 {
+function continueInFinally(out: string[]): int32 {
 	let n: int32 = 0;
 	let fins: int32 = 0;
 	for (let i: int32 = 0; i < 3; i += 1) {
@@ -49,7 +48,7 @@ function continueInFinally(): int32 {
 	return n * 10 + fins;
 }
 
-function raiseAtReturnWithCatch(): int32 {
+function raiseAtReturnWithCatch(out: string[]): int32 {
 	try {
 		return 7;
 	} catch {
@@ -62,7 +61,7 @@ function raiseAtReturnWithCatch(): int32 {
 	return 0;
 }
 
-function raiseAtReturn(): int32 {
+function raiseAtReturn(out: string[]): int32 {
 	try {
 		return 7;
 	} finally {
@@ -72,7 +71,7 @@ function raiseAtReturn(): int32 {
 	return 0;
 }
 
-function raiseAtBreak(): int32 {
+function raiseAtBreak(out: string[]): int32 {
 	let n: int32 = 0;
 	try {
 		while (n < 3) {
@@ -92,7 +91,7 @@ function raiseAtBreak(): int32 {
 	return n;
 }
 
-function raiseIntoOuterTry(): int32 {
+function raiseIntoOuterTry(out: string[]): int32 {
 	try {
 		try {
 			return 1;
@@ -110,11 +109,12 @@ function raiseIntoOuterTry(): int32 {
 }
 
 function run(): void {
-	out.push(retInFinally().toString());
-	out.push(breakInFinally().toString());
-	out.push(continueInFinally().toString());
+	const out: string[] = [];
+	out.push(retInFinally(out).toString());
+	out.push(breakInFinally(out).toString());
+	out.push(continueInFinally(out).toString());
 	try {
-		const r = raiseAtReturnWithCatch();
+		const r = raiseAtReturnWithCatch(out);
 		out.push(r.toString());
 	} catch {
 		out.push("outer caught");
@@ -122,17 +122,17 @@ function run(): void {
 	out.push(`calls=${calls}`);
 	calls = 0;
 	try {
-		const r = raiseAtReturn();
+		const r = raiseAtReturn(out);
 		out.push(r.toString());
 	} catch {
 		out.push("caught");
 	}
 	out.push(`calls=${calls}`);
 	calls = 0;
-	out.push(raiseAtBreak().toString());
+	out.push(raiseAtBreak(out).toString());
 	out.push(`calls=${calls}`);
 	calls = 0;
-	out.push(raiseIntoOuterTry().toString());
+	out.push(raiseIntoOuterTry(out).toString());
 	out.push(`calls=${calls}`);
 	console.log(out.join("|"));
 }
