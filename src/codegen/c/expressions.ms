@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -88,6 +88,38 @@ function resolveSinkLent(t: Type | null): Type | null {
 
 function variantSlotAccess(u: Type, vi: number): string {
 	return inlineVariantStruct(u.typeChildren[vi]) != null ? "." : "->";
+}
+
+function literalDiscriminantOf(u: Type): string {
+	if (isDiscriminatedUnion(u)) {
+		const dt = u.typeExtra;
+		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(u) : "";
+	}
+	const strDisc = findSharedStringDiscriminant(u);
+	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(u);
+}
+
+function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
+	const lits: string[] = [];
+	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
+		const lt = findFieldInVariant(u.typeChildren[vi], disc);
+		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral)) {
+			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			return tagRead;
+		}
+		lits.push(lt.kind == TypeKind.BooleanLiteral ? cBoolLiteral(booleanLiteralValue(lt)) : typeofStr(g, lt.typeName));
+	}
+	let tag = tagRead;
+	let prefix = "";
+	if (lits.length > 2) {
+		p.labels += 1;
+		tag = `_disc${p.labels}_`;
+		emitProcLocalsLine(p, `int32_t ${tag};`);
+		prefix = `${tag} = ${tagRead}, `;
+	}
+	let out = lits[lits.length - 1];
+	for (let vi = lits.length - 2; vi >= 0; vi -= 1) out = `${tag} == ${vi} ? ${lits[vi]} : ${out}`;
+	return `(${prefix}${out})`;
 }
 
 // Declared (un-narrowed) union of a member-access object: walk HiddenDeref to the
@@ -1265,6 +1297,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const right = peekResult(ctx, cc, 1);
 		truncResults(ctx, cc);
 		const d = node.data as BinaryExprData;
+		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
+			const md = d.left.data as MemberExprData;
+			const ut = peelToStructOrUnion(md.object.nodeType);
+			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && literalDiscriminantOf(ut) == md.property) {
+				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			}
+		}
 		let finalRight = right;
 		if (d.operator == "=" && d.left.nodeType != null && d.right.nodeType != null
 				&& d.left.kind != NodeKind.MemberExpr && d.left.kind != NodeKind.ArrayAccess) {
@@ -1495,34 +1534,15 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// `Union(Ref<X>, Ref<X>)` shapes that lack discriminator semantics.
 		if (objType != null && objType.kind == TypeKind.Union && isRealDiscriminatedUnion(objType)) {
 			const acc = objIsPtr ? "->" : ".";
-			// Discriminator field access. Translation depends on the discriminant
-			// type:
-			//  - Enum (match-type with `match (kind: K) { ... }`): the wrapper has
-			//    `_tag` of the enum type — emit `r._tag` directly.
-			//  - Boolean / String literal (TS-style `{ ok: true } | { ok: false }` or
-			//    `{ kind: "a" } | { kind: "b" }`): the discriminator field is stored
-			//    in each variant struct, sharing memory at the same offset (it's the
-			//    first field in each variant). Emit `r.v0.<disc>` to read the active
-			//    variant's value through the overlapping union memory.
-			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) == d.property) {
-				const dt = objType.typeExtra;
-				if (dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String)) {
-					ctx.results.push(`${obj}${acc}v0${variantSlotAccess(objType, 0)}${field}`);
-					return;
-				}
-				ctx.results.push(`${obj}${acc}_tag`);
+			const mainDeclTy = duDeclaredUnionOfObject(d.object);
+			const litDisc = literalDiscriminantOf(objType);
+			if (litDisc != "" && litDisc == d.property) {
+				ctx.results.push(discriminantFromTag(g, p, node, mainDeclTy != null ? mainDeclTy : objType, litDisc, `${obj}${acc}_tag`));
 				return;
 			}
-			// Codegen-only string-DU detection (TS-style `{ kind: "a" } | { kind: "b" }`).
-			// The checker treats this as "non-discriminated" for backward-compatible
-			// error reporting, so typeExtra is null. Detect on the fly here so
-			// member access still routes through the variant slot.
-			if (!isDiscriminatedUnion(objType)) {
-				const strDisc = findSharedStringDiscriminant(objType);
-				if (strDisc != "" && strDisc == d.property) {
-					ctx.results.push(`${obj}${acc}v0${variantSlotAccess(objType, 0)}${field}`);
-					return;
-				}
+			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) == d.property) {
+				ctx.results.push(`${obj}${acc}_tag`);
+				return;
 			}
 			// Variant field access: s.radius → s.v<N>.radius.
 			// objType may be a flow-NARROWED sub-union (subset of the declared union) whose
@@ -1531,7 +1551,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Order: sub-union identity map → checker stamp → by-name (sound only for
 			// unique / same-offset shared fields, which the checker now enforces).
 			let varIdx = -1;
-			const mainDeclTy = duDeclaredUnionOfObject(d.object);
 			if (mainDeclTy != null && mainDeclTy != objType) {
 				const subIdx = findVariantByFieldName(objType, d.property);
 				if (subIdx >= 0) varIdx = duVariantIndexOfType(mainDeclTy, objType.typeChildren[subIdx]);
@@ -1566,18 +1585,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			declTy = peelToStructOrUnion(declTy);
 			// Same DU-only filter as the main path.
 			if (declTy != null && declTy.kind == TypeKind.Union && isRealDiscriminatedUnion(declTy)) {
-				// Disc re-read on a narrowed variant: route via the wrapper's
-				// disc contract exactly like the full-union gate above — `_tag`
-				// for enum disc, `v0.<disc>` overlapping read for bool/string.
-				let discSuffix = "";
-				if (isDiscriminatedUnion(declTy) && getDiscriminantName(declTy) == d.property) {
-					const ddt = declTy.typeExtra;
-					if (ddt != null && (ddt.kind == TypeKind.Boolean || ddt.kind == TypeKind.String)) {
-						discSuffix = `v0${variantSlotAccess(declTy, 0)}${field}`;
-					} else {
-						discSuffix = "_tag";
-					}
-				}
+				const isLitDisc = literalDiscriminantOf(declTy) == d.property;
+				const discSuffix = !isLitDisc && isDiscriminatedUnion(declTy) && getDiscriminantName(declTy) == d.property ? "_tag" : "";
 				let declVarIdx = -1;
 				if (objType != null && objType.kind == TypeKind.Struct) {
 					declVarIdx = duVariantIndexOfType(declTy, objType);
@@ -1585,7 +1594,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (declVarIdx < 0 && node.resolvedSym != null && node.resolvedSym.duVariantSlot > 0) {
 					declVarIdx = node.resolvedSym.duVariantSlot - 1;
 				}
-				if (declVarIdx < 0) declVarIdx = findVariantByFieldName(declTy, d.property);
+				if (declVarIdx < 0 && isLitDisc) {
+					addCGenError(g, `internal: discriminant '${d.property}' of '${typeDisplayName(declTy)}' read through a narrowed variant with no slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				}
+				if (declVarIdx < 0 && !isLitDisc) declVarIdx = findVariantByFieldName(declTy, d.property);
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
