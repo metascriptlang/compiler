@@ -3,7 +3,8 @@
 // Reference implementation equivalent: generic instantiation cache.
 // sameInstantiation() + genericCacheGet() in reference instantiation.
 
-import { Type, TypeKind, TypeFlag } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
+import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../checker/context";
 
@@ -142,7 +143,12 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Set => "set_" + monoTypeKey(t.typeReturn),
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
 		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
-		TypeKind.Distinct => "distinct_" + monoTypeKey(t.typeReturn),
+		TypeKind.Distinct => {
+			if (t.typeName == "") return "distinct_" + monoTypeKey(t.typeReturn);
+			const owner = monoOwnerPath(t);
+			if (owner != "") return "distinct_" + t.typeName + "_" + hashToBase36(owner);
+			return "distinct_" + t.typeName;
+		},
 		TypeKind.Function => {
 			let key = "fn";
 			for (const child of t.typeChildren) {
@@ -330,6 +336,36 @@ test "monoTypeKey unhandled kinds key apart" {
 	const unknown: Type = { kind: TypeKind.Unknown, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert monoTypeKey(never) != monoTypeKey(unknown);
 	assert monoTypeKey(never) != "unknown";
+}
+
+test "monoTypeKey keys distinct types by identity" {
+	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const meters: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const seconds: Type = { kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	assert monoTypeKey(meters) != monoTypeKey(seconds);
+	const metersA: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const metersB: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const symA = makeSymbol("Meters", SymbolKind.TypeAlias, metersA, false);
+	symA.modulePath = "/p/a.ms";
+	metersA.sym = symA;
+	const symB = makeSymbol("Meters", SymbolKind.TypeAlias, metersB, false);
+	symB.modulePath = "/p/b.ms";
+	metersB.sym = symB;
+	assert monoTypeKey(metersA) != monoTypeKey(metersB);
+	const anon: Type = { kind: TypeKind.Distinct, typeName: "", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	assert monoTypeKey(anon) == "distinct_float64";
+}
+
+test "registry separates instantiations over distinct types" {
+	const reg = createMonoRegistry();
+	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const meters: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const seconds: Type = { kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const params: string[] = ["T"];
+	monoRegister(reg, "show", params, [meters]);
+	monoRegister(reg, "show", params, [seconds]);
+	assert reg.entries.length == 2;
+	assert mangleMonoName("show", [meters]) != mangleMonoName("show", [seconds]);
 }
 
 test "registry separates anonymous struct instantiations" {
