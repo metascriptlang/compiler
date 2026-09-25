@@ -42,7 +42,7 @@ import {
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
 // ===== Data Structures =====
 
@@ -1051,3 +1051,17 @@ test "yield with locals" { assert stmtCountAfter("function* gen() { let x = 1; y
 test "while yield loop" { assert stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) == 1; }
 
 test "regular function unchanged" { assert stmtCountAfter("function f() { while (true) {} }", lowerGenerator) == 1; }
+
+function splitErrorsFor(src: string): int32 {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return -1 as int32;
+	const ctx = makeCtx();
+	lowerGenerator(parsed.value, ctx);
+	return ctx.errors.length as int32;
+}
+
+test "a yield inside an expression is reported, not passed through" { assert splitErrorsFor("function* gen() { const v = (yield 1) + 1; }") == 1; }
+
+test "a statement kind the splitter cannot split is reported" { assert splitErrorsFor("function* gen() { throw (yield 1); }") == 1; }
+
+test "a splittable body reports nothing" { assert splitErrorsFor("function* gen() { do { yield 1; } while (false); switch (1) { case 1: yield 2; } }") == 0; }
