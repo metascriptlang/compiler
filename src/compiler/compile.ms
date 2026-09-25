@@ -4,11 +4,11 @@ import { exit, exec, execFile, platform, cwd } from "std/process";
 import { exists, readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { parseSource } from "../parser/statements/validation";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -40,7 +40,7 @@ import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrImport, HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
-import { createTransformContextWithChecker, createNameSet } from "../transform/context";
+import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
 import { setGlobalHookOwners, useHookOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
@@ -48,7 +48,10 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPrelud
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances } from "../checker/instantiate";
+import { drainPendingInstances, pendingInstanceKeyOf } from "../checker/instantiate";
+import { BuildSession, BuildStatus, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint } from "./buildSession";
+import { dbLower } from "./transam/index";
+import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
@@ -372,7 +375,7 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
@@ -408,7 +411,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, targetInfo, gcMode, config);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, targetInfo, gcMode, config, session);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -551,6 +554,141 @@ interface ProcessedModule {
 	program: Node;
 	ctx: CheckerContext;
 	modPath: string;
+}
+
+interface FsAsyncHit {
+	modPath: string;
+	source: string;
+	line: int32;
+	column: int32;
+}
+
+interface A2Timers {
+	mono: number;
+	macro: number;
+	xform: number;
+	refine: number;
+	native: number;
+	analyze: number;
+	lower: number;
+}
+
+interface A2Job {
+	modPath: string;
+	source: string;
+	opts: CliOptions;
+	stdPath: string;
+	hcrSlot: int32;
+	hcrModules: HcrIndirectModule[];
+	sharedHookOwners: NameSet;
+	fsAsyncHits: FsAsyncHit[];
+	timers: A2Timers;
+	diagnostics: ModuleError[];
+	instances: Node[];
+	cloneInput: boolean;
+	ran: boolean;
+}
+
+function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
+	for (let i = base; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) return true;
+	}
+	return false;
+}
+
+function truncateErrors(ctx: CheckerContext, base: int32): void {
+	while (ctx.errors.length > base) ctx.errors.pop();
+}
+
+function exitOnCheckerErrorsFrom(ctx: CheckerContext, base: int32, modPath: string, source: string): void {
+	if (!hasErrorsFrom(ctx, base)) return;
+	for (let i = base; i < ctx.errors.length; i += 1) {
+		const e = ctx.errors[i];
+		if (e.severity != Severity.Error) continue;
+		renderModuleError(modPath, source, { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Error });
+	}
+	exit(1);
+}
+
+function programWithInstances(program: Node, instances: Node[] | null): Node {
+	if (instances == null || instances.length == 0) return program;
+	const stmts: Node[] = [];
+	for (const stmt of (program.data as ProgramData).programStmts) stmts.push(stmt);
+	for (const inst of instances) stmts.push(inst);
+	return createNodeAt(NodeKind.Program, { programStmts: stmts }, program.location);
+}
+
+function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
+	job.ran = true;
+	const opts = job.opts;
+	const modPath = job.modPath;
+	let program = checked;
+	if (job.cloneInput) {
+		program = cloneNodeKeepSem(checked);
+		for (const inst of job.instances) (program.data as ProgramData).programStmts.push(cloneNodeKeepSem(inst));
+	}
+	const errBase = ctx.errors.length;
+	if (opts.verbose) verboseLog(`transforming ${modPath}`);
+	const _tm0 = performance.now();
+	const monoed = monomorphizeProgram(program, ctx);
+	validateTypedAST(ctx, monoed);
+	job.timers.mono = job.timers.mono + (performance.now() - _tm0);
+	if (hasErrorsFrom(ctx, errBase)) {
+		for (let i = errBase; i < ctx.errors.length; i += 1) {
+			const e = ctx.errors[i];
+			const shown: ModuleError = { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Warning };
+			job.diagnostics.push(shown);
+			renderModuleError(modPath, job.source, shown);
+		}
+		truncateErrors(ctx, errBase);
+	}
+
+	const _tmc0 = performance.now();
+	const macroExpanded = expandMacros(monoed, ctx);
+	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
+	const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
+	job.timers.macro = job.timers.macro + (performance.now() - _tmc0);
+	if (opts.gcMode == "manual" && !(job.stdPath != "" && modPath.startsWith(job.stdPath))) {
+		for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
+			const hitLoc = freestandingAsyncLoc(hitNode);
+			job.fsAsyncHits.push({ modPath, source: job.source, line: hitLoc.line, column: hitLoc.column });
+		}
+	}
+	const hcrSlot = job.hcrSlot;
+	if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : job.sharedHookOwners);
+	const _tx0 = performance.now();
+	const transformed = transformProgram(comptimeResolved, ctx, false);
+	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
+	const nativeCtx = createTransformContextWithChecker(ctx);
+	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
+	const _tr0 = performance.now();
+	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
+	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
+	const _tn0 = performance.now();
+	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+	job.timers.native = job.timers.native + (performance.now() - _tn0);
+	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+	const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, job.hcrModules[hcrSlot], job.hcrModules) : hcrLifted;
+	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
+		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
+		else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
+	ctx.targetOs = opts.targetOs;
+	ctx.targetInfo = opts.targetInfo;
+	const _ta0 = performance.now();
+	const preAnErrors = ctx.errors.length;
+	const analyzed = analyzeProgram(hcrResult, ctx);
+	if (ctx.errors.length > preAnErrors) {
+		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
+			printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+		}
+		exit(1);
+	}
+	job.timers.analyze = job.timers.analyze + (performance.now() - _ta0);
+	const _tl0 = performance.now();
+	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
+	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
+	truncateErrors(ctx, errBase);
+	return nativeLowered;
 }
 
 interface ModuleEmissionJob {
@@ -1797,6 +1935,16 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 //   Link all .o files into final binary
 
 export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	const session = createBuildSession(false);
+	const status = buildC(entryPath, opts, resolveSection, session);
+	if (status == BuildStatus.Stale) {
+		printDiag(`${error("error")}: internal: a fresh build session reported stale state (${session.staleReason})`);
+		exit(1);
+	}
+}
+
+export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
+	startSessionBuild(session);
 	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
 	initCache(opts.mode, opts.forceRebuild);
@@ -1812,7 +1960,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
@@ -1911,7 +2059,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
-		return;
+		return BuildStatus.UpToDate;
 	}
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules, store results
@@ -1926,7 +2074,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	let oFiles: string[] = [];
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
-	const fsAsyncHits: { modPath: string, source: string, line: int32, column: int32 }[] = [];
+	const fsAsyncHits: FsAsyncHit[] = [];
 	const fsWritableHits: { modPath: string, source: string, name: string, line: int32, column: int32, message: string }[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
@@ -1937,13 +2085,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	// PROFILE: sub-phase timings summed across all modules.
 	let tParse: number = 0;
 	let tCheck: number = 0;
-	let tMono: number = 0;
-	let tMacro: number = 0;
-	let tXform: number = 0;
-	let tRefine: number = 0;
-	let tNative: number = 0;
-	let tAnalyze: number = 0;
-	let tLower: number = 0;
+	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
 	// created during a later module's check is OWNED by its defining module (set in
@@ -1978,7 +2120,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 			if (hasErrors(reusedCtx)) {
 				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
 			}
-			reusedCtx.errors = [];
 			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
 			programByPath.set(modPath, reusedProgram);
 			continue;
@@ -2004,15 +2145,20 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		programByPath.set(modPath, program);
 	}
 
-	// Dispatch pending generic instances into their OWNER module's program (the module that
-	// defines the generic — `instNode.resolvedSym.modulePath`). Co-location makes the generic
-	// body's module-private static helpers visible in the same TU. Owner-less nodes (e.g.
-	// per-using-module synthesized helpers, modulePath="") fall back to the entry program so
-	// none is dropped. Instances are only ever created during checking (callInstantiateGeneric
-	// lives only in the checker), so this single drain after A1 catches them all.
-	const pendingInsts = drainPendingInstances();
-	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
-		const instNode = pendingInsts[ii];
+	const instancesByOwner: HashMap<string, Node[]> = new HashMap<string, Node[]>();
+	const routedKeys: HashSet<string> = new HashSet<string>();
+	const routeOrder: Node[] = [];
+	for (const modPath of graph.loadOrder) {
+		const created = session.check.instances.get(modPath);
+		if (created != null) for (const instNode of created) routeOrder.push(instNode);
+	}
+	for (const instNode of drainPendingInstances()) routeOrder.push(instNode);
+	for (const instNode of routeOrder) {
+		const key = pendingInstanceKeyOf(instNode);
+		if (key != "") {
+			if (routedKeys.has(key)) continue;
+			routedKeys.add(key);
+		}
 		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
 			instNode.nodeType = instNode.resolvedSym.symbolType;
 		}
@@ -2020,99 +2166,81 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
 			owner = instNode.resolvedSym.modulePath;
 		}
-		let targetProgram: Node | null = null;
-		if (owner != "" && programByPath.has(owner)) {
-			targetProgram = programByPath.get(owner);
-		} else if (programByPath.has(entryPath)) {
-			targetProgram = programByPath.get(entryPath);
-		}
-		if (targetProgram != null) {
-			(targetProgram.data as ProgramData).programStmts.push(instNode);
-		}
+		const target = owner != "" && programByPath.has(owner) ? owner : programByPath.has(entryPath) ? entryPath : "";
+		if (target == "") continue;
+		if (!instancesByOwner.has(target)) instancesByOwner.set(target, []);
+		instancesByOwner.get(target).push(instNode);
+		if (!session.keep) (programByPath.get(target).data as ProgramData).programStmts.push(instNode);
 	}
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
 		const path = hcrModulePaths[i];
-		const program = programByPath.has(path) ? programByPath.get(path) : null;
+		const checkedProgram = programByPath.has(path) ? programByPath.get(path) : null;
+		const program = session.keep && checkedProgram != null ? programWithInstances(checkedProgram, instancesByOwner.get(path)) : checkedProgram;
 		hcrModules[i].typeInfos = hcrTypeInfoNames(program, path);
 		hcrModules[i].typeKeys = hcrTypeLayoutKeys(program);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
+	}
+	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
+	if (session.keep) {
+		if (opts.isHcr) {
+			const tablesNow = hcrTablesFingerprint(hcrModules);
+			let greenHcrModule = false;
+			for (const path of hcrModulePaths) {
+				if (!session.check.rechecked.has(path)) greenHcrModule = true;
+			}
+			if (session.hcrTablesFingerprint != "" && session.hcrTablesFingerprint != tablesNow && greenHcrModule) {
+				session.staleReason = "the HCR export tables changed";
+				return BuildStatus.Stale;
+			}
+			session.hcrTablesFingerprint = tablesNow;
+		}
+		for (const cm of checkedMods) {
+			const fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
+			ownerFingerprints.set(cm.modPath, fingerprint);
+			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
+			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
+				session.staleReason = `the generic instances emitted in ${cm.modPath} changed`;
+				return BuildStatus.Stale;
+			}
+		}
 	}
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
 		const modPath = cm.modPath;
 		const modT0 = performance.now();
-		if (opts.verbose) verboseLog(`transforming ${modPath}`);
-		const _tm0 = performance.now();
-		const monoed = monomorphizeProgram(program, ctx);
-		validateTypedAST(ctx, monoed);
-		tMono = tMono + (performance.now() - _tm0);
-		if (hasErrors(ctx)) {
-			for (const e of ctx.errors) {
-				renderModuleError(modPath, cm.source, {
-					message: e.message,
-					line: e.line,
-					column: e.column,
-					severity: ErrorSeverity.Warning,
-				});
+		const routed = instancesByOwner.get(modPath);
+		const job: A2Job = {
+			modPath,
+			source: cm.source,
+			opts,
+			stdPath: config.stdPath,
+			hcrSlot: hcrModulePaths.indexOf(modPath) as int32,
+			hcrModules,
+			sharedHookOwners,
+			fsAsyncHits,
+			timers: a2t,
+			diagnostics: [],
+			instances: routed != null ? routed : [],
+			cloneInput: session.keep,
+			ran: false,
+		};
+		let nativeLowered: Node;
+		if (session.keep) {
+			nativeLowered = dbLower(session.check.db!, modPath, lowerModuleA2, job);
+			if (job.ran) {
+				session.lowerDiagnostics.set(modPath, job.diagnostics);
+				session.lowerFingerprints.set(modPath, ownerFingerprints.get(modPath) ?? "");
+			} else {
+				const replay = session.lowerDiagnostics.get(modPath);
+				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
 			}
-			ctx.errors = [];
+		} else {
+			nativeLowered = lowerModuleA2(program, ctx, job);
 		}
-
-		const _tmc0 = performance.now();
-		const macroExpanded = expandMacros(monoed, ctx);
-		exitOnCheckerErrors(ctx, modPath, cm.source);
-		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		tMacro = tMacro + (performance.now() - _tmc0);
-		// FREESTANDING E01 — the freestanding runtime carries no dispatcher, no
-		// thread pool and no await slots, so an emitted await/spawn reaches clang
-		// as a wall of undeclared msAwaitSlot* / msFuture* symbols. Collect the
-		// sites HERE, before transformProgram: promiseLower erases every AwaitExpr,
-		// so a post-transform scan finds nothing. Reporting is deferred to after
-		// DCE (below) so async the program never reaches stays silent, and std/ is
-		// skipped entirely — the prelude declares async surface for every build.
-		if (opts.gcMode == "manual" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
-			for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
-				const hitLoc = freestandingAsyncLoc(hitNode);
-				fsAsyncHits.push({ modPath, source: cm.source, line: hitLoc.line, column: hitLoc.column });
-			}
-		}
-		const hcrSlot = hcrModulePaths.indexOf(modPath);
-		if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : sharedHookOwners);
-		const _tx0 = performance.now();
-		const transformed = transformProgram(comptimeResolved, ctx, false);
-		tXform = tXform + (performance.now() - _tx0);
-		const nativeCtx = createTransformContextWithChecker(ctx);
-		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const _tr0 = performance.now();
-		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-		tRefine = tRefine + (performance.now() - _tr0);
-		const _tn0 = performance.now();
-		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		tNative = tNative + (performance.now() - _tn0);
-		const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, hcrModules[hcrSlot], hcrModules) : hcrLifted;
-		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
-			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
-			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
-		ctx.targetOs = opts.targetOs;
-		ctx.targetInfo = opts.targetInfo;
-		const _ta0 = performance.now();
-		const preAnErrors = ctx.errors.length;
-		const analyzed = analyzeProgram(hcrResult, ctx);
-		if (ctx.errors.length > preAnErrors) {
-			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
-			}
-			exit(1);
-		}
-		tAnalyze = tAnalyze + (performance.now() - _ta0);
-		const _tl0 = performance.now();
-		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		tLower = tLower + (performance.now() - _tl0);
 		const modT1 = performance.now();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
@@ -2146,7 +2274,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 	if (opts.showTime) {
-		console.log(`    parse=${tParse}ms check=${tCheck}ms mono=${tMono}ms macro=${tMacro}ms xform=${tXform}ms refine=${tRefine}ms native=${tNative}ms analyze=${tAnalyze}ms lower=${tLower}ms`);
+		console.log(`    parse=${tParse}ms check=${tCheck}ms mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
@@ -2364,7 +2492,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		}
 		console.log(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
-		return;
+		return BuildStatus.Built;
 	}
 	if (opts.emitC) {
 		// Also emit dispatcher (MsMain + entry point)
@@ -2381,7 +2509,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		console.log(`${green("  Wrote")} ${bold(dispPath)}`);
 		console.log(success(`Emitted ${compiled + 1} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
-		return;
+		return BuildStatus.Built;
 	}
 
 	// Its .o IS content-keyed though: two concurrent builds of different
@@ -2457,7 +2585,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
-		return;
+		return BuildStatus.Built;
 	}
 	oFiles = [];
 	for (const slot of oSlots) {
@@ -2486,7 +2614,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
-		return;
+		return BuildStatus.Built;
 	}
 
 	if (opts.showTime) {
@@ -2546,6 +2674,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("total", t0);
+	return BuildStatus.Built;
 }
 
 // ===== Test (C backend) =====
