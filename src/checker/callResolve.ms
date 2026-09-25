@@ -10,7 +10,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, convertsImplicitly, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, TypeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { checkSwitchCase, fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -4000,17 +4000,20 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
+				const patternKind = p.kind;
 				// Extract enum member name — only unguarded arms count for exhaustiveness
-				if (p.kind == NodeKind.MemberExpr && !hasGuard) {
-					const pmd = p.data as MemberExprData;
-					coveredMembers.push(pmd.property);
-				}
+				let coveredName = "";
+				let covers = false;
+				if (patternKind == NodeKind.MemberExpr && !hasGuard) { coveredName = (p.data as MemberExprData).property; covers = true; }
 				// Tier 2: collect string literal patterns for exhaustiveness
-				if (p.kind == NodeKind.StringLiteral && !hasGuard) {
-					const sd = p.data as StringLiteralData;
-					coveredMembers.push(sd.value);
-				}
+				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
 				callCheckExpr(ctx, p, discType);
+				const errorsBeforePattern = ctx.errors.length;
+				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
+					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral) {
+					checkSwitchCase(ctx, d.matchDisc, p);
+				}
+				if (covers && ctx.errors.length == errorsBeforePattern) coveredMembers.push(coveredName);
 			}
 		}
 		// Phase 4: per-arm variant narrowing flows through the binder's

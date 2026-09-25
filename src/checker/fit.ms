@@ -462,11 +462,13 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
 	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
-	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
-	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
+	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
+	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
+	if (aEnum && bEnum) return a.typeName == b.typeName;
+	if (aEnum || bEnum) return isNumeric(aEnum ? b : a) || (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
-	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
 }
