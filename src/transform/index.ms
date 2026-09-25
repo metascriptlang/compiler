@@ -91,7 +91,7 @@ import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions } from "./native/unionProjectLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
-import { liftDestructors } from "./lowering/destructorLifting";
+import { liftDestructors, liftEqualityOps } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
@@ -199,6 +199,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// definition whose only reference is a call the lowerings just created.
 	if (jsBackend) { result = lowerEnumToString(result, ctx); }
 	if (!jsBackend) { result = liftDestructors(result, ctx); }
+	if (jsBackend) { result = liftEqualityOps(result, ctx); }
 	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
 	return result;
 }

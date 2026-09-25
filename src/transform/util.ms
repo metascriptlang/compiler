@@ -322,7 +322,7 @@ export function makeReturn(arg: Node | null, loc: SourceLocation): Node {
 }
 
 export function makeIf(cond: Node, thenBranch: Node, elseBranch: Node | null, loc: SourceLocation): Node {
-	return createNode(NodeKind.IfStmt, { condition: cond, consequent: thenBranch, alternate: elseBranch }, syntheticToken(loc));
+	return createNode(NodeKind.IfStmt, { condition: cond, consequent: thenBranch, alternate: elseBranch as Node }, syntheticToken(loc));
 }
 
 export function makeWhile(cond: Node, body: Node, loc: SourceLocation): Node {
@@ -490,7 +490,7 @@ export function makeFnDecl(name: string, paramSyms: Symbol[], paramTypes: string
 	for (const ps of paramSyms) fnParams.push(ps.name);
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
-		fnBody: body, fnFlags: flags, fnReturnType: returnType,
+		fnBody: body as Node, fnFlags: flags, fnReturnType: returnType,
 		fnDefaults: emptyDefaults, nativeName: "", nameLocation: loc,
 	}, syntheticToken(loc));
 	// Build Type from string annotations for codegen (Implementation parity)

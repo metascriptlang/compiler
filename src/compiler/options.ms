@@ -53,6 +53,8 @@ export interface CliOptions {
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
+	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
+	testsShards: int32;
 	gcMode: string;            // --gc=drc|none|manual: memory management mode
 	gcExplicit: boolean;       // true when --gc= was passed. Distinguishes an explicit
 	                           // --gc=orc from the default, so target-implied modes
@@ -143,6 +145,8 @@ export function parseArgs(): CliOptions {
 		strictDefs: false,
 		strictNullChecks: false,
 		testsInDir: false,
+		testsShard: 0,
+		testsShards: 1,
 		gcMode: "orc",
 		gcExplicit: false,
 		lto: "",
@@ -260,6 +264,15 @@ export function parseArgs(): CliOptions {
 			opts.strictNullChecks = true;
 		} else if (arg == "--tests-in-dir") {
 			opts.testsInDir = true;
+		} else if (arg.startsWith("--tests-shard=")) {
+			const spec = arg.slice(14, arg.length);
+			const shard = testsShardOf(spec);
+			if (shard.length == 0) {
+				console.log(error("error") + ": --tests-shard wants <index>/<count> with 0 <= index < count, got '" + bold(spec) + "'");
+				exit(1);
+			}
+			opts.testsShard = shard[0];
+			opts.testsShards = shard[1];
 		} else if (arg == "--gc=none") {
 			opts.gcMode = "none";
 			opts.gcExplicit = true;
@@ -342,7 +355,26 @@ export function parseArgs(): CliOptions {
 	return opts;
 }
 
+export function testsShardOf(spec: string): int32[] {
+	const parts = spec.split("/");
+	if (parts.length != 2) return [];
+	const shard = parts[0].parseInt();
+	const shards = parts[1].parseInt();
+	if (shard.toString() != parts[0] || shards.toString() != parts[1]) return [];
+	if (shards < 1 || shard < 0 || shard >= shards) return [];
+	return [shard as int32, shards as int32];
+}
+
 // ===== Tests =====
+
+test "a tests shard is <index>/<count> with the index below the count" {
+	const ok = testsShardOf("2/3");
+	assert ok.length == 2 && ok[0] == 2 && ok[1] == 3;
+	assert testsShardOf("0/1").length == 2;
+	for (const bad of ["3/3", "x/2", "1", "-1/2", "01/2", "0/0", "1/2/3", "/2", "1/"]) {
+		assert testsShardOf(bad).length == 0;
+	}
+}
 
 test "pointer width follows the target cpu, not the host" {
 	assert resolveTargetSizes("macos", "").ptrSize == 8;

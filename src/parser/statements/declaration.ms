@@ -127,7 +127,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const varNode = createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
 		declType,
-		initializer: init,
+		initializer: init as Node,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 		nameLocation: makeLocFromToken(nameToken),
 	}, keyword);

@@ -696,7 +696,7 @@ export function findUnionVariant(unionType: Type | null, fieldNames: string[], f
 	if (unionType == null || unionType.typeChildren == null || fieldNames.length == 0) return -1;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
-		const variant = unionType.typeChildren[vi];
+		const variant = peelToStruct(unionType.typeChildren[vi]);
 		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
 			let allFound = true;
 			let ti = 0;
@@ -754,7 +754,7 @@ export function isAmbiguousVariant(unionType: Type | null, matchedIdx: number, f
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		if (vi != matchedIdx) {
-			const variant = unionType.typeChildren[vi];
+			const variant = peelToStruct(unionType.typeChildren[vi]);
 			if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
 				let allFound = true;
 				let ti = 0;
@@ -948,12 +948,13 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 	// EXACT field-set match only. findUnionVariant accepts a superset, which
 	// picks the wrong slot when one variant's fields contain another's
 	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
-	// Two candidates that survive the type comparison are ambiguous: refuse
-	// rather than guess a slot.
+	// Candidates that survive the type comparison are the same structural type;
+	// they share a layout only when their storage matches, else refuse.
 	const types = exprType.typeChildren;
 	let found: int32 = -1;
 	let vi: int32 = 0;
-	for (const child of formal.typeChildren) {
+	for (const member of formal.typeChildren) {
+		const child = peelToStruct(member);
 		if (child != null && child.typeNames != null && child.typeNames.length == names.length) {
 			let same = true;
 			for (let fi = 0; fi < names.length; fi += 1) {
@@ -966,11 +967,15 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 					const have = child.typeChildren[fi];
 					if (want == null || have == null) continue;
 					if (want.kind != have.kind || want.typeName != have.typeName) { same = false; break; }
+					if (want.kind == TypeKind.EnumLiteral && want.typeNames.join(",") != have.typeNames.join(",")) { same = false; break; }
 				}
 			}
 			if (same) {
-				if (found >= 0) return -1;
-				found = vi;
+				if (found < 0) {
+					found = vi;
+				} else if (formal.typeChildren[found].kind != member.kind) {
+					return -1;
+				}
 			}
 		}
 		vi += 1;
@@ -1119,6 +1124,16 @@ export function peelToStruct(t: Type | null): Type | null {
 		break;
 	}
 	return cur;
+}
+
+export function inlineVariantStruct(member: Type | null): Type | null {
+	let cur = member;
+	let _g = 0;
+	while (cur != null && cur.kind == TypeKind.Alias && cur.typeReturn != null && _g < PEEL_MAX_DEPTH) {
+		_g = _g + 1;
+		cur = cur.typeReturn;
+	}
+	return cur != null && cur.kind == TypeKind.Struct ? cur : null;
 }
 
 // Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.
@@ -2550,7 +2565,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	// heap), so the box-site must pick the per-type <Name>ArrayDestroy walker — never the
 	// free-only fallback (else every inner buffer leaks).
 	if (elem.kind == TypeKind.Array) return true;
-	if (elem.kind == TypeKind.Tuple) {
+	if (elem.kind == TypeKind.Tuple || (elem.kind == TypeKind.Union && elem.typeName == "")) {
 		for (const child of elem.typeChildren) {
 			if (arrayElementNeedsCleanup(child)) return true;
 		}
