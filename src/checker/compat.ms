@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -346,6 +346,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				if (isAffineAwaitable(source) && isAwaitable(target) && !isAffineAwaitable(target)) return true;
 				return source.typeName == target.typeName;
 			},
+			TypeKind.Union => isUnionAssignable(source, target),
+			TypeKind.Tuple => isTupleAssignable(source, target),
 			_ => true,
 		};
 	}
@@ -534,6 +536,28 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// (Target-is-union check moved earlier — see above the Ref auto-deref branch.)
 
 	return false;
+}
+
+function isUnionAssignable(source: Type, target: Type): boolean {
+	for (const member of source.typeChildren) {
+		let fits = false;
+		for (const slot of target.typeChildren) {
+			if (isAssignable(member, slot)) { fits = true; break; }
+		}
+		if (!fits) return false;
+	}
+	if (unwrapRefNullUnion(source) != null && unwrapRefNullUnion(target) != null) return true;
+	return !fieldReprMismatch(source, target);
+}
+
+function isTupleAssignable(source: Type, target: Type): boolean {
+	if (source.typeChildren.length != target.typeChildren.length) return false;
+	for (let i = 0; i < source.typeChildren.length; i += 1) {
+		const s = source.typeChildren[i];
+		const t = target.typeChildren[i];
+		if (!isAssignable(s, t) || !sameElementRepr(s, t) || fieldReprMismatch(s, t)) return false;
+	}
+	return true;
 }
 
 // ===== Standard Conversion Check (standard reference implementation parity) =====
@@ -991,6 +1015,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 					if (retRel < worst) worst = retRel;
 				}
 				return worst;
+			},
+			TypeKind.Union | TypeKind.Tuple => {
+				if (sameType(formal, actual)) return TypeRelation.Exact;
+				return isAssignable(actual, formal) ? TypeRelation.Subtype : TypeRelation.None;
 			},
 			_ => TypeRelation.Exact,
 		};
