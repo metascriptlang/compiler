@@ -1653,6 +1653,10 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (hasGenericAlias && resolved.typeName == "") {
 		resolved.typeName = d.aliasName;
 	}
+	if (hasGenericAlias && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
+			&& resolved.typeReturn.kind == TypeKind.Struct && resolved.typeReturn.sym == null) {
+		resolved.typeReturn.sym = sym;
+	}
 	// TypeScript-parity auto-detection of boolean-discriminator DUs:
 	// `type R = { ok: true, ... } | { ok: false, ... }`. Stamp the discriminator
 	// metadata so codegen and narrowing treat it as discriminated. String-literal
