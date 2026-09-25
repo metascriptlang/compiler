@@ -190,7 +190,8 @@ function getSourceLine(source: string, lineNum: number): string {
 	const lines = source.split("\n");
 	const idx = (lineNum as int32) - 1;
 	if (idx < 0 || idx >= lines.length) return "";
-	return lines[idx];
+	const line = lines[idx];
+	return line.endsWith("\r") ? line.slice(0, line.length - 1) : line;
 }
 
 function printDiag(line: string): void {
