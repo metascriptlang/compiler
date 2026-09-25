@@ -77,6 +77,31 @@ inert_range() {
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
+kill_group() {
+  local w
+  if [ -r "/proc/$1/winpid" ]; then
+    for w in $(ps | awk -v g="$1" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do
+      taskkill //T //F //PID "$w" >/dev/null 2>&1
+    done
+  fi
+  kill -KILL -- "-$1" 2>/dev/null
+}
+
+bounded() {
+  local pid waited=0
+  set -m; "$@" <&0 & pid=$!; set +m
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$LANE_LIMIT" ]; then
+      kill_group "$pid"; wait "$pid" 2>/dev/null
+      printf '\nTIMEOUT after %ss, process tree killed: %s\n' "$LANE_LIMIT" "$*" >&2
+      return 124
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 hash_files() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
 
 emit_one() {
@@ -241,6 +266,11 @@ CASES
     | program_keys | sort | paste -sd'|' -)
   want="100-file o1|200-dir o2|802-nested o4"
   [ "$got" = "$want" ] || { printf 'FAIL control reuse: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  log=$(mktemp) || return 1
+  printf 'x\ny\n' >"$log"
+  got=$({ bounded cat; } <"$log" | paste -sd'|' -)
+  rm -f "$log"
+  [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -568,31 +598,8 @@ scope_known() {
       print }'
 }
 
-LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
 
-kill_group() {
-  local w
-  if [ -r "/proc/$1/winpid" ]; then
-    for w in $(ps | awk -v g="$1" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do
-      taskkill //T //F //PID "$w" >/dev/null 2>&1
-    done
-  fi
-  kill -KILL -- "-$1" 2>/dev/null
-}
 
-bounded() {
-  local pid waited=0
-  set -m; "$@" & pid=$!; set +m
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$waited" -ge "$LANE_LIMIT" ]; then
-      kill_group "$pid"; wait "$pid" 2>/dev/null
-      printf '\nTIMEOUT after %ss, process tree killed: %s\n' "$LANE_LIMIT" "$*" >&2
-      return 124
-    fi
-    sleep 1; waited=$((waited + 1))
-  done
-  wait "$pid"
-}
 
 need_cand() {
   [ -x "$CAND" ] || die "lane '$1' tests the candidate compiler; include the build lane"
