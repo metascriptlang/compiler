@@ -1965,19 +1965,20 @@ function emitDirOf(opts: CliOptions): string {
 
 interface WatchFeed {
 	watcher: FsWatch;
-	got: FsChanges | null;
+	armed: boolean;
+	batches: FsChanges[];
 }
 
-function takeFeed(feed: WatchFeed): FsChanges {
-	feed.got = null;
-	const target = feed;
-	nextChanges(target.watcher).then((changes: FsChanges): void => {
-		target.got = changes;
-	});
-	while (feed.got == null) msIoRunOnce(50);
-	const changes = feed.got!;
-	feed.got = null;
-	return changes;
+function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
+	if (!feed.armed) {
+		feed.armed = true;
+		const target = feed;
+		nextChanges(target.watcher).then((changes: FsChanges): void => {
+			target.batches.push(changes);
+			target.armed = false;
+		});
+	}
+	msIoRunOnce(timeoutMs);
 }
 
 function isWatchedSource(path: string): boolean {
@@ -1996,13 +1997,26 @@ function changedSources(changes: FsChanges): string[] {
 
 function waitForSourceChange(feed: WatchFeed): boolean {
 	while (true) {
-		const changes = takeFeed(feed);
-		if (changes.ended) return false;
-		const sources = changedSources(changes);
-		if (!changes.rescan && sources.length == 0) continue;
-		console.log(changes.rescan ? "watch: changed (rescan)" : `watch: changed ${sources.join(" ")}`);
+		while (feed.batches.length == 0) pumpFeed(feed, 50);
+		const queued = feed.batches;
+		feed.batches = [];
+		let rescan = false;
+		const sources: string[] = [];
+		for (const changes of queued) {
+			if (changes.ended) return false;
+			if (changes.rescan) rescan = true;
+			for (const path of changedSources(changes)) {
+				if (!sources.includes(path)) sources.push(path);
+			}
+		}
+		if (!rescan && sources.length == 0) continue;
+		console.log(rescan ? "watch: changed (rescan)" : `watch: changed ${sources.join(" ")}`);
 		const settle = performance.now();
-		while (performance.now() - settle < 60) msIoRunOnce(20);
+		while (performance.now() - settle < 60) pumpFeed(feed, 20);
+		for (const later of feed.batches) {
+			if (later.ended) return false;
+		}
+		feed.batches = [];
 		return true;
 	}
 }
@@ -2049,7 +2063,7 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 			printDiag(`${error("error")}: --watch cannot watch ${root}: ${opened.error.message}`);
 			exit(1);
 		}
-		feed = { watcher: opened.value, got: null };
+		feed = { watcher: opened.value, armed: false, batches: [] };
 		console.log(`watch: watching ${root}`);
 	}
 	setRecoverableBuild(true);
