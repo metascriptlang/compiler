@@ -366,3 +366,5 @@ import "./bug234ArgumentsBindBeforeContext";
 import "./bug235GenericInstanceInvariant";
 import "./bug236TypedPointerToUntyped";
 import "./bug237ExplicitTypeArgsFitArguments";
+import "./bug238SameNameGenericsAcrossModules";
+import "./bug239ConstrainedGenericAlias";
