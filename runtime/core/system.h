@@ -489,8 +489,8 @@ static inline uint64_t msHiXorLo(uint64_t a, uint64_t b) { __uint128_t r = (__ui
    Works with any MS_ARRAY(T) typedef. Supports both reads and writes. */
 
 #define msArrayAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).p->data[__idx]); \
 }))
 
@@ -501,14 +501,14 @@ static inline uint64_t msHiXorLo(uint64_t a, uint64_t b) { __uint128_t r = (__ui
 #define msUint8ArrayAccess  msArrayAccess
 
 #define msSizedArrayAccess(a, i, n) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(n)) msRaiseIndexError(__idx, (n)); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(n)) msRaiseIndexError(__idx, (n)); \
 	&((a).data[__idx]); \
 }))
 
 #define msSpanAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).data[__idx]); \
 }))
 
