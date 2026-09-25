@@ -1,6 +1,6 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { chmod, ensureDir, exists, remove, writeFile } from "std/fs";
+import { chmod, ensureDir, exists, remove, removeAll, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -383,4 +383,5 @@ for (const r of results) {
 	if (!pass) failures = failures + 1;
 	console.log(`${pass ? "pass" : "FAIL"}  ${r.name}  expected=${r.expected} actual=${r.actual}`);
 }
+if (failures == 0) removeAll(root);
 exit(failures == 0 ? 0 : 1);
