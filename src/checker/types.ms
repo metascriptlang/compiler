@@ -1613,7 +1613,8 @@ export function refSubstInner(t: Type): Type | null {
 export function rebuildRefLike(t: Type, inner: Type | null): Type {
 	if (isLockedRef(t)) return createLocked(inner);
 	if (isAtomicRef(t)) return createArc(inner);
-	return createRef(inner);
+	const rebuilt = createRef(inner);
+	return isReadonlyView(t) ? createReadonlyView(rebuilt) : rebuilt;
 }
 
 // The annotation spelling that re-resolves to this Ref class, or "" for a plain
