@@ -2,7 +2,7 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Symbol } from "../ast/node";
+import { Node, Symbol } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
@@ -16,9 +16,25 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx, pendingInstanceMark, takePendingInstancesFrom, drainPendingInstances } from "./instantiate";
 import { cloneNodeForCheck } from "../monomorphize/clone";
-import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck } from "../compiler/transam/index";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
+
+export class CheckSession {
+	db: TransAmDb | null;
+	checks: HashMap<string, CheckerContext>;
+	instances: HashMap<string, Node[]>;
+	rechecked: HashSet<string>;
+}
+
+export function createCheckSession(): CheckSession {
+	return {
+		db: null,
+		checks: new HashMap<string, CheckerContext>(),
+		instances: new HashMap<string, Node[]>(),
+		rechecked: new HashSet<string>(),
+	};
+}
 
 
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
@@ -75,9 +91,10 @@ export function setGraphCheckTiming(on: boolean): void {
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null): ExportRegistry {
+	const kept: TransAmDb | null = session != null ? session.db : null;
 	const _tpre0 = performance.now();
-	const baseCtx = buildPreludeContext(stdPath, backendExt);
+	const baseCtx = kept != null ? kept.preludeCtx : buildPreludeContext(stdPath, backendExt);
 	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
@@ -85,15 +102,23 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	lastPreludeCtx = baseCtx;
 
 	const _tf0 = performance.now();
-	const db = createTransAmDb(graph.loadOrder.length * 8 + 64);
-	dbSetResolverConfig(db, config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath));
-	db.preludeCtx = baseCtx;
+	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64);
+	if (kept == null) {
+		dbSetResolverConfig(db, config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath));
+		db.preludeCtx = baseCtx;
+	}
+	if (session != null) {
+		session.db = db;
+		session.rechecked = new HashSet<string>();
+		const _stale = drainPendingInstances();
+	}
 	dbBindGraph(db, graph);
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || mod.source == "") continue;
 		const parsed = dbParse(db, path);
-		if (parsed != null) registerModuleProgram(path, cloneNodeForCheck(parsed));
+		if (parsed == null) continue;
+		registerModuleProgram(path, kept != null && dbCheckIsCurrent(db, path) ? dbGetCheckedProgram(db, path) : cloneNodeForCheck(parsed));
 	}
 	const tFeed = performance.now() - _tf0;
 
@@ -103,7 +128,13 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		if (mod == null || mod.source == "") continue;
 		mod.exportNames = [];
 		const _tm0 = performance.now();
+		const instanceMark = pendingInstanceMark();
 		const ctx = dbTypeCheck(db, path);
+		if (session != null && ctx != null && session.checks.get(path) != ctx) {
+			session.checks.set(path, ctx);
+			session.instances.set(path, takePendingInstancesFrom(instanceMark));
+			session.rechecked.add(path);
+		}
 		const _tm1 = performance.now();
 		if (graphTiming && (_tm1 - _tm0) > 100) {
 			console.log(`    slowcheck ${path} ${_tm1 - _tm0}ms`);

@@ -121,7 +121,7 @@ function pendingInstanceKey(node: Node, name: string): string {
 	return owner + "::" + name;
 }
 
-function pendingInstanceKeyOf(node: Node): string {
+export function pendingInstanceKeyOf(node: Node): string {
 	if (node.kind == NodeKind.FunctionDecl) return pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
 	if (node.kind == NodeKind.ClassDecl) return pendingInstanceKey(node, (node.data as ClassDeclData).className);
 	return "";
@@ -146,6 +146,13 @@ export function discardPendingInstancesFrom(mark: int32): void {
 		const key = pendingInstanceKeyOf(node);
 		if (key != "") _pendingNames.delete(key);
 	}
+}
+
+export function takePendingInstancesFrom(mark: int32): Node[] {
+	const taken: Node[] = [];
+	for (let i = mark; i < _pendingInstances.length; i += 1) taken.push(_pendingInstances[i]);
+	while (_pendingInstances.length > mark) _pendingInstances.pop();
+	return taken;
 }
 
 export function drainPendingInstances(): Node[] {
