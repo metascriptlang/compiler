@@ -894,7 +894,7 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 
 // Resolve all TypeExpr nodes in a type annotation array (params, fields).
 // Null-safe: skips null arrays and null entries.
-export function resolveTypeExprs(exprs: (Node | null)[] | null, ctx: CheckerContext): void {
+export function resolveTypeExprs(exprs: Node[] | null, ctx: CheckerContext): void {
 	if (exprs == null) return;
 	for (const te of exprs) {
 		if (te == null) continue;

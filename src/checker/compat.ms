@@ -457,6 +457,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		|| (source.kind == TypeKind.Ptr && target.kind == TypeKind.Ref)) {
 		if (!isAtomicRef(source) && !isAtomicRef(target)
 			&& source.typeReturn != null && target.typeReturn != null) {
+			if (target.kind == TypeKind.Ptr && target.typeReturn.kind == TypeKind.Ref) return isAssignable(source, target.typeReturn);
+			if (source.kind == TypeKind.Ptr && source.typeReturn.kind == TypeKind.Ref) return isAssignable(source.typeReturn, target);
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
 	}
@@ -573,6 +575,11 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	return false;
 }
 
+
+export function convertsImplicitly(source: Type, target: Type): boolean {
+	if (source.kind == TypeKind.Struct && target.kind == TypeKind.Union) return false;
+	return needsStdConv(source, target);
+}
 
 // Repr comparison for ONE slot (param or return) of a function signature.
 // Peels `X | null` to X first — a nullable ref is pointer-repr like X itself
