@@ -706,9 +706,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// TU (consumer claimed hook ownership first via split-ownership design),
 		// emit extern forward prototypes so the linker resolves them.
 		ensureDrcProto(g, d.name, node.resolvedSym);
-		// Built-in numeric constants → C99 macros
-		if (d.name == "NaN") { ctx.results.push("NAN"); return; }
-		if (d.name == "Infinity") { ctx.results.push("INFINITY"); return; }
+		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
+		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
+		if (builtin == "Infinity") { ctx.results.push("INFINITY"); return; }
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (d.name.startsWith("$sink_") && p != null) {
 			let alreadySeen = false;
