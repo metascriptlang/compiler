@@ -19,6 +19,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite hcr tests suite-orc fmt corpus san guard"
 LADDER="build boundary suite hcr tests suite-orc fmt corpus san guard"
 KNOWN_LANES="boundary suite hcr suite-orc tests fmt corpus san guard"
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
 usage() {
@@ -209,6 +210,19 @@ runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
 CASES
+  INERT_RE=$INERT RAISER_RE=$RAISER_PATHS awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["RAISER_RE"]) ? "raiser" : "" }
+    got != $2 { printf "FAIL raiser lane %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/raiser/vm.ms|raiser
+src/codegen/raiser/emit.ms|raiser
+src/transform/raiserLowering.ms|raiser
+std/core/date/index.rms|raiser
+src/test/corpus/run.ms|raiser
+src/checker/checkPass.ms|
+src/codegen/c/expressions.ms|
+std/core/date/index.cms|
+CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
     "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
@@ -296,6 +310,13 @@ case " $lanes " in *" corpus "*|*" san "*)
   fi ;;
 esac
 
+raiser_on=0 raiser_why=""
+if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
+else
+  raiser_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RAISER_PATHS" | head -1)
+  [ -z "$raiser_why" ] || raiser_on=1
+fi
+
 explain() {
   local l n
   for l in $lanes; do
@@ -307,6 +328,9 @@ explain() {
   elif [ -n "$select_why" ] && [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ]; then
     say "gate: no narrowing for $select_label ($select_why)"
   fi
+  case " $lanes " in *" corpus "*)
+    if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
+  esac
 }
 
 if [ -z "$lanes" ]; then
@@ -348,7 +372,7 @@ lane_cmd() {
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$CAND" "$CAND" ;;
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
-    corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
+    corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
   esac
@@ -534,12 +558,12 @@ narrow_for() {
 }
 
 scope_known() {
-  if [ -z "$only_csv" ]; then cat; return; fi
-  awk -v only="$only_csv" -v lanes="$lanes_csv" '
+  awk -v only="$only_csv" -v lanes="$lanes_csv" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
     BEGIN { n = split(only, a, ","); for (i = 1; i <= n; i++) keep[a[i]] = 1
             m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1 }
     { prog = $0; sub(/ \[.*$/, "", prog); lane = $0; sub(/^.*\[/, "", lane); sub(/\].*$/, "", lane)
-      if (!(prog in keep)) next
+      if (drop_raiser == 1 && lane == "raiser") next
+      if (n > 0 && !(prog in keep)) next
       if (m > 0 && lane != "parity" && !(lane in lane_kept)) next
       print }'
 }
@@ -727,7 +751,7 @@ for phase in "${PHASES[@]}"; do
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
-  known_of "$lane" | scope_known >"$OUT/$lane.known"
+  known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
