@@ -36,6 +36,7 @@ after another, and compare every red against src/test/known-red.json.
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
+  --select       print the corpus programs whose emitted C or JS differs from the merge base
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check the routing table and the red parsers against fixed cases
 
@@ -74,6 +75,23 @@ inert_range() {
   ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -q .
 }
 
+digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+hash_files() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
+
+emit_one() {
+  local bin=$1 name=$2 entry=$3 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
+  rm -rf "$d"; mkdir -p "$d" && cd "$d" || exit 1
+  "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
+  "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
+  mapfile -t cs < <(find out -name '*.c' 2>/dev/null | LC_ALL=C sort)
+  c=$({ echo "rc=$c_rc"; [ "$c_rc" -eq 0 ] || cat c.log; [ "${#cs[@]}" -eq 0 ] || hash_files "${cs[@]}"; } | digest)
+  "$bin" build "$entry" --target=js --output=out.js >js.log 2>&1; js_rc=$?
+  js=$({ echo "rc=$js_rc"; if [ "$js_rc" -eq 0 ]; then cat out.js; else cat js.log; fi; } 2>/dev/null | digest)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "${#cs[@]}"
+}
+
+if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0; fi
+
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
 KNOWN="$TOP/src/test/known-red.json"
@@ -83,20 +101,6 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) CAND="$CAND.exe" ;;
 esac
 EMIT="$OUT/emit"
-
-digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
-
-emit_one() {
-  local bin=$1 name=$2 entry=$3 d="$EMIT/work/$2" c_rc js_rc c js n
-  mkdir -p "$d" && cd "$d" || exit 1
-  "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
-  "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
-  n=$(find out -name '*.c' 2>/dev/null | grep -c .)
-  c=$({ echo "rc=$c_rc"; [ "$c_rc" -eq 0 ] || cat c.log; find out -name '*.c' 2>/dev/null | sort | while IFS= read -r f; do echo "$f"; cat "$f"; done; } | digest)
-  "$bin" build "$entry" --target=js --output=out.js >js.log 2>&1; js_rc=$?
-  js=$({ echo "rc=$js_rc"; if [ "$js_rc" -eq 0 ]; then cat out.js; else cat js.log; fi; } 2>/dev/null | digest)
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "$n"
-}
 
 reds_of() {
   local lane=$1 log=$2 rc=$3
@@ -129,6 +133,19 @@ route_paths() {
       if ($0 !~ ENVIRON["EXEMPT_RE"]) for (j = 1; j <= nd; j++) print floor[j] "\t" $0
       for (i = 1; i <= n; i++) if ($0 ~ re[i]) { m = split(lanes[i], l, ","); for (j = 1; j <= m; j++) print l[j] "\t" $0 }
     }'
+}
+
+program_keys() {
+  awk -F'\t' -v dir="src/test/corpus/programs/" '
+    function prog(p,   n, a) { sub("^" dir, "", p); n = split(p, a, "/"); if (n == 1) sub(/\.ms$/, "", a[1]); return a[1] }
+    $1 == "key" { key[prog($3)] = $2; next }
+    $1 == "dirty" { n = split($3, r, " -> "); for (i = 1; i <= n; i++) outside[prog(r[i])] = 1; next }
+    $1 == "ref" {
+      c = index($3, ":\""); p = substr($3, 1, c - 1); m = substr($3, c + 2)
+      rel = p; sub("^" dir, "", rel); depth = split(rel, a, "/") - 2
+      if (depth < 0 || gsub(/\.\.\//, "", m) > depth) outside[prog(p)] = 1
+      next }
+    END { for (p in key) if (!(p in outside)) print p " " key[p] }'
 }
 
 self_test() {
@@ -204,21 +221,27 @@ CASES
   want="setup: source baseline|when branch after a -d: value change"
   [ "$got" = "$want" ] || { printf 'FAIL reds boundary: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
+  got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
+    | cat - <(printf 'ref\t\tsrc/test/corpus/programs/%s\n' '630-escapes.ms:"../../../' '802-nested/app/direct.ms:"../' '802-nested/main.ms:"./' '803-up/main.ms:"../') \
+      <(printf 'dirty\t\tsrc/test/corpus/programs/%s\n' 804-dirty/main.ms 900-new/main.ms) \
+    | program_keys | sort | paste -sd'|' -)
+  want="100-file o1|200-dir o2|802-nested o4"
+  [ "$got" = "$want" ] || { printf 'FAIL control reuse: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
 
-base=main release=0 dry=0 record=0 reuse=0 lanes_arg=""
+base=main release=0 dry=0 record=0 reuse=0 lanes_arg="" select_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base=${2:?--base needs a rev}; shift ;;
     --release) release=1 ;;
     --lanes) lanes_arg=${2:?--lanes needs a list}; shift ;;
     --dry-run) dry=1 ;;
+    --select) select_only=1 ;;
     --record) record=1 ;;
     --reuse) reuse=1 ;;
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
-    --emit-one) emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0 ;;
     --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
     --route) route_paths; exit 0 ;;
     --self-test) self_test; exit $? ;;
@@ -407,7 +430,7 @@ totals_of() {
 list_programs() {
   local e n
   for e in "$TOP"/src/test/corpus/programs/*; do
-    n=$(basename "$e")
+    n=${e##*/}
     case "$n" in [0-9]*-*) ;; *) continue ;; esac
     if [ -d "$e" ]; then
       [ -f "$e/main.ms" ] && printf '%s %s\n' "$n" "$e/main.ms"
@@ -418,12 +441,34 @@ list_programs() {
 }
 
 emit_side() {
-  local bin=$1 side=$2 jobs
+  local jobs
   jobs=$(( $(cores) / 2 )); [ "$jobs" -ge 1 ] || jobs=1
-  rm -rf "$EMIT/work" "$EMIT/$side"
-  mkdir -p "$EMIT/work"
-  list_programs | env -u FORCE_COLOR NO_COLOR=1 xargs -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$bin" | sort >"$EMIT/$side.sig"
-  mv "$EMIT/work" "$EMIT/$side"
+  mkdir -p "$2"
+  env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+}
+
+reusable_programs() {
+  local dir=src/test/corpus/programs
+  {
+    git ls-tree HEAD "$dir/" | awk -F'\t' '{ split($1, m, " "); print "key\t" m[3] "\t" $2 }'
+    git status --porcelain --untracked-files=all -- "$dir" | awk '{ print "dirty\t\t" substr($0, 4) }'
+    grep -rEo '"\.{1,2}/(\.\./)*' "$dir" | awk '{ print "ref\t\t" $0 }'
+  } | program_keys
+}
+
+emit_control() {
+  local dir="$OUT/ctl/emit"
+  mkdir -p "$dir"
+  reusable_programs >"$EMIT/ctl.keys"
+  awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    { f = dir "/" $1; have = ""
+      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0) { close(f ".key"); close(f ".sig"); next }
+      close(f ".key"); close(f ".sig"); print }' "$EMIT/programs" >"$EMIT/ctl.todo"
+  emit_side "$1" "$dir" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); printf "%s", (($1 in key) ? key[$1] "\n" : "") > (f ".key"); close(f ".key") }'
+  awk -v dir="$dir" '{ f = dir "/" $1 ".sig"; if ((getline l < f) > 0) print l; close(f) }' "$EMIT/programs" | sort >"$EMIT/ctl.sig"
 }
 
 select_whole() { select=0; say "gate: select gave up, no narrowing for $select_label ($1)"; }
@@ -439,10 +484,12 @@ select_programs() {
     [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
     printf '%s\n' "$sha" >"$OUT/ctl/sha"
   fi
+  rm -rf "$EMIT"
   mkdir -p "$EMIT"
-  emit_side "$ctl" ctl
-  emit_side "$CAND" cand
-  n_all=$(list_programs | grep -c .)
+  list_programs >"$EMIT/programs"
+  emit_control "$ctl"
+  emit_side "$CAND" "$EMIT/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  n_all=$(grep -c . "$EMIT/programs")
   if [ "$(grep -c . "$EMIT/ctl.sig")" -ne "$n_all" ] || [ "$(grep -c . "$EMIT/cand.sig")" -ne "$n_all" ]; then
     select_whole "an emit pass lost programs"; return
   fi
@@ -453,7 +500,7 @@ select_programs() {
   awk -F'\t' '$2 != $6 { print $1 }' "$EMIT/both" >"$EMIT/differ.c"
   awk -F'\t' '$3 != $7 { print $1 }' "$EMIT/both" >"$EMIT/differ.js"
   printf '%s\n' "$paths" | sed -n 's|^src/test/corpus/programs/\([^/]*\).*$|\1|p' | sed 's/\.ms$//' | sort -u >"$EMIT/touched.all"
-  list_programs | cut -d' ' -f1 | sort | comm -12 - "$EMIT/touched.all" >"$EMIT/touched"
+  cut -d' ' -f1 "$EMIT/programs" | sort | comm -12 - "$EMIT/touched.all" >"$EMIT/touched"
   sort -u "$EMIT/differ.c" "$EMIT/differ.js" "$EMIT/touched" >"$EMIT/only.corpus"
   sort -u "$EMIT/differ.c" "$EMIT/touched" >"$EMIT/only.san"
   line="gate: select $(fmt_secs $((SECONDS - t0))) · $n_all programs · $(grep -c . "$EMIT/differ.c" | tr -d ' ') differ in C · $(grep -c . "$EMIT/differ.js" | tr -d ' ') in JS · $(grep -c . "$EMIT/touched" | tr -d ' ') touched"
@@ -490,6 +537,14 @@ need_cand() {
 }
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+
+if [ "$select_only" -eq 1 ]; then
+  need_cand select
+  select=1 selected=0 select_label=corpus
+  select_programs
+  [ "$selected" -eq 0 ] || cat "$EMIT/only.corpus"
+  exit 0
+fi
 
 if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
   unnoted=$(jq -r 'to_entries[] | .key as $l | .value | to_entries[]
