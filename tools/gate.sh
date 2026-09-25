@@ -600,6 +600,24 @@ need_cand() {
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
+GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+
+live_gates() {
+  local f n=0
+  for f in "$GATES_DIR"/*; do
+    [ -e "$f" ] || continue
+    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
+  done
+  [ "$n" -ge 1 ] || n=1
+  echo "$n"
+}
+
+share_of_cores() {
+  local w=$(( $(cores) / $(live_gates) / $1 ))
+  [ "$w" -ge 1 ] || w=1
+  echo "$w"
+}
+
 if [ "$select_only" -eq 1 ]; then
   need_cand select
   select=1 selected=0 select_label=corpus
@@ -619,24 +637,6 @@ fi
 
 mkdir -p "$OUT"
 flaky_ids >"$OUT/flaky.ids"
-
-GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
-
-live_gates() {
-  local f n=0
-  for f in "$GATES_DIR"/*; do
-    [ -e "$f" ] || continue
-    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
-  done
-  [ "$n" -ge 1 ] || n=1
-  echo "$n"
-}
-
-share_of_cores() {
-  local w=$(( $(cores) / $(live_gates) / $1 ))
-  [ "$w" -ge 1 ] || w=1
-  echo "$w"
-}
 
 SLOTS_DIR="$OUT/slots"
 
