@@ -19,6 +19,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite hcr tests suite-orc fmt corpus san guard"
 LADDER="build boundary suite hcr tests suite-orc fmt corpus san guard"
 KNOWN_LANES="boundary suite hcr suite-orc tests fmt corpus san guard"
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
 usage() {
@@ -76,10 +77,65 @@ inert_range() {
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+tree_key() {
+  local t
+  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
+  [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
+}
+differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
+
+control_todo() {
+  awk -v dir="$1" -v keys="$2" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    { f = dir "/" $1; have = ""; sig = ""
+      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0 \
+        && split(sig, s, "\t") >= 4 && s[4] == "0") { close(f ".key"); close(f ".sig"); next }
+      close(f ".key"); close(f ".sig"); print }'
+}
+
+TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
+SHARDED_TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms"
+TEST_SHARDS=${GATE_TEST_SHARDS:-3}
+
+test_jobs() {
+  local f i
+  for f in $TIERS; do
+    case " $SHARDED_TIERS " in
+      *" $f "*) if [ "$TEST_SHARDS" -gt 1 ]; then for ((i = 0; i < TEST_SHARDS; i++)); do printf '%s %s\n' "$f" "$i/$TEST_SHARDS"; done; continue; fi ;;
+    esac
+    printf '%s -\n' "$f"
+  done
+}
+
+LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
+kill_group() {
+  local w
+  if [ -r "/proc/$1/winpid" ]; then
+    for w in $(ps | awk -v g="$1" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do
+      taskkill //T //F //PID "$w" >/dev/null 2>&1
+    done
+  fi
+  kill -KILL -- "-$1" 2>/dev/null
+}
+
+bounded() {
+  local pid waited=0
+  set -m; "$@" <&0 & pid=$!; set +m
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$LANE_LIMIT" ]; then
+      kill_group "$pid"; wait "$pid" 2>/dev/null
+      printf '\nTIMEOUT after %ss, process tree killed: %s\n' "$LANE_LIMIT" "$*" >&2
+      return 124
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 hash_files() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
 
 emit_one() {
-  local bin=$1 name=$2 entry=$3 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
+  local bin=$1 name=$3 entry=$4 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
   rm -rf "$d"; mkdir -p "$d" && cd "$d" || exit 1
   "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
   "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
@@ -90,7 +146,7 @@ emit_one() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "${#cs[@]}"
 }
 
-if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}"; exit 0; fi
+if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}" "${5:?}"; exit 0; fi
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
@@ -209,6 +265,19 @@ runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
 CASES
+  INERT_RE=$INERT RAISER_RE=$RAISER_PATHS awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["RAISER_RE"]) ? "raiser" : "" }
+    got != $2 { printf "FAIL raiser lane %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/raiser/vm.ms|raiser
+src/codegen/raiser/emit.ms|raiser
+src/transform/raiserLowering.ms|raiser
+std/core/date/index.rms|raiser
+src/test/corpus/run.ms|raiser
+src/checker/checkPass.ms|
+src/codegen/c/expressions.ms|
+std/core/date/index.cms|
+CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
     "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
@@ -227,6 +296,28 @@ CASES
     | program_keys | sort | paste -sd'|' -)
   want="100-file o1|200-dir o2|802-nested o4"
   [ "$got" = "$want" ] || { printf 'FAIL control reuse: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  got=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    same c1 j1 0 9 c1 j1 0 9  changed c1 j1 0 9 c2 j1 0 9  bothfail c1 j1 1 9 c1 j1 1 9  candfail c1 j1 0 9 c1 j1 1 9 \
+    | differ_c | paste -sd'|' -)
+  want="changed|bothfail|candfail"
+  [ "$got" = "$want" ] || { printf 'FAIL differ in C: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  log=$(mktemp) || return 1
+  printf 'x\ny\n' >"$log"
+  got=$({ bounded cat; } <"$log" | paste -sd'|' -)
+  rm -f "$log"
+  [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
+  got=$(TEST_SHARDS=3; test_jobs | awk '{ n++; if ($2 != "-") s++ } NR == 1 { first = $0 } END { printf "%d %d %s", n, s, first }')
+  [ "$got" = "12 6 src/test/fixedbugs/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
+  got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
+  [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
+  log=$(mktemp -d) || return 1
+  printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
+  printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"
+  printf 'k2\n' >"$log/failed.key"; printf 'failed\tc\tj\t1\t9\n' >"$log/failed.sig"
+  printf 'k0\n' >"$log/stale.key"; printf 'stale\tc\tj\t0\t9\n' >"$log/stale.sig"
+  got=$(printf '%s p\n' ok failed stale new | control_todo "$log" "$log/keys" | cut -d' ' -f1 | paste -sd'|' -)
+  rm -rf "$log"
+  [ "$got" = "failed|stale|new" ] || { printf 'FAIL control reuse of emits: want "failed|stale|new", got "%s"\n' "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -296,6 +387,13 @@ case " $lanes " in *" corpus "*|*" san "*)
   fi ;;
 esac
 
+raiser_on=0 raiser_why=""
+if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
+else
+  raiser_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RAISER_PATHS" | head -1)
+  [ -z "$raiser_why" ] || raiser_on=1
+fi
+
 explain() {
   local l n
   for l in $lanes; do
@@ -307,6 +405,9 @@ explain() {
   elif [ -n "$select_why" ] && [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ]; then
     say "gate: no narrowing for $select_label ($select_why)"
   fi
+  case " $lanes " in *" corpus "*)
+    if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
+  esac
 }
 
 if [ -z "$lanes" ]; then
@@ -324,6 +425,8 @@ $(printf '%s\n' "$off_main" | head -5 | sed 's/^/  /')"
 fi
 
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
+cand_key=""
+[ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
@@ -348,9 +451,8 @@ lane_cmd() {
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$CAND" "$CAND" ;;
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
-    corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
+    corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
   esac
 }
@@ -370,7 +472,6 @@ run_tools_lane() {
   return $rc
 }
 
-TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/helpers.ms"
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
@@ -381,26 +482,32 @@ test_one() {
 }
 
 run_test_lane() {
-  local rc=0 f part files=src/index.ms
+  local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     suite-orc) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite-orc src/index.ms)" --gc=orc ;;
     tests)
-      files=$TIERS
-      for f in $files; do with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir & done
+      jobs=$(test_jobs)
+      while read -r f shard; do
+        if [ "$shard" = - ]; then
+          with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
+        else
+          with_slot test_one "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
+        fi
+      done <<<"$jobs"
       wait ;;
   esac
-  for f in $files; do
-    part=$(part_of "$1" "$f")
+  while read -r f shard; do
+    if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
-      printf 'NORESULT %s > no result\n' "$f"
+      case "$noresult" in *" $f "*) ;; *) printf 'NORESULT %s > no result\n' "$f"; noresult="$noresult$f " ;; esac
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
     fi
     rm -f "$part" "$part.rc"
-  done
+  done <<<"$jobs"
   return $rc
 }
 
@@ -457,7 +564,7 @@ emit_side() {
   local jobs
   jobs=$(share_of_cores 2)
   mkdir -p "$2"
-  bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
 }
 
 reusable_programs() {
@@ -469,16 +576,30 @@ reusable_programs() {
   } | program_keys
 }
 
-emit_control() {
-  local dir="$OUT/ctl/emit"
+
+keep_emits() {
+  local dir=$1 side=$2
   mkdir -p "$dir"
-  reusable_programs >"$EMIT/ctl.keys"
   awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
     BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
-    { f = dir "/" $1; have = ""
-      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0) { close(f ".key"); close(f ".sig"); next }
-      close(f ".key"); close(f ".sig"); print }' "$EMIT/programs" >"$EMIT/ctl.todo"
-  emit_side "$1" "$dir" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+    ($1 in key) { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); print key[$1] > (f ".key"); close(f ".key") }' "$side"
+}
+
+adopt_candidate() {
+  local dir="$OUT/ctl-$cand_key"
+  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
+  [ -x "$dir/msc" ] && return 0
+  mkdir -p "$dir.tmp" && cp "$CAND" "$dir.tmp/msc" && keep_emits "$dir.tmp/emit" "$EMIT/cand.sig" \
+    && rm -rf "$dir" && mv "$dir.tmp" "$dir" || rm -rf "$dir.tmp"
+  ls -dt "$OUT"/ctl-[0-9a-f]*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+}
+
+emit_control() {
+  local dir="$2/emit"
+  mkdir -p "$dir"
+  reusable_programs >"$EMIT/ctl.keys"
+  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/ctl.todo"
+  emit_side "$1" "$EMIT/ctrl" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
     BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
     { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); printf "%s", (($1 in key) ? key[$1] "\n" : "") > (f ".key"); close(f ".key") }'
   awk -v dir="$dir" '{ f = dir "/" $1 ".sig"; if ((getline l < f) > 0) print l; close(f) }' "$EMIT/programs" | sort >"$EMIT/ctl.sig"
@@ -487,21 +608,26 @@ emit_control() {
 select_whole() { select=0; say "gate: select gave up, no narrowing for $select_label ($1)"; }
 
 select_programs() {
-  local sha ctl="$OUT/ctl/msc" t0=$SECONDS n_all line
+  local sha key ctl_dir ctl t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  if [ ! -x "$ctl" ] || [ "$(cat "$OUT/ctl/sha" 2>/dev/null)" != "$sha" ]; then
-    rm -rf "$OUT/ctl" "$OUT/ctl-src"
-    mkdir -p "$OUT/ctl" "$OUT/ctl-src"
+  key=$(tree_key "$sha")
+  [ -n "$key" ] || { select_whole "cannot read the src and std trees at $sha"; return; }
+  ctl_dir="$OUT/ctl-$key" ctl="$OUT/ctl-$key/msc"
+  rm -rf "$OUT/ctl"
+  if [ ! -x "$ctl" ]; then
+    rm -rf "$ctl_dir" "$OUT/ctl-src"
+    mkdir -p "$ctl_dir" "$OUT/ctl-src"
     git archive "$sha" src | tar -x -C "$OUT/ctl-src" || { select_whole "cannot unpack src at $sha"; return; }
     (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
     [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
-    printf '%s\n' "$sha" >"$OUT/ctl/sha"
   fi
+  touch "$ctl_dir"
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
   list_programs >"$EMIT/programs"
-  emit_control "$ctl"
+  emit_control "$ctl" "$ctl_dir"
   emit_side "$CAND" "$EMIT/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  adopt_candidate
   n_all=$(grep -c . "$EMIT/programs")
   if [ "$(grep -c . "$EMIT/ctl.sig")" -ne "$n_all" ] || [ "$(grep -c . "$EMIT/cand.sig")" -ne "$n_all" ]; then
     select_whole "an emit pass lost programs"; return
@@ -510,7 +636,7 @@ select_programs() {
     select_whole "a clean --emit=c left no C file to compare"; return
   fi
   join -t "$(printf '\t')" "$EMIT/ctl.sig" "$EMIT/cand.sig" >"$EMIT/both"
-  awk -F'\t' '$2 != $6 { print $1 }' "$EMIT/both" >"$EMIT/differ.c"
+  differ_c <"$EMIT/both" >"$EMIT/differ.c"
   awk -F'\t' '$3 != $7 { print $1 }' "$EMIT/both" >"$EMIT/differ.js"
   printf '%s\n' "$paths" | sed -n 's|^src/test/corpus/programs/\([^/]*\).*$|\1|p' | sed 's/\.ms$//' | sort -u >"$EMIT/touched.all"
   cut -d' ' -f1 "$EMIT/programs" | sort | comm -12 - "$EMIT/touched.all" >"$EMIT/touched"
@@ -529,53 +655,48 @@ narrow_for() {
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm,raiser"
+    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }
 
 scope_known() {
-  if [ -z "$only_csv" ]; then cat; return; fi
-  awk -v only="$only_csv" -v lanes="$lanes_csv" '
+  awk -v only="$only_csv" -v lanes="$lanes_csv" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
     BEGIN { n = split(only, a, ","); for (i = 1; i <= n; i++) keep[a[i]] = 1
             m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1 }
     { prog = $0; sub(/ \[.*$/, "", prog); lane = $0; sub(/^.*\[/, "", lane); sub(/\].*$/, "", lane)
-      if (!(prog in keep)) next
+      if (drop_raiser == 1 && lane == "raiser") next
+      if (n > 0 && !(prog in keep)) next
       if (m > 0 && lane != "parity" && !(lane in lane_kept)) next
       print }'
 }
 
-LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
 
-kill_group() {
-  local w
-  if [ -r "/proc/$1/winpid" ]; then
-    for w in $(ps | awk -v g="$1" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do
-      taskkill //T //F //PID "$w" >/dev/null 2>&1
-    done
-  fi
-  kill -KILL -- "-$1" 2>/dev/null
-}
 
-bounded() {
-  local pid waited=0
-  set -m; "$@" & pid=$!; set +m
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$waited" -ge "$LANE_LIMIT" ]; then
-      kill_group "$pid"; wait "$pid" 2>/dev/null
-      printf '\nTIMEOUT after %ss, process tree killed: %s\n' "$LANE_LIMIT" "$*" >&2
-      return 124
-    fi
-    sleep 1; waited=$((waited + 1))
-  done
-  wait "$pid"
-}
 
 need_cand() {
   [ -x "$CAND" ] || die "lane '$1' tests the candidate compiler; include the build lane"
 }
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+
+GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+
+live_gates() {
+  local f n=0
+  for f in "$GATES_DIR"/*; do
+    [ -e "$f" ] || continue
+    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
+  done
+  [ "$n" -ge 1 ] || n=1
+  echo "$n"
+}
+
+share_of_cores() {
+  local w=$(( $(cores) / $(live_gates) / $1 ))
+  [ "$w" -ge 1 ] || w=1
+  echo "$w"
+}
 
 if [ "$select_only" -eq 1 ]; then
   need_cand select
@@ -596,24 +717,6 @@ fi
 
 mkdir -p "$OUT"
 flaky_ids >"$OUT/flaky.ids"
-
-GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
-
-live_gates() {
-  local f n=0
-  for f in "$GATES_DIR"/*; do
-    [ -e "$f" ] || continue
-    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
-  done
-  [ "$n" -ge 1 ] || n=1
-  echo "$n"
-}
-
-share_of_cores() {
-  local w=$(( $(cores) / $(live_gates) / $1 ))
-  [ "$w" -ge 1 ] || w=1
-  echo "$w"
-}
 
 SLOTS_DIR="$OUT/slots"
 
@@ -640,14 +743,36 @@ with_test_binary() {
   return $rc
 }
 
+run_guard_lane() {
+  local i n=${GATE_GUARD_SHARDS:-$PAR} rc=0 part
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run src/test/guard/run.ms --target=raiser >"$part" 2>&1; echo $? >"$part.rc") &
+  done
+  wait
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    cat "$part"
+    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
+    rm -f "$part" "$part.rc"
+  done
+  return $rc
+}
+
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
+  [ "$lane" != build ] || rm -f "$CAND.key"
   case "$lane" in
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|guard|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
+  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
+    && [ "$(tree_key HEAD)" = "$cand_key" ]; then
+    printf '%s\n' "$cand_key" >"$CAND.key"
+  fi
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
@@ -711,7 +836,7 @@ for phase in "${PHASES[@]}"; do
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
-  known_of "$lane" | scope_known >"$OUT/$lane.known"
+  known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')

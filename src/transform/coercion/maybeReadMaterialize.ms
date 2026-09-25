@@ -16,7 +16,7 @@
 // LHS before the assignment node is visited — undo it there.
 
 import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isTagCarriedUnion } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion } from "../../checker/types";
 import { projectTagUnionMember, narrowMaybePayload } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -120,6 +120,10 @@ function visitMaybeRead(node: Node, project: boolean): Node {
 	const carrier = declaredMaybeOf(node);
 	if (carrier == null) return node;
 	node.nodeType = carrier;
+	if (project && unwrapRefNullUnion(nt) != null && isTagCarriedUnion(unwrapMaybeType(carrier))) {
+		const nilable = narrowMaybePayload(node, carrier, nt);
+		if (nilable != null as unknown as Node) return nilable;
+	}
 	const val = makeMember(node, "value", node.location);
 	const payload = unwrapMaybeType(carrier);
 	val.nodeType = payload;

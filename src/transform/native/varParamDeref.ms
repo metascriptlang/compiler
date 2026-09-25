@@ -70,7 +70,7 @@ function visit(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.FunctionDecl && isGeneratedOp(node)) return node;
 	if (node.kind == NodeKind.Identifier) return wrapVarUse(node);
-	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) return node;
+	if (node.kind == NodeKind.HiddenDeref) return node;
 	if (node.kind == NodeKind.OutExpr) {
 		const d = node.data as OutExprData;
 		if (d.outArg != null && d.outArg.kind != NodeKind.Identifier) d.outArg = visit(d.outArg);

@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -96,6 +96,7 @@ class LiftCtx {
 	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
+	jsBackend: boolean;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -811,7 +812,7 @@ function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBu
 function isTaggedUnion(t: Type): boolean {
 	if (t.kind != TypeKind.Union) return false;
 	for (let vi = 0; vi < t.typeChildren.length; vi += 1) {
-		const v = peelToStruct(t.typeChildren[vi]);
+		const v = inlineVariantStruct(t.typeChildren[vi]);
 		if (v != null && v.kind == TypeKind.Struct) return true;
 	}
 	return false;
@@ -826,10 +827,8 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	if (objType.kind == TypeKind.Union) {
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
-		// Probe each variant's fields. Peel Ref/Ptr — interface variants are
-		// Ref<Struct> in the C backend.
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
-			const variant = peelToStruct(objType.typeChildren[vi]);
+			const variant = inlineVariantStruct(objType.typeChildren[vi]);
 			if (isScalarVariant(objType.typeChildren[vi], variant)) {
 				const visited: NameSet = createNameSet();
 				fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
@@ -998,11 +997,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
-		// Without peel, Phase 1a/1b skipped variant.typeNames (empty on Ref) and
-		// no per-variant Destroy helpers were emitted, leaving the wrapper hook
-		// (`<Union>Destroy`) calling undefined helpers at link time.
-		const variant = peelToStruct(objType.typeChildren[vi]);
+		const variant = inlineVariantStruct(objType.typeChildren[vi]);
 		const scalar = isScalarVariant(objType.typeChildren[vi], variant);
 		if ((variant != null && variant.typeNames != null) || scalar) {
 			// Generate per-variant arm body
@@ -1128,11 +1123,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 	let chain = null as unknown as Node;
 	let vi = objType.typeChildren.length - 1;
 	while (vi >= 0) {
-		// Peel Ref/Ptr for the same reason buildVariantDispatch does: interface
-		// variants are Ref<Struct>, whose typeNames is empty. Reading it raw
-		// skipped every arm, so the sink's field-assign chain came out empty and
-		// the hook stopped after the tag copy — the payload never moved.
-		const variant = peelToStruct(objType.typeChildren[vi]);
+		const variant = inlineVariantStruct(objType.typeChildren[vi]);
 		const armBuf = newBuf();
 		if (isScalarVariant(objType.typeChildren[vi], variant)) {
 			buildScalarArmBody(hook, s1, s2, "v" + vi.toString(), objType.typeChildren[vi], lctx, armBuf, loc);
@@ -1561,6 +1552,16 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 		ensureTupleEq(tn, fieldType, lctx, loc);
 		return makeCall(makeTypedIdentResolved(opProcSym(tn + "Eq"), null, loc), [aField, bField], loc);
 	}
+	if (fieldType.kind == TypeKind.GenericInstance) {
+		const gi = unwrapGenericInstance(fieldType);
+		if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
+			ensureInstanceEq(gi.mangledName, gi.body, lctx, loc);
+			return makeCall(makeTypedIdentResolved(opProcSym(gi.mangledName + "Eq"), null, loc), [aField, bField], loc);
+		}
+	}
+	if (lctx.jsBackend) {
+		return makeBinary(aField, "===", bField, loc);
+	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
 	if (isStringLike(fieldType)) {
@@ -1625,11 +1626,24 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 
 // ===== Ensure Eq (on-demand: only for struct/interface types actually compared) =====
 
+// C links every module into one image, so one module owns each Eq; a JS module
+// only sees its own top level, so each module that compares emits its own.
+function claimEq(key: string, lctx: LiftCtx): boolean {
+	if (nameSetContains(lctx.generated, key)) return false;
+	nameSetAdd(lctx.generated, key);
+	if (lctx.jsBackend) return true;
+	if (isGloballyOwned(key)) return false;
+	claimGlobal(key);
+	return true;
+}
+
+function ensureInstanceEq(mangledName: string, body: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (!claimEq(mangledName + "Eq", lctx)) return;
+	generateEq(mangledName, body, lctx, loc);
+}
+
 function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	if (nameSetContains(lctx.generated, typeName + "Eq")) return;
-	if (isGloballyOwned(typeName + "Eq")) return;
-	nameSetAdd(lctx.generated, typeName + "Eq");
-	claimGlobal(typeName + "Eq");
+	if (!claimEq(typeName + "Eq", lctx)) return;
 
 	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym == null) return;
@@ -1704,7 +1718,6 @@ function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): stri
 	let allPrimitive = true;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return "";
-		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return "";
 		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 	}
 	if (allPrimitive) return "";
@@ -1735,11 +1748,7 @@ function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: Source
 // Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
 function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	const key = tupleName + "Eq";
-	if (nameSetContains(lctx.generated, key)) return;
-	if (isGloballyOwned(key)) { nameSetAdd(lctx.generated, key); return; }
-	nameSetAdd(lctx.generated, key);
-	claimGlobal(key);
+	if (!claimEq(tupleName + "Eq", lctx)) return;
 	generateTupleEq(tupleName, t, lctx, loc);
 }
 
@@ -1748,7 +1757,8 @@ function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLoc
 // Reference implementation uses `fields()` magic iterator; we unroll at transform time.
 
 // Tuple field access helper: a._0, a._1, etc.
-function tupleField(obj: Node, idx: number, loc: SourceLocation): Node {
+function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation): Node {
+	if (lctx.jsBackend) return makeArrayAccess(obj, makeNumber(idx, loc), loc);
 	return makeMember(obj, "_" + idx.toString(), loc);
 }
 
@@ -1762,8 +1772,8 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
 		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
@@ -1791,13 +1801,13 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		// if (a._i < b._i) return true;
 		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
 		// if (a._i > b._i) return false;
-		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
-		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
+		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
+		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
 	}
@@ -1822,11 +1832,11 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
-		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, loc);
-		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, loc);
+		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
+		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 		i += 1;
 	}
@@ -2123,6 +2133,11 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				// undefined symbols. DU-variant payloads excluded (classify defers them
 				// to the DU machinery; a stray unstamped copy just makes a dead def).
 				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, false, lctx, node.location);
+			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
+				&& node.nodeType.typeReturn.kind == TypeKind.Struct
+				&& isAnonTypeName(node.nodeType.typeReturn.typeName)
+				&& node.nodeType.typeReturn.typeNames.length > 0) {
+				ensureHooks(anonTypeName(node.nodeType.typeReturn), node.nodeType.typeReturn, node.nodeType, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName != ""
 				&& hasAsgnFlag(node.nodeType)
 				&& !isAllStringLiteralUnion(node.nodeType)
@@ -2235,11 +2250,8 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 
 // ===== Main Entry Point =====
 
-export function liftDestructors(program: Node, ctx: TransformContext): Node {
-	if (ctx.checkerCtx == null) return program;
-
-	const pd = program.data as ProgramData;
-	const lctx: LiftCtx = {
+function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
+	return {
 		checkerCtx: ctx.checkerCtx,
 		tempCounter: ctx.tempCounter,
 		generated: createNameSet(),
@@ -2251,7 +2263,60 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		seqElemTypes: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
+		jsBackend: jsBackend,
 	};
+}
+
+// Comparison operators operatorLower routed to generated functions: tuple ==/</<=,
+// struct ==, and == on types with no symbol (Maybe carriers, generic struct instances).
+// reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
+function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocation): void {
+	for (const pending of ctx.pendingTupleOps) {
+		for (const op of pending.ops) {
+			if (!claimEq(pending.tupleName + op, lctx)) continue;
+			match (op) {
+				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, loc); },
+				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, loc); },
+				"Le" => { generateTupleLe(pending.tupleName, pending.tupleType, lctx, loc); },
+				_ => {},
+			};
+		}
+	}
+	for (const structName of ctx.pendingStructEqs) {
+		ensureEq(structName, lctx, loc);
+	}
+	for (const carrierType of ctx.pendingCarrierEqs) {
+		if (carrierType.kind == TypeKind.GenericInstance) {
+			const gi = unwrapGenericInstance(carrierType);
+			if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
+				ensureInstanceEq(gi.mangledName, gi.body, lctx, loc);
+				continue;
+			}
+		}
+		const carrierName = typeNameOf(carrierType);
+		if (carrierName == "") continue;
+		if (!claimEq(carrierName + "Eq", lctx)) continue;
+		generateEq(carrierName, carrierType, lctx, loc);
+	}
+}
+
+// JS runs no lifetime hooks, but its == on value types calls the same generated Eq.
+export function liftEqualityOps(program: Node, ctx: TransformContext): Node {
+	if (ctx.checkerCtx == null) return program;
+	const lctx = newLiftCtx(ctx, true);
+	liftComparisons(ctx, lctx, makeLoc(0, 0));
+	const pd = program.data as ProgramData;
+	for (const decl of lctx.collector) {
+		pd.programStmts.push(decl);
+	}
+	return program;
+}
+
+export function liftDestructors(program: Node, ctx: TransformContext): Node {
+	if (ctx.checkerCtx == null) return program;
+
+	const pd = program.data as ProgramData;
+	const lctx = newLiftCtx(ctx, false);
 
 	for (const stmt of pd.programStmts) {
 		processDecl(stmt, lctx);
@@ -2269,42 +2334,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 
 	const defaultLoc = makeLoc(0, 0);
 	generateArrayHooks(lctx, defaultLoc);
-
-	// Process pending tuple comparison ops (collected by operatorLower).
-	// reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
-	for (const pending of ctx.pendingTupleOps) {
-		for (const op of pending.ops) {
-			const key = pending.tupleName + op;
-			if (nameSetContains(lctx.generated, key)) continue;
-			if (isGloballyOwned(key)) continue;
-			nameSetAdd(lctx.generated, key);
-			claimGlobal(key);
-			match (op) {
-				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
-				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
-				"Le" => { generateTupleLe(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
-				_ => {},
-			};
-		}
-	}
-
-	// Lift Eq only for structs actually compared (collected by operatorLower); ensureEq is
-	// idempotent and recurses into nested struct fields via fieldEqExpr.
-	for (const structName of ctx.pendingStructEqs) {
-		ensureEq(structName, lctx, defaultLoc);
-	}
-
-	// Synthesized carrier structs (Maybe<T>) have no symbol-table entry, so ensureEq's
-	// name lookup can never find them — generate from the Type the comparison carried.
-	for (const carrierType of ctx.pendingCarrierEqs) {
-		const carrierName = typeNameOf(carrierType);
-		if (carrierName == "") continue;
-		if (nameSetContains(lctx.generated, carrierName + "Eq")) continue;
-		if (isGloballyOwned(carrierName + "Eq")) continue;
-		nameSetAdd(lctx.generated, carrierName + "Eq");
-		claimGlobal(carrierName + "Eq");
-		generateEq(carrierName, carrierType, lctx, defaultLoc);
-	}
+	liftComparisons(ctx, lctx, defaultLoc);
 
 	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);

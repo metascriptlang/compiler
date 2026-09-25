@@ -4,6 +4,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocks } from "../walker";
+import { literalTakesType } from "../coercion/constantFolding";
 import { makeAssign, makeMember, makeIdentResolved, makeIdent, makeExprStmt } from "../util";
 import { parseInput, getStmts } from "../testUtil";
 
@@ -18,8 +19,7 @@ function isInlinedReadonlyScalar(declNode: Node, ownerName: string, member: Node
 	if (!d.propIsStatic || !d.propIsReadonly || d.propInitializer == null) return false;
 	const sym = staticFieldSym(declNode.resolvedSym, ownerName + "." + d.propName);
 	if (sym == null || sym.symFlags.has(SymbolFlag.Mutable)) return false;
-	return d.propInitializer.kind == NodeKind.NumberLiteral
-		|| d.propInitializer.kind == NodeKind.BooleanLiteral;
+	return literalTakesType(d.propInitializer, member.nodeType);
 }
 
 
