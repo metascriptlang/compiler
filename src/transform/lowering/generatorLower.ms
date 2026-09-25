@@ -38,9 +38,10 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr,
+	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr, makeDefaultValue,
 } from "../util";
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
+import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -85,38 +86,27 @@ export interface StateCollector {
 
 // ===== Helpers =====
 
-// Collect name→Type from VarDecl nodes in the body.
+function isFnBoundary(node: Node): boolean {
+	return node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.MethodDecl
+		|| node.kind == NodeKind.ConstructorDecl || node.kind == NodeKind.ClassDecl;
+}
+
 // Reference parity (captureVar): env fields always carry their original type.
 function collectDeclTypes(node: Node, names: string[], types: Type[], syms: Symbol[]): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			const t = node.nodeType != null ? node.nodeType
-				: (d.initializer != null ? d.initializer.nodeType : null);
-			if (t != null) {
-				names.push(d.declName);
-				types.push(t);
-				const declSym = node.resolvedSym;
-				syms.push(declSym!);
-			}
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { collectDeclTypes(s, names, types, syms); }
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			collectDeclTypes(d.whileBody, names, types, syms);
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectDeclTypes(d.consequent, names, types, syms);
-			collectDeclTypes(d.alternate, names, types, syms);
-		},
-		_ => {},
-	};
+	if (node == null || isFnBoundary(node)) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		let t = node.nodeType;
+		if (t == null && d.initializer != null) t = d.initializer.nodeType;
+		if (t == null && node.resolvedSym != null) t = node.resolvedSym.symbolType;
+		if (t != null) {
+			names.push(d.declName);
+			types.push(t);
+			syms.push(node.resolvedSym!);
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectDeclTypes(child, names, types, syms); });
 }
 
 function lookupDeclIdx(names: string[], name: string): int32 {
@@ -737,6 +727,7 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 				const lhs = (stmt.resolvedSym != null)
 					? makeIdentResolved(stmt.resolvedSym, loc)
 					: makeIdent(vd.declName, loc);
+				(lhs.data as IdentifierData).name = vd.declName;
 				stmts[i] = makeExprStmt(makeAssign(lhs, vd.initializer, loc), loc);
 			}
 		}
@@ -767,6 +758,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, loc: SourceLocation): Node {
 	// 1. Collect all local variable names and their types
 	const nc: NameSet = createNameSet();
+	renameRepeatedBindingsInFrame(params, body, "$g");
 	collectDeclNames(body, nc, false);
 	const dtNames: string[] = [];
 	const dtTypes: Type[] = [];
@@ -844,8 +836,8 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	for (const localName of nc.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
-		const decl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
 		const dtIdx = lookupDeclIdx(dtNames, localName);
+		const decl = makeVarDecl(localName, dtIdx >= 0 ? makeDefaultValue(dtTypes[dtIdx], loc) : makeNull(loc), DeclKind.Let, loc);
 		if (dtIdx >= 0) {
 			decl.nodeType = dtTypes[dtIdx];
 			decl.resolvedSym = dtSyms[dtIdx];

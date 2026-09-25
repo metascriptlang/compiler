@@ -16,6 +16,7 @@ interface RenameState {
 	counter: int32;
 	frameNames: string[];
 	frameStarts: int32[];
+	tag: string;
 }
 
 function boundInOpenFrame(st: RenameState, name: string): boolean {
@@ -79,7 +80,7 @@ function declareBinding(st: RenameState, name: string, renameSiblings: boolean =
 	let bound = name;
 	if (lookupRenamed(st, name) != "" || (renameSiblings && boundInOpenFrame(st, name))) {
 		st.counter += 1;
-		bound = name + "$s" + st.counter.toString();
+		bound = name + st.tag + st.counter.toString();
 	}
 	defineIn(st, name, bound);
 	st.frameNames.push(name);
@@ -190,9 +191,16 @@ function walkRename(node: Node | null, st: RenameState): void {
 }
 
 export function renameRepeatedBindings(program: Node): Node {
-	const st: RenameState = { scopes: [], counter: 0, frameNames: [], frameStarts: [] };
+	const st: RenameState = { scopes: [], counter: 0, frameNames: [], frameStarts: [], tag: "$s" };
 	pushScope(st);
 	walkRename(program, st);
 	popScope(st);
 	return program;
+}
+
+export function renameRepeatedBindingsInFrame(params: string[], body: Node, tag: string): void {
+	const st: RenameState = { scopes: [], counter: 0, frameNames: [], frameStarts: [], tag };
+	pushScope(st);
+	walkFrame(st, params, body, []);
+	popScope(st);
 }
