@@ -21,7 +21,7 @@ import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
 import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
-import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
+import { GcMode, dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
 import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
@@ -768,9 +768,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			let emitted = calleeName;
 			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual) {
-				const de = dispatchEntryForLiftedName(idSym.name);
+				const de = dispatchEntryFor(idSym);
 				if (de != null && !de.overloaded) {
-					const ovs = dispatchOverridesFor(de.className, de.methodName);
+					const ovs = dispatchOverridesFor(de.classSym, de.methodName);
 					if (ovs.length > 0) {
 						const ovSyms: Symbol[] = [];
 						for (const oe of ovs) { ovSyms.push(oe.sym); }

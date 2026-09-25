@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, stampOwner, stampItem, addRuntimeConverter } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, stampOwner, stampItem, addRuntimeConverter } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -489,7 +489,6 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 	const innerType = createStruct(d.className, memberNames, memberTypes, true);
 	if (d.classExtends != "") {
 		innerType.typeExtra = createTypeRef(d.classExtends);
-		dispatchRecordParent(d.className, d.classExtends);
 	}
 	const classType = createRef(innerType);
 	const sym = declSymbol(ctx, node, d.className, SymbolKind.Class, classType, false);
@@ -530,7 +529,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		const classGenerics = declGenericParams(node);
 		const isExternClass = node.flags.has(NodeFlag.ExternC);
 		for (let si = 0; si < d.classBody.length; si += 1) {
-			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
+			collectClassMethod(ctx, sym, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
 	}
 	stripIntrinsicMemberWrappers(ctx, sym, d.classBody);
@@ -598,7 +597,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 	if (ctx.extensionRegistry != null) {
 		const actorGenerics = declGenericParams(node);
 		for (let mi = 0; mi < d.actorBody.length; mi += 1) {
-			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
+			collectClassMethod(ctx, sym, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}
 	}
 	stripIntrinsicMemberWrappers(ctx, sym, d.actorBody);
@@ -633,7 +632,7 @@ function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): S
 	return null;
 }
 
-function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
+function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
 	let builtinKind = "";
 	let methodNode: Node | null = null;
@@ -742,7 +741,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	}
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
-		dispatchRecordMethod(className, md.methodName, methodSym);
+		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}
 }
 

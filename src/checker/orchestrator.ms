@@ -513,6 +513,28 @@ test "a class is not assignable to a same-named class of another module" {
 	assert mainErrorsWith("const x: BoxA = new BoxA(1);\nconst y: BoxB = new BoxB(\"q\");") == 0;
 }
 
+function hierarchyErrorsWith(mainSource: string): int32 {
+	const dog = "export class Dog extends Animal { name: string = \"d\"; }\n";
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export class Animal { legs: number = 4; }\n" + dog });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Animal { wings: string = \"w\"; }\n" + dog });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { Animal as AnimalA, Dog as DogA } from \"./a\";\nimport { Dog as DogB } from \"./b\";\nfunction pick<T>(x: T, y: T): T { return y; }\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a type parameter bound to a subclass and then to its base widens to that base, not to a same-named base of another module" {
+	assert hierarchyErrorsWith("const p = pick(new DogA(), new AnimalA());\n") == 0;
+	assert hierarchyErrorsWith("const p = pick(new DogB(), new AnimalA());\n") > 0;
+}
+
 test "imported enum available" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });

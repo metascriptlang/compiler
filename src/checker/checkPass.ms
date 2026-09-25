@@ -1087,14 +1087,15 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checked;
 }
 
-function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string): void {
-	const base = dispatchOverriddenEntry(className, d.methodName);
+function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): void {
+	if (classType == null || classType.sym == null) return;
+	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
 	if (base == null) return;
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
 	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
 	if (!baseGeneric && !isGenericFn(d.methodFlags)) return;
-	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.className}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
 		d.nameLocation.line, d.nameLocation.column);
 }
 
@@ -1131,7 +1132,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className);
+			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className, classType);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {

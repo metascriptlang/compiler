@@ -744,99 +744,105 @@ function classBaseStruct(t: Type): Type | null {
 }
 
 // ===== Method Dispatch Registry (Nim cgmeth methodDef/g.methods analog) =====
-// Populated by collectPass for every class (parent edge) and every instance
-// method (lifted `<Class>_<method>` sym). Whole-program by construction:
 // collect runs for all modules before any transform/codegen. Codegen consults
 // it at identifier-callee emission to route overridden methods through a
 // msDisp_* if-chain dispatcher. A name declared twice on one class (overload)
 // disables dispatch for that method name — conservative direct call.
 
 export interface DispMethodEntry {
-	className: string;
+	classSym: Symbol;
 	methodName: string;
 	sym: Symbol;
 	overloaded: boolean;
 }
 
-let _dispParent: HashMap<string, string> = new HashMap<string, string>();
 let _dispEntries: DispMethodEntry[] = [];
-let _dispByLifted: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
+let _dispByClass: HashMap<Symbol, DispMethodEntry[]> = new HashMap<Symbol, DispMethodEntry[]>();
+let _dispBySym: HashMap<Symbol, DispMethodEntry> = new HashMap<Symbol, DispMethodEntry>();
+let _dispByPlace: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
-export function dispatchRecordParent(className: string, baseName: string): void {
-	if (className == "" || baseName == "") return;
-	_dispParent.set(className, baseName);
-}
-
-export function dispatchRecordMethod(className: string, methodName: string, sym: Symbol): void {
-	const lifted = sym.name;
-	const prev = _dispByLifted.get(lifted);
-	if (prev != null) {
-		const samePlace = prev.sym.modulePath == sym.modulePath
-			&& prev.sym.location.line == sym.location.line
-			&& prev.sym.location.column == sym.location.column;
-		if (samePlace) {
-			prev.sym = sym;
-		} else {
-			prev.overloaded = true;
+export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: Symbol): void {
+	const ofClass = _dispByClass.get(classSym);
+	if (ofClass != null) {
+		for (const prev of ofClass) {
+			if (prev.methodName != methodName) continue;
+			const samePlace = prev.sym.modulePath == sym.modulePath
+				&& prev.sym.location.line == sym.location.line
+				&& prev.sym.location.column == sym.location.column;
+			if (samePlace) {
+				prev.sym = sym;
+				_dispBySym.set(sym, prev);
+			} else {
+				prev.overloaded = true;
+			}
+			return;
 		}
-		return;
 	}
-	const e: DispMethodEntry = { className: className, methodName: methodName, sym: sym, overloaded: false };
+	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false };
 	_dispEntries.push(e);
-	_dispByLifted.set(lifted, e);
+	if (ofClass != null) ofClass.push(e);
+	else _dispByClass.set(classSym, [e]);
+	_dispBySym.set(sym, e);
+	_dispByPlace.set(sym.modulePath + ":" + sym.name, e);
 }
 
 export function resetDispatchRegistry(): void {
-	_dispParent = new HashMap<string, string>();
 	_dispEntries = [];
-	_dispByLifted = new HashMap<string, DispMethodEntry>();
+	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
+	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
+	_dispByPlace = new HashMap<string, DispMethodEntry>();
 }
 
-export function dispatchEntryForLiftedName(liftedName: string): DispMethodEntry | null {
-	if (!_dispByLifted.has(liftedName)) return null;
-	return _dispByLifted.get(liftedName);
+export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
+	return _dispBySym.get(sym) ?? null;
 }
 
-function dispDepthBelow(className: string, root: string): int32 {
-	let cur = className;
+export function dispatchEntryAt(modulePath: string, liftedName: string): DispMethodEntry | null {
+	return _dispByPlace.get(modulePath + ":" + liftedName) ?? null;
+}
+
+function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
+	let cur: Type | null = classSym.symbolType;
 	let d = 0;
-	while (d < 64) {
-		if (cur == root) return d;
-		const nxt = _dispParent.get(cur);
-		if (nxt == null) return -1;
-		cur = nxt;
+	while (cur != null && d < 64) {
+		const own = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn.sym : cur.sym;
+		if (own == root) return d;
+		cur = classBaseStruct(cur);
 		d += 1;
 	}
 	return -1;
 }
 
-export function classDescendsFrom(className: string, baseName: string): boolean {
-	if (className == "" || baseName == "" || className == baseName) return false;
-	return dispDepthBelow(className, baseName) > 0;
+export function classDescendsFrom(classSym: Symbol, baseSym: Symbol): boolean {
+	if (classSym == baseSym) return false;
+	return dispDepthBelow(classSym, baseSym) > 0;
 }
 
-export function dispatchOverriddenEntry(className: string, methodName: string): DispMethodEntry | null {
-	let cur = _dispParent.get(className);
+export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
-		for (const e of _dispEntries) {
-			if (e.className == cur && e.methodName == methodName) return e;
+		const ofBase = cur.sym != null ? _dispByClass.get(cur.sym) : null;
+		if (ofBase != null) {
+			for (const e of ofBase) {
+				if (e.methodName == methodName) return e;
+			}
 		}
-		cur = _dispParent.get(cur);
+		cur = classBaseStruct(cur);
 		d += 1;
 	}
 	return null;
 }
 
-export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
+export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
 	for (const e of _dispEntries) {
 		if (e.methodName != methodName) continue;
+		const dd = dispDepthBelow(e.classSym, classSym);
+		if (dd < 0) continue;
 		if (e.overloaded) return [];
-		if (e.className == className) continue;
-		const dd = dispDepthBelow(e.className, className);
-		if (dd <= 0) continue;
+		if (dd == 0) continue;
 		ents.push(e);
 		depths.push(dd);
 	}
