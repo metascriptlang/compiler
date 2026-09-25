@@ -31,17 +31,26 @@ function stringLocal(i: int32): void {
 	throw m;
 }
 
+class TaHolder { msg: string; constructor(m: string) { this.msg = m; } }
+
+function stringField(h: TaHolder): void { throw h.msg; }
+function stringElement(a: string[], i: int32): void { throw a[i]; }
+
 function run(): int32 {
 	let n = 0;
+	const h = new TaHolder(describe(7));
+	const a: string[] = [describe(8), describe(9)];
 	for (let i: int32 = 0; i < 3; i += 1) {
 		try { freshCtorArg(i); } catch (e) { n += 1; }
 		try { nestedInMessage(i); } catch (e) { n += e.message.length; }
 		try { stringLocal(i); } catch (e) { n += 1; }
+		try { stringField(h); } catch (e) { n += 1; }
+		try { stringElement(a, i % 2); } catch (e) { n += 1; }
 	}
-	return n;
+	return h.msg == "bad 7" && a[1] == "bad 9" ? n : -1;
 }
 
-if (run() == 12) {
+if (run() == 18) {
 	console.log("GUARD-OK");
 } else {
 	process.exit(1);
