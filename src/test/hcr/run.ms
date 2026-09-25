@@ -210,6 +210,89 @@ function localNames(): void {
 	console.log("ok   hcrModuleLocalNames");
 }
 
+interface WatchStep {
+	file: string;
+	target: string;
+	warm: boolean;
+	fails: boolean;
+}
+
+function cFilesIn(dir: string): string[] {
+	const names: string[] = [];
+	if (!exists(dir)) return names;
+	for (const e of readDir(dir)) {
+		if (e.endsWith(".c")) names.push(e);
+	}
+	names.sort();
+	return names;
+}
+
+function partialRecheck(status: string): boolean {
+	const at = status.indexOf("(checked ", 0);
+	if (at < 0) return false;
+	const counts = status.slice(at + 9, status.indexOf(",", at)).split("/");
+	return counts.length == 2 && counts[0] != counts[1];
+}
+
+function watchWarm(): void {
+	const tag = "hcrWatchWarm";
+	const dir = freshDir(`${TMP}/watchWarm`);
+	for (const f of readDir(`${FIXTURES}/watchWarm`)) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "viewShift.ms", target: "view.ms", warm: true, fails: false },
+		{ file: "logicError.ms", target: "logic.ms", warm: false, fails: true },
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicMap.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "shapesBody.ms", target: "shapes.ms", warm: true, fails: false },
+		{ file: "logicExport.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "logicInt64.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "logicOriginal.ms", target: "logic.ms", warm: false, fails: false },
+	];
+	let replay = "";
+	for (const s of steps) replay = replay + `${s.file} ${s.target}\n`;
+	put(`${dir}/replay.txt`, replay);
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt", "--emit=c"]);
+	const statuses: string[] = [];
+	for (const line of lines(both(watched))) {
+		if (line.startsWith("watch: build ")) statuses.push(line);
+	}
+	if (!succeeded(watched) || statuses.length != steps.length + 1) {
+		console.log(both(watched));
+		failWith(tag, `the watch replay reported ${statuses.length} builds, expected ${steps.length + 1}`);
+	}
+
+	for (const f of ["logic.ms", "view.ms", "shapes.ms"]) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	const debug = `${dir}/out/debug`;
+	for (let n = 0; n <= steps.length; n += 1) {
+		const step: WatchStep | null = n > 0 ? steps[n - 1] : null;
+		if (step != null) copy(`${dir}/${step!.file}`, `${dir}/${step!.target}`);
+		for (const f of cFilesIn(debug)) removeAll(`${debug}/${f}`);
+		const cold = msc(dir, ["build", "app.ms", "--hcr", "--emit=c"]);
+		const label = step != null ? `step ${n} (${step!.file})` : "the first build";
+		const status = statuses[n];
+		if (step != null && step!.fails) {
+			need(tag, !succeeded(cold) && status.contains(" failed "), `${label} should fail warm and cold: ${status}`);
+			continue;
+		}
+		if (!succeeded(cold)) {
+			console.log(both(cold));
+			failWith(tag, `the cold build of ${label} failed`);
+		}
+		need(tag, !status.contains(" failed "), `${label} failed warm: ${status}`);
+		const warmFiles = cFilesIn(`${debug}/watch${n}`);
+		const coldFiles = cFilesIn(debug);
+		need(tag, warmFiles.join(",") == coldFiles.join(","), `${label} emitted ${warmFiles.length} files warm, ${coldFiles.length} cold`);
+		for (const f of coldFiles) {
+			need(tag, read(`${debug}/watch${n}/${f}`) == read(`${debug}/${f}`), `${label}: ${f} differs from a cold build`);
+		}
+		if (step != null && step!.warm) {
+			need(tag, status.contains(" built ") && partialRecheck(status), `${label} did not stay warm: ${status}`);
+		}
+	}
+	console.log("ok   hcrWatchWarm");
+}
+
 // ---- hcrIndirect: cross-module calls lowered through module tables ----
 
 interface Emitted {
@@ -511,5 +594,6 @@ ensureDir(TMP);
 fsWatch();
 moduleAbi();
 localNames();
+watchWarm();
 coreLinkClang();
 indirect();
