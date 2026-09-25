@@ -690,7 +690,7 @@ export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
 	return tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, fileId), db.revision.value);
 }
 
-export function dbLower(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext) => Node): Node {
+export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
@@ -703,7 +703,7 @@ export function dbLower(db: TransAmDb, filePath: string, lower: (checked: Node, 
 	const checkEntry = cacheGet(db.cache, checkKey);
 	recordDependency(db.depStack, checkKey, checkEntry != null ? checkEntry.outputHash : 0);
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
-	const lowered = lower(checked, ctx);
+	const lowered = lower(checked, ctx, arg);
 	db.trees.set(lowerNodeKey(fileId), lowered);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
 	return lowered;
@@ -1357,17 +1357,21 @@ interface LowerCount {
 	n: int32;
 }
 
+function countLowering(checked: Node, ctx: CheckerContext, count: LowerCount): Node {
+	count.n += 1;
+	return checked;
+}
+
 test "a module's lowering is reused while its check stays green" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/lower/a.ms", "export function one(): int32 { return 1; }");
 	dbSetFileText(db, "/lower/b.ms", "export function two(): int32 { return 2; }");
 	const count: LowerCount = { n: 0 };
-	const lower = (checked: Node, ctx: CheckerContext): Node => { count.n += 1; return checked; };
-	const first = dbLower(db, "/lower/a.ms", lower);
-	assert dbLower(db, "/lower/a.ms", lower) == first;
+	const first = dbLower(db, "/lower/a.ms", countLowering, count);
+	assert dbLower(db, "/lower/a.ms", countLowering, count) == first;
 	dbSetFileText(db, "/lower/b.ms", "export function two(): int32 { return 3; }");
 	dbParse(db, "/lower/a.ms");
-	assert dbLower(db, "/lower/a.ms", lower) == first;
+	assert dbLower(db, "/lower/a.ms", countLowering, count) == first;
 	assert count.n == 1;
 }
 
@@ -1375,11 +1379,10 @@ test "a module's lowering reruns after its check reruns" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/lower/c.ms", "export function one(): int32 { return 1; }");
 	const count: LowerCount = { n: 0 };
-	const lower = (checked: Node, ctx: CheckerContext): Node => { count.n += 1; return checked; };
-	dbLower(db, "/lower/c.ms", lower);
+	dbLower(db, "/lower/c.ms", countLowering, count);
 	dbSetFileText(db, "/lower/c.ms", "export function one(): int32 { return 7; }");
 	dbParse(db, "/lower/c.ms");
-	dbLower(db, "/lower/c.ms", lower);
+	dbLower(db, "/lower/c.ms", countLowering, count);
 	assert count.n == 2;
 }
 
