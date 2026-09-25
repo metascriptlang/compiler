@@ -2118,6 +2118,13 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 				d.argument = passCopyToSink(d.argument, dctx);
 			}
 		}
+		const convCore = skipConversionWrappers(d.argument);
+		if (convCore != d.argument && (convCore.kind == NodeKind.MemberExpr || convCore.kind == NodeKind.ArrayAccess)) {
+			const convRc = classifyRc(d.argument.nodeType, dctx);
+			if (convRc.needsCleanup && convRc.rcKind != RcKind.Ref) {
+				d.argument = passCopyToSink(d.argument, dctx);
+			}
+		}
 		// Non-local identifier return: globals/module vars need deep copy too.
 		// Function-local vars are moved out by destructiveMoveVar in the Consumed walk.
 		// Non-local variables (globals, module-level, outer function) are borrowed —
