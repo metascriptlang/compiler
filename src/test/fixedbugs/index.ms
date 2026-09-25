@@ -228,3 +228,7 @@ import "./bug211SinkParamTakesUnknown";
 import "./bug450SiblingBindingIdentity";
 import "./bug452GeneratorLocalKeepsType";
 import "./bug453GeneratorSameNameBindings";
+import "./bug451GeneratorReturnAnyDepth";
+import "./bug454JumpRunsSplitFinally";
+import "./bug455SplitStatementKinds";
+import "./bug457ClosureSwitchDiscriminant";
