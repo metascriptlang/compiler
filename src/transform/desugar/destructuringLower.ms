@@ -3,8 +3,9 @@
 import {
 	Node, NodeKind, DeclKind, SourceLocation, Type, TypeKind, createNode,
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData, SpreadExprData, VariableDeclData,
+	ArrayLiteralData, ObjectLiteralData, ExprStmtData, BinaryExprData,
 } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import { nullishLowered } from "../coercion/nullishCoalesce";
@@ -26,6 +27,54 @@ function destrElemType(base: Node, i: int32): Type {
 	return t != null ? t : (null as unknown as Type);
 }
 
+function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: SourceLocation, ctx: TransformContext, items: Node[]): Node | null {
+	if (ctx.jsBackend) {
+		const sliceCallee = makeMember(base, "slice", loc);
+		const sliceCall = makeCall(sliceCallee, [makeNumber(from, loc), makeMember(base, "length", loc)], loc);
+		if (restType != null) sliceCall.nodeType = restType;
+		return sliceCall;
+	}
+	if (restType == null) return null;
+	// C backend: slice is a std method the checker resolves at check time;
+	// transform-built member calls bypass that, so mirror lowerArraySpread's
+	// accumulator + msGenericArrayPush loop instead.
+	const accSym = freshTempSym(ctx, "destr", restType);
+	const emptyLit = createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(loc));
+	emptyLit.nodeType = restType;
+	const accDecl = makeVarDecl(accSym.name, emptyLit, DeclKind.Let, loc);
+	accDecl.resolvedSym = accSym;
+	accDecl.nodeType = restType;
+	items.push(accDecl);
+	const iSym = freshTempSym(ctx, "destri", int32Type());
+	const iDecl = makeVarDecl(iSym.name, makeNumber(from, loc), DeclKind.Let, loc);
+	iDecl.resolvedSym = iSym;
+	iDecl.nodeType = int32Type();
+	items.push(iDecl);
+	const lenMember = makeMember(base, "length", loc);
+	lenMember.nodeType = int32Type();
+	const iv0 = makeIdentResolved(iSym, loc);
+	iv0.nodeType = int32Type();
+	const cond = makeBinary(iv0, "<", lenMember, loc);
+	const iv1 = makeIdentResolved(iSym, loc);
+	iv1.nodeType = int32Type();
+	const refAcc = restType.kind == TypeKind.Ref && restType.typeReturn != null;
+	const elemAccess = makeArrayAccess(base, iv1, loc);
+	elemAccess.nodeType = refAcc ? restType.typeReturn.typeReturn : restType.typeReturn;
+	const accRef = makeIdentResolved(accSym, loc);
+	accRef.nodeType = restType;
+	const pushCall = makeCall(runtimeRef("msGenericArrayPush", loc), [refAcc ? accRef : makeHiddenAddr(accRef, loc), elemAccess], loc);
+	const pushStmt = makeExprStmt(pushCall, loc);
+	const iv2 = makeIdentResolved(iSym, loc);
+	iv2.nodeType = int32Type();
+	const iv3 = makeIdentResolved(iSym, loc);
+	iv3.nodeType = int32Type();
+	const incr = makeExprStmt(makeAssign(iv2, makeBinary(iv3, "+", makeNumber(1, loc), loc), loc), loc);
+	items.push(makeWhile(cond, makeBlock([pushStmt, incr], loc), loc));
+	const restRef = makeIdentResolved(accSym, loc);
+	restRef.nodeType = restType;
+	return restRef;
+}
+
 // Expand array pattern [a, b, ...rest] → indexed access
 export function expandArrayRet(
 	pattern: Node, base: Node, declKind: DeclKind,
@@ -44,52 +93,10 @@ export function expandArrayRet(
 			if (idNode != null && idNode.kind == NodeKind.Identifier && (idNode.data as IdentifierData).name != "_") {
 				const id = idNode.data as IdentifierData;
 				const restType = destrRestElemType(base.nodeType);
-				if (ctx.jsBackend) {
-					const sliceCallee = makeMember(base, "slice", loc);
-					const sliceCall = makeCall(sliceCallee, [makeNumber(i, loc), makeMember(base, "length", loc)], loc);
-					if (restType != null) sliceCall.nodeType = restType;
-					const sliceDecl = makeVarDecl(id.name, sliceCall, declKind, loc);
-					sliceDecl.resolvedSym = idNode.resolvedSym;
-					items.push(sliceDecl);
-				} else if (restType != null) {
-					// C backend: slice is a std method the checker resolves at check time;
-					// transform-built member calls bypass that, so mirror lowerArraySpread's
-					// accumulator + msGenericArrayPush loop instead.
-					const accSym = freshTempSym(ctx, "destr", restType);
-					const emptyLit = createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(loc));
-					emptyLit.nodeType = restType;
-					const accDecl = makeVarDecl(accSym.name, emptyLit, DeclKind.Let, loc);
-					accDecl.resolvedSym = accSym;
-					accDecl.nodeType = restType;
-					items.push(accDecl);
-					const iSym = freshTempSym(ctx, "destri", int32Type());
-					const iDecl = makeVarDecl(iSym.name, makeNumber(i, loc), DeclKind.Let, loc);
-					iDecl.resolvedSym = iSym;
-					iDecl.nodeType = int32Type();
-					items.push(iDecl);
-					const lenMember = makeMember(base, "length", loc);
-					lenMember.nodeType = int32Type();
-					const iv0 = makeIdentResolved(iSym, loc);
-					iv0.nodeType = int32Type();
-					const cond = makeBinary(iv0, "<", lenMember, loc);
-					const iv1 = makeIdentResolved(iSym, loc);
-					iv1.nodeType = int32Type();
-					const elemAccess = makeArrayAccess(base, iv1, loc);
-					elemAccess.nodeType = restType.typeReturn;
-					const accRef = makeIdentResolved(accSym, loc);
-					accRef.nodeType = restType;
-					const pushCall = makeCall(runtimeRef("msGenericArrayPush", loc), [makeHiddenAddr(accRef, loc), elemAccess], loc);
-					const pushStmt = makeExprStmt(pushCall, loc);
-					const iv2 = makeIdentResolved(iSym, loc);
-					iv2.nodeType = int32Type();
-					const iv3 = makeIdentResolved(iSym, loc);
-					iv3.nodeType = int32Type();
-					const incr = makeExprStmt(makeAssign(iv2, makeBinary(iv3, "+", makeNumber(1, loc), loc), loc), loc);
-					items.push(makeWhile(cond, makeBlock([pushStmt, incr], loc), loc));
-					const restRef = makeIdentResolved(accSym, loc);
-					restRef.nodeType = restType;
-					const restDecl = makeVarDecl(id.name, restRef, declKind, loc);
-					restDecl.nodeType = restType;
+				const restValue = arrayRestValue(base, i, restType, loc, ctx, items);
+				if (restValue != null) {
+					const restDecl = makeVarDecl(id.name, restValue, declKind, loc);
+					if (!ctx.jsBackend) restDecl.nodeType = restType;
 					restDecl.resolvedSym = idNode.resolvedSym;
 					items.push(restDecl);
 				}
@@ -177,7 +184,85 @@ export function expandObjectRet(
 	return items;
 }
 
+function isGrowableArray(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Ref && t.typeReturn != null) return t.typeReturn.kind == TypeKind.Array;
+	return t.kind == TypeKind.Array;
+}
+
+function isPattern(n: Node): boolean {
+	return n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral;
+}
+
+function tempOf(value: Node, loc: SourceLocation, ctx: TransformContext, items: Node[]): Node {
+	const sym = freshOwnedSym(ctx, "destr", value.nodeType != null ? value.nodeType : noneType());
+	const decl = makeVarDecl(sym.name, value, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	items.push(decl);
+	return makeIdentResolved(sym, loc);
+}
+
+function assignTarget(target: Node, value: Node, loc: SourceLocation, ctx: TransformContext, items: Node[]): void {
+	if (isPattern(target)) {
+		assignPattern(target, tempOf(value, loc, ctx, items), loc, ctx, items);
+		return;
+	}
+	if (target.kind != NodeKind.Identifier && target.kind != NodeKind.MemberExpr && target.kind != NodeKind.ArrayAccess) {
+		ctx.errors.push(`${target.location.line}:${target.location.column}: a destructuring assignment target must be a variable, a field or an element`);
+		return;
+	}
+	items.push(makeExprStmt(makeAssign(target, value, loc), loc));
+}
+
+function assignPattern(pattern: Node, base: Node, loc: SourceLocation, ctx: TransformContext, items: Node[]): void {
+	if (pattern.kind == NodeKind.ArrayLiteral) {
+		const elements = (pattern.data as ArrayLiteralData).elements;
+		for (let i = 0; i < elements.length; i += 1) {
+			const target = elements[i];
+			if (target.kind == NodeKind.SpreadExpr) {
+				const restTarget = (target.data as SpreadExprData).spreadArg;
+				const restType = isGrowableArray(restTarget.nodeType) ? restTarget.nodeType : destrRestElemType(base.nodeType);
+				const rest = i == elements.length - 1 ? arrayRestValue(base, i, restType, loc, ctx, items) : null;
+				if (rest == null) {
+					ctx.errors.push(`${target.location.line}:${target.location.column}: a rest element in a destructuring assignment must be the last one, over an array`);
+					continue;
+				}
+				assignTarget((target.data as SpreadExprData).spreadArg, rest, loc, ctx, items);
+				continue;
+			}
+			const access = makeArrayAccess(base, makeNumber(i, loc), loc);
+			const elemType = destrElemType(base, i);
+			if (elemType != null) access.nodeType = elemType;
+			assignTarget(target, access, loc, ctx, items);
+		}
+		return;
+	}
+	const od = pattern.data as ObjectLiteralData;
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const target = od.properties[i];
+		if (target.kind == NodeKind.SpreadExpr) {
+			ctx.errors.push(`${target.location.line}:${target.location.column}: a rest property in a destructuring assignment is not supported; destructure into a declaration`);
+			continue;
+		}
+		const access = makeMember(base, od.keys[i], loc);
+		const fieldType = destrNamedFieldType(base.nodeType, od.keys[i]);
+		if (fieldType != null) access.nodeType = fieldType;
+		assignTarget(target, access, loc, ctx, items);
+	}
+}
+
+function expandPatternAssign(stmt: Node, ctx: TransformContext): Node[] {
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr) return [stmt];
+	const bd = e.data as BinaryExprData;
+	if (bd.operator != "=" || !isPattern(bd.left)) return [stmt];
+	const items: Node[] = [];
+	assignPattern(bd.left, tempOf(bd.right, stmt.location, ctx, items), stmt.location, ctx, items);
+	return items;
+}
+
 function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
+	if (stmt.kind == NodeKind.ExprStmt) return expandPatternAssign(stmt, ctx);
 	if (stmt.kind != NodeKind.DestructuringDecl) return [stmt];
 	const d = stmt.data as DestructuringDeclData;
 	const loc = stmt.location;
@@ -245,3 +330,9 @@ test "object default lowers to a conditional init" { assert lastInitKind("const 
 test "array default lowers to a conditional init" { assert lastInitKind("const [a = 1] = f();") == NodeKind.ConditionalExpr; }
 
 test "no default keeps a bare access" { assert lastInitKind("const { x } = f();") == NodeKind.MemberExpr; }
+
+test "a pattern assignment evaluates its right side once into a temp" { assert stmtCountAfter("[a, b] = [b, a];", lowerDestructuring) == 3; }
+
+test "a nested pattern assignment takes one temp per level" { assert stmtCountAfter("[a, [b, c]] = f();", lowerDestructuring) == 5; }
+
+test "an assignment to a plain target passes through" { assert stmtCountAfter("a = [b];", lowerDestructuring) == 1; }

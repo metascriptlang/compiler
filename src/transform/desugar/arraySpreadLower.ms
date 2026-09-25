@@ -40,6 +40,12 @@ function isLowerableSpreadLiteral(node: Node): boolean {
 	return false;
 }
 
+function isAssignedPattern(parent: Node, child: Node): boolean {
+	if (parent.kind != NodeKind.BinaryExpr || child.kind != NodeKind.ArrayLiteral) return false;
+	const bd = parent.data as BinaryExprData;
+	return bd.operator == "=" && bd.left == child;
+}
+
 function holdsSpreadLiteral(node: Node): boolean {
 	const found: Node[] = [];
 	collectSpreadLiterals(node, found);
@@ -66,6 +72,7 @@ function collectSpreadLiterals(node: Node, out: Node[]): void {
 		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
 			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
 			|| k == NodeKind.BlockStmt) return;
+		if (isAssignedPattern(node, c)) return;
 		const guard = conditionalGuard(c);
 		if (guard != null) {
 			collectSpreadLiterals(guard, out);
