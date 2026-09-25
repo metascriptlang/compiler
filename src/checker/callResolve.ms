@@ -424,7 +424,7 @@ function cloneDefaultNode(node: Node): Node {
 
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
-function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
+function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null,
 	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = ""): void {
 	if (defaults == null) return;
 	// A default expression's free identifiers belong to the callee's module (where
@@ -459,21 +459,22 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
 // Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
-function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
-	totalParams: number, defaultOffset: number): void {
-	const cd = callNode.data as CallExprData;
-	// Get defaults from Symbol (Reference: defaults stored on symbol)
-	let fnDefaults: Node[] = null as unknown as Node[];
-	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
-	const defSym = cd.callee.resolvedSym != null ? cd.callee.resolvedSym : callNode.resolvedSym;
-	if (defSym != null) {
-		if (defSym.defaultParams != null && defSym.defaultParams.length > 0) {
-			fnDefaults = defSym.defaultParams;
-		} else if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
-			const declData = defSym.declNode.data as FunctionDeclData;
-			if (declData.fnDefaults != null) fnDefaults = declData.fnDefaults;
-		}
+function declaredDefaults(defSym: Symbol | null): Node[] | null {
+	if (defSym == null) return null;
+	if (defSym.defaultParams != null && defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
+		const declData = defSym.declNode.data as FunctionDeclData;
+		if (declData.fnDefaults != null) return declData.fnDefaults;
 	}
+	return null;
+}
+
+function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
+	totalParams: number, defaultOffset: number, chosen: Symbol | null = null): void {
+	const cd = callNode.data as CallExprData;
+	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
+	const defSym = chosen != null ? chosen : (cd.callee.resolvedSym != null ? cd.callee.resolvedSym : callNode.resolvedSym);
+	const fnDefaults = declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
 	let paramTypes: Type[] = null as unknown as Type[];
@@ -2522,7 +2523,8 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	}
 
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
+		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
+		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
 	}
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
