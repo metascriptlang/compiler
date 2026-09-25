@@ -384,7 +384,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			for (let oi = 0; oi < operandTypes.length; oi += 1) {
 				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col);
 			}
-			return createStruct("", mergedNames, mergedTypes, true);
+			return createRef(createStruct("", mergedNames, mergedTypes, true));
 		}
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
@@ -431,7 +431,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// insertion order — the semantic match for `{ [key: K]: V }` sugar.
 	if (trimmed.charAt(0) == "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
-		if (inner == "") return createStruct("", [], [], true);
+		if (inner == "") return createRef(createStruct("", [], [], true));
 
 		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V> (ordered).
 		// After normalization, both syntaxes produce identical Type structs.
@@ -498,7 +498,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 			}
 		}
-		return createStruct("", names, types, true);
+		return createRef(createStruct("", names, types, true));
 	}
 
 	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
@@ -1653,6 +1653,10 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (hasGenericAlias && resolved.typeName == "") {
 		resolved.typeName = d.aliasName;
 	}
+	if (hasGenericAlias && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
+			&& resolved.typeReturn.kind == TypeKind.Struct && resolved.typeReturn.sym == null) {
+		resolved.typeReturn.sym = sym;
+	}
 	// TypeScript-parity auto-detection of boolean-discriminator DUs:
 	// `type R = { ok: true, ... } | { ok: false, ... }`. Stamp the discriminator
 	// metadata so codegen and narrowing treat it as discriminated. String-literal
@@ -1756,7 +1760,11 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	//   variant memory (`v<N>.<disc>`).
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
-		const resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
+		let resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
+		if (resolved != null && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
+				&& d.variantTypes[vi].trim().charAt(0) == "{") {
+			resolved = resolved.typeReturn;
+		}
 		if (resolved != null && resolved.kind == TypeKind.Struct && vi < d.variantKeys.length) {
 			if (isBooleanDisc) {
 				const discValue = d.variantKeys[vi] == "true";

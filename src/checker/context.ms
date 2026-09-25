@@ -656,6 +656,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// Nominal mismatch: both have names but they differ → not a match.
 		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
 		if (objName != "") return false;
+		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
 	}
 	return isAssignable(objType, receiverType);
 }
@@ -1679,6 +1680,8 @@ test "instance extension isStatic false" {
 // two different modules is ambiguous — resolution then keeps the bare name
 // (pre-existing behavior for that corner).
 
+const AMBIGUOUS_OWNER = "\u0001AMBIGUOUS";
+
 const _globalTypeOwners: Map<string, string> = new Map<string, string>();
 
 export function recordGlobalTypeOwner(name: string, modulePath: string): void {
@@ -1689,13 +1692,13 @@ export function recordGlobalTypeOwner(name: string, modulePath: string): void {
 		return;
 	}
 	if (prev != modulePath) {
-		_globalTypeOwners.set(name, "\u0001AMBIGUOUS");
+		_globalTypeOwners.set(name, AMBIGUOUS_OWNER);
 	}
 }
 
 export function getGlobalTypeOwner(name: string): string {
 	const v = _globalTypeOwners.get(name);
-	if (v == null || v == "AMBIGUOUS") return "";
+	if (v == null || v == AMBIGUOUS_OWNER) return "";
 	return v;
 }
 
@@ -1714,12 +1717,22 @@ export function recordGlobalTypeShape(name: string, shapeKey: string, modulePath
 		return;
 	}
 	if (prev != modulePath) {
-		_globalTypeShapes.set(key, "AMBIGUOUS");
+		_globalTypeShapes.set(key, AMBIGUOUS_OWNER);
 	}
 }
 
 export function getGlobalTypeOwnerByShape(name: string, shapeKey: string): string {
 	const v = _globalTypeShapes.get(name + "|" + shapeKey);
-	if (v == null || v == "AMBIGUOUS") return "";
+	if (v == null || v == AMBIGUOUS_OWNER) return "";
 	return v;
+}
+
+test "a type name two modules declare has no global owner" {
+	recordGlobalTypeOwner("AmbigOwnerProbe", "/one/a.ms");
+	assert getGlobalTypeOwner("AmbigOwnerProbe") == "/one/a.ms";
+	recordGlobalTypeOwner("AmbigOwnerProbe", "/two/b.ms");
+	assert getGlobalTypeOwner("AmbigOwnerProbe") == "";
+	recordGlobalTypeShape("AmbigShapeProbe", "x", "/one/a.ms");
+	recordGlobalTypeShape("AmbigShapeProbe", "x", "/two/b.ms");
+	assert getGlobalTypeOwnerByShape("AmbigShapeProbe", "x") == "";
 }

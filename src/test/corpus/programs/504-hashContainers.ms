@@ -1,5 +1,4 @@
 // @xfail(raiser): raiser runtime error: attempt to access a nil address
-// @xfail(esm): tree emit: prelude container class binding never imported into the referencing module
 // Parity program — std collections: HashMap<K,V> / HashSet<T>.
 // C = open addressing (std/core/struct.ms); JS = native Map/Set aliases
 // (std/core/struct.jms — STRING-CONTRACT §5: the containers promise NO

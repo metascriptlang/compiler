@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { closureStorageType, isTagCarriedUnion, peelToStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 
@@ -897,8 +897,7 @@ function structuralMemberIndex(formal: Type, exprType: Type): int32 {
 }
 
 function slotHoldsStructByValue(member: Type): boolean {
-	const s = peelToStruct(member);
-	return s != null && s.kind == TypeKind.Struct;
+	return inlineVariantStruct(member) != null;
 }
 
 export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
@@ -919,12 +918,11 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	let vi = variantIndexInUnion(formal, valueType);
 	if (vi < 0) vi = structuralMemberIndex(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
+	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
-	// A union slot holds the variant BY VALUE, so a ref operand is READ and
-	// copied, never consumed: handing the pointer to the conversion makes the
-	// analyzer sink it (wasMoved) and the heap cell is then destroyed by
-	// nobody. Spelling the deref keeps the ref owned by its own scope and
-	// routes the payload through the ordinary value-copy path.
+	// A by-value slot READS a ref operand and copies it, never consumes it:
+	// handing the pointer to the conversion makes the analyzer sink it
+	// (wasMoved) and the heap cell is then destroyed by nobody.
 	let operand = expr;
 	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType);
 	if (thunk != null as unknown as Node) operand = thunk;
@@ -962,22 +960,37 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
-function declaredTagUnionOf(expr: Node): Type | null {
+function declaredTypeOfLocation(loc: Node): Type | null {
+	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null ? loc.resolvedSym.symbolType : null;
+	if (loc.kind != NodeKind.MemberExpr) return null;
+	const md = loc.data as MemberExprData;
+	const owner = md.object != null ? peelToStructOrUnion(md.object.nodeType) : null;
+	if (owner == null || owner.kind != TypeKind.Struct) return null;
+	for (let i = 0; i < owner.typeNames.length && i < owner.typeChildren.length; i += 1) {
+		if (owner.typeNames[i] == md.property) return owner.typeChildren[i];
+	}
+	return null;
+}
+
+export function declaredTagUnionOf(expr: Node): Type | null {
 	let walk: Node = expr;
 	while (walk != null && walk.kind == NodeKind.TypeAssertion) {
 		walk = (walk.data as TypeAssertionData).asExpr;
 	}
-	if (walk == null || walk.kind != NodeKind.Identifier || walk.resolvedSym == null) return null;
-	const t = walk.resolvedSym.symbolType;
-	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return null;
-	if (unwrapRefNullUnion(t) != null) return null;
+	if (walk == null) return null;
+	const t = declaredTypeOfLocation(walk);
+	return t != null && isSlotUnion(t) ? t : null;
+}
+
+export function isSlotUnion(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
+	if (unwrapRefNullUnion(t) != null) return false;
 	let allStrLit = true;
 	for (const child of t.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return null;
+		if (child == null || child.kind == TypeKind.Null) return false;
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	if (allStrLit) return null;
-	return t;
+	return !allStrLit;
 }
 
 // The projection twin of widenVariantToUnion: a flow-narrowed reference whose
@@ -1010,12 +1023,14 @@ export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type): Node {
 	const vi = tagUnionMemberSlot(declared, exprType);
 	if (vi < 0) return null as unknown as Node;
+	expr.nodeType = declared;
 	return hiddenSlotConv(expr, declared.typeChildren[vi], vi);
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type): Node {
-	if (carrier.typeReturn == null || narrowed.typeReturn == null) return null as unknown as Node;
-	const vi = tagUnionMemberSlot(carrier.typeReturn, narrowed.typeReturn);
+	const payload = isMaybeType(narrowed) ? narrowed.typeReturn : unwrapRefNullUnion(narrowed);
+	if (carrier.typeReturn == null || payload == null) return null as unknown as Node;
+	const vi = tagUnionMemberSlot(carrier.typeReturn, payload);
 	if (vi < 0) return null as unknown as Node;
 	return hiddenSlotConv(expr, narrowed, vi);
 }
