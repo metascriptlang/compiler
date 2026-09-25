@@ -1385,7 +1385,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
 		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryToLoop(dctx); return stmt; },
-		NodeKind.ThrowStmt => processThrow(stmt, dctx, sloc),
+		NodeKind.ThrowStmt => processThrow(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
@@ -2038,35 +2038,10 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	return false;
 }
 
-// Nim pRaiseStmt: the raise argument is a sink. An owned-local identifier is
-// moved (destructiveMoveVar via the Consumed walk); a non-movable RC source
-// (field/element read) is copy-temp'd — `tmp = copy(arg); raise tmp`
-// (injectdestructors.nim:773) — so the raise machinery owns exactly one live
-// reference and no aliasing second owner survives the unwind. String throws
-// stay untouched: msThrow copies the message (MS sugar outside the ref domain).
-function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node {
+function processThrow(stmt: Node, dctx: DrcContext): Node {
 	setNeedsTryAll(dctx);
 	const td = stmt.data as ThrowStmtData;
-	const at = td.throwArg.nodeType;
-	if (at == null || at.kind == TypeKind.String) return stmt;
-	const rc = classifyRc(at, dctx);
-	if (!rc.needsCleanup) return stmt;
-	if (td.throwArg.kind == NodeKind.Identifier) {
-		td.throwArg = processNode(td.throwArg, dctx, DrcMode.Consumed);
-		return stmt;
-	}
-	if (td.throwArg.kind == NodeKind.MemberExpr || td.throwArg.kind == NodeKind.ArrayAccess) {
-		const excSym = freshTempSym(dctx.ctx, "exc", at);
-		const tmpDecl = makeVarDecl(excSym.name, td.throwArg, DeclKind.Const, sloc);
-		tmpDecl.nodeType = at;
-		tmpDecl.resolvedSym = excSym;
-		const rcCopy = sinkClassify(at, dctx);
-		const increfRef = rcCopy.copyFn != null ? makeTypedIdentResolved(rcCopy.copyFn, null, sloc) : runtimeRef("msIncref", sloc);
-		const incref = makeExprStmt(
-			makeCall(increfRef, [makeIdentResolved(excSym, sloc)], sloc), sloc);
-		td.throwArg = makeIdentResolved(excSym, sloc);
-		return makeBlock([tmpDecl, incref, stmt], sloc);
-	}
+	td.throwArg = processNode(td.throwArg, dctx, DrcMode.SinkArg);
 	return stmt;
 }
 
