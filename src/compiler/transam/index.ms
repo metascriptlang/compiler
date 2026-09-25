@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, isExportedBy, Severity, CancelCtx, createContext } from "../../checker/context";
+import { CheckerContext, CancelCtx, createContext } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -368,7 +368,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 		program = parseResult.value;
 	}
 	db.trees.set(parseNodeKey(fileId), program);
-	const parseHash = transAmHashNode(program);
+	const parseHash = taHashString(source);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
 }
@@ -538,27 +538,9 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 	return entries;
 }
 
-// Check if an absolute path matches an import specifier
-// Hash checker result for Salsa early cutoff. If error count + exported symbol
-// signatures are unchanged, dependents stay GREEN (comment-only edits, etc.).
-function hashCheckerResult(ctx: CheckerContext): number {
-	if (ctx == null) return 0;
-	// Only hash Error-severity errors (hints/warnings don't affect dependents)
-	let errorCount = 0;
-	for (const err of ctx.errors) {
-		if (err.severity == Severity.Error) errorCount = errorCount + 1;
-	}
-	let h: number = errorCount;
-	if (ctx.table != null && ctx.table.current != null) {
-		const scope = ctx.table.current;
-		for (const sym of scope.symbols.values()) {
-			if (isExportedBy(ctx, sym)) {
-				// Hash name + type kind so type changes invalidate dependents
-				const typeKind = sym.symbolType != null ? sym.symbolType.kind : 0;
-				h = (h * 31 + taHashString(sym.name) + typeKind) % 2147483647;
-			}
-		}
-	}
+function checkOutputHash(ctx: CheckerContext, inputHashes: number[]): number {
+	let h: number = ctx != null ? checkErrorCount(ctx) : 0;
+	for (const input of inputHashes) h = (h * 31 + input) % 2147483647;
 	return h;
 }
 
@@ -636,6 +618,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const parseEntry = cacheGet(db.cache, pKey);
 	const parseHash = parseEntry != null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
+	const inputHashes: number[] = [parseHash];
 
 	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
 	// Parse dep: structural changes (new/removed declarations).
@@ -646,10 +629,14 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		const depId = importDepIds[di];
 		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
 		const depParseEntry = cacheGet(db.cache, depParseKey);
-		recordDependency(db.depStack, depParseKey, depParseEntry != null ? depParseEntry.outputHash : 0);
+		const depParseHash = depParseEntry != null ? depParseEntry.outputHash : 0;
+		recordDependency(db.depStack, depParseKey, depParseHash);
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
 		const depCheckEntry = cacheGet(db.cache, depCheckKey);
-		recordDependency(db.depStack, depCheckKey, depCheckEntry != null ? depCheckEntry.outputHash : 0);
+		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
+		recordDependency(db.depStack, depCheckKey, depCheckHash);
+		inputHashes.push(depParseHash);
+		inputHashes.push(depCheckHash);
 	}
 
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
@@ -678,7 +665,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	const checkHash = hashCheckerResult(checkerCtx);
+	const checkHash = checkOutputHash(checkerCtx, inputHashes);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
 	db.checkInProgress.delete(filePath);
 	return checkerCtx;
@@ -993,35 +980,25 @@ test "unused .h import identifier gets warning via Phase B" {
 
 // ===== Salsa Early Cutoff Integration Tests =====
 
-test "comment-only edit keeps typecheck cache green" {
+test "a comment-only edit rechecks the module" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1;");
-	// Run full pipeline to populate cache
 	dbTypeCheck(db, "test.ms");
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const before = cacheGet(db.cache, checkKey);
-	assert before != null;
-	assert before.state == TaQueryState.Green;
-	const computedBefore = before.computedAt;
+	assert cacheGet(db.cache, checkKey).state == TaQueryState.Green;
 
-	// Edit: add comment only (no semantic change)
 	dbSetFileText(db, "test.ms", "const x = 1; // comment");
-	assert db.revision.value == 2;
-
-	// Parse must recompute (file hash changed)
-	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
-	const parseEntry = cacheGet(db.cache, parseKey);
-	assert parseEntry.state == TaQueryState.Red;
-
-	// Force parse recompute
 	dbParse(db, "test.ms");
+	assert !tryMarkGreen(db.cache, db.fileInput, checkKey, db.revision.value);
+}
 
-	// TypeCheck should verify GREEN via early cutoff (parse output hash unchanged)
-	assert tryMarkGreen(db.cache, db.fileInput, checkKey, db.revision.value);
-	const after = cacheGet(db.cache, checkKey);
-	assert after.state == TaQueryState.Green;
-	// computedAt should NOT change (wasn't recomputed, just verified)
-	assert after.computedAt == computedBefore;
+test "an unchanged text keeps the module's check green" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "const x = 1;");
+	const first = dbTypeCheck(db, "test.ms");
+	dbSetFileText(db, "test.ms", "const x = 1;");
+	dbParse(db, "test.ms");
+	assert dbTypeCheck(db, "test.ms") == first;
 }
 
 test "real code edit invalidates typecheck" {
@@ -1297,4 +1274,53 @@ test "two dbs keep their own trees and contexts for the same file id" {
 	dbTypeCheck(second, "/test/second.ms");
 	assert dbParse(first, "/test/first.ms") == firstTree;
 	assert dbTypeCheck(first, "/test/first.ms") == firstCtx;
+}
+
+import { typeDisplayName } from "../../checker/types";
+
+function checkChain(db: TransAmDb, paths: string[]): CheckerContext {
+	for (const path of paths) dbParse(db, path);
+	let last = null as unknown as CheckerContext;
+	for (const path of paths) last = dbTypeCheck(db, path);
+	return last;
+}
+
+function localTypeName(ctx: CheckerContext, name: string): string {
+	const sym = lookupLocal(ctx.table, name);
+	return sym != null ? typeDisplayName(sym.symbolType) : "";
+}
+
+test "an inferred export type change reaches an importer of an importer" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/chain/logic.ms", "export function value(): int32 { return 1; }");
+	dbSetFileText(db, "/chain/mid.ms", 'import { value } from "./logic";
+export function midValue() { return value(); }');
+	dbSetFileText(db, "/chain/far.ms", 'import { midValue } from "./mid";
+export const farValue = () => midValue();');
+	dbSetFileText(db, "/chain/view.ms", 'import { midValue } from "./mid";
+import { farValue } from "./far";
+const v = midValue();
+const w = farValue();');
+	const edges = [["/chain/mid.ms", "/chain/logic.ms"], ["/chain/far.ms", "/chain/mid.ms"], ["/chain/view.ms", "/chain/mid.ms"], ["/chain/view.ms", "/chain/far.ms"]];
+	for (const e of edges) recordModuleImport(db.moduleDeps, getFileId(db.fileInput, e[0]), getFileId(db.fileInput, e[1]));
+	const order = ["/chain/logic.ms", "/chain/mid.ms", "/chain/far.ms", "/chain/view.ms"];
+	const before = checkChain(db, order);
+	assert localTypeName(before, "v") == "int32";
+	assert localTypeName(before, "w") == "int32";
+	dbSetFileText(db, "/chain/logic.ms", "export function value(): int64 { return 1; }");
+	const after = checkChain(db, order);
+	assert localTypeName(after, "v") == "int64";
+	assert localTypeName(after, "w") == "int64";
+}
+
+test "a line shift in a module rechecks it at the new positions" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/shift/a.ms", "export function one(): int32 { return 1; }");
+	checkChain(db, ["/shift/a.ms"]);
+	assert (dbGetCheckedProgram(db, "/shift/a.ms").data as ProgramData).programStmts[0].location.line == 1;
+	dbSetFileText(db, "/shift/a.ms", "
+
+export function one(): int32 { return 1; }");
+	checkChain(db, ["/shift/a.ms"]);
+	assert (dbGetCheckedProgram(db, "/shift/a.ms").data as ProgramData).programStmts[0].location.line == 3;
 }
