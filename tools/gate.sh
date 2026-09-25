@@ -589,7 +589,7 @@ narrow_for() {
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm,raiser"
+    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }
