@@ -252,6 +252,7 @@ let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
 export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return isAssignableInner(source, target);
+	if (source == target) return true;
 	if (pairOnStack(_assignSources, _assignTargets, source, target)) return true;
 	if (_assignSources.length >= RELATION_MAX_DEPTH) return false;
 	_isaCount = _isaCount + 1;
