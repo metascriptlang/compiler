@@ -61,12 +61,17 @@ export function isNominalMismatch(source: Type | null, target: Type | null): boo
 	return !isAssignable(source, target);
 }
 
-let _reprDepth = 0;
+const _reprSources: Type[] = [];
+const _reprTargets: Type[] = [];
 export function isReinterpretUnsafe(source: Type | null, target: Type | null): boolean {
-	if (_reprDepth > 12) return false;
-	_reprDepth = _reprDepth + 1;
+	if (source == null || target == null) return false;
+	if (pairOnStack(_reprSources, _reprTargets, source, target)) return false;
+	if (_reprSources.length >= RELATION_MAX_DEPTH) return true;
+	_reprSources.push(source);
+	_reprTargets.push(target);
 	const result = isReinterpretUnsafeInner(source, target);
-	_reprDepth = _reprDepth - 1;
+	_reprSources.pop();
+	_reprTargets.pop();
 	return result;
 }
 
@@ -231,18 +236,32 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	return false;
 }
 
-let _assignDepth = 0;
+const RELATION_MAX_DEPTH = 64;
+
+function pairOnStack(sources: Type[], targets: Type[], source: Type | null, target: Type | null): boolean {
+	for (let i = 0; i < sources.length; i += 1) {
+		if (sources[i] == source && targets[i] == target) return true;
+	}
+	return false;
+}
+
+const _assignSources: Type[] = [];
+const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
 let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
 export function isAssignable(source: Type | null, target: Type | null): boolean {
-	if (_assignDepth > 20) return true;
+	if (source == null || target == null) return isAssignableInner(source, target);
+	if (pairOnStack(_assignSources, _assignTargets, source, target)) return true;
+	if (_assignSources.length >= RELATION_MAX_DEPTH) return false;
 	_isaCount = _isaCount + 1;
-	_assignDepth = _assignDepth + 1;
+	_assignSources.push(source);
+	_assignTargets.push(target);
 	const _isa0 = performance.now();
 	const result = isAssignableInner(source, target);
 	_isaTime = _isaTime + (performance.now() - _isa0);
-	_assignDepth = _assignDepth - 1;
+	_assignSources.pop();
+	_assignTargets.pop();
 	return result;
 }
 
@@ -906,12 +925,17 @@ function sameTypeInner(a: Type, b: Type): boolean {
 	};
 }
 
-let _relationDepth = 0;
+const _relationFormals: Type[] = [];
+const _relationActuals: Type[] = [];
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
-	if (_relationDepth > 20) return TypeRelation.Generic;
-	_relationDepth = _relationDepth + 1;
+	if (formal == null || actual == null) return typeRelationInner(formal, actual);
+	if (pairOnStack(_relationFormals, _relationActuals, formal, actual)) return TypeRelation.Exact;
+	if (_relationFormals.length >= RELATION_MAX_DEPTH) return TypeRelation.None;
+	_relationFormals.push(formal);
+	_relationActuals.push(actual);
 	const result = typeRelationInner(formal, actual);
-	_relationDepth = _relationDepth - 1;
+	_relationFormals.pop();
+	_relationActuals.pop();
 	return result;
 }
 

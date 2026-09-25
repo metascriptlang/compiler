@@ -230,3 +230,4 @@ import "./bug521GenericInstanceArgsInvariant";
 import "./bug522UnionAndTupleRelateByMember";
 import "./bug523IntegerIsNotAnEnum";
 import "./bug524OverloadArgumentsRelated";
+import "./bug525RelationCycleNotDepth";
