@@ -234,6 +234,8 @@ import "./bug208_try_converts_error";
 import "./bug209_try_error_type_mismatch";
 import "./bug210_const_binding_write";
 import "./bug211_writable_bindings";
+import "./bug216MethodCallReceiverIsArgZero";
+import "./bug217MethodCallReceiverRefused";
 import "./bug218GenericReadonlyViewSubstitution";
 import "./bug219GenericCtorThisIsItsInstance";
 import "./bug220GenericCtorThisBindsTypeParams";
