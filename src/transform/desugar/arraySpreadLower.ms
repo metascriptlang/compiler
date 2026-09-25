@@ -14,7 +14,7 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
-	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
+	ArrayLiteralData, SpreadExprData, IdentifierData, BinaryExprData, ConditionalExprData, Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type } from "../../checker/types";
@@ -23,7 +23,7 @@ import { walkExpandBlocks } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
-	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef,
+	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef, makeNull, makeIf,
 } from "../util";
 
 function isLowerableSpreadLiteral(node: Node): boolean {
@@ -40,6 +40,24 @@ function isLowerableSpreadLiteral(node: Node): boolean {
 	return false;
 }
 
+function holdsSpreadLiteral(node: Node): boolean {
+	const found: Node[] = [];
+	collectSpreadLiterals(node, found);
+	return found.length > 0;
+}
+
+function conditionalGuard(c: Node): Node | null {
+	if (c.kind == NodeKind.ConditionalExpr) {
+		const cd = c.data as ConditionalExprData;
+		return holdsSpreadLiteral(cd.ternaryConsequent) || holdsSpreadLiteral(cd.ternaryAlternate) ? cd.ternaryCondition : null;
+	}
+	if (c.kind == NodeKind.BinaryExpr) {
+		const bd = c.data as BinaryExprData;
+		return (bd.operator == "&&" || bd.operator == "||") && holdsSpreadLiteral(bd.right) ? bd.left : null;
+	}
+	return null;
+}
+
 function collectSpreadLiterals(node: Node, out: Node[]): void {
 	if (node == null) return;
 	forEachChild(node, (c: Node): void => {
@@ -48,9 +66,47 @@ function collectSpreadLiterals(node: Node, out: Node[]): void {
 		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
 			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
 			|| k == NodeKind.BlockStmt) return;
+		const guard = conditionalGuard(c);
+		if (guard != null) {
+			collectSpreadLiterals(guard, out);
+			out.push(c);
+			return;
+		}
 		collectSpreadLiterals(c, out);
 	});
 	if (isLowerableSpreadLiteral(node)) out.push(node);
+}
+
+function guardedAssign(sym: Symbol, t: Type | null, value: Node, loc: SourceLocation): Node {
+	return makeBlock([makeExprStmt(makeAssign(typedRef(sym, t, loc), value, loc), loc)], loc);
+}
+
+function buildGuardedOwner(owner: Node, ctx: TransformContext, out: Node[]): void {
+	const loc = owner.location;
+	const t = owner.nodeType;
+	const resSym = freshTempSym(ctx, "sprc", t);
+	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
+	resDecl.resolvedSym = resSym;
+	resDecl.nodeType = t;
+	out.push(resDecl);
+	if (owner.kind == NodeKind.ConditionalExpr) {
+		const cd = owner.data as ConditionalExprData;
+		out.push(makeIf(cd.ternaryCondition, guardedAssign(resSym, t, cd.ternaryConsequent, loc), guardedAssign(resSym, t, cd.ternaryAlternate, loc), loc));
+	} else {
+		const bd = owner.data as BinaryExprData;
+		const lhsSym = freshTempSym(ctx, "sprl", bd.left.nodeType);
+		const lhsDecl = makeVarDecl(lhsSym.name, bd.left, DeclKind.Const, loc);
+		lhsDecl.resolvedSym = lhsSym;
+		out.push(lhsDecl);
+		const keep = guardedAssign(resSym, t, typedRef(lhsSym, bd.left.nodeType, loc), loc);
+		const rhs = guardedAssign(resSym, t, bd.right, loc);
+		const isAnd = bd.operator == "&&";
+		out.push(makeIf(typedRef(lhsSym, bd.left.nodeType, loc), isAnd ? rhs : keep, isAnd ? keep : rhs, loc));
+	}
+	const resData: IdentifierData = { name: resSym.name };
+	owner.kind = NodeKind.Identifier;
+	owner.data = resData;
+	owner.resolvedSym = resSym;
 }
 
 function typedRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
@@ -144,7 +200,10 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	collectSpreadLiterals(stmt, lits);
 	if (lits.length == 0) return [stmt];
 	const out: Node[] = [];
-	for (const lit of lits) buildExpansion(lit, ctx, out);
+	for (const lit of lits) {
+		if (lit.kind == NodeKind.ArrayLiteral) buildExpansion(lit, ctx, out);
+		else buildGuardedOwner(lit, ctx, out);
+	}
 	out.push(stmt);
 	return out;
 }
