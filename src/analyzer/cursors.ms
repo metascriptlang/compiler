@@ -27,7 +27,7 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 
@@ -380,7 +380,9 @@ function liveRanges(p: Partitions, node: Node | null): void {
 			p.abstractTime -= 1; // Symbols don't advance time
 			// Auto-register referenced variables not yet seen (params, outer scope).
 			// Treat as "external" — alive for the full function, never a cursor candidate.
-			registerVariable(p, node.resolvedSym, true);
+			if (node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global)) {
+				registerVariable(p, node.resolvedSym, true);
+			}
 			const id = variableId(p, node.resolvedSym);
 			if (id >= 0) {
 				if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
@@ -532,6 +534,10 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 	collectPathRoots(src, srcRoots);
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
+		if (hasFlag(srcSym, SymbolFlag.Global)) {
+			p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
+			continue;
+		}
 		const srcId = variableId(p, srcSym);
 		if (srcId >= 0) {
 			// Source lives shorter than dest → can't borrow
@@ -820,6 +826,24 @@ function getFuncBody(input: string): Node {
 	return null as unknown as Node;
 }
 
+function getFuncNamed(input: string, name: string): Node {
+	for (const stmt of getStmts(input)) {
+		let decl = stmt;
+		if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+		if (decl.kind == NodeKind.FunctionDecl && (decl.data as FunctionDeclData).fnName == name) {
+			return (decl.data as FunctionDeclData).fnBody;
+		}
+	}
+	return null as unknown as Node;
+}
+
+const BOXES = "class Box { v: string; constructor(v: string) { this.v = v; } }\n"
+	+ "class Holder { child: Box; constructor(s: string) { this.child = new Box(s); } }\n"
+	+ "class Top { mid: Holder; mids: Holder[]; constructor() { this.mid = new Holder(\"i\"); this.mids = []; } }\n"
+	+ "function replaceChild(h: Holder): void { h.child = new Box(\"n\"); }\n"
+	+ "function replaceFirst(arr: Box[]): void { arr[0] = new Box(\"n\"); }\n"
+	+ "function show(s: string): void { console.log(s); }\n";
+
 function isCursorNamed(node: Node | null, name: string): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declName == name) {
@@ -973,4 +997,16 @@ test "same-named declarations in sibling scopes are separate variables" {
 	const body = getFuncBody("function f(arr: string[]) { if (true) { const x = arr[0]; process(x); } else { const x = getValue(); } }");
 	inferCursors(body);
 	assert isCursorNamed(body, "x");
+}
+
+test "borrow from a module global is NOT cursor" {
+	const body = getFuncNamed(BOXES + "let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "borrow from an exported module global is NOT cursor" {
+	const body = getFuncNamed(BOXES + "export let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
 }
