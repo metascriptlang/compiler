@@ -226,3 +226,5 @@ import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug450SiblingBindingIdentity";
+import "./bug452GeneratorLocalKeepsType";
+import "./bug453GeneratorSameNameBindings";
