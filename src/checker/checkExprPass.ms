@@ -62,6 +62,14 @@ function writeThroughArc(target: Node): boolean {
 	return false;
 }
 
+function literalElemType(el: Node): Type | null {
+	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
+	let src = (el.data as SpreadExprData).spreadArg.nodeType;
+	if (src != null && src.kind == TypeKind.Ref && src.typeReturn != null) src = src.typeReturn;
+	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray) && src.typeReturn != null) return src.typeReturn;
+	return el.nodeType;
+}
+
 function reportArcWrite(ctx: CheckerContext, target: Node): void {
 	addError(ctx, "cannot write through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)",
 		target.location.line, target.location.column);
@@ -1714,6 +1722,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						}
 						elemType = joinedElem;
 					}
+				}
+				if (elemExpected == null && isUnresolvedType(elemType)) {
+					const spreadTypes: Type[] = [];
+					for (const el of d.elements) {
+						const st = literalElemType(el);
+						if (st != null) spreadTypes.push(st);
+					}
+					const fromSpreads = joinBranchTypes(spreadTypes);
+					if (!isUnresolvedType(fromSpreads)) elemType = fromSpreads;
 				}
 				if (elemExpected == null && elemType != null && closureStorageType(elemType) != elemType) {
 					const storedElem = closureStorageType(elemType);
