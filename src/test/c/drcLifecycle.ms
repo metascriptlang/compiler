@@ -300,3 +300,48 @@ test "E2E C: a field reached through a non-owning local is never moved out" {
 	assert !c.value.contains("WasMoved(rhs_1_->own)");
 	assert !c.value.contains("WasMoved((*rhs_1_).own)");
 }
+
+test "E2E C: a narrowed local returned through an identity assertion is copied" {
+	const c = compileToC(`
+		struct Box { names: string[]; count: int32; }
+		function get(): Box {
+			let got: Box | null = null;
+			got = { names: ["a"], count: 1 };
+			if (got == null) return { names: [], count: 0 };
+			return got!;
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("Copy(&(dollarborrow");
+	assert !c.value.contains("*__result = got_1_.value;");
+}
+
+test "E2E C: a narrowed field returned through an identity assertion is copied" {
+	const c = compileToC(`
+		struct Box { names: string[]; count: int32; }
+		interface Slot { got: Box | null; }
+		function get(slot: Slot): Box {
+			if (slot.got == null) return { names: [], count: 0 };
+			return slot.got as Box;
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("&((*slot).got.value));");
+	assert !c.value.contains("*__result = (*slot).got.value;");
+}
+
+test "E2E C: a narrowed captured local returned through an identity assertion is copied" {
+	const c = compileToC(`
+		struct Box { names: string[]; count: int32; }
+		function get(): Box {
+			let got: Box | null = null;
+			const fill = (): void => { got = { names: ["a"], count: 1 }; };
+			fill();
+			if (got == null) return { names: [], count: 0 };
+			return got!;
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains(").got.value));");
+	assert !c.value.contains("*__result = (*_env");
+}

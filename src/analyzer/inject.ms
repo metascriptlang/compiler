@@ -2068,8 +2068,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		const origKind = d.argument.kind;
 		const origSym = origKind == NodeKind.Identifier ? d.argument.resolvedSym : noSym;
 
-		// Process return argument recursively with Consumed mode
-		d.argument = processNode(d.argument, dctx, DrcMode.Consumed);
+		d.argument = processNode(d.argument, dctx, rhsMode(d.argument));
 
 		// Borrowed RC pointer return: wrap in temp + incref to prevent use-after-free
 		if (needsReturnIncref(d.argument, dctx)) {
