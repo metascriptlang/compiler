@@ -225,4 +225,5 @@ import "./bug208StructIntoPtrVariable";
 import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
+import "./bug212Float32ConstFold";
 import "./bug330ArrayFieldCycleTraced";
