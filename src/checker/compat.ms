@@ -921,7 +921,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind == actual.kind) {
 		return match (formal.kind) {
 			TypeKind.Struct => {
-				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
+				if (formal == actual || sameStructType(formal, actual)) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
@@ -1452,6 +1452,16 @@ test "unknown = generic" {
 test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.IntConv; }
 
 test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.Subtype; }
+
+test "two object types of the same shape relate exactly, a different shape does not" {
+	const a = createRef(createStruct("", ["a", "x"], [createPrimitive(TypeKind.Int32), stringType()], true));
+	const same = createRef(createStruct("", ["a", "x"], [createPrimitive(TypeKind.Int32), stringType()], true));
+	const wider = createRef(createStruct("", ["a", "x", "y"], [createPrimitive(TypeKind.Int32), stringType(), stringType()], true));
+	const other = createRef(createStruct("", ["b"], [stringType()], true));
+	assert typeRelation(a, same) == TypeRelation.Exact;
+	assert typeRelation(a, wider) == TypeRelation.Subtype;
+	assert typeRelation(a, other) == TypeRelation.None;
+}
 
 test "exact args" {
 	const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);

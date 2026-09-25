@@ -227,5 +227,6 @@ import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug420SpreadOperandIsFullExpression";
 import "./bug421PatternAssignmentTargets";
+import "./bug532SameShapeObjectTypesRelateExactly";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
