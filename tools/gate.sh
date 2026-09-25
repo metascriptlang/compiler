@@ -77,6 +77,11 @@ inert_range() {
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+tree_key() {
+  local t
+  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
+  [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
+}
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
 LANE_LIMIT=${GATE_LANE_LIMIT:-5400}
@@ -385,6 +390,8 @@ $(printf '%s\n' "$off_main" | head -5 | sed 's/^/  /')"
 fi
 
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
+cand_key=""
+[ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
@@ -529,8 +536,26 @@ reusable_programs() {
   } | program_keys
 }
 
+
+keep_emits() {
+  local dir=$1 side=$2
+  mkdir -p "$dir"
+  awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    ($1 in key) { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); print key[$1] > (f ".key"); close(f ".key") }' "$side"
+}
+
+adopt_candidate() {
+  local dir="$OUT/ctl-$cand_key"
+  [ -n "$cand_key" ] && [ "$reuse" -eq 0 ] && [ -x "$CAND" ] || return 0
+  [ -x "$dir/msc" ] && return 0
+  mkdir -p "$dir.tmp" && cp "$CAND" "$dir.tmp/msc" && keep_emits "$dir.tmp/emit" "$EMIT/cand.sig" \
+    && rm -rf "$dir" && mv "$dir.tmp" "$dir" || rm -rf "$dir.tmp"
+  ls -dt "$OUT"/ctl-[0-9a-f]*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+}
+
 emit_control() {
-  local dir="$OUT/ctl/emit"
+  local dir="$2/emit"
   mkdir -p "$dir"
   reusable_programs >"$EMIT/ctl.keys"
   awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
@@ -547,21 +572,26 @@ emit_control() {
 select_whole() { select=0; say "gate: select gave up, no narrowing for $select_label ($1)"; }
 
 select_programs() {
-  local sha ctl="$OUT/ctl/msc" t0=$SECONDS n_all line
+  local sha key ctl_dir ctl t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  if [ ! -x "$ctl" ] || [ "$(cat "$OUT/ctl/sha" 2>/dev/null)" != "$sha" ]; then
-    rm -rf "$OUT/ctl" "$OUT/ctl-src"
-    mkdir -p "$OUT/ctl" "$OUT/ctl-src"
+  key=$(tree_key "$sha")
+  [ -n "$key" ] || { select_whole "cannot read the src and std trees at $sha"; return; }
+  ctl_dir="$OUT/ctl-$key" ctl="$OUT/ctl-$key/msc"
+  rm -rf "$OUT/ctl"
+  if [ ! -x "$ctl" ]; then
+    rm -rf "$ctl_dir" "$OUT/ctl-src"
+    mkdir -p "$ctl_dir" "$OUT/ctl-src"
     git archive "$sha" src | tar -x -C "$OUT/ctl-src" || { select_whole "cannot unpack src at $sha"; return; }
     (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
     [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
-    printf '%s\n' "$sha" >"$OUT/ctl/sha"
   fi
+  touch "$ctl_dir"
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
   list_programs >"$EMIT/programs"
-  emit_control "$ctl"
+  emit_control "$ctl" "$ctl_dir"
   emit_side "$CAND" "$EMIT/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  adopt_candidate
   n_all=$(grep -c . "$EMIT/programs")
   if [ "$(grep -c . "$EMIT/ctl.sig")" -ne "$n_all" ] || [ "$(grep -c . "$EMIT/cand.sig")" -ne "$n_all" ]; then
     select_whole "an emit pass lost programs"; return
