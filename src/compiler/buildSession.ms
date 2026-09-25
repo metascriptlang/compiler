@@ -37,6 +37,7 @@ export class BuildSession {
 	hcrTablesFingerprint: string;
 	staleReason: string;
 	moduleCount: int32;
+	lastBuilt: boolean;
 	loweredCount: int32;
 	instanceFingerprints: HashMap<Node, string>;
 	typeShapes: HashMap<Type, string>;
@@ -52,6 +53,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		hcrTablesFingerprint: "",
 		staleReason: "",
 		moduleCount: 0,
+		lastBuilt: false,
 		loweredCount: 0,
 		instanceFingerprints: new HashMap<Node, string>(),
 		typeShapes: new HashMap<Type, string>(),

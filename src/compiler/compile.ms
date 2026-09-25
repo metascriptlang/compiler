@@ -1965,23 +1965,17 @@ function emitDirOf(opts: CliOptions): string {
 
 interface WatchFeed {
 	watcher: FsWatch;
-	armed: boolean;
 	got: FsChanges | null;
 }
 
-function takeFeed(feed: WatchFeed, timeoutMs: number): FsChanges | null {
-	if (!feed.armed) {
-		feed.armed = true;
-		feed.got = null;
-		const target = feed;
-		nextChanges(target.watcher).then((changes: FsChanges): void => {
-			target.got = changes;
-			target.armed = false;
-		});
-	}
-	const start = performance.now();
-	while (feed.got == null && (timeoutMs < 0 || performance.now() - start < timeoutMs)) msIoRunOnce(50);
-	const changes = feed.got;
+function takeFeed(feed: WatchFeed): FsChanges {
+	feed.got = null;
+	const target = feed;
+	nextChanges(target.watcher).then((changes: FsChanges): void => {
+		target.got = changes;
+	});
+	while (feed.got == null) msIoRunOnce(50);
+	const changes = feed.got!;
 	feed.got = null;
 	return changes;
 }
@@ -1992,24 +1986,24 @@ function isWatchedSource(path: string): boolean {
 	return p.endsWith(".ms") || p.endsWith(".cms") || p.endsWith(".h");
 }
 
-function relevantChange(changes: FsChanges): boolean {
-	if (changes.rescan) return true;
+function changedSources(changes: FsChanges): string[] {
+	const sources: string[] = [];
 	for (const path of changes.paths) {
-		if (isWatchedSource(path)) return true;
+		if (isWatchedSource(path)) sources.push(path);
 	}
-	return false;
+	return sources;
 }
 
 function waitForSourceChange(feed: WatchFeed): boolean {
 	while (true) {
-		const first = takeFeed(feed, -1);
-		if (first == null || first!.ended) return false;
-		if (!relevantChange(first!)) continue;
-		while (true) {
-			const more = takeFeed(feed, 60);
-			if (more == null) return true;
-			if (more!.ended) return false;
-		}
+		const changes = takeFeed(feed);
+		if (changes.ended) return false;
+		const sources = changedSources(changes);
+		if (!changes.rescan && sources.length == 0) continue;
+		console.log(changes.rescan ? "watch: changed (rescan)" : `watch: changed ${sources.join(" ")}`);
+		const settle = performance.now();
+		while (performance.now() - settle < 60) msIoRunOnce(20);
+		return true;
 	}
 }
 
@@ -2055,7 +2049,7 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 			printDiag(`${error("error")}: --watch cannot watch ${root}: ${opened.error.message}`);
 			exit(1);
 		}
-		feed = { watcher: opened.value, armed: false, got: null };
+		feed = { watcher: opened.value, got: null };
 		console.log(`watch: watching ${root}`);
 	}
 	setRecoverableBuild(true);
@@ -2104,6 +2098,8 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
 	startSessionBuild(session);
+	const lastBuilt = session.lastBuilt;
+	session.lastBuilt = false;
 	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
 	initCache(opts.mode, opts.forceRebuild);
@@ -2121,6 +2117,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	setGraphLoadTiming(opts.showTime);
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
+	session.moduleCount = graph.loadOrder.length as int32;
 
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
 	// in resolveTargetGcMode (it has to happen before the check pass).
@@ -2211,13 +2208,15 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
-	if (!projectChanged && hcrBundleCurrent) {
+	const upToDate = session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent;
+	if (upToDate) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
 			writeDepsFile(graph, entryPath, depsDir);
 		}
+		session.lastBuilt = true;
 		return BuildStatus.UpToDate;
 	}
 
@@ -2253,7 +2252,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	// appended to that module's program BEFORE the module's transform/lower runs. Load order
 	// is dependency-first, so the owner is already past transform by the time a dependent
 	// instantiates it; hence we defer all transform to A2 and route instances by owner between.
-	session.moduleCount = graph.loadOrder.length as int32;
 	const checkedMods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[] = [];
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
@@ -2669,6 +2667,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		}
 		console.log(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
+		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
 	if (opts.emitC) {
@@ -2686,6 +2685,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		console.log(`${green("  Wrote")} ${bold(dispPath)}`);
 		console.log(success(`Emitted ${compiled + 1} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
+		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
 
@@ -2762,6 +2762,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
+		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
 	oFiles = [];
@@ -2791,6 +2792,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
+		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
 
@@ -2851,6 +2853,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("total", t0);
+	session.lastBuilt = true;
 	return BuildStatus.Built;
 }
 
