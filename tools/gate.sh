@@ -547,7 +547,7 @@ keep_emits() {
 
 adopt_candidate() {
   local dir="$OUT/ctl-$cand_key"
-  [ -n "$cand_key" ] && [ "$reuse" -eq 0 ] && [ -x "$CAND" ] || return 0
+  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
   [ -x "$dir/msc" ] && return 0
   mkdir -p "$dir.tmp" && cp "$CAND" "$dir.tmp/msc" && keep_emits "$dir.tmp/emit" "$EMIT/cand.sig" \
     && rm -rf "$dir" && mv "$dir.tmp" "$dir" || rm -rf "$dir.tmp"
@@ -725,6 +725,7 @@ run_guard_lane() {
 
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
+  [ "$lane" != build ] || rm -f "$CAND.key"
   case "$lane" in
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
@@ -732,6 +733,10 @@ lane_body() {
     boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
+  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
+    && [ "$(tree_key HEAD)" = "$cand_key" ]; then
+    printf '%s\n' "$cand_key" >"$CAND.key"
+  fi
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
