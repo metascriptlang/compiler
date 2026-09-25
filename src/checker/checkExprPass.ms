@@ -27,7 +27,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1350,6 +1350,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							: objE;
 					}
 					checkExpr(ctx, d.properties[fi], fieldExpected);
+					const errorsBeforeFit = ctx.errors.length;
 					// Auto-wrap directFn → closure when field type is closure (Reference parity)
 					if (fieldExpected != null) {
 						d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
@@ -1358,7 +1359,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					// checkExpr propagates expectedType for inference but doesn't enforce assignability.
 					const propActual = d.properties[fi].nodeType;
 					const fe = fieldExpected;
-					if (fe != null && propActual != null) {
+					if (fe != null && propActual != null && ctx.errors.length == errorsBeforeFit) {
 						if (!isUnresolvedType(fe)
 								&& !isUnresolvedType(propActual)
 								&& propActual.kind != TypeKind.Error
@@ -1756,7 +1757,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
 			ctx.condEvalDepth = ctx.condEvalDepth - 1;
-			if (expectedType != null) {
+			if (expectedType != null
+				&& branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
+				&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)) {
 				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
 				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
 			} else {
@@ -2422,7 +2425,7 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const unwrapped = awaitedType(returnExpected);
 			if (unwrapped != null) returnExpected = unwrapped;
 		}
-		d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
+		if (returnExpected.kind != TypeKind.Void) d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
 		const finalRetType = d.arrowBody.nodeType;
 		if (finalRetType != null
 			&& !isUnresolvedType(finalRetType)

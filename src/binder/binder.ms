@@ -859,6 +859,10 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	// fall-through path to the ok variant.
 	if (d.callee != null && isExitCallee(d.callee)) {
 		state.currentFlow = state.unreachableFlow;
+		return;
+	}
+	if (d.arguments.length > 0 || (d.callee != null && d.callee.kind == NodeKind.MemberExpr)) {
+		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
 	}
 }
 
@@ -880,6 +884,9 @@ function bindNewExpr(state: BinderState, node: Node): void {
 	if (d.newCallee != null) bindExpression(state, d.newCallee);
 	for (const arg of d.newArguments) {
 		bindExpression(state, arg);
+	}
+	if (d.newArguments.length > 0) {
+		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
 	}
 }
 

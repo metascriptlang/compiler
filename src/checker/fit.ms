@@ -4,7 +4,7 @@
 
 import { BinaryExprData, CallingConvention, IdentifierData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { convertsImplicitly, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
@@ -462,11 +462,13 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
 	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
-	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
-	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
+	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
+	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
+	if (aEnum && bEnum) return a.typeName == b.typeName;
+	if (aEnum || bEnum) return isNumeric(aEnum ? b : a) || (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
-	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
 }
@@ -1147,11 +1149,18 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}
+	if (formal.kind == TypeKind.Enum && isIntegerType(exprType) && isNodeIntLit(expr)) {
+		expr.nodeType = formal;
+		return expr;
+	}
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
 		return expr;
 	}
-	if (formal.kind == exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
+	if (formal.kind == exprType.kind && !isReinterpretUnsafe(exprType, formal)) {
+		if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
+		return expr;
+	}
 	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
 		|| ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
 			&& formal.kind == TypeKind.CString)) {
@@ -1190,18 +1199,46 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
-	// Scope: the memory-safety class only — container element-repr and pointer vs
-	// scalar. General `!isAssignable` rejection is intentionally NOT applied — see
-	// NIM-REF CK-51 "Container element assignability + enforcement site" (terminal;
-	// two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isStructIntoPtr(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — a struct value is not a pointer, and its address is never taken implicitly", expr.location.line, expr.location.column);
 		return expr;
 	}
 	if (isReinterpretUnsafe(exprType, formal)) {
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
+		return expr;
 	}
+	if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
 	return expr;
+}
+
+function refusedOnlyForNull(exprType: Type, formal: Type): boolean {
+	if (exprType.kind == TypeKind.Null) return true;
+	if (isMaybeType(exprType) && exprType.typeReturn != null) return isAssignable(exprType.typeReturn, formal);
+	if (exprType.kind != TypeKind.Union) return false;
+	let carriesNull = false;
+	for (const member of exprType.typeChildren) {
+		if (member == null) continue;
+		if (member.kind == TypeKind.Null) carriesNull = true;
+		else if (!isAssignable(member, formal)) return false;
+	}
+	return carriesNull;
+}
+
+export function slotRefuses(exprType: Type, formal: Type): boolean {
+	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
+	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal) && !refusedOnlyForNull(exprType, formal);
+}
+
+export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, formal: Type | null): boolean {
+	if (exprType == null || formal == null) return true;
+	if (isUnresolvedType(formal) || isUnknownType(formal) || formal.kind == TypeKind.GenericParam
+		|| hasGenericParams(formal) || isMaybeType(formal)) return true;
+	if (isUnresolvedType(exprType) || isUnknownType(exprType) || exprType.kind == TypeKind.Never) return true;
+	return !slotRefuses(exprType, formal) || convertsBetween(ctx, exprType, formal) || hasValueOfProtocol(ctx, exprType);
+}
+
+function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal), expr.location.line, expr.location.column);
 }
 
 // A float literal whose value has no fractional part converts exactly, so it

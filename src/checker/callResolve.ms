@@ -1,16 +1,16 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
+import { CandidateScore, convertsImplicitly, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, TypeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
+import { checkSwitchCase, fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -424,7 +424,7 @@ function cloneDefaultNode(node: Node): Node {
 
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
-function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
+function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null,
 	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = ""): void {
 	if (defaults == null) return;
 	// A default expression's free identifiers belong to the callee's module (where
@@ -459,21 +459,22 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
 // Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
-function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
-	totalParams: number, defaultOffset: number): void {
-	const cd = callNode.data as CallExprData;
-	// Get defaults from Symbol (Reference: defaults stored on symbol)
-	let fnDefaults: Node[] = null as unknown as Node[];
-	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
-	const defSym = cd.callee.resolvedSym != null ? cd.callee.resolvedSym : callNode.resolvedSym;
-	if (defSym != null) {
-		if (defSym.defaultParams != null && defSym.defaultParams.length > 0) {
-			fnDefaults = defSym.defaultParams;
-		} else if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
-			const declData = defSym.declNode.data as FunctionDeclData;
-			if (declData.fnDefaults != null) fnDefaults = declData.fnDefaults;
-		}
+function declaredDefaults(defSym: Symbol | null): Node[] | null {
+	if (defSym == null) return null;
+	if (defSym.defaultParams != null && defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
+		const declData = defSym.declNode.data as FunctionDeclData;
+		if (declData.fnDefaults != null) return declData.fnDefaults;
 	}
+	return null;
+}
+
+function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
+	totalParams: number, defaultOffset: number, chosen: Symbol | null = null): void {
+	const cd = callNode.data as CallExprData;
+	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
+	const defSym = chosen != null ? chosen : (cd.callee.resolvedSym != null ? cd.callee.resolvedSym : callNode.resolvedSym);
+	const fnDefaults = declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
 	let paramTypes: Type[] = null as unknown as Type[];
@@ -1418,7 +1419,7 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
 						+ " — a struct value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
 						node.location.line, node.location.column);
-				} else if (needsStdConv(argTypes[pi], paramType)) {
+				} else if (convertsImplicitly(argTypes[pi], paramType)) {
 					// float/number → integer: the fractional part would be cut
 					// with no annotation beside the value to warn the reader —
 					// the cut has to be the programmer's word (`as intN`).
@@ -2262,6 +2263,31 @@ function checkArgsAgainstCandidate(ctx: CheckerContext, args: Node[], candType: 
 // (Wigham, 2024) proposed formal speculation, was marked Experimental,
 // closed unmerged. Known leakage bugs microsoft/TypeScript#49820, #13430
 // are accepted.
+function intLiteralArg(arg: Node): Node | null {
+	if (isNodeIntLit(arg)) return arg;
+	if (arg.kind == NodeKind.UnaryExpr) {
+		const u = arg.data as UnaryExprData;
+		if (u.unaryOp == "-" && isNodeIntLit(u.operand)) return u.operand;
+	}
+	return null;
+}
+
+function literalRelations(paramTypes: Type[], args: Node[], argTypes: Type[]): int32[] {
+	const rels: int32[] = [];
+	for (let i = 0; i < args.length; i += 1) {
+		const lit = intLiteralArg(args[i]);
+		const formal = i < paramTypes.length ? skipModifier(paramTypes[i]) : null;
+		if (lit == null || formal == null || !isIntegerType(formal)
+			|| (argTypes[i] != null && argTypes[i].kind == formal.kind)) {
+			rels.push(-1);
+			continue;
+		}
+		const fits = literalFitsInType(lit, formal, lit != args[i]);
+		rels.push((fits ? TypeRelation.FromLiteral : TypeRelation.None) as int32);
+	}
+	return rels;
+}
+
 function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
 	const impl = findOverloadImpl(sym);
 	if (impl == null) {
@@ -2309,7 +2335,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	while (ci < candidates.length) {
 		const candType = candidates[ci];
 		if (candType == null || candType.kind != TypeKind.Function) { ci = ci + 1; continue; }
-		const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask);
+		const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
 		if (score.exactMatches < 0) { ci = ci + 1; continue; }
 		if (bestIdx < 0) {
 			bestIdx = ci;
@@ -2427,25 +2453,8 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// the winner sym to the body-bearing impl before mangling. Keeping
 	// the redirect localized to codegen avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
-	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null
-			&& d.arguments.length == winnerType.typeChildren.length) {
-		for (let wi = 0; wi < d.arguments.length; wi += 1) {
-			const wpt = winnerType.typeChildren[wi];
-			const wat = d.arguments[wi].nodeType;
-			if (wpt == null || wat == null) continue;
-			if (wpt.kind == TypeKind.CString
-					&& (wat.kind == TypeKind.String || wat.kind == TypeKind.StringLiteral)) {
-				d.arguments[wi] = synthCStringConv(d.arguments[wi], wpt);
-				argTypes[wi] = wpt;
-			} else if (needsStdConv(wat, wpt)) {
-				const wTok = createToken(TokenKind.Ident, "", d.arguments[wi].location.line);
-				const wConv = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[wi], convType: wpt }, wTok);
-				wConv.nodeType = wpt;
-				wConv.flags = wConv.flags.incl(NodeFlag.Sem);
-				d.arguments[wi] = wConv;
-				argTypes[wi] = wpt;
-			}
-		}
+	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
+		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
 	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
@@ -2522,7 +2531,8 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	}
 
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0);
+		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
+		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
 	}
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
@@ -3020,6 +3030,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	callCheckExpr(ctx, d.object, null);
 	const objType = d.object.nodeType;
 	if (objType == null) return inferredType();
+	if (objType.kind == TypeKind.Never) {
+		addError(ctx, `Property '${d.property}' does not exist on type 'never': the conditions that lead here leave no value for the object`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).
@@ -3990,17 +4005,20 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
+				const patternKind = p.kind;
 				// Extract enum member name — only unguarded arms count for exhaustiveness
-				if (p.kind == NodeKind.MemberExpr && !hasGuard) {
-					const pmd = p.data as MemberExprData;
-					coveredMembers.push(pmd.property);
-				}
+				let coveredName = "";
+				let covers = false;
+				if (patternKind == NodeKind.MemberExpr && !hasGuard) { coveredName = (p.data as MemberExprData).property; covers = true; }
 				// Tier 2: collect string literal patterns for exhaustiveness
-				if (p.kind == NodeKind.StringLiteral && !hasGuard) {
-					const sd = p.data as StringLiteralData;
-					coveredMembers.push(sd.value);
-				}
+				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
 				callCheckExpr(ctx, p, discType);
+				const errorsBeforePattern = ctx.errors.length;
+				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
+					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral) {
+					checkSwitchCase(ctx, d.matchDisc, p);
+				}
+				if (covers && ctx.errors.length == errorsBeforePattern) coveredMembers.push(coveredName);
 			}
 		}
 		// Phase 4: per-arm variant narrowing flows through the binder's
