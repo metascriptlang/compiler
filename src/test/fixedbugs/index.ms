@@ -233,3 +233,4 @@ import "./bug454JumpRunsSplitFinally";
 import "./bug455SplitStatementKinds";
 import "./bug457ClosureSwitchDiscriminant";
 import "./bug456AwaitResumeStateOwnEntry";
+import "./bug458JsPromiseThenValue";
