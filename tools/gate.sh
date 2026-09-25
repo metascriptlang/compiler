@@ -370,24 +370,37 @@ run_tools_lane() {
   return $rc
 }
 
-TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms"
+TIERS="src/test/js/index.ms src/test/c/index.ms src/test/fixedbugs/index.ms src/test/handoff/index.ms src/test/fmt/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/helpers.ms"
+
+part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
+
+test_one() {
+  local bin=$1 f=$2 part=$3; shift 3
+  env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" "$@" >"$part" 2>&1
+  echo $? >"$part.rc"
+}
 
 run_test_lane() {
-  local bin=$BUILDER files=src/index.ms flags="" rc=0 f part="$OUT/$1.part"
+  local rc=0 f part files=src/index.ms
   case "$1" in
-    suite-orc) flags=--gc=orc ;;
-    tests) bin=$CAND files=$TIERS ;;
+    suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
+    suite-orc) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite-orc src/index.ms)" --gc=orc ;;
+    tests)
+      files=$TIERS
+      for f in $files; do with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir & done
+      wait ;;
   esac
   for f in $files; do
-    env -u NO_COLOR -u FORCE_COLOR "$bin" test "$f" $flags >"$part" 2>&1 || rc=1
+    part=$(part_of "$1" "$f")
     cat "$part"
+    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
     if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
       printf 'NORESULT %s > no result\n' "$f"
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
     fi
+    rm -f "$part" "$part.rc"
   done
-  rm -f "$part"
   return $rc
 }
 
@@ -631,7 +644,7 @@ lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
   case "$lane" in
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
-    tests|suite|suite-orc) with_test_binary with_slot bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     boundary|corpus|san|guard|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
