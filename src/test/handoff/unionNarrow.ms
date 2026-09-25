@@ -26,10 +26,8 @@ test "union narrowing as-cast emits variant accessor" {
 			return d.flat;
 		}
 	`);
-	if (!r.ok) {
-		console.log("COMPILE ERROR: " + r.error);
-		assert false;
-	}
+	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
+	assert r.ok;
 	const cCode = r.value;
 	assert !cCode.contains("msAnon_");
 	assert cCode.contains("DocData_v3");
@@ -54,10 +52,8 @@ test "partial as-cast resolves to full variant" {
 			return d.flat;
 		}
 	`);
-	if (!r.ok) {
-		console.log("COMPILE ERROR: " + r.error);
-		assert false;
-	}
+	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
+	assert r.ok;
 	const cCode = r.value;
 	assert !cCode.contains("msAnon_");
 	assert cCode.contains("DocData_v3");

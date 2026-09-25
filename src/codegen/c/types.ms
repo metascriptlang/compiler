@@ -4,10 +4,10 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, inlineVariantStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { getGenericDecl } from "../../parser/context";
-import { monoTypeKey } from "../../monomorphize/registry";
+import { genericParamsOf } from "../../checker/types";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
@@ -858,7 +858,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
-		if (sharedName) ensureDrcProto(g, destroyHook, destroySym);
+		ensureDrcProto(g, destroyHook, destroySym);
 	} else if (sharedName && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
@@ -1058,12 +1058,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// `type UserId = distinct number` case handled above.
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
-			// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
-			// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
-			let instName = t.typeName;
-			for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-				instName = `${instName}${gi == 0 ? "__" : "_"}${monoTypeKey(t.typeChildren[gi])}`;
-			}
+			const instName = monoInstanceName(t);
 			const cacheKey = `object:${instName}`;
 			const cached = typeCacheGet(g.typeCache, cacheKey);
 			if (cached != "") return cached;
@@ -1072,9 +1067,23 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// Peel Ref/GenericInstance to reach the underlying Struct/Union body
 			// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
 			const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
+			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (instBody != null && instBody.kind == TypeKind.Struct) {
+				const bodyNames: string[] = [];
+				for (const n of instBody.typeNames) bodyNames.push(n);
+				const bodyChildren: Type[] = [];
+				for (const c of instBody.typeChildren) bodyChildren.push(c);
+				return genObjectType(g, createStruct(instName, bodyNames, bodyChildren, isStructType(instBody)));
+			}
+			if (instBody != null && instBody.kind == TypeKind.Union) {
+				const renamed = emptyType();
+				assignType(renamed, instBody);
+				renamed.typeName = instName;
+				return genUnionType(g, renamed);
+			}
 			if (baseType != null && baseType.kind == TypeKind.Struct) {
 				// Substitute generic params in fields with concrete type args
-				const genericDecl = getGenericDecl(t.typeName);
+				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
 					const paramNames = splitTopLevel(genericDecl, ",");
 					let concType: Type = baseType;
@@ -1101,7 +1110,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// tagged union. Required for `Result<T, E> = Ref<ResultData<T, E>>` style
 			// types where ResultData is a generic match-type.
 			if (baseType != null && baseType.kind == TypeKind.Union) {
-				const genericDecl = getGenericDecl(t.typeName);
+				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
 					const paramNames = splitTopLevel(genericDecl, ",");
 					let concType: Type = baseType;
@@ -1488,13 +1497,7 @@ function elemArrayCName(elem: Type): string {
 		if (rm != null) return elemArrayCName(rm);
 		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : mangle(elem.typeName);
 	}
-	if (elem.kind == TypeKind.GenericInstance) {
-		let instName = elem.typeName;
-		for (let gi = 0; gi < elem.typeChildren.length; gi += 1) {
-			instName = `${instName}${gi == 0 ? "__" : "_"}${monoTypeKey(elem.typeChildren[gi])}`;
-		}
-		return instName;
-	}
+	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
 		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
 	}

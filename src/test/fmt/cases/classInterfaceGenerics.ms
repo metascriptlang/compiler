@@ -2,11 +2,10 @@
 //
 // Symptom:    `class Box<T> { value: T }` formats to `class Box { value: T }`.
 //             `interface Pair<T, U> { ... }` similarly drops generics.
-// Note:       Generic params for classes/interfaces are stored in a parser
-//             side-channel (getGenericDecl by name), not in the AST node
-//             data — so the printer must consult that channel.
+// Note:       Generic params for classes/interfaces live on the declaration
+//             node's `typeArg`, not in its NodeData.
 // Fix:        printClassDecl + printInterfaceDecl emit `<...>` after name
-//             when getGenericDecl returns non-empty.
+//             when the declaration's `typeArg` is non-empty.
 
 import { assertFmtPreservesAst } from "../roundtrip";
 

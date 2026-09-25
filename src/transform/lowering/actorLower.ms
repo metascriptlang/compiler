@@ -26,7 +26,7 @@ import {
 	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
-import { getGenericDecl } from "../../parser/context";
+import { genericParamsOf } from "../../checker/types";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
@@ -40,7 +40,7 @@ function ensureGIBody(t: Type | null): void {
 	if (t.kind != TypeKind.GenericInstance) return;
 	if (t.typeReturn != null) return;
 	if (t.typeName == "") return;
-	const params = getGenericDecl(t.typeName);
+	const params = genericParamsOf(t);
 	if (params != "") instantiateGenericBody(t, params);
 }
 

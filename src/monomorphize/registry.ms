@@ -129,7 +129,7 @@ export function monoTypeKey(t: Type | null): string {
 			return t.typeName;
 		},
 		TypeKind.GenericInstance => {
-			let key = t.typeName;
+			let key = monoBaseName(t.typeName, monoGenericOwner(t));
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				key = key + "_" + monoTypeKey(t.typeChildren[i]);

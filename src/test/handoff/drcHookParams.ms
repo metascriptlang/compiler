@@ -13,10 +13,8 @@ function contains(haystack: string, needle: string): boolean {
 test "DRC hooks use pointer params for small interface" {
 	const source = "interface SmallThing {\n\tname: string;\n}\nfunction makeIt(): SmallThing {\n\treturn { name: \"hello\" };\n}\nconst x = makeIt();\n";
 	const result = compileToC(source);
-	if (!result.ok) {
-		console.log("ERROR: " + result.error);
-		assert false;
-	}
+	if (!result.ok) console.log("ERROR: " + result.error);
+	assert result.ok;
 	const c = result.value;
 	// Find the destroy signature
 	const idx = c.indexOf("SmallThingDestroy(");

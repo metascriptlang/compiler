@@ -6,12 +6,12 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
+import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
-import { mangleMonoName } from "../monomorphize/registry";
+import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch } from "./fit";
@@ -458,7 +458,7 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
 	// to a location-keyed side channel that still holds the original (unsubstituted)
 	// strings, producing HashMap<Unknown, Unknown> during re-check of cloned bodies.
-	if (node.typeArg != null && node.typeArg != "") {
+	if (node.typeArg != null && node.typeArg != "" && declGenericParams(node) == "") {
 		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
@@ -681,7 +681,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledClass = mangleMonoName(classSym.name, dedup.types);
+	const mangledClass = mangleMonoName(monoBaseName(classSym.name, classSym.modulePath), dedup.types);
 	const ctorFnName = mangledClass + "_new";
 
 	// Cache check — already instantiated?

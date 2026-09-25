@@ -25,7 +25,7 @@ import { setExtraGlobalImports } from "./checker/prelude";
 import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
 import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
-import { ensureVersionMarker } from "./compiler/cache";
+import { collectGlobalCache } from "./compiler/cache";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile == "") {
@@ -40,10 +40,7 @@ export function main(): int32 {
 	// No-op on Unix. Must run before any network/heavy work.
 	sweepUpgradeBackups();
 
-	// Global object-cache version check: wipes ~/.metascript/cache/objects/ if
-	// it was populated by a different msc VERSION. Guards against stale runtime
-	// .o entries after any upgrade path (msc upgrade, brew, manual cp). ~1ms.
-	ensureVersionMarker();
+	collectGlobalCache();
 
 	const opts = parseArgs();
 	const cmd = opts.command;

@@ -3,8 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp, Symbol } from "../ast/node";
-import { getGenericDecl } from "../parser/context";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -1712,7 +1711,7 @@ function instanceBody(t: Type): Type | null {
 	const base = t.typeExtra;
 	if (base == null || base.typeReturn == null) return null;
 	if (t.typeReturn != null) return t.typeReturn;
-	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
+	const paramNames = splitTopLevel(genericParamsOf(t), ",");
 	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return base.typeReturn;
 	const names: string[] = [];
 	const args: Type[] = [];
@@ -1830,6 +1829,90 @@ export function createGenericParam(name: string): Type {
 // For Ref<Struct> (interface types), unwrap to inner struct for name and flags.
 export function unwrapRefBase(t: Type): Type {
 	return (t != null && t.kind == TypeKind.Ref && t.typeReturn != null) ? t.typeReturn : t;
+}
+
+// Built-in generics are never parsed, so no declaration carries their
+// parameter names; without them instantiateGenericBody leaves typeReturn
+// empty and narrowing leaks GenericParam (Bug 16).
+export function builtinGenericParams(name: string): string {
+	return match (name) {
+		"Result" => "T,E",
+		"Promise" => "T",
+		"Iterator" => "T",
+		"Arc" => "T",
+		"Locked" => "T",
+		_ => "",
+	};
+}
+
+function peelDeclWrapper(decl: Node | null): Node | null {
+	let cur = decl;
+	let guard = 0;
+	while (cur != null && guard < 8) {
+		guard = guard + 1;
+		if (cur.kind == NodeKind.DecoratedDecl) { cur = (cur.data as DecoratedDeclData).decoratedNode; continue; }
+		if (cur.kind == NodeKind.ExportDecl) { cur = (cur.data as ExportDeclData).exportedDecl; continue; }
+		return cur;
+	}
+	return cur;
+}
+
+export function declGenericParams(decl: Node | null): string {
+	const d = peelDeclWrapper(decl);
+	if (d == null) return "";
+	if (d.kind == NodeKind.TypeAliasDecl) {
+		const params = (d.data as TypeAliasDeclData).aliasGenericParams;
+		return params != null ? params : "";
+	}
+	if (d.kind == NodeKind.ClassDecl || d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl
+			|| d.kind == NodeKind.ActorDecl || d.kind == NodeKind.ExternDecl) {
+		return d.typeArg != null ? d.typeArg : "";
+	}
+	return "";
+}
+
+export function symGenericParams(sym: Symbol | null): string {
+	if (sym == null) return "";
+	if (sym.declNode != null) return declGenericParams(sym.declNode);
+	const viaType = genericParamsOf(sym.symbolType);
+	return viaType != "" ? viaType : builtinGenericParams(sym.name);
+}
+
+export function genericParamsOf(t: Type | null): string {
+	if (t == null) return "";
+	let cur = t;
+	if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr) && cur.typeReturn != null) cur = cur.typeReturn;
+	let owner: Symbol | null = cur.sym;
+	if (cur.kind == TypeKind.GenericInstance) {
+		const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
+		owner = base != null ? base.sym : null;
+	}
+	if (owner != null && owner.declNode != null) return declGenericParams(owner.declNode);
+	return builtinGenericParams(cur.typeName);
+}
+
+export function declFieldNamesJoined(decl: Node | null): string {
+	const d = peelDeclWrapper(decl);
+	if (d == null) return "";
+	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFields.join("|");
+	if (d.kind != NodeKind.ClassDecl) return "";
+	const names: string[] = [];
+	for (const m of (d.data as ClassDeclData).classBody) {
+		if (m.kind == NodeKind.PropertyDecl) names.push((m.data as PropertyDeclData).propName);
+	}
+	return names.join("|");
+}
+
+export function declFieldTypesJoined(decl: Node | null): string {
+	const d = peelDeclWrapper(decl);
+	if (d == null) return "";
+	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFieldTypes.join("|");
+	if (d.kind != NodeKind.ClassDecl) return "";
+	const types: string[] = [];
+	for (const m of (d.data as ClassDeclData).classBody) {
+		if (m.kind == NodeKind.PropertyDecl) types.push((m.data as PropertyDeclData).propType);
+	}
+	return types.join("|");
 }
 
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
@@ -2530,6 +2613,16 @@ export function skipModifier(t: Type | null): Type | null {
 	return cur;
 }
 
+export function unwrapPointerLikeForVariant(t: Type | null): Type | null {
+	if (t == null) return null;
+	const k = t.kind;
+	if ((k == TypeKind.Ptr || k == TypeKind.Ref
+		|| k == TypeKind.Sink || k == TypeKind.Lent) && t.typeReturn != null) {
+		return t.typeReturn;
+	}
+	return t;
+}
+
 // ===== Generic Instantiation =====
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
@@ -2703,7 +2796,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				// inferGenericReturnWithExplicit + peelToStructOrUnion populate
 				// typeReturn lazily via instantiateGenericBody, which now has
 				// param-name entries for built-in Result/Promise/Iterator
-				// (see parser/context.ms `getGenericDecl` fallbacks).
+				// (see `builtinGenericParams`).
 				const gi = copyTypeForSubst(t);
 				substituteChildrenInPlace(gi, paramName, concrete, active);
 				if (gi.typeReturn != null) {
@@ -3676,7 +3769,7 @@ function instanceLayoutBody(t: Type): Type | null {
 	const base = peelToStructOrUnion(t.typeExtra);
 	if (base == null) return null;
 	if (base.kind != TypeKind.Struct && base.kind != TypeKind.Union) return null;
-	const paramNames = splitTopLevel(getGenericDecl(t.typeName), ",");
+	const paramNames = splitTopLevel(genericParamsOf(t), ",");
 	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return null;
 	const names: string[] = [];
 	const args: Type[] = [];
@@ -3919,8 +4012,7 @@ test "instantiateGeneric multi-param" {
 // substituteType keeps typeExtra un-substituted (would cost ~20× compile
 // time on self-host), so callers that need the substituted body
 // must invoke instantiateGenericBody themselves. Built-in Result/Promise/Iterator
-// have no parser-side addGenericDecl entry — they get their param names from
-// the hardcoded fallback in `parser/context.ms:getGenericDecl`.
+// have no declaration — they get their param names from `builtinGenericParams`.
 test "instantiateGenericBody populates substituted Result body" {
 	const r = createResult(createGenericParam("T"), stringType());
 	// Bare Result<T, string> — typeReturn is null (no eager body).

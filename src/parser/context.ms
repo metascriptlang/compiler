@@ -398,116 +398,6 @@ export function consumePendingTypeArg(state: ParserState): string {
 	return ta;
 }
 
-// ===== Generic Declaration Side-Channel =====
-// Parser stores generic params for interface/class declarations (e.g., interface Box<T>).
-// Checker reads this to create GenericParam types for field resolution.
-
-export interface GenericDeclEntry {
-	key: string;        // interface/class name
-	val: string;        // comma-joined generic param names ("T,U")
-	fieldNames: string; // "|"-joined field names ("value|count"), empty for functions
-	fieldTypes: string; // "|"-joined field type annotations ("T|number"), empty for functions
-}
-
-interface GenericDeclStore {
-	items: GenericDeclEntry[];
-}
-
-function createGenericDeclStore(): GenericDeclStore {
-	const items: GenericDeclEntry[] = [];
-	return { items };
-}
-
-let _genericDeclStore: GenericDeclStore = createGenericDeclStore();
-
-export function resetGenericDeclStore(): void {
-	_genericDeclStore = createGenericDeclStore();
-}
-
-export function addGenericDecl(name: string, genericParams: string): void {
-	const entry: GenericDeclEntry = { key: name, val: genericParams, fieldNames: "", fieldTypes: "" };
-	_genericDeclStore.items.push(entry);
-}
-
-export function genericDeclCount(): int32 {
-	return _genericDeclStore.items.length;
-}
-
-export function genericDeclsSince(mark: int32): GenericDeclEntry[] {
-	const out: GenericDeclEntry[] = [];
-	let i = mark;
-	while (i < _genericDeclStore.items.length) {
-		out.push(_genericDeclStore.items[i]);
-		i = i + 1;
-	}
-	return out;
-}
-
-export function restoreGenericDecl(entry: GenericDeclEntry): void {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key == entry.key) return;
-		i = i + 1;
-	}
-	_genericDeclStore.items.push({ key: entry.key, val: entry.val, fieldNames: entry.fieldNames, fieldTypes: entry.fieldTypes });
-}
-
-// Update an existing GenericDeclEntry with field info (called after parsing interface body)
-export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key == name) {
-			_genericDeclStore.items[i].fieldNames = fieldNames;
-			_genericDeclStore.items[i].fieldTypes = fieldTypes;
-			return;
-		}
-		i = i + 1;
-	}
-}
-
-export function getGenericDecl(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].val;
-		i = i + 1;
-	}
-	// Built-in generic types — never parsed, so never registered via
-	// addGenericDecl. Hardcode their param names so instantiateGenericBody
-	// can populate typeReturn for them. Without this, peelToStructOrUnion
-	// falls back to the un-substituted typeExtra and downstream narrowing
-	// leaks GenericParam (Bug 16). The alternative — substituting typeExtra
-	// inside substituteType — costs ~20× compile time on self-host and is
-	// rejected.
-	return match (name) {
-		"Result" => "T,E",
-		"Promise" => "T",
-		"Iterator" => "T",
-		"Arc" => "T",
-		"Locked" => "T",
-		_ => "",
-	};
-}
-
-// Get "|"-joined field names for a generic interface/class
-export function getGenericDeclFieldNames(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].fieldNames;
-		i = i + 1;
-	}
-	return "";
-}
-
-// Get "|"-joined field type annotations for a generic interface/class
-export function getGenericDeclFieldTypes(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
-		if (_genericDeclStore.items[i].key == name) return _genericDeclStore.items[i].fieldTypes;
-		i = i + 1;
-	}
-	return "";
-}
-
 // ===== Generic Type Instantiation Registry =====
 // Checker records instantiations (e.g., Box<number>) here.
 // Codegen reads this to emit concrete struct definitions.
@@ -538,7 +428,6 @@ export function resetGenericTypeInsts(): void {
 
 // Centralized reset for all side-channel stores (prevents stale data across test runs)
 export function resetAllSideChannels(): void {
-	resetGenericDeclStore();
 	resetGenericTypeInsts();
 }
 

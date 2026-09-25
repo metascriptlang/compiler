@@ -28,7 +28,8 @@ import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, Met
 import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
 import { createFunction, voidType, noneType } from "../../checker/types";
-import { getGenericDecl } from "../../parser/context";
+import { declGenericParams } from "../../checker/types";
+import { classInitCName, mangledTypeName } from "../../codegen/c/names";
 
 // ===== Synthesize FunctionDecl from MethodDecl =====
 //
@@ -142,6 +143,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// that becomes a problem, propagate the bitfield here from the class symbol.
 	const initSym = makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
 	setFlag(initSym, SymbolFlag.Exported);
+	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));
 	initSym.location = ctorNode.location;
 	initSym.declNode = fnNode;
 	if (defaults.length > 0) initSym.defaultParams = defaults;
@@ -176,13 +178,9 @@ function rewrapDecorated(member: Node, dd: DecoratedDeclData, liftedFn: Node): N
 function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[], lifted: Node[] } {
 	const newBody: Node[] = [];
 	const lifted: Node[] = [];
-	// Class-level generics are stored side-band by the parser, keyed by the
-	// class name. Methods + ctors built before resolution need it to render
+	// Methods + ctors built before resolution need the class generics to render
 	// the receiver type as `Foo<T>` rather than `Foo`.
-	const className = classNode.kind == NodeKind.ClassDecl
-		? (classNode.data as ClassDeclData).className
-		: "";
-	const classGenerics = className != "" ? getGenericDecl(className) : "";
+	const classGenerics = classNode.kind == NodeKind.ClassDecl ? declGenericParams(classNode) : "";
 	for (const member of body) {
 		match (member.kind) {
 			NodeKind.MethodDecl => {

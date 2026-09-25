@@ -17,6 +17,7 @@ import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
 import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
+import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
 import { getCompilerName, compilerInvocation, modeFlags } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
@@ -341,7 +342,7 @@ function globalCacheRoot(): string {
 function globalObjectsDir(): string {
 	const root = globalCacheRoot();
 	if (root == "") return "";
-	return `${root}/objects`;
+	return `${root}/objects/${toolchainStamp()}`;
 }
 
 // Convert a fingerprint string into a flat filename hash (stable, collision-safe).
@@ -408,46 +409,12 @@ function populateGlobal(oFile: string, fp: string): void {
 	if (!renamed.ok) remove(tmp);
 }
 
-// Per-dir version-marker GC: entries are keyed by the toolchain stamp, so a
-// stamp change makes every existing entry unreachable — this wipe is pure
-// garbage collection and can never cost a cache hit. Also sweeps orphan
-// .tmp.<ts> files left by atomic publishes if an msc process was killed
-// mid-write. Idempotent.
-function wipeStampedDirOnMarker(dir: string, markerValue: string): void {
-	ensureDir(dir);
-	const marker = `${dir}/.version`;
-	const stored = try readFile(marker) catch "";
-	const entries = readDir(dir);
-	if (stored != markerValue) {
-		// Mismatch — wipe entries and any orphan tmp files. Preserve .version
-		// itself so we don't need a second write; it will be overwritten below.
-		for (const e of entries) {
-			if (e.length == 0) continue;
-			if (e == ".version") continue;
-			if (e.charAt(e.length - 1) == "/") continue;
-			remove(`${dir}/${e}`);
-		}
-		writeFile(marker, markerValue);
-		return;
-	}
-	// Version matches — still sweep orphan .tmp.<ts> leftovers from crashed runs.
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e.indexOf(".tmp.", 0) < 0) continue;
-		remove(`${dir}/${e}`);
-	}
-}
-
-// Called at msc startup: wipe every global cache dir whose contents were
-// populated by a different VERSION or a different toolchain stamp (msc binary
-// + runtime/ + vendor/ content). Guards against stale entries after any
-// upgrade path (msc upgrade, brew, manual cp, downgrade, WIP tree edits).
-export function ensureVersionMarker(): void {
-	const dir = globalObjectsDir();
-	if (dir == "") return;
-	const markerValue = `${VERSION}:${toolchainStamp()}`;
-	wipeStampedDirOnMarker(dir, markerValue);
-	wipeStampedDirOnMarker(headersCacheDir(), markerValue);
+export function collectGlobalCache(): void {
+	const root = globalCacheRoot();
+	if (root == "") return;
+	const now = nowSeconds();
+	collectStaleEntries(`${root}/objects`, now);
+	collectStaleEntries(`${root}/headers`, now);
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
@@ -883,7 +850,7 @@ const HEADER_ENTRY_MAGIC = "MSHI1";
 // Global when available, else the local cache dir (exotic environments).
 function headersCacheDir(): string {
 	const root = globalCacheRoot();
-	if (root != "") return `${root}/headers`;
+	if (root != "") return `${root}/headers/${toolchainStamp()}`;
 	return `${getCacheDir()}/headers`;
 }
 

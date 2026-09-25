@@ -34,7 +34,6 @@ import { makeSymbolState } from "./symbol";
 import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
-import { GenericDeclEntry, restoreGenericDecl, getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes } from "../parser/context";
 import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
@@ -549,9 +548,8 @@ function writePreludeDeps(root: string, key: string, stamp: string): void {
 //   D includeDirectives
 //   F compilerFlags
 //   X compileDirectives
-//   A genericDeclName genericParams fieldNames fieldTypes   (parser side channel the std parse filled)
 
-export function writePreludePack(key: string, stamp: string, ctx: CheckerContext, genericDecls: GenericDeclEntry[]): void {
+export function writePreludePack(key: string, stamp: string, ctx: CheckerContext): void {
 	const _w0 = performance.now();
 	if (packDisabled()) return;
 	const root = packRoot();
@@ -813,10 +811,6 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const idx: int32[] = [];
 		for (const m of members) idx.push(idxSym(m));
 		lines.push(`U\t${escapeP(spec)}\t${intsCsv(idx)}`);
-	}
-
-	for (const g of genericDecls) {
-		lines.push(`A\t${escapeP(g.key)}\t${escapeP(g.val)}\t${escapeP(g.fieldNames)}\t${escapeP(g.fieldTypes)}`);
 	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
@@ -1176,7 +1170,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
 	const aliasRows: string[][] = [];
-	const genericRows: string[][] = [];
 	let importRow = "";
 	let exportRow = "";
 	let includeDirectives = "";
@@ -1279,8 +1272,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			compilerFlags = unescapeP(f[1]);
 		} else if (f[0] == "X") {
 			compileDirectives = unescapeP(f[1]);
-		} else if (f[0] == "A" && f.length >= 5) {
-			genericRows.push(f);
 		} else {
 			return null;
 		}
@@ -1407,9 +1398,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	ctx.includeDirectives = includeDirectives;
 	ctx.compilerFlags = compilerFlags;
 	ctx.compileDirectives = compileDirectives;
-	for (const f of genericRows) {
-		restoreGenericDecl({ key: unescapeP(f[1]), val: unescapeP(f[2]), fieldNames: unescapeP(f[3]), fieldTypes: unescapeP(f[4]) });
-	}
 
 	if (packDebug) console.log(`[pack:r] done ms=${performance.now() - _r0}`);
 	return ctx;
@@ -1482,7 +1470,7 @@ test "preludePack: escape/unescape roundtrip incl separators" {
 	assert maxByte < 128;
 }
 
-test "preludePack: write then load reconstructs symbols, types, nodes, exts, directives, generic declarations" {
+test "preludePack: write then load reconstructs symbols, types, nodes, exts, directives" {
 	const prevHome = pkEnterPrivateCache();
 	try {
 		const ctx = makeTestCtx();
@@ -1525,13 +1513,9 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
 		assert packRoot().startsWith("out/test/"), `a pack test reached the machine-wide cache: ${packRoot()}`;
-		writePreludePack(key, PK_STAMP, ctx, [{ key: "PkBox", val: "T", fieldNames: "value", fieldTypes: "T" }]);
-		assert getGenericDecl("PkBox") == "";
+		writePreludePack(key, PK_STAMP, ctx);
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
-		assert getGenericDecl("PkBox") == "T", "a generic declaration the std parse registered did not survive the pack";
-		assert getGenericDeclFieldNames("PkBox") == "value";
-		assert getGenericDeclFieldTypes("PkBox") == "T";
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkTestFn"));
 		assert got != null;
 		assert loaded.compilerFuncs.get("pkRuntimeName") == got, "a compilerFunc binding did not survive the pack";
@@ -1603,7 +1587,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const program = createNodeAt(NodeKind.Program, { programStmts: samples } as NodeData, makeLoc(1, 1));
 		sym.declNode = program;
 		const key = preludePackKey("kind-roundtrip", ".test");
-		writePreludePack(key, PK_STAMP, ctx, []);
+		writePreludePack(key, PK_STAMP, ctx);
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkKindFn"));
@@ -1666,7 +1650,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 				{ fromPath: "/std/core/a.ms", toPath: "/std/core/b.ms", cycle: ["/std/core/a.ms", "/std/core/b.ms", "/std/core/a.ms"], importLine: 3, importNames: ["z"] },
 			],
 		}, key);
-		writePreludePack(key, PK_STAMP, makeTestCtx(), []);
+		writePreludePack(key, PK_STAMP, makeTestCtx());
 		const loaded = tryLoadPreludeDeps(key, PK_STAMP);
 		assert loaded != null;
 		assert loaded.mods.length == 2;
@@ -1691,7 +1675,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		remove(`${packRoot()}/${key}.deps`);
 		remove(`${packRoot()}/${key}.pk`);
 		const otherKey = preludePackKey("deps-roundtrip-probe", ".other-backend");
-		writePreludePack(otherKey, PK_STAMP, makeTestCtx(), []);
+		writePreludePack(otherKey, PK_STAMP, makeTestCtx());
 		assert tryLoadPreludeDeps(otherKey, PK_STAMP) == null;
 		remove(`${packRoot()}/${otherKey}.pk`);
 	} finally {
@@ -1735,11 +1719,11 @@ test "preludePack: another compiler's pack is a miss, and its rewrite takes the 
 	try {
 		const key = preludePackKey("stamp-probe", ".test");
 		const path = `${packRoot()}/${key}.pk`;
-		writePreludePack(key, "compiler-a", pkCtxWithOneSym(), []);
+		writePreludePack(key, "compiler-a", pkCtxWithOneSym());
 		assert tryLoadPreludePack(key, "compiler-a") != null;
 		assert tryLoadPreludePack(key, "compiler-b") == null;
 		assert exists(path), "a stamp miss deleted the other compiler's pack";
-		writePreludePack(key, "compiler-b", pkCtxWithOneSym(), []);
+		writePreludePack(key, "compiler-b", pkCtxWithOneSym());
 		assert tryLoadPreludePack(key, "compiler-b") != null;
 		assert tryLoadPreludePack(key, "compiler-a") == null;
 		remove(path);
@@ -1753,7 +1737,7 @@ test "preludePack: another compiler's deps file is a miss" {
 	try {
 		const key = preludePackKey("deps-stamp-probe", ".depstest");
 		setStdGraphDepsSnapshot({ mods: [{ path: "/std/core/a.ms", imports: [] }], circulars: [] }, key);
-		writePreludePack(key, "compiler-a", makeTestCtx(), []);
+		writePreludePack(key, "compiler-a", makeTestCtx());
 		assert tryLoadPreludeDeps(key, "compiler-a") != null;
 		assert tryLoadPreludeDeps(key, "compiler-b") == null;
 		remove(`${packRoot()}/${key}.deps`);

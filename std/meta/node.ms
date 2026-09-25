@@ -572,7 +572,7 @@ export class Node {
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
-	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
+	typeArg: string; // Use site: explicit generic args ("Person" from parse<Person>()); class/interface/struct/actor/extern decl: its generic params ("K,V")
 	flowNode: FlowNode | null; // Flow graph node for narrowing queries. Null until binder runs; null for non-reference nodes.
 	// Compiler-side round-trip slot mirrored here for wire parity: the compiler's
 	// internal Node keeps nodeType as a checker Type, so valueToNode stores the
