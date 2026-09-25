@@ -10,7 +10,8 @@
 //
 // Fix:        for a nullable Ptr union only a struct assignable to its pointee converts, and
 //             spanLower lowers that conversion to the address, as it does for Borrow<S>
-//             (`promotesToNullablePtr`, src/checker/compat.ms). Behaviour: corpus 805, 806.
+//             (`promotesToNullablePtr`, src/checker/compat.ms). Behaviour: corpus 805, 807.
+//             Since bug209 only an extern callee takes the address.
 
 import { compileToCWithStd } from "../helpers";
 
@@ -37,6 +38,6 @@ test "bug201: the same holds for an extern parameter" {
 	assert e.contains("Argument type mismatch in 'g' arg 0"), e;
 }
 
-test "bug201: the pointee struct and null are accepted" {
-	assert errorsOf("const p: P = { a: 1 }; f(p); g(p); f(null);") == "";
+test "bug201: the pointee struct into an extern, and null, are accepted" {
+	assert errorsOf("const p: P = { a: 1 }; g(p); g(null); f(null);") == "";
 }

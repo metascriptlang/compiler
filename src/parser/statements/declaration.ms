@@ -151,6 +151,12 @@ function stripFirstDefault(arr: Node[]): Node[] {
 	return result;
 }
 
+function stripFirstLoc(arr: SourceLocation[]): SourceLocation[] {
+	const result: SourceLocation[] = [];
+	for (let i = 1; i < arr.length; i += 1) { result.push(arr[i]); }
+	return result;
+}
+
 // Detect extension method `this`/`typeof` in params and append to flags.
 // Mutates params[0] for instance extensions (strips "this:" prefix).
 // Appends generic names. Used by both regular and extern function parsers.
@@ -164,7 +170,8 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 		params[0] = receiverName;
 	}
 	// Static extension: first param has "typeof:" prefix
-	if (params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:") {
+	const first = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:" ? 1 : 0;
+	if (first == 1) {
 		const staticType = params[0].slice(7, params[0].length);
 		if (flags == "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
@@ -174,26 +181,27 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	let refPositions = "";
 	let rdonlyPositions = "";
 	let sinkPositions = "";
-	for (let oi = 0; oi < params.length; oi += 1) {
+	for (let oi = first; oi < params.length; oi += 1) {
+		const at = oi - first;
 		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
-			if (outPositions == "") { outPositions = `${oi}`; }
-			else { outPositions = `${outPositions},${oi}`; }
+			if (outPositions == "") { outPositions = `${at}`; }
+			else { outPositions = `${outPositions},${at}`; }
 		}
 		if (params[oi].length > 4 && params[oi].slice(0, 4) == "ref:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
-			if (refPositions == "") { refPositions = `${oi}`; }
-			else { refPositions = `${refPositions},${oi}`; }
+			if (refPositions == "") { refPositions = `${at}`; }
+			else { refPositions = `${refPositions},${at}`; }
 		}
 		if (params[oi].length > 7 && params[oi].slice(0, 7) == "rdonly:") {
 			params[oi] = params[oi].slice(7, params[oi].length);
-			if (rdonlyPositions == "") { rdonlyPositions = `${oi}`; }
-			else { rdonlyPositions = `${rdonlyPositions},${oi}`; }
+			if (rdonlyPositions == "") { rdonlyPositions = `${at}`; }
+			else { rdonlyPositions = `${rdonlyPositions},${at}`; }
 		}
 		if (params[oi].length > 5 && params[oi].slice(0, 5) == "sink:") {
 			params[oi] = params[oi].slice(5, params[oi].length);
-			if (sinkPositions == "") { sinkPositions = `${oi}`; }
-			else { sinkPositions = `${sinkPositions},${oi}`; }
+			if (sinkPositions == "") { sinkPositions = `${at}`; }
+			else { sinkPositions = `${sinkPositions},${at}`; }
 		}
 	}
 	if (outPositions != "") {
@@ -296,7 +304,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	}, fnToken);
 	fnNode.typeExpr = fnReturnTypeExpr;
 	fnNode.typeExprs = fnParamTypeExprs;
-	fnNode.paramLocations = fnParamLocs;
+	fnNode.paramLocations = isStatic ? stripFirstLoc(fnParamLocs) : fnParamLocs;
 	return Result.ok(fnNode);
 }
 
@@ -1652,6 +1660,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		const raw = parseParamList(state, nameToken.value);
 		const externParamTypeExprs = getLastParamTypeExprs();
 		const externParamLocs = getLastParamLocations();
+		const externDefaults = getLastParsedDefaults();
 		const params = extractParamNames(raw);
 		const fnParamTypes = extractParamTypes(raw);
 
@@ -1680,13 +1689,13 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			fnBody,
 			fnFlags: flags,
 			fnReturnType,
-			fnDefaults: getLastParsedDefaults(),
+			fnDefaults: isStatic ? stripFirstDefault(externDefaults) : externDefaults,
 			nativeName,
 			nameLocation: makeLocFromToken(nameToken),
 		}, externToken);
 		externFnNode.typeExpr = externRetTypeExpr;
 		externFnNode.typeExprs = externParamTypeExprs;
-		externFnNode.paramLocations = externParamLocs;
+		externFnNode.paramLocations = isStatic ? stripFirstLoc(externParamLocs) : externParamLocs;
 		return Result.ok(externFnNode);
 	}
 

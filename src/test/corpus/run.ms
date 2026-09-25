@@ -231,6 +231,7 @@ interface Cell {
 	dir: string;
 	launched: boolean;
 	launchedAtMs: float64;
+	pid: string;
 	finished: boolean;
 	pass: boolean;
 	detail: string;
@@ -466,7 +467,7 @@ function discoverSpecs(): Spec[] {
 
 function makeCell(spec: Spec, lane: string, bin: string): Cell {
 	const dir = OUT_DIR + "cells/" + spec.name + "." + lane + "/";
-	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, finished: false, pass: false, detail: "" };
+	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, pid: "", finished: false, pass: false, detail: "" };
 }
 
 function isXfail(c: Cell): boolean {
@@ -583,7 +584,7 @@ function launchCell(c: Cell): void {
 		inner + "\r\n" +
 		"(echo !ERRORLEVEL!)> " + winQuote(c.dir + "done.tmp") + "\r\n" +
 		"move /y " + winQuote(c.dir + "done.tmp") + " " + winQuote(c.dir + "done") + " >nul\r\n");
-	runCapture(winQuote(WINTIME) + " --detach cmd /d /s /c " + winQuote(bat));
+	c.pid = shellOut(winQuote(WINTIME) + " --detach cmd /d /s /c " + winQuote(bat));
 	c.launched = true;
 }
 
@@ -912,8 +913,9 @@ function activeCount(running: Cell[]): int32 {
 // FAIL — not an eternally green-freeze of the whole run. The default is 100x
 // the slowest healthy cell (serial actor churn runs in seconds); the env knob
 // exists so a genuinely-slow program can be granted more without weakening
-// anyone else's bound. The timed-out process is NOT killed (the runner has no
-// portable kill) — it lingers as an orphan and the verdict names it.
+// anyone else's bound. On Windows the timed-out cell's process tree is killed;
+// a POSIX `&` cell has no recorded pid, so it lingers as an orphan and the
+// verdict names it.
 const CELL_TIMEOUT_MS: float64 = envOr("MSCORPUS_CELL_TIMEOUT_MS", "300000").parseInt() as float64;
 
 function cellTimedOut(c: Cell): boolean {
@@ -922,9 +924,17 @@ function cellTimedOut(c: Cell): boolean {
 
 function failCellTimeout(c: Cell, t: Tally): void {
 	c.pass = false;
-	c.detail = "cell TIMEOUT after " + ((performance.now() - c.launchedAtMs) / 1000).toString() + "s — no exit; the program hung (orphan process left running; rerun the cell binary directly to reproduce)";
+	const secs = ((performance.now() - c.launchedAtMs) / 1000).toString();
+	c.detail = "cell TIMEOUT after " + secs + "s — no exit; the program hung (" + killCellTree(c) + "; rerun the cell binary directly to reproduce)";
 	c.finished = true;
 	reportCell(c, t);
+}
+
+function killCellTree(c: Cell): string {
+	if (!IS_WIN || c.pid == "") { return "orphan process left running"; }
+	const r = runCapture("taskkill /T /F /PID " + c.pid);
+	if (r.exitCode != 0) { return "taskkill of pid " + c.pid + " failed: " + r.output.trim(); }
+	return "process tree " + c.pid + " killed";
 }
 
 function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {

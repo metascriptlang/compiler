@@ -2,70 +2,24 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, ProgramData, Symbol, Type } from "../ast/node";
-import {
-	CheckerContext, createModuleContextWithCache, Severity, GcMode,
-	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
-	collectExports, registerExtension, isPreludeExport,
-} from "./context";
-import { ScopeKind, openScope, addSymbolToScope, hasFlag, SymbolFlag, lookupLocal } from "./symbol";
+import { Symbol } from "../ast/node";
+import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from "./context";
+import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { runThreePasses, threePassTimings, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
+import { threePassTimings, buildPreludeContext, promoteModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
 import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
 import { preludePackStats } from "./preludePack";
-import { analyzeParamMutations } from "./paramMutationAnalysis";
-import { collectTopLevelLocal, declOfStatement } from "./collectPass";
 import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { registerModuleCtx, registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
-import { lex } from "../lexer/lexer";
-import { createState } from "../parser/context";
-import { callStateProgramParser } from "../parser/statements/callbacks";
-import "../parser/statements/core";
+import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { cloneNodeForCheck } from "../monomorphize/clone";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck } from "../compiler/transam/index";
 
-
-// Standard-aligned two-phase module checking.
-//
-// Phase 1: Parse + collectTopLevelLocal (skip imports) for ALL modules.
-//          Register exported names+kinds with placeholder types in ExportRegistry.
-//          After Phase 1, every module's names are visible cross-module.
-//
-// Phase 2: For each module in loadOrder, run full 3 passes (imports now resolve
-//          from Phase 1 placeholders or earlier Phase 2 resolved types).
-//          After each module, update its ExportRegistry entry with resolved types.
-//
-// For circular deps (A→B→A, loadOrder=[B,A]):
-//   Phase 1: Both registered with placeholder types
-//   Phase 2: B checked first — imports A → placeholder types. A checked second — imports B → resolved types.
-//   Matches standard partial visibility semantics for circular imports.
-
-// A module in an import cycle is imported before its own Phase 2 runs, so importers bind to the
-// symbols Phase 1 collected. Phase 2 parses the same source again and its collectors take those
-// symbols over for the same declarations, so each declaration keeps one Symbol.
-function adoptEarlySymbols(ctx: CheckerContext, mod: Module, early: Node, program: Node, earlyDeclSyms: HashMap<Node, Symbol>): void {
-	const earlyStmts = (early.data as ProgramData).programStmts;
-	const stmts = (program.data as ProgramData).programStmts;
-	if (earlyStmts.length != stmts.length) {
-		mod.errors.push(createModuleError(`internal: phase 2 parsed ${stmts.length} statements where phase 1 parsed ${earlyStmts.length}`, 0, 0, ErrorSeverity.Error));
-		return;
-	}
-	for (let i = 0; i < stmts.length; i += 1) {
-		const earlyDecl = declOfStatement(earlyStmts[i]);
-		const sym = earlyDeclSyms.get(earlyDecl);
-		if (sym == null) continue;
-		const decl = declOfStatement(stmts[i]);
-		if (decl.kind != earlyDecl.kind) {
-			mod.errors.push(createModuleError(`internal: statement ${i} is a ${decl.kind} in phase 2 and a ${earlyDecl.kind} in phase 1`, decl.location.line, decl.location.column, ErrorSeverity.Error));
-			continue;
-		}
-		ctx.adoptedDecls.set(decl, sym);
-	}
-}
 
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
@@ -121,185 +75,45 @@ export function setGraphCheckTiming(on: boolean): void {
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc): ExportRegistry {
-	const registry = createExportRegistry();
-
-	// PROFILE: sub-phase timings summed across all modules (-t only).
-	let tPrelude: float64 = 0;
-	let tP1Parse: float64 = 0;
-	let tP1Collect: float64 = 0;
-	let tP2Parse: float64 = 0;
-	let tP2Inject: float64 = 0;
-	let tP2Passes: float64 = 0;
-	let tP2Directives: float64 = 0;
-	let tP2Mutations: float64 = 0;
-	let tP2Exports: float64 = 0;
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null): ExportRegistry {
 	const _tpre0 = performance.now();
-
-	// Load prelude into a base context — provides console, string methods, etc.
-	// Creates the shared IdentCache (one cache per compilation).
 	const baseCtx = buildPreludeContext(stdPath, backendExt);
-	tPrelude = performance.now() - _tpre0;
+	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
 	baseCtx.gcMode = gcMode;
 	lastPreludeCtx = baseCtx;
-	const sharedCache = getSharedIdentCache(baseCtx);
-	const earlyPrograms = new HashMap<string, Node>();
-	const earlyDeclSyms = new HashMap<Node, Symbol>();
 
-	// ================================================================
-	// PHASE 1: Early export registration (Standard reference implementation)
-	// Parse + collectTopLevelLocal for ALL modules, register names+kinds
-	// ================================================================
+	const _tf0 = performance.now();
+	const db = createTransAmDb(graph.loadOrder.length * 8 + 64);
+	dbSetResolverConfig(db, config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath));
+	db.preludeCtx = baseCtx;
+	dbBindGraph(db, graph);
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null) continue;
-		if (mod.source == "") continue;
-
-		const _t1p0 = performance.now();
-		const lr = lex(mod.source);
-		if (!lr.ok) continue;  // Phase 1 best-effort; errors caught in Phase 2
-		const parseState = createState(lr.value);
-		const pr = callStateProgramParser(parseState);
-		tP1Parse = tP1Parse + (performance.now() - _t1p0);
-		if (!pr.ok) continue;
-		const _t1c0 = performance.now();
-
-		// Register parsed Program in Phase 1 so cross-module @comptime / macro
-		// resolution can find ANY module's AST regardless of where it falls in
-		// the Phase 2 loadOrder. Phase 2 re-registers with its own parse, which
-		// overwrites harmlessly. Without this, sibling modules in the dep tree
-		// race: a module whose @comptime eager-folds in Phase 2 cannot reach
-		// the Program AST of a sibling that hasn't hit Phase 2 yet. Manifests
-		// platform-sensitively — observed on Linux ARM where the schedule
-		// happens to put the @comptime owner before its non-imported callees.
-		registerModuleProgram(path, pr.value);
-
-		// Temporary context for Phase 1 (discarded after) — shared IdentCache
-		const p1ctx = createModuleContextWithCache(graph, mod, sharedCache);
-		p1ctx.exportRegistry = registry;
-		// With shared IdentCache, nameIds already match — no re-interning needed.
-		// Map iteration preserves insertion order (matches old array iteration).
-		for (const sym of baseCtx.table.current.symbols.values()) {
-			if (isPreludeExport(baseCtx, sym)) {
-				addSymbolToScope(p1ctx.table.current, sym);
-			}
-		}
-		if (baseCtx.extensionRegistry != null && p1ctx.extensionRegistry != null) {
-			const baseExts = baseCtx.extensionRegistry.methods;
-			let bei = 0;
-			while (bei < baseExts.length) {
-				const ext = baseExts[bei];
-				if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
-					registerExtension(p1ctx.extensionRegistry, ext);
-				}
-				bei = bei + 1;
-			}
-		}
-		openScope(p1ctx.table, ScopeKind.Module);
-
-		// Collect local declarations only (no imports — registry not ready)
-		collectTopLevelLocal(p1ctx, pr.value);
-
-		// Register early exports (names + kinds, placeholder types)
-		const earlyExports: ExportedSymInfo[] = [];
-		earlyPrograms.set(path, pr.value);
-		for (const sym of p1ctx.table.current.symbols.values()) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
-				if (sym.declNode != null) earlyDeclSyms.set(sym.declNode, sym);
-				const info: ExportedSymInfo = {
-					name: sym.name, sym,
-					extReceiverType: "", extIsStatic: false,
-					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-					macroBody: null as unknown as Node,
-					converterTarget: "",
-					converterTargetType: null as unknown as Type,
-					macroParams: [],
-					macroParamTypes: [],
-				};
-				earlyExports.push(info);
-			}
-		}
-		registerModuleExports(registry, path, earlyExports);
-		tP1Collect = tP1Collect + (performance.now() - _t1c0);
+		if (mod == null || mod.source == "") continue;
+		const parsed = dbParse(db, path);
+		if (parsed != null) registerModuleProgram(path, cloneNodeForCheck(parsed));
 	}
+	const tFeed = performance.now() - _tf0;
 
-	// ================================================================
-	// PHASE 2: Full checking (Reference semantic pass with cross-module visibility)
-	// All modules' names now in registry. Run full 3 passes per module.
-	// ================================================================
+	const _tc0 = performance.now();
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null) continue;
-		if (mod.source == "") continue;
-
-		// Clear Phase 1 exportNames to avoid duplicates
+		if (mod == null || mod.source == "") continue;
 		mod.exportNames = [];
-
-		// Parse with recovery — always get partial AST, errors in state.errors
-		const _t2p0 = performance.now();
-		const lr = lex(mod.source);
-		if (!lr.ok) {
-			mod.errors.push(createModuleError("Lex: " + lr.error, 0, 0, ErrorSeverity.Error));
+		const _tm0 = performance.now();
+		const ctx = dbTypeCheck(db, path);
+		const _tm1 = performance.now();
+		if (graphTiming && (_tm1 - _tm0) > 100) {
+			console.log(`    slowcheck ${path} ${_tm1 - _tm0}ms`);
+		}
+		if (ctx == null) {
+			if (!hasModuleError(mod)) mod.errors.push(createModuleError(`internal: ${path} produced no check result`, 0, 0, ErrorSeverity.Error));
 			continue;
 		}
-		const parseState = createState(lr.value);
-		const pr = callStateProgramParser(parseState);
-		tP2Parse = tP2Parse + (performance.now() - _t2p0);
-		if (!pr.ok) {
-			mod.errors.push(createModuleError("Parse: " + pr.error, 0, 0, ErrorSeverity.Error));
-			continue;
-		}
-
-		for (const parseErr of parseState.errors) {
-			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
-		}
-
-		// Register parsed program for macro VM cross-module helper resolution.
-		// Macro path (expand.ms) walks macro's defining module's programStmts to
-		// find PRIVATE helpers (which ExportRegistry can't surface). Must register
-		// BEFORE runThreePasses since macro expansion fires inside Pass 3.
-		registerModuleProgram(path, pr.value);
-
-		const _t2i0 = performance.now();
-		const ctx = createModuleContextWithCache(graph, mod, sharedCache);
-		ctx.exportRegistry = registry;
-		const early = earlyPrograms.get(path);
-		if (early != null) adoptEarlySymbols(ctx, mod, early, pr.value, earlyDeclSyms);
-		injectPrelude(ctx, baseCtx);
-		ctx.preludeCtx = baseCtx;
-
-		// Open Module scope for this module's declarations
-		openScope(ctx.table, ScopeKind.Module);
-		tP2Inject = tP2Inject + (performance.now() - _t2i0);
-
-		const _t2r0 = performance.now();
-		runThreePasses(ctx, pr.value);
-		const _t2r1 = performance.now();
-		tP2Passes = tP2Passes + (_t2r1 - _t2r0);
-		if (graphTiming && (_t2r1 - _t2r0) > 100) {
-			console.log(`    slowcheck ${path} ${_t2r1 - _t2r0}ms`);
-		}
-		const _t2d0 = performance.now();
-		collectDirectives(ctx, pr.value);
-		stampHeaderPaths(ctx);
-		tP2Directives = tP2Directives + (performance.now() - _t2d0);
-		const _t2m0 = performance.now();
-		analyzeParamMutations(ctx, pr.value);
-		tP2Mutations = tP2Mutations + (performance.now() - _t2m0);
-
-		// Register this module's ctx so cross-module generic instantiation can
-		// re-check cloned bodies in the DEFINING module's scope (resolving
-		// private helpers and locally-visible types). Pairs with the
-		// registerModuleCtx call in checkProgram for single-file mode.
-		registerModuleCtx(ctx.modulePath, ctx);
-
 		if (isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
-
-		// Copy structured errors to module (preserves line/col/severity)
 		for (const err of ctx.errors) {
-			// Skip hints (unused warnings) — they're LSP-only, not build errors
 			if (err.severity == Severity.Hint) continue;
 			const sev = match (err.severity) {
 				Severity.Warning => ErrorSeverity.Warning,
@@ -307,16 +121,11 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			};
 			mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
 		}
-
-		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
-		const _t2e0 = performance.now();
-		const exports = collectExports(ctx, path);
-		for (const e of exports) { mod.exportNames.push(e.name); }
-		updateModuleExports(registry, path, exports);
-		tP2Exports = tP2Exports + (performance.now() - _t2e0);
+		for (const e of collectExports(ctx, path)) mod.exportNames.push(e.name);
 	}
+	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {
-		console.log(`    prelude=${tPrelude}ms p1parse=${tP1Parse}ms p1collect=${tP1Collect}ms p2parse=${tP2Parse}ms p2inject=${tP2Inject}ms p2passes=${tP2Passes}ms p2directives=${tP2Directives}ms p2mutations=${tP2Mutations}ms p2exports=${tP2Exports}ms`);
+		console.log(`    prelude=${tPrelude}ms feed=${tFeed}ms check=${tCheck}ms`);
 		const pk = preludePackStats();
 		console.log(`    preludePack: hit=${pk[3]} key=${pk[0]}ms load=${pk[1]}ms write=${pk[2]}ms`);
 		const tp = threePassTimings();
@@ -337,7 +146,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const fae = findAllExtensionsByNameProfile();
 		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
 	}
-	return registry;
+	return db.exportRegistry;
+}
+
+function hasModuleError(mod: Module): boolean {
+	for (const e of mod.errors) {
+		if (e.severity == ErrorSeverity.Error) return true;
+	}
+	return false;
 }
 
 

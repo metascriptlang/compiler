@@ -2324,11 +2324,12 @@ the checker keeps them apart from the bare types. Measured 2026-09-24 (wt/c-ffi 
 
 An uninitialized `let q: Ptr<P>;` is accepted. Not measured: `Cursor<T>`, which accepts null by design.
 
-A struct value passed to a `Ptr<S> | null` parameter is passed by address, as a `Borrow<S>` argument
-is (corpus 806: the callee reads the caller's value and writes land in the caller's local); a
-struct of another type is refused. Nothing checks that the callee does not keep the pointer past
-the call. The same value as the initializer of a `Ptr<S> | null` variable is not covered and
-fails in the C compiler (measured 2026-09-24).
+A struct value passed to a `Ptr<S> | null` parameter of an `extern` C function (hand-written or
+imported from a header) is passed by address, valid for the call, as a `Borrow<S>` argument is
+(corpus 805, 807). Every other place refuses it: a MetaScript function, method or closure with
+that parameter ("… its address is taken implicitly only for an extern C function; declare the
+parameter 'ref x: S' or 'x: S'"), a struct of another type, and the initializer of a
+`Ptr<S> | null` variable ("… its address is never taken implicitly"). Measured 2026-09-25.
 
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 

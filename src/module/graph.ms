@@ -50,7 +50,8 @@ export interface ImportEntry {
 
 export class Module {
 	path: string;              // absolute file path (canonical key)
-	source: string;            // raw source text
+	rawSource: string;         // source text as read, before C headers are inlined
+	source: string;            // source text with C headers inlined
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
@@ -95,6 +96,7 @@ export function createModuleGraph(): ModuleGraph {
 export function createModule(path: string): Module {
 	return {
 		path,
+		rawSource: "",
 		source: "",
 		state: ModuleState.Unloaded,
 		exportNames: [],

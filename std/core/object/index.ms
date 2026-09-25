@@ -26,6 +26,51 @@ export class Object {
 	}
 }
 
+export function hash<T>(this x: T): int64 {
+	return hashOf(x);
+}
+
+export macro hashOf(t: Node): Node {
+	let tt = t.nodeType;
+	if (tt.kind == NodeKind.TypeGeneric) {
+		tt = tt.typExprArgs[0];
+	}
+	if (tt.kind == NodeKind.EnumDecl) {
+		const ordinal: Node = { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int64" };
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashWangYi1" },
+			arguments: [{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: ordinal, asType: "uint64" }],
+		};
+	}
+	if (tt.kind != NodeKind.TypeObject) {
+		error("hash: no hash for this key type — give it `hash(this k: K): int64`", t);
+	}
+	const zero: Node = { kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: 0, isFloat: false, intVal: 0, outOfRangeText: "", isBitPattern: false };
+	let acc: Node = { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: zero, asType: "int64" };
+	const fields = tt.typExprFieldNames;
+	let i = 0;
+	while (i < fields.length) {
+		const field: Node = { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: fields[i], isOptional: false };
+		const fieldHash: Node = {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: field, property: "hash", isOptional: false },
+			arguments: [],
+		};
+		acc = {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashCombine" },
+			arguments: [acc, fieldHash],
+		};
+		i = i + 1;
+	}
+	return {
+		kind: NodeKind.CallExpr, line: t.line, column: t.column,
+		callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashFinish" },
+		arguments: [acc],
+	};
+}
+
 export macro objectKeysOf(t: Node): Node {
 	// Peel Ref<Struct> (TypeGeneric) to the shape node — same peel the JSON
 	// encoder applies before reading typExprFieldNames. Macro bodies are not

@@ -200,7 +200,7 @@ cmd_card() {
   if [ -n "$target" ] && [ ! -d "$target" ] && [ -e "$(card_path "$target")" ]; then
     name=$target
   else
-    if [ -n "$target" ]; then w=$(resolve_target "$target"); else w=$(git rev-parse --show-toplevel); fi
+    if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git rev-parse --show-toplevel); fi
     name=$(card_name_of "$w") || die "card: $w is not on a wt/<name> branch"
   fi
   c=$(card_path "$name")
@@ -284,7 +284,7 @@ cmd_rm() {
     esac
   done
   [ -n "$target" ] || die "rm: missing <name|path>"
-  w=$(resolve_target "$target")
+  w=$(resolve_target "$target") || exit 1
   [ "$w" != "$MAIN" ] || die "rm: refusing to remove the main checkout"
   table=$(cwd_table)
   pids=$(procs_in "$w" "$table")
@@ -404,7 +404,7 @@ cmd_land() {
     esac
     shift
   done
-  if [ -n "$target" ]; then w=$(resolve_target "$target"); else w=$(git rev-parse --show-toplevel); fi
+  if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git rev-parse --show-toplevel); fi
   [ "$w" != "$MAIN" ] || die "land: run from a worktree, not the main checkout"
   [ "$(git -C "$MAIN" symbolic-ref -q HEAD)" = "refs/heads/$BASE" ] || die "land: the main checkout is not on $BASE"
   [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || die "land: $w has uncommitted changes to tracked files"

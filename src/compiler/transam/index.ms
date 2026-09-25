@@ -7,11 +7,11 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, SymbolKind, TypeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, isExportedBy, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { CheckerContext, isExportedBy, Severity, CancelCtx, createContext } from "../../checker/context";
+import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision,
@@ -48,20 +48,21 @@ import {
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../checker/checkPass";
+import { registerModuleProgram, lookupModuleProgram } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
-import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
+import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
-import { createModule, createModuleGraph, addModule, ImportEntry, createImportEntry } from "../../module/graph";
+import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
-import { inlineHeaderImports, createTaReadProvider, SourceProvider } from "../../module/loader";
+import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
@@ -82,6 +83,29 @@ function isStdPathFor(db: TransAmDb, filePath: string): boolean {
 export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 	db.stdPath = stdPath;
 	db.resolverConfig = createDefaultConfig(Backend.C, stdPath);
+}
+
+export function dbSetResolverConfig(db: TransAmDb, config: ResolverConfig): void {
+	db.stdPath = config.stdPath;
+	db.resolverConfig = config;
+}
+
+export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
+	db.graph = graph;
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod != null && mod.source != "") dbSetFileText(db, path, mod.rawSource);
+	}
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod == null || mod.source == "") continue;
+		const fileId = getFileId(db.fileInput, path);
+		clearImportsFor(db.moduleDeps, fileId);
+		for (const imp of mod.imports) {
+			const targetId = getFileId(db.fileInput, imp.sourcePath);
+			if (targetId >= 0) recordModuleImport(db.moduleDeps, fileId, targetId);
+		}
+	}
 }
 
 
@@ -110,10 +134,6 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 }
 
 // ===== TransAmDb =====
-// Node/CheckerContext caches live in ast/node.ms and checker/context.ms
-// to avoid DRC lifecycle mangling bug (wrong module path for Node_destroy).
-// Cache keys use: parseKey = fileId, checkKey = fileId + 10000,
-// transformKey = fileId + 20000, analyzeKey = fileId + 30000.
 
 export class TransAmDb {
 	revision: TaRevision;
@@ -129,6 +149,17 @@ export class TransAmDb {
 	preludeCtx: CheckerContext;
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
+	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
+	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
+	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
+}
+
+function dbTree(db: TransAmDb, key: int32): Node {
+	return db.trees.get(key) ?? null as unknown as Node;
+}
+
+function dbContext(db: TransAmDb, key: int32): CheckerContext {
+	return db.contexts.get(key) ?? null as unknown as CheckerContext;
 }
 
 export function createTransAmDb(cacheCapacity: int32): TransAmDb {
@@ -146,6 +177,9 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		preludeCtx: null as unknown as CheckerContext,
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
+		graph: null,
+		trees: new HashMap<int32, Node>(),
+		contexts: new HashMap<int32, CheckerContext>(),
 	};
 }
 
@@ -279,8 +313,11 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 
 	const raw = getFileText(db.fileInput, fileId);
 	let out = raw;
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 
-	if (filePath.endsWith(".h")) {
+	if (graphMod != null && graphMod.source != "") {
+		out = graphMod.source;
+	} else if (filePath.endsWith(".h")) {
 		// .h → translate C to MS extern decls
 		out = translateCHeader(raw, []);
 	} else if (filePath.endsWith(".ms") || filePath.endsWith(".cms") || filePath.endsWith(".jms") || filePath.endsWith(".wms")) {
@@ -306,7 +343,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 
 	// Try cache
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(parseNodeKey(fileId));
+		return dbTree(db, parseNodeKey(fileId));
 	}
 
 	// Compute — get preprocessed source via the Preprocess query. This records
@@ -330,7 +367,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	if (parseResult.ok) {
 		program = parseResult.value;
 	}
-	nodeCacheStore(parseNodeKey(fileId), program);
+	db.trees.set(parseNodeKey(fileId), program);
 	const parseHash = transAmHashNode(program);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
@@ -525,6 +562,23 @@ function hashCheckerResult(ctx: CheckerContext): number {
 	return h;
 }
 
+function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: Node): HashMap<Node, Symbol> {
+	const adopted = new HashMap<Node, Symbol>();
+	const entry = findModuleExports(db.exportRegistry, filePath);
+	if (entry == null) return adopted;
+	const early = new HashMap<Node, Symbol>();
+	for (const info of entry.symbols) {
+		if (info.sym.declNode != null && info.sym.modulePath == filePath) early.set(info.sym.declNode, info.sym);
+	}
+	const parsedStmts = (parsed.data as ProgramData).programStmts;
+	const stmts = (program.data as ProgramData).programStmts;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const sym = early.get(declOfStatement(parsedStmts[i]));
+		if (sym != null) adopted.set(declOfStatement(stmts[i]), sym);
+	}
+	return adopted;
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -532,7 +586,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return ctxCacheGet(checkCtxKey(fileId));
+		return dbContext(db, checkCtxKey(fileId));
 	}
 
 	// Get the cached parse tree (needed for dependency hash tracking + to source the clone).
@@ -598,15 +652,19 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		recordDependency(db.depStack, depCheckKey, depCheckEntry != null ? depCheckEntry.outputHash : 0);
 	}
 
-	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
-	const mod = createModule(filePath);
-	mod.imports = imports;
-	const graph = createModuleGraph();
-	addModule(graph, mod);
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
+	const mod = graphMod != null ? graphMod : createModule(filePath);
+	if (graphMod == null) {
+		mod.imports = imports;
+		addModule(graph, mod);
+	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	registerModuleProgram(filePath, program);
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
-		db.preludeCtx, db.cancelCtx, startVersion
+		db.preludeCtx, db.cancelCtx, startVersion,
+		earlyAdoptions(db, filePath, cachedProgram, program)
 	);
 
 	// If cancelled, discard frame without caching — partial result not reliable
@@ -616,9 +674,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		return checkerCtx;
 	}
 
-	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
+	db.contexts.set(checkCtxKey(fileId), checkerCtx);
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
-	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
+	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
+	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	const checkHash = hashCheckerResult(checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
 	db.checkInProgress.delete(filePath);
@@ -630,7 +689,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
-	const checked = nodeCacheGet(checkNodeKey(fileId));
+	const checked = dbTree(db, checkNodeKey(fileId));
 	if (checked != null) return checked;
 	return dbParse(db, filePath);
 }
@@ -642,7 +701,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Analyze, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(analyzeNodeKey(fileId));
+		return dbTree(db, analyzeNodeKey(fileId));
 	}
 
 	// Ensure upstream queries are computed
@@ -664,7 +723,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx);
-	nodeCacheStore(analyzeNodeKey(fileId), analyzed);
+	db.trees.set(analyzeNodeKey(fileId), analyzed);
 	const analyzeHash = transAmHashNode(analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, analyzeHash, true);
 	return analyzed;
@@ -677,7 +736,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Transform, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
-		return nodeCacheGet(transformNodeKey(fileId));
+		return dbTree(db, transformNodeKey(fileId));
 	}
 
 	const _cachedProg2 = dbParse(db, filePath);
@@ -696,7 +755,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	recordDependency(db.depStack, tckKey, tckEntry != null ? tckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
-	nodeCacheStore(transformNodeKey(fileId), transformed);
+	db.trees.set(transformNodeKey(fileId), transformed);
 	const transformHash = transAmHashNode(transformed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, transformHash, true);
 	return transformed;
@@ -1143,4 +1202,99 @@ test "an importer resolves members through a dependency's checked exports" {
 	const ctx = dbTypeCheck(db, "/test/reader.ms");
 	assert ctx != null;
 	assert checkErrorCount(ctx) == 0;
+}
+
+test "a module's type check registers the program it checked" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/registered.ms", "export function one(): int32 { return 1; }");
+	const ctx = dbTypeCheck(db, "/test/registered.ms");
+	assert ctx != null;
+	const program = lookupModuleProgram("/test/registered.ms");
+	assert program != null;
+	assert program == dbGetCheckedProgram(db, "/test/registered.ms");
+}
+
+test "both sides of an import cycle bind the symbols each side checks" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/ca.ms", 'import { fb } from "./cb";\nexport function fa(n: int32): int32 { return fb(n); }');
+	dbSetFileText(db, "/test/cb.ms", 'import { fa } from "./ca";\nexport function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }');
+	const aId = getFileId(db.fileInput, "/test/ca.ms");
+	const bId = getFileId(db.fileInput, "/test/cb.ms");
+	recordModuleImport(db.moduleDeps, aId, bId);
+	recordModuleImport(db.moduleDeps, bId, aId);
+	const ctxB = dbTypeCheck(db, "/test/cb.ms");
+	const ctxA = dbTypeCheck(db, "/test/ca.ms");
+	assert ctxA != null && ctxB != null;
+	const fa = lookupLocal(ctxA.table, "fa");
+	const fb = lookupLocal(ctxB.table, "fb");
+	assert fa != null && fb != null;
+	assert lookupLocal(ctxB.table, "fa") == fa;
+	assert lookupLocal(ctxA.table, "fb") == fb;
+}
+
+test "a db bound to a loaded graph checks each module against the graph's module" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/b.ms", entrySource: "export function two(): int32 { return 2; }" });
+	entries.push({ entryPath: "/g/a.ms", entrySource: 'import { two } from "./b";\nexport const four = two() + two();' });
+	const graph = loadModuleGraph("/g/a.ms", createMapProvider(entries));
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	for (const path of graph.loadOrder) dbTypeCheck(db, path);
+	const ctx = dbTypeCheck(db, "/g/a.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
+	assert ctx.currentModule == findModule(graph, "/g/a.ms");
+}
+
+const HEADER_API = "int apiValue(int x);";
+const HEADER_MAIN = "import { apiValue } from \"./api.h\";\nexport function twice(): int32 { return apiValue(1) + apiValue(2); }";
+
+function headerGraph(): ModuleGraph {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/api.h", entrySource: HEADER_API });
+	entries.push({ entryPath: "/g/main.ms", entrySource: HEADER_MAIN });
+	return loadModuleGraph("/g/main.ms", createMapProvider(entries));
+}
+
+test "a db bound to a loaded graph parses the header text the loader inlined" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	const ctx = dbTypeCheck(db, "/g/main.ms");
+	assert ctx != null;
+	assert checkErrorCount(ctx) == 0;
+	assert dbPreprocess(db, "/g/main.ms") == findModule(graph, "/g/main.ms")!.source;
+}
+
+test "an unbound db inlines a C header the way the loader does" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/g/api.h", HEADER_API);
+	dbSetFileText(db, "/g/main.ms", HEADER_MAIN);
+	assert dbPreprocess(db, "/g/main.ms") == findModule(graph, "/g/main.ms")!.source;
+}
+
+test "a graph-bound check marks its module registered at the current revision" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/g/b.ms", entrySource: "export function two(): int32 { return 2; }" });
+	entries.push({ entryPath: "/g/a.ms", entrySource: 'import { two } from "./b";\nexport const four = two() + two();' });
+	const graph = loadModuleGraph("/g/a.ms", createMapProvider(entries));
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	for (const path of graph.loadOrder) dbTypeCheck(db, path);
+	assert getRegisteredAt(db.moduleDeps, getFileId(db.fileInput, "/g/b.ms")) == db.revision.value;
+	assert getRegisteredAt(db.moduleDeps, getFileId(db.fileInput, "/g/a.ms")) == db.revision.value;
+}
+
+test "two dbs keep their own trees and contexts for the same file id" {
+	const first = createTransAmDb(100);
+	dbSetFileText(first, "/test/first.ms", "export const firstName = 1;");
+	const firstTree = dbParse(first, "/test/first.ms");
+	const firstCtx = dbTypeCheck(first, "/test/first.ms");
+	const second = createTransAmDb(100);
+	dbSetFileText(second, "/test/second.ms", "export const secondName = 2;");
+	dbParse(second, "/test/second.ms");
+	dbTypeCheck(second, "/test/second.ms");
+	assert dbParse(first, "/test/first.ms") == firstTree;
+	assert dbTypeCheck(first, "/test/first.ms") == firstCtx;
 }

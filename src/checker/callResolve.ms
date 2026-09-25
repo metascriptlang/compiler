@@ -8,7 +8,7 @@ import { mangleMonoName } from "../monomorphize/registry";
 import { findCallTypeArg, getGenericDecl } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, cmpCandidates, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
+import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -1355,7 +1355,8 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 			continue;
 		}
 		if (argTypes[pi] == null || argTypes[pi] == null) continue;
-		if (isUnknownType(paramType)) {
+		const formal: Type = skipModifier(paramType) ?? paramType;
+		if (isUnknownType(formal)) {
 			let argSrcT = argTypes[pi];
 			let argProbe = d.arguments[pi];
 			while (argProbe.kind == NodeKind.TypeAssertion) {
@@ -1367,10 +1368,10 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 			if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
 				addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
 			}
-		} else if (isUnknownType(argTypes[pi]) && paramType.kind != TypeKind.Unknown && !isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam) {
-			const collapsedParam = paramType.kind == TypeKind.Union ? unwrapRefNullUnion(paramType) : null;
+		} else if (isUnknownType(argTypes[pi]) && formal.kind != TypeKind.Unknown && !isUnresolvedType(formal) && formal.kind != TypeKind.GenericParam) {
+			const collapsedParam = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 			if (collapsedParam == null || (collapsedParam.kind != TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
-				addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(paramType) + " — narrow with an explicit cast", node.location.line, node.location.column);
+				addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
 			}
 		}
 		const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
@@ -1423,7 +1424,11 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 			const literalAwaitsBinding = pi < d.arguments.length && d.arguments[pi] != null
 				&& d.arguments[pi].kind == NodeKind.ObjectLiteral && hasGenericParams(paramType);
 			if (!literalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
-				if (needsStdConv(argTypes[pi], paramType)) {
+				if (promotesToNullablePtr(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
+					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
+						+ " — a struct value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
+						node.location.line, node.location.column);
+				} else if (needsStdConv(argTypes[pi], paramType)) {
 					// float/number → integer: the fractional part would be cut
 					// with no annotation beside the value to warn the reader —
 					// the cut has to be the programmer's word (`as intN`).
@@ -2568,6 +2573,27 @@ function isNeverCallable(t: Type): boolean {
 	};
 }
 
+// Declared types, not `candidates`: those have the receiver stripped, and the receiver is what differs.
+function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
+	let winner = -1;
+	for (let i = 0; i < exts.length; i += 1) {
+		let beatsAll = true;
+		for (let j = 0; j < exts.length; j += 1) {
+			if (i == j) continue;
+			const a = getExtFnType(exts[i]);
+			const b = getExtFnType(exts[j]);
+			let s = checkGenericSpecialization(a, b);
+			if (s == 0) s = complexDisambiguation(a, b);
+			if (s <= 0) { beatsAll = false; break; }
+		}
+		if (beatsAll) {
+			if (winner >= 0) return -1;
+			winner = i;
+		}
+	}
+	return winner;
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
@@ -2659,8 +2685,11 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 				}
 				ti = ti + 1;
 			}
+			const specificIdx = concreteCount == 0 ? mostSpecificGenericExt(exts) : -1;
 			if (concreteCount == 1) {
 				idx = concreteIdx;
+			} else if (specificIdx >= 0) {
+				idx = specificIdx;
 			} else {
 				addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
 				return getReturnType(candidates[0]);
@@ -2696,6 +2725,19 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
 	if (winnerType.kind == TypeKind.Function) relateCallArgs(ctx, callNode, winnerType, argTypes, false);
+	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
+			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
+			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
+		const recvBindings = createUnifyBindings();
+		unifyType(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		if (recvBindings.names.length > 0 && bindingsCoverDecl(recvBindings, extWinnerSym.declNode)) {
+			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
+			if (instSym != null) {
+				callNode.resolvedSym = instSym;
+				(callNode.data as CallExprData).callee.resolvedSym = instSym;
+			}
+		}
+	}
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
@@ -3036,7 +3078,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr.
 	// Skip "toString" — that's a method call, not a member access.
 	// builtinLower handles enum .toString() → EnumName_toString(value).
-	if (objType.kind == TypeKind.Enum && d.property != "toString") {
+	const enumTypeRef = d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Enum;
+	if (objType.kind == TypeKind.Enum && d.property != "toString"
+			&& (enumTypeRef || objType.typeNames.indexOf(d.property) >= 0)) {
 		const enumName = objType.typeName;
 		const propName = d.property;
 		// Extern C enums: member names are already full C identifiers (e.g. WGPUCullMode_Back)

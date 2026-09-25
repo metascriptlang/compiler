@@ -507,12 +507,12 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		finalizeModule(graph, mod, path);
 		return false;
 	}
-	mod.source = sourceResult.value;
+	mod.rawSource = sourceResult.value;
 
 	// Inline .h imports: replace `import { ... } from "*.h"` with extern declarations.
 	// reference parity: importc declarations live inline in the consuming module, no separate module.
 	const headerErrors: ModuleError[] = [];
-	mod.source = inlineHeaderImports(mod.source, path, provider, false, headerErrors);
+	mod.source = inlineHeaderImports(mod.rawSource, path, provider, true, headerErrors);
 	for (const he of headerErrors) mod.errors.push(he);
 
 	// Parse with recovery — always get partial AST, errors in state.errors
@@ -896,6 +896,32 @@ test "C header import inlines declarations" {
 	const appMod = findModule(graph, "/src/app.ms");
 	assert appMod != null;
 	assert appMod.errors.length == 0;
+}
+
+test "C header import keeps every later line where the source has it" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", "import { foo, bar } from \"./lib.h\";\nconst x = 1;\nconst y = 2;"));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);\nint bar(void);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	const mod = findModule(graph, "/src/app.ms");
+	assert mod != null;
+	assert mod.source.indexOf("extern") >= 0;
+	const lines = mod.source.split("\n");
+	assert lines.length == 3;
+	assert lines[1] == "const x = 1;";
+	assert lines[2] == "const y = 2;";
+}
+
+test "a module keeps the source it was read from beside its inlined source" {
+	const raw = "import { foo } from \"./lib.h\";\nconst x = foo;";
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", raw));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	const mod = findModule(graph, "/src/app.ms");
+	assert mod != null;
+	assert mod.rawSource == raw;
+	assert mod.source != raw;
 }
 
 test "parse error recorded" {

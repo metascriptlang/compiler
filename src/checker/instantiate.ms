@@ -120,18 +120,31 @@ function pendingInstanceKey(node: Node, name: string): string {
 	return owner + "::" + name;
 }
 
+function pendingInstanceKeyOf(node: Node): string {
+	if (node.kind == NodeKind.FunctionDecl) return pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
+	if (node.kind == NodeKind.ClassDecl) return pendingInstanceKey(node, (node.data as ClassDeclData).className);
+	return "";
+}
+
 export function addPendingInstance(node: Node): void {
-	let key = "";
-	if (node.kind == NodeKind.FunctionDecl) {
-		key = pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
-	} else if (node.kind == NodeKind.ClassDecl) {
-		key = pendingInstanceKey(node, (node.data as ClassDeclData).className);
-	}
+	const key = pendingInstanceKeyOf(node);
 	if (key != "") {
 		if (_pendingNames.has(key)) return;
 		_pendingNames.add(key);
 	}
 	_pendingInstances.push(node);
+}
+
+export function pendingInstanceMark(): int32 {
+	return _pendingInstances.length;
+}
+
+export function discardPendingInstancesFrom(mark: int32): void {
+	while (_pendingInstances.length > mark) {
+		const node = _pendingInstances.pop();
+		const key = pendingInstanceKeyOf(node);
+		if (key != "") _pendingNames.delete(key);
+	}
 }
 
 export function drainPendingInstances(): Node[] {

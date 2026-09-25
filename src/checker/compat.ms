@@ -89,6 +89,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if ((isPointerShapedRepr(source) && isScalarRepr(target))
 		|| (isScalarRepr(source) && isPointerShapedRepr(target))) return true;
+	if (isStructIntoPtr(source, target)) return true;
 	if (source.kind == TypeKind.Array && target.kind == TypeKind.Ref
 		&& target.typeReturn != null && target.typeReturn.kind == TypeKind.Array) return true;
 	if (source.kind == TypeKind.Ref && source.typeReturn != null
@@ -134,6 +135,13 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		return false;
 	}
 	return false;
+}
+
+export function isStructIntoPtr(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ptr;
 }
 
 function isPointerShapedRepr(t: Type | null): boolean {
@@ -1212,7 +1220,7 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 // f<T>(x: T[]) is more specific than f<T>(x: T) because T[] can match T generically
 // but T cannot match T[].
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
-function checkGenericSpecialization(typeA: Type, typeB: Type): number {
+export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	if (typeA == null || typeB == null) return 0;
 	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
 	const lenA = typeA.typeChildren.length;
@@ -1269,7 +1277,7 @@ function sumGeneric(t: Type | null): int32 {
 // Higher sumGeneric = more specific overload.
 // Per-parameter contradiction detection: if param i favors A but param j favors B → return 0.
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
-function complexDisambiguation(typeA: Type, typeB: Type): number {
+export function complexDisambiguation(typeA: Type, typeB: Type): number {
 	if (typeA == null || typeB == null) return 0;
 	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
 	let aWins = 0;

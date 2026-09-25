@@ -24,7 +24,8 @@
  * answers an unroutable address. One Sleep() call is exact and has neither
  * failure mode.
  *
- * `wintime --detach <command>` is the third mode: spawn and return immediately.
+ * `wintime --detach <command>` is the third mode: spawn, print the child's pid on
+ * stdout, and return immediately.
  * It exists because the shell's own backgrounding cannot work here. POSIX `&`
  * has no cmd.exe equivalent, and `start /b` does NOT background through
  * std/process.exec: msProcessSpawnSync hands the child INHERITABLE pipe write
@@ -142,6 +143,7 @@ int main(void) {
 	if (detach) {
 		/* Deliberately no wait: the runner polls for the cell's own sentinel
 		 * file, exactly as it polls on POSIX after a `&`. */
+		printf("%lu\n", (unsigned long)pi.dwProcessId);
 		CloseHandle(pi.hThread);
 		CloseHandle(pi.hProcess);
 		return 0;

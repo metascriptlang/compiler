@@ -13,6 +13,7 @@ import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
+import { env } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
@@ -23,7 +24,7 @@ import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShape
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { getGenericDecl, genericDeclCount, genericDeclsSince } from "../parser/context";
 import { splitTopLevel } from "../utils/string";
@@ -34,10 +35,10 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
-import { gensymSplicePrefix } from "./template";
+import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
-import { preludePackKey, tryLoadPreludePack, writePreludePack } from "./preludePack";
+import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { forEachChild } from "../ast/visitor";
@@ -2810,9 +2811,12 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
 	const imps = defaultGlobalImports();
 	const packKey = preludePackKey(stdPath, backendExt);
-	const packed = tryLoadPreludePack(packKey);
+	const packStamp = preludePackStamp(stdPath);
+	const packed = tryLoadPreludePack(packKey, packStamp);
 	if (packed != null) return packed;
 	const genericMark = genericDeclCount();
+	const gensymMark = templateGensymMark();
+	const instanceMark = pendingInstanceMark();
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
@@ -2825,7 +2829,9 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
-	writePreludePack(packKey, ctx, genericDeclsSince(genericMark));
+	writePreludePack(packKey, packStamp, ctx, genericDeclsSince(genericMark));
+	rewindTemplateGensym(gensymMark);
+	discardPendingInstancesFrom(instanceMark);
 	return ctx;
 }
 
@@ -2968,6 +2974,7 @@ function checkProgramCore(
 	mod: Module | null,
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
+	adoptedDecls: HashMap<Node, Symbol> | null,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -2975,6 +2982,7 @@ function checkProgramCore(
 	ctx.extensionRegistry = createExtensionRegistry();
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
+	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
 	injectPrelude(ctx, preludeCtx);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
 	const consoleClass = lookupSymbol(ctx.table, "console");
@@ -3041,7 +3049,7 @@ export function checkProgram(program: Node): CheckerContext {
 	// Phase 8a POC: expose outer Program to @comptime evaluator so it can
 	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
 	setOuterProgramForComptime(program);
-	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0);
+	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0, null);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
@@ -3049,16 +3057,17 @@ export function checkProgramWithRegistry(program: Node, registry: ExportRegistry
 	// Spike 2: expose full multi-module context so @comptime evaluator's inner
 	// check can resolve cross-module imports via the same registry/graph.
 	setOuterCheckContext(registry, graph, mod, preludeCtx);
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, null, 0);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, null, 0, null);
 }
 
 export function checkProgramWithRegistryCancellable(
 	program: Node, registry: ExportRegistry,
 	graph: ModuleGraph, mod: Module,
 	preludeCtx: CheckerContext,
-	cancelCtx: CancelCtx, cancelVersion: int32
+	cancelCtx: CancelCtx, cancelVersion: int32,
+	adoptedDecls: HashMap<Node, Symbol> | null = null
 ): CheckerContext {
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls);
 }
 
 // Register callbacks at module load time
@@ -4947,4 +4956,17 @@ test "a method and a constructor carry their parameter symbols with the receiver
 		}
 	}
 	assert seen == 2;
+}
+
+test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
+	env.set("MSC_NO_PRELUDE_PACK", "1");
+	try {
+		const gensym = templateGensymMark();
+		const instances = pendingInstanceMark();
+		buildPreludeContext(join(resolveRuntimeDir(), "std"));
+		assert templateGensymMark() == gensym;
+		assert pendingInstanceMark() == instances;
+	} finally {
+		env.delete("MSC_NO_PRELUDE_PACK");
+	}
 }
