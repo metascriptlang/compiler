@@ -189,6 +189,7 @@ function checkCtxKey(fileId: int32): int32 { return fileId + 10000; }
 function checkNodeKey(fileId: int32): int32 { return fileId + 15000; }
 function transformNodeKey(fileId: int32): int32 { return fileId + 20000; }
 function analyzeNodeKey(fileId: int32): int32 { return fileId + 30000; }
+function lowerNodeKey(fileId: int32): int32 { return fileId + 40000; }
 
 // ===== Public API =====
 
@@ -666,6 +667,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
+	inputHashes.push(db.revision.value);
 	const checkHash = checkOutputHash(checkerCtx, inputHashes);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
 	db.checkInProgress.delete(filePath);
@@ -680,6 +682,31 @@ export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 	const checked = dbTree(db, checkNodeKey(fileId));
 	if (checked != null) return checked;
 	return dbParse(db, filePath);
+}
+
+export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return false;
+	return tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, fileId), db.revision.value);
+}
+
+export function dbLower(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext) => Node): Node {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return null as unknown as Node;
+	const key = createQueryKey(TaQueryKind.Lower, fileId);
+	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
+	const ctx = dbTypeCheck(db, filePath);
+	if (ctx == null) return null as unknown as Node;
+	const checked = dbTree(db, checkNodeKey(fileId));
+	pushFrame(db.depStack, key);
+	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
+	const checkEntry = cacheGet(db.cache, checkKey);
+	recordDependency(db.depStack, checkKey, checkEntry != null ? checkEntry.outputHash : 0);
+	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+	const lowered = lower(checked, ctx);
+	db.trees.set(lowerNodeKey(fileId), lowered);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
+	return lowered;
 }
 
 // Execute full pipeline: parse → check → transform → analyze
@@ -1324,6 +1351,36 @@ test "a line shift in a module rechecks it at the new positions" {
 export function one(): int32 { return 1; }");
 	checkChain(db, ["/shift/a.ms"]);
 	assert (dbGetCheckedProgram(db, "/shift/a.ms").data as ProgramData).programStmts[0].location.line == 3;
+}
+
+interface LowerCount {
+	n: int32;
+}
+
+test "a module's lowering is reused while its check stays green" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/lower/a.ms", "export function one(): int32 { return 1; }");
+	dbSetFileText(db, "/lower/b.ms", "export function two(): int32 { return 2; }");
+	const count: LowerCount = { n: 0 };
+	const lower = (checked: Node, ctx: CheckerContext): Node => { count.n += 1; return checked; };
+	const first = dbLower(db, "/lower/a.ms", lower);
+	assert dbLower(db, "/lower/a.ms", lower) == first;
+	dbSetFileText(db, "/lower/b.ms", "export function two(): int32 { return 3; }");
+	dbParse(db, "/lower/a.ms");
+	assert dbLower(db, "/lower/a.ms", lower) == first;
+	assert count.n == 1;
+}
+
+test "a module's lowering reruns after its check reruns" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/lower/c.ms", "export function one(): int32 { return 1; }");
+	const count: LowerCount = { n: 0 };
+	const lower = (checked: Node, ctx: CheckerContext): Node => { count.n += 1; return checked; };
+	dbLower(db, "/lower/c.ms", lower);
+	dbSetFileText(db, "/lower/c.ms", "export function one(): int32 { return 7; }");
+	dbParse(db, "/lower/c.ms");
+	dbLower(db, "/lower/c.ms", lower);
+	assert count.n == 2;
 }
 
 test "a user module's check keeps its file's durability" {
