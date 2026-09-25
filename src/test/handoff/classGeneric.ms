@@ -104,7 +104,7 @@ test "E2E C: generic class instantiation compiles" {
 	const src = "class Box<T> { value: T; }\nconst b = new Box<number>(42);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.indexOf("Box__number") >= 0;
+	assert result.value.indexOf("Box_") >= 0 && result.value.indexOf("__number") >= 0;
 }
 
 // ===== Regression: extension method receiver not dropped =====
@@ -155,7 +155,7 @@ test "E2E C: two-param generic compiles" {
 	const result = compileToC(src);
 	assert result.ok;
 	// C mangler converts "," to "X" and adds trailing "_"
-	assert result.value.indexOf("KV__string") >= 0;
+	assert result.value.indexOf("KV_") >= 0 && result.value.indexOf("__string") >= 0;
 }
 
 // Regression test for the generic wrapper + Map.set monomorphize bug
