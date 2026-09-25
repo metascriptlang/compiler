@@ -1660,6 +1660,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		const raw = parseParamList(state, nameToken.value);
 		const externParamTypeExprs = getLastParamTypeExprs();
 		const externParamLocs = getLastParamLocations();
+		const externDefaults = getLastParsedDefaults();
 		const params = extractParamNames(raw);
 		const fnParamTypes = extractParamTypes(raw);
 
@@ -1688,7 +1689,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			fnBody,
 			fnFlags: flags,
 			fnReturnType,
-			fnDefaults: getLastParsedDefaults(),
+			fnDefaults: isStatic ? stripFirstDefault(externDefaults) : externDefaults,
 			nativeName,
 			nameLocation: makeLocFromToken(nameToken),
 		}, externToken);
