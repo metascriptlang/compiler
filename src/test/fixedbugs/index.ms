@@ -226,3 +226,4 @@ import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug420SpreadOperandIsFullExpression";
+import "./bug421PatternAssignmentTargets";
