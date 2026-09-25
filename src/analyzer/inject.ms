@@ -1871,10 +1871,8 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	}
 
 	// Phase D: first-write optimization — skip destroy on first assignment to uninitialized var
-	const isFirstWrite = vi != null && !vi.isInitialized;
-	if (isFirstWrite) {
-		vi.isInitialized = true;
-	}
+	const isFirstWrite = vi != null && !vi.isInitialized && !(sym != null && isVarFromOuterLoopScope(sym, dctx));
+	if (vi != null) vi.isInitialized = true;
 
 	// Snapshot the LHS var's move-state BEFORE the RHS, so we can tell whether THIS RHS
 	// consumes it (`x = f([..., x])`) versus it having been conditionally moved earlier
