@@ -248,7 +248,12 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).p = _asc_newp; \
 } while(0)
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
-#define msArrayStringSink(d, ...)      do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
+#define msArrayStringSink(d, ...)      do { \
+	msStringArray _ass_src = (__VA_ARGS__); \
+	if ((d).p != _ass_src.p) msStringArrayDestroy(&(d)); \
+	(d).len = _ass_src.len; \
+	(d).p = _ass_src.p; \
+} while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
@@ -270,12 +275,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).len = _arc_len; \
 	(d).p = (void*)_arc_newp; \
 } while(0)
-/* Sink semantics: old dest payload freed (elements NOT decref'd — ownership
- * transfers from source which already holds the only refs). */
 #define msArrayRefSink(d, ...)         do { \
 	msRefArray _ars_src = (__VA_ARGS__); \
-	if ((d).p != NULL) { free((msRefPayload*)(d).p); } \
-	(d) = _ars_src; \
+	if ((void*)(d).p != (void*)_ars_src.p) msRefArrayDestroy((msRefArray*)&(d)); \
+	(d).len = _ars_src.len; \
+	(d).p = (void*)_ars_src.p; \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \

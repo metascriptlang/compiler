@@ -137,7 +137,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			const n = arrayCTypeName(t);
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
-		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
+		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
 	}
 	// Closure element (function type) — msClosureArray stores msClosure structs
 	// INLINE (16B stride), NOT as void* pointers. Routing to msArrayRefDestroy
@@ -171,7 +171,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	// BUG #3 family — msArrayRefDestroy will misread struct data. Future
 	// TypeKind additions in element position must add an explicit case
 	// above (verify with a runtime cleanup probe before falling through).
-	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
+	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
 }
 
 // ===== Sub-classifiers for complex arms =====
