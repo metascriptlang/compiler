@@ -26,8 +26,8 @@
 // serial until the fp-keyed artifact cache stopped letting sibling msc
 // processes fight over one shared std module: they swapped the .c under each
 // other's cc and deleted each other's .o (cache.ms writeCSource /
-// invalidateCompileCache, cc.ms compileCFile). A wave is joined IN INPUT
-// ORDER, so progress lines, the tally and the parity grouping are byte-for-
+// invalidateCompileCache, cc.ms compileCFile). Builds are joined IN INPUT
+// ORDER and each joined slot is refilled at once, so progress lines, the tally and the parity grouping are byte-for-
 // byte what the serial loop produced; only the wall clock moves. Progress
 // streams to stderr unbuffered; stdout carries the final summary.
 //
@@ -1014,53 +1014,49 @@ function main(): void {
 	// compileCFile): before that, two builds racing one shared std module
 	// swapped the .c under each other's cc and deleted each other's .o.
 	//
-	// A wave is spawned, then JOINED IN INPUT ORDER, so every progress line,
-	// every tally and the parity grouping come out exactly as the serial loop
-	// produced them — only the wall clock changes. Awaiting the handles from
-	// an array (never a handle re-read across iterations) is the shape the
-	// affine-Promise rules ask for (PARALOCK R1/E40).
+	// Builds are JOINED IN INPUT ORDER, so every progress line, every tally and
+	// the parity grouping come out exactly as the serial loop produced them —
+	// only the wall clock changes. Awaiting the handles from an array (never a
+	// handle re-read across iterations) is the shape the affine-Promise rules
+	// ask for (PARALOCK R1/E40).
 	//
 	// "Up to date" = msc's self-skip when the cell binary is already fresh —
 	// a success, not a failure (unchanged reruns hit it on every native cell)
-	let waveStart = 0;
-	while (waveStart < jobs.length) {
-		let waveEnd = waveStart + BUILD_SLOTS;
-		if (waveEnd > jobs.length) { waveEnd = jobs.length; }
-		const futures: Promise<number>[] = [];
-		let qi = waveStart;
-		while (qi < waveEnd) {
-			const job = jobs[qi];
-			futures.push(spawn(() => buildOneJob(job) as number));
-			qi = qi + 1;
+	const futures: Promise<number>[] = [];
+	let nextBuild = 0;
+	while (nextBuild < jobs.length && nextBuild < BUILD_SLOTS) {
+		const job = jobs[nextBuild];
+		futures.push(spawn(() => buildOneJob(job) as number));
+		nextBuild = nextBuild + 1;
+	}
+	let ci = 0;
+	while (ci < jobs.length) {
+		const code = (await futures[ci]) as int32;
+		if (nextBuild < jobs.length) {
+			const refill = jobs[nextBuild];
+			futures.push(spawn(() => buildOneJob(refill) as number));
+			nextBuild = nextBuild + 1;
 		}
-		const codes: number[] = [];
-		for (const f of futures) { codes.push(await f); }
-
-		let ci = 0;
-		while (ci < codes.length) {
-			const job = jobs[waveStart + ci];
-			const code = codes[ci] as int32;
-			ci = ci + 1;
-			if (code == BUILD_FAILED) {
-				job.cell.pass = false;
-				job.cell.detail = "build failed — " + job.cell.dir + "build.log";
-				job.cell.finished = true;
-				reportCell(job.cell, t);
-				continue;
-			}
-			if (code == BUILD_OK_RETRIED) {
-				progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
-			}
-			if (job.cmd != "") { progress("  · built " + job.spec.name + " [" + job.lane + "]"); }
-			if (job.cell.spec.serial) {
-				pendingSerial.push(job.cell);
-			} else {
-				waitForSlot(running, t, parityDone);
-				launchCell(job.cell);
-				running.push(job.cell);
-			}
+		const job = jobs[ci];
+		ci = ci + 1;
+		if (code == BUILD_FAILED) {
+			job.cell.pass = false;
+			job.cell.detail = "build failed — " + job.cell.dir + "build.log";
+			job.cell.finished = true;
+			reportCell(job.cell, t);
+			continue;
 		}
-		waveStart = waveEnd;
+		if (code == BUILD_OK_RETRIED) {
+			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
+		}
+		if (job.cmd != "") { progress("  · built " + job.spec.name + " [" + job.lane + "]"); }
+		if (job.cell.spec.serial) {
+			pendingSerial.push(job.cell);
+		} else {
+			waitForSlot(running, t, parityDone);
+			launchCell(job.cell);
+			running.push(job.cell);
+		}
 	}
 
 	// drain the parallel tail
