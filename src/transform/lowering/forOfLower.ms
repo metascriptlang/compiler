@@ -8,7 +8,6 @@
 
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
@@ -121,15 +120,6 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
-		// A fresh owned value (call result / array literal) has no other owner, so the
-		// temp must own+destroy it (like `const t = f(); for..of t`). Cursor here would
-		// skip destroy and leak the array every iteration. Aliasing rvalues (conditional,
-		// type-assertion of an lvalue) stay Cursor to avoid double-free.
-		const producesFreshOwned = d.forOfIterable.kind == NodeKind.CallExpr
-			|| d.forOfIterable.kind == NodeKind.ArrayLiteral;
-		if (!producesFreshOwned) {
-			setFlag(iterSym, SymbolFlag.Cursor);
-		}
 		preamble.push(iterDecl);
 		iterExpr = makeIdentResolved(iterSym, loc);
 	}
@@ -183,12 +173,10 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = <iter>[$idx];
-		// The binding borrows from the array: its symbol is a cursor, so DRC skips destroy
 		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		if (bindingSym != null) {
 			itemDecl.resolvedSym = bindingSym;
-			setFlag(bindingSym, SymbolFlag.Cursor);
 		}
 		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
 		// passes can see the monomorphized binding type. Same reason as the iterator

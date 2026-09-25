@@ -824,8 +824,6 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | VF_IS_COND_REASSIGNED)) != 0) {
 			i += 1; continue;
 		}
-		// Reassigned variables can't be cursors
-		if ((v.flags & VF_IS_REASSIGNED) != 0) { i += 1; continue; }
 
 		// Check graph for dangerous mutation during cursor's lifetime
 		const r = ufRoot(p, i);
@@ -1106,4 +1104,16 @@ test "storing an array literal joins its elements to the target's graph" {
 	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mids = [m]; const z = m.child; t.mids[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "z");
+}
+
+test "loop binding over an array written in the loop is NOT cursor" {
+	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; boxes[0] = new Box(\"n\"); show(b.v); } }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "b");
+}
+
+test "loop binding over an array nobody writes is cursor" {
+	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; show(b.v); } }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "b");
 }
