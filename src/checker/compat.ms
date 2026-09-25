@@ -598,7 +598,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 
 
 export function convertsImplicitly(source: Type, target: Type): boolean {
-	if (source.kind == TypeKind.Struct && target.kind == TypeKind.Union) return false;
+	if (source.kind == TypeKind.Struct && target.kind == TypeKind.Union) return promotesToNullablePtr(source, target);
 	return needsStdConv(source, target);
 }
 
