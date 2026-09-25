@@ -78,18 +78,49 @@ export { msBuffer } from "./buffer.h";
 
 ### Type Mapping (C → MetaScript)
 
-| C Type | MetaScript Type |
+Parameter types, measured 2026-09-26 with `msc check` on a probe header (recompiler `fc5e0b23`, and
+`1718d72c` for the call rules, C): each call passes a wrong-typed argument and the diagnostic names the imported
+type.
+
+| C parameter | MetaScript type |
 |--------|----------------|
-| `int`, `int32_t` | `number` (int32) |
-| `double`, `float` | `number` (float64) |
-| `char*`, `const char*` | `string` *(intent)* / `cstring` *(current)* |
-| `bool`, `_Bool` | `boolean` |
-| `void` | `void` |
-| `T*` | `Ptr<T>` |
-| `struct Foo` | `Foo` (extern class) |
-| `enum E { A, B }` | `enum E { A, B }` |
-| `typedef X Y` | `type Y = X` |
-| `#define FOO 42` | `const FOO: number = 42` |
+| `int`, `int32_t`, a `typedef` of one | `int32` |
+| `uint16_t`, `int64_t`, … | `uint16`, `int64`, … |
+| `double` | `number` |
+| `float` | `float32` |
+| `char` | `int8` |
+| `bool` | `boolean` |
+| `char*`, `const char*`, `uint8_t*`, `const uint8_t*` | `cstring` |
+| `void*` | `Ptr<void> \| null` |
+| `T*`, `T[N]` (scalar or enum `T`) | `Ptr<T> \| null` |
+| `const T*` (scalar `T`) | `Borrow<T>` |
+| `S*`, `const S*`, `struct S*` | `Ptr<S> \| null` |
+| `typedef struct Impl* H` | `Ptr<Impl>` |
+| `H*` (pointer to such a handle) | `out p: Ptr<Impl>` |
+| `S` by value | `S` |
+| `enum E { … }` | `E` |
+| function pointer | a function type |
+| `#define FOO 42` | not imported (`Undefined variable 'FOO'` from a named import) |
+
+A return type maps the same way without `| null` (`void*` → `Ptr<void>`, read in
+`src/module/cimport/emit.ms`, not measured). Struct field types were not re-measured.
+
+At a call, a `Ptr<T> | null` parameter takes `null` or a variable, a field or an element of exactly
+type `T`, and C receives its address for the call; `Ptr<void> | null` takes any scalar, enum or
+struct that way, while a `Ptr<void>` passes its value and a typed handle (`Ptr<Impl>`) is refused. A literal or a call result into a
+scalar pointer is a compile error (`expression has no address`). A `ref` parameter passes the
+caller's pointer through. Only an extern C function gets this: a MetaScript function with a
+`Ptr<T> | null` parameter refuses a value (NIM-REF CK-102).
+
+```ms
+import { iter_new, iter_next, state_get, Iter, Key } from "./g.h";
+let it: Iter;
+iter_new(it);                                          // int iter_new(Iter* out): `out it`
+let y: uint16 = 0;
+iter_next(it, y);                                      // bool iter_next(Iter, uint16_t* out_y)
+let cols: uint16 = 0;
+state_get(Key.KEY_COLS, cols);                         // C writes cols
+```
 
 Both directions are implicit. The compiler inserts `msStringToCString` at
 `string → cstring` boundaries (zero-copy `.data` extraction) and

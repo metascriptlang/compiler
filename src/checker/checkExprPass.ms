@@ -27,7 +27,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1462,7 +1462,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
 				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-				node.nodeType = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType); return;
+				const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+				node.nodeType = constructed; return;
 			} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
 				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
@@ -1534,6 +1535,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					&& varIdx < objExpected.typeChildren.length)
 					? objExpected.typeChildren[varIdx]
 					: null;
+				if (variant != null && variant.kind == TypeKind.Ref) {
+					rearmLiteralForRecheck(node, variant);
+					checkExpr(ctx, node, variant);
+					return;
+				}
 				for (let fi = 0; fi < d.properties.length; fi += 1) {
 					const key = fi < d.keys.length ? d.keys[fi] : "";
 					const fieldExpected = (variant != null && key != "")
@@ -1567,9 +1573,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					pi = pi + 1;
 				}
 				const anonName = anonStructName(fieldNames, fieldTypes);
-				const anonType = createStruct(anonName, fieldNames, fieldTypes, false);
-				node.nodeType = anonType;
-				node.nodeType = anonType; return;
+				node.nodeType = createRef(createStruct(anonName, fieldNames, fieldTypes, false)); return;
 			}
 		},
 		NodeKind.ArrayLiteral => {
@@ -1818,6 +1822,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					srcType = innerExpr.nodeType;
 				}
 			}
+			if (srcType != null && isSlotUnion(srcType) && targetType.kind != TypeKind.Union
+				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, targetType) >= 0) {
+				node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, targetType), asType: d.asType };
+				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
+				return;
+			}
 			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
 				&& !slotTakesValue(srcType, targetType)) {
 				const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
@@ -1827,6 +1837,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					srcType = asCall.nodeType;
 				} else if (valueOfInPlace(ctx, d.asExpr, ReadNeed.Slot, targetType)) {
 					srcType = d.asExpr.nodeType;
+				}
+			}
+			if (srcType != null && srcType.kind != TypeKind.Union) {
+				const projected = narrowUnionToVariant(d.asExpr, srcType);
+				if (projected != null as unknown as Node) {
+					node.data = { asExpr: projected, asType: d.asType };
+					d = node.data as TypeAssertionData;
 				}
 			}
 			// Nil typing: collapse `null as T` into typed NullLiteral.
@@ -1859,10 +1876,19 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = targetType;
 				}
+			} else if (srcType != null && srcType.kind == TypeKind.Union && targetType.kind == TypeKind.Ref
+				&& targetType.typeReturn != null) {
+				const refTarget = targetType.typeReturn;
+				const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
+				node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
 			} else {
 				node.nodeType = targetType;
 			}
-			const castSrcUnknown = (srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
+			if (srcType != null && srcType.kind != TypeKind.Union && targetType.kind == TypeKind.Union) {
+				const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
+				if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
+			}
+			const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
 			if (castSrcUnknown != null && isUnknownType(castSrcUnknown)
 				&& !isUnresolvedType(targetType) && !isPointerShapedForUnknown(targetType)) {
 				addError(ctx, "cannot cast unknown to value type " + typeDisplayName(targetType) + " — no void* representation to reinterpret", asLoc.line, asLoc.column);
@@ -2577,7 +2603,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

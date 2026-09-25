@@ -97,18 +97,20 @@ function enumMemberOrdinal(expr: Node): int64 {
 	return -1;
 }
 
+export function literalTakesType(literal: Node, t: Type | null): boolean {
+	if (literal.kind == NodeKind.BooleanLiteral) return t == null || t.kind == TypeKind.Boolean;
+	if (literal.kind != NodeKind.NumberLiteral) return false;
+	if (t == null) return true;
+	if (isFloat32Type(literal.nodeType) && !isFloat32Type(t)) return false;
+	return !isIntegerType(t) || !(literal.data as NumberLiteralData).isFloat;
+}
+
 function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Node {
 	const none = null as unknown as Node;
-	if (literal.kind == NodeKind.BooleanLiteral) {
-		if (t != null && t.kind != TypeKind.Boolean) return none;
-		return makeBool((literal.data as BooleanLiteralData).boolValue, loc);
-	}
-	if (literal.kind != NodeKind.NumberLiteral) return none;
+	if (!literalTakesType(literal, t)) return none;
+	if (literal.kind == NodeKind.BooleanLiteral) return makeBool((literal.data as BooleanLiteralData).boolValue, loc);
 	const nd = literal.data as NumberLiteralData;
-	if (t != null && isIntegerType(t)) {
-		if (nd.isFloat) return none;
-		return makeTypedInteger(wrapToWidth(nd.intVal as uint64, t), t, loc);
-	}
+	if (t != null && isIntegerType(t)) return makeTypedInteger(wrapToWidth(nd.intVal as uint64, t), t, loc);
 	const copy = createNode(NodeKind.NumberLiteral, { value: nd.value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
 	copy.nodeType = t != null ? t : literal.nodeType;
 	return copy;
@@ -337,7 +339,7 @@ function foldBinaryLiterals(op: string, left: Node, right: Node, node: Node): No
 					return foldIntegerArithmetic(op, ld.intVal, rd.intVal, node.nodeType, loc, node);
 				}
 			}
-			if (!fitsDouble(ld) || !fitsDouble(rd)) return node;
+			if (!fitsDouble(ld) || !fitsDouble(rd) || involvesFloat32(left, right, node)) return node;
 			return foldNumberBinary(op, ld.value, rd.value, loc, node);
 		},
 		NodeKind.StringLiteral => {
@@ -362,6 +364,14 @@ function foldBinaryLiterals(op: string, left: Node, right: Node, node: Node): No
 function fitsDouble(d: NumberLiteralData): boolean {
 	if (d.isFloat) return true;
 	return ((d.intVal as number) as int64) == d.intVal;
+}
+
+function isFloat32Type(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Float32;
+}
+
+function involvesFloat32(left: Node, right: Node, node: Node): boolean {
+	return isFloat32Type(left.nodeType) || isFloat32Type(right.nodeType) || isFloat32Type(node.nodeType);
 }
 
 function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocation, fallback: Node): Node {
