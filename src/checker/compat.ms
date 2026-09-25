@@ -511,10 +511,6 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (source.kind == TypeKind.EnumLiteral && target.kind == TypeKind.Enum) {
 		return source.typeName == target.typeName;
 	}
-	// Integer → Enum (enums are int32 at runtime; allows { kind: 0 } for enum-typed fields)
-	if (isIntegerType(source) && target.kind == TypeKind.Enum) {
-		return true;
-	}
 	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
 	// Enum/EnumLiteral → Number/Int32 (enums are ints at runtime)
 	if ((source.kind == TypeKind.Enum || source.kind == TypeKind.EnumLiteral)

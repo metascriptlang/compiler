@@ -228,3 +228,4 @@ import "./bug211SinkParamTakesUnknown";
 import "./bug520SlotFitIsTheArgumentRelation";
 import "./bug521GenericInstanceArgsInvariant";
 import "./bug522UnionAndTupleRelateByMember";
+import "./bug523IntegerIsNotAnEnum";
