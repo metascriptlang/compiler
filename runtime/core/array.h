@@ -223,13 +223,21 @@ msString msAsString(msUint8Array* arr);
 #define msGenericArrayAt(arr_ptr, idx) ({ \
 	int64_t _gi = (idx); \
 	if (_gi < 0) _gi = (arr_ptr)->len + _gi; \
-	(arr_ptr)->p->data[_gi]; \
+	__typeof__((arr_ptr)->p->data[0]) _gv; \
+	if (_gi >= 0 && _gi < (arr_ptr)->len) _gv = (arr_ptr)->p->data[_gi]; \
+	else memset(&_gv, 0, sizeof(_gv)); \
+	_gv; \
 })
 
 /* Pop last element. Returns the value. */
 #define msGenericArrayPop(arr_ptr) ({ \
-	__typeof__((arr_ptr)->p->data[0]) _pv = (arr_ptr)->p->data[(arr_ptr)->len - 1]; \
-	(arr_ptr)->len--; \
+	__typeof__((arr_ptr)->p->data[0]) _pv; \
+	if ((arr_ptr)->len > 0) { \
+		(arr_ptr)->len--; \
+		_pv = (arr_ptr)->p->data[(arr_ptr)->len]; \
+	} else { \
+		memset(&_pv, 0, sizeof(_pv)); \
+	} \
 	_pv; \
 })
 
