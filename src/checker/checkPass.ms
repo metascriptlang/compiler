@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
+import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -2940,7 +2940,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
 				// Imported extensions get scope depth 0 (other module).
 				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym, 0));
+				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
 			}
 			ei = ei + 1;
 		}
@@ -3032,24 +3032,31 @@ function appendDirectiveLines(lines: string, more: string): string {
 }
 
 let _pendingSeedSymbols: Symbol[] = [];
+let _pendingSeedExtensions: ExtensionMethod[] = [];
 
-export function registerSeedSymbols(syms: Symbol[]): void {
+export function registerSeedSymbols(syms: Symbol[], exts: ExtensionMethod[]): void {
 	_pendingSeedSymbols = syms;
+	_pendingSeedExtensions = exts;
 }
 
 export function clearSeedSymbols(): void {
 	_pendingSeedSymbols = [];
+	_pendingSeedExtensions = [];
 }
 
-function drainSeedSymbols(table: SymbolTable): void {
-	if (_pendingSeedSymbols.length == 0) return;
+function drainSeedSymbols(ctx: CheckerContext): void {
+	const table = ctx.table;
 	for (const sym of _pendingSeedSymbols) {
 		const innerNameId = getIdentId(table.identCache, sym.name);
 		if (!table.current.symbols.has(innerNameId)) {
 			table.current.symbols.set(innerNameId, sym);
 		}
 	}
+	for (const ext of _pendingSeedExtensions) {
+		registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
+	}
 	_pendingSeedSymbols = [];
+	_pendingSeedExtensions = [];
 }
 
 // Single internal entry point for all checkProgram variants.
@@ -3086,7 +3093,7 @@ function checkProgramCore(
 	}
 	defineBuiltinConstants(ctx);
 	openScope(ctx.table, ScopeKind.Module);
-	drainSeedSymbols(ctx.table);
+	drainSeedSymbols(ctx);
 	const outerGensym = beginGensymUnit();
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);

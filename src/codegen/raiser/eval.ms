@@ -2,10 +2,11 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, createNode, NodeKind, ProgramData } from "../../ast/node";
+import { Node, Symbol, SymbolKind, createNode, NodeKind, ProgramData, makeLoc } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, Severity, addError, setEngineCheckMode } from "../../checker/context";
+import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode } from "../../checker/context";
+import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
@@ -21,7 +22,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction 
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx } from "../../checker/instantiate";
+import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
@@ -123,6 +124,7 @@ interface ComptimeEngine {
 	enumMap: RaiserFuncMap;
 	vm: RaiserVM;
 	seen: HashMap<string, int32>;
+	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -141,13 +143,51 @@ function freshEngine(): ComptimeEngine {
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const seen: HashMap<string, int32> = new HashMap<string, int32>();
-	return { image, funcMap, enumMap, vm, seen };
+	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
+	return { image, funcMap, enumMap, vm, seen, bodyCtxs };
 }
 
-function compileProgramIntoEngine(program: Node, seeds: Symbol[], wantFn: string): int32 {
+function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMethod[] {
+	const out: ExtensionMethod[] = [];
+	if (mc.extensionRegistry == null) return out;
+	if (mc.currentModule != null && mc.currentModule.stdPrelude) return out;
+	const fromPrelude = new HashSet<Symbol>();
+	if (mc.preludeCtx != null && mc.preludeCtx.extensionRegistry != null) {
+		for (const p of mc.preludeCtx.extensionRegistry.methods) {
+			if (p.sym != null) fromPrelude.add(p.sym);
+		}
+	}
+	for (const m of mc.extensionRegistry.methods) {
+		if (m.sym == null || m.sym == skip || fromPrelude.has(m.sym)) continue;
+		out.push(m);
+	}
+	return out;
+}
+
+function engineBodyCtx(definingModulePath: string): CheckerContext | null {
+	if (_engine == null) return null;
+	const outer = getComptimeOuterCtx();
+	if (outer == null || outer.registry == null || outer.graph == null) return null;
+	const mod = findModule(outer.graph, definingModulePath);
+	if (mod == null || mod.stdPrelude) return null;
+	const declCtx = lookupModuleCtx(definingModulePath);
+	if (declCtx == null) return null;
+	const known = _engine.bodyCtxs.get(declCtx);
+	if (known != null) return known;
+	registerSeedSymbols(moduleScopeSymbols(declCtx.table), seedExtensionsOf(declCtx, null));
+	const empty = createNode(NodeKind.Program, { programStmts: [] }, synthToken(makeLoc(1, 1)));
+	const bodyCtx = checkProgramWithRegistryCancellable(empty, outer.registry, outer.graph, mod, raiserPreludeCtx(), null as unknown as CancelCtx, 0);
+	clearSeedSymbols();
+	_engine.bodyCtxs.set(declCtx, bodyCtx);
+	return bodyCtx;
+}
+
+registerEngineBodyCtxFn(engineBodyCtx);
+
+function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
-	registerSeedSymbols(seeds);
+	registerSeedSymbols(seeds, exts);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
@@ -165,16 +205,18 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 		_engineToken = token;
 	}
 	const seeds = moduleScopeSymbols(token.table);
+	const exts = seedExtensionsOf(token, null);
 	const declPath = getMacroDeclModulePath();
 	if (declPath != "") {
 		const declCtx = lookupModuleCtx(declPath);
 		if (declCtx != null) {
 			for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
+			for (const e of seedExtensionsOf(declCtx, null)) exts.push(e);
 		}
 	}
 	_pendingHelperErrors = [];
 	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
-	const funcIdx = compileProgramIntoEngine(program, seeds, macroFnName);
+	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName);
 	const errors: CheckerError[] = [];
 	for (const e of _lastEngineCheckErrors) errors.push(e);
 	for (const e of _pendingHelperErrors) errors.push(e);
@@ -205,16 +247,18 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	_engine.seen.set(name, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = [];
+	let exts: ExtensionMethod[] = [];
 	if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (s.name != sym.name) seeds.push(s);
 		}
+		exts = seedExtensionsOf(seedCtx, sym);
 	}
 	const clone = cloneNodeForCheck(sym.declNode);
 	callComptimeHelperPreparer(clone);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
-	const idx = compileProgramIntoEngine(program, seeds, name);
+	const idx = compileProgramIntoEngine(program, seeds, exts, name);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({

@@ -9,7 +9,7 @@ import { forEachChild } from "../ast/visitor";
 import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createGenericInstance, createRef, createStruct, instantiateGenericBody, isStructType, symGenericParams, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
+import { CheckerContext, isEngineCheckMode, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
@@ -76,8 +76,18 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 //   4. Caller's ctx — last resort when all lookups miss.
 // Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
 // instantiation body re-check.
+let _engineBodyCtxFn: (definingModulePath: string) => CheckerContext | null = (definingModulePath: string): CheckerContext | null => null;
+
+export function registerEngineBodyCtxFn(fn: (definingModulePath: string) => CheckerContext | null): void {
+	_engineBodyCtxFn = fn;
+}
+
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
+	if (isEngineCheckMode()) {
+		const engineCtx = _engineBodyCtxFn(definingModulePath);
+		if (engineCtx != null) return engineCtx;
+	}
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining != null) return defining;
 	if (ctx.preludeCtx != null) return ctx.preludeCtx;
