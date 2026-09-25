@@ -49,6 +49,9 @@ export interface CliOptions {
 	sourcemap: boolean;        // --sourcemap: js target writes a .map beside each output and links it
 	fmtCheck: boolean;
 	isHcr: boolean;
+	watch: boolean;
+	watchReplay: string;
+	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
@@ -141,6 +144,9 @@ export function parseArgs(): CliOptions {
 		sourcemap: false,
 		fmtCheck: false,
 		isHcr: false,
+		watch: false,
+		watchReplay: "",
+		emitSubdir: "",
 		appMode: "console",
 		strictDefs: false,
 		strictNullChecks: false,
@@ -250,6 +256,11 @@ export function parseArgs(): CliOptions {
 			opts.fmtCheck = true;
 		} else if (arg == "--hcr") {
 			opts.isHcr = true;
+		} else if (arg == "--watch") {
+			opts.watch = true;
+		} else if (arg.startsWith("--watch-replay=")) {
+			opts.watch = true;
+			opts.watchReplay = arg.slice(15, arg.length);
 		} else if (arg.startsWith("--app=")) {
 			const appVal = arg.slice(6, arg.length);
 			if (appVal == "console" || appVal == "lib" || appVal == "staticlib") {
