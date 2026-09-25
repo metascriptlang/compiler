@@ -133,22 +133,33 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 
 	const localSyms: (Symbol | null)[] = [];
 	const shadowDecls: Node[] = [];
+	const activationDecls: Node[] = [];
 	if (paramSyms != null) {
+		const readSyms: (Symbol | null)[] = [];
 		for (const ps of paramSyms) {
 			const ls = freshOwnedSym(ctx, "tcp", ps.symbolType);
 			const decl = makeVarDecl(ls.name, makeIdentResolved(ps, loc), DeclKind.Let, loc);
 			decl.resolvedSym = ls;
 			shadowDecls.push(decl);
 			localSyms.push(ls);
+			if (!capturedByNestedFunction(statementized, ps)) {
+				readSyms.push(ls);
+				continue;
+			}
+			const activation = freshOwnedSym(ctx, "tca", ps.symbolType);
+			const activationDecl = makeVarDecl(activation.name, makeIdentResolved(ls, loc), DeclKind.Let, loc);
+			activationDecl.resolvedSym = activation;
+			activationDecls.push(activationDecl);
+			readSyms.push(activation);
 		}
-		rewriteParamRefs(statementized, paramSyms, localSyms);
+		rewriteParamRefs(statementized, paramSyms, readSyms);
 	} else {
 		for (const _p of params) localSyms.push(null);
 	}
 
 	// Transform: wrap body in while(true), replace tail calls with reassign+continue
 	const bodyStmts = extractBodyStmts(statementized);
-	const newStmts: Node[] = [];
+	const newStmts: Node[] = activationDecls;
 	for (let i = 0; i < bodyStmts.length; i += 1) {
 		newStmts.push(transformStmt(bodyStmts[i], name, sym, params, localSyms, ctx));
 	}
@@ -162,6 +173,17 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	}
 	outerStmts.push(whileNode);
 	return makeBlock(outerStmts, loc);
+}
+
+function capturedByNestedFunction(n: Node, sym: Symbol, nested: boolean = false): boolean {
+	if (n == null) return false;
+	if (nested && n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
+	const inner = nested || isFuncBoundary(n);
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && capturedByNestedFunction(c, sym, inner)) found = true;
+	});
+	return found;
 }
 
 // Redirect every reference to a shadowed param (closures included — symbol
