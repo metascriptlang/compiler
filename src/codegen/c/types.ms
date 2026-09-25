@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -827,21 +827,21 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// or miss) count as generic here.
 	const bareOrigin = typeCacheGet(g.typeCache, "bare:" + className);
 	const isQualifiedNamed = bareOrigin != "" && bareOrigin != className;
-	const isGeneric = !isQualifiedNamed && className.indexOf("__", 0) >= 0;
+	const sharedName = (!isQualifiedNamed && className.indexOf("__", 0) >= 0) || className.startsWith("msAnon_");
 	// The declaring module owns the definition even when DCE dropped the decl
 	// arm (interface used only inside one function) — declaredThings alone
 	// misses that case and the extern would resolve to nothing.
 	let ownSym = objType != null ? objType.sym : null;
 	if (ownSym == null && objType != null && objType.typeReturn != null) ownSym = objType.typeReturn.sym;
 	const isDeclaringModule = ownSym != null && ownSym.modulePath == g.modulePath;
-	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || isGeneric || isDeclaringModule;
+	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || sharedName || isDeclaringModule;
 	if (!isOwner) {
 		ensureTypeInfo(g, className);
 		return;
 	}
 	// Owning module: emit definition + DatInit assignment.
-	// Generics use weak linkage — multiple modules may emit, linker deduplicates.
-	if (isGeneric) {
+	// Generics and structural anonymous shapes use weak linkage — multiple modules may emit, linker deduplicates.
+	if (sharedName) {
 		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
 	} else if (isCompilerGen) {
 		// $-generated types (lambda envs) are only ever referenced in the module
@@ -859,7 +859,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
 		ensureDrcProto(g, destroyHook, destroySym);
-	} else if (isGeneric && genHasDestroyHook(className)) {
+	} else if (sharedName && genHasDestroyHook(className)) {
 		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
 		// objType resolved here. Consult the global destroy-hook registry by hook name.
@@ -1290,16 +1290,13 @@ function genUnionType(g: CGen, t: Type): string {
 		// Primitive/string variants (float32 | string) carry the raw C type as
 		// payload — no per-variant struct typedef. Null is tag-only ("").
 		const rawVariant = t.typeChildren[vi];
-		const structVariant = peelToStruct(rawVariant);
+		const structVariant = inlineVariantStruct(rawVariant);
 		if (isPrimitiveUnionMember(rawVariant) || structVariant == null || structVariant.kind != TypeKind.Struct) {
 			canonicalNames.push(rawVariant.kind == TypeKind.Null ? "" : getTypeDesc(g, rawVariant));
 			allFieldTypes.push([]);
 			vi += 1;
 			continue;
 		}
-		// Peel Ref/Ptr — interface variants are Ref<Struct> in the C backend.
-		// Without peel, variant.typeNames is empty and the variant struct emits
-		// no fields, breaking discriminated unions of named interfaces.
 		const variant = structVariant;
 		const varName = `${name}_v${vi}`;
 
@@ -1352,8 +1349,7 @@ function genUnionType(g: CGen, t: Type): string {
 	// Phase 1b: Emit named variant structs (skip duplicates that reuse a canonical name)
 	vi = 0;
 	while (vi < t.typeChildren.length) {
-		// Same Ref-peel as Phase 1a — interface variants are Ref<Struct>.
-		const variant = peelToStruct(t.typeChildren[vi]);
+		const variant = inlineVariantStruct(t.typeChildren[vi]);
 		const varName = `${name}_v${vi}`;
 		const fieldTypes = allFieldTypes[vi];
 
@@ -1498,7 +1494,7 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCName(rm);
-		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : mangle(elem.typeName);
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {

@@ -418,6 +418,10 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
+function initializerLiteralType(literal: Readonly<Node>, declType: Type | null): Type | null {
+	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32 ? literal.nodeType : declType;
+}
+
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
 function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
@@ -432,7 +436,7 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
 					const nv = (pd.propInitializer.data as NumberLiteralData).value;
-					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, member.nodeType)};`);
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
 				},
 				NodeKind.StringLiteral => {
 					const sv = (pd.propInitializer.data as StringLiteralData).value;
@@ -656,7 +660,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 		const init = d.initializer;
 		if (init.kind == NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
-			const litStr = formatCNumberLit(nd, node.nodeType);
+			const litStr = formatCNumberLit(nd, initializerLiteralType(init, node.nodeType));
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
 			const castedLit = (node.nodeType != null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
@@ -741,7 +745,10 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	let closuresOk = true;
 	let i = 0;
 	for (const prop of od.properties) {
-		const snippet = genExpr(g, p, prop);
+		const sv = prop.kind == NodeKind.StringLiteral ? (prop.data as StringLiteralData).value : "";
+		const snippet = prop.kind == NodeKind.StringLiteral
+			? msStringPoolRef(internString(g.stringPool, sv), cStringByteLen(sv))
+			: genExpr(g, p, prop);
 		if (prop.kind == NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
 		if (braced.length > 0) braced = braced + ", ";
 		braced = braced + "." + mangleFieldName(od.keys[i]) + " = " + snippet;

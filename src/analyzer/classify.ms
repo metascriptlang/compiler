@@ -125,6 +125,14 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// stride from the per-type C array (sizeof data[0]), so they are exact.
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
+	if (elem.kind == TypeKind.Union && elem.typeName == "" && unwrapRefNullUnion(elem) == null
+			&& !isAllStringLiteralUnion(elem)) {
+		if (anonUnionOwnsRc(elem, ctx)) {
+			const n = arrayCTypeName(t);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+		}
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	// Actor elements are exempt from DRC (managed by actor runtime).
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
@@ -353,7 +361,6 @@ export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {
 	let owns = false;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return false;
-		if (c.kind == TypeKind.Ref && c.typeReturn != null && c.typeReturn.kind == TypeKind.Struct) return false;
 		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 		if (classifyType(c, ctx).needsCleanup) owns = true;
 	}

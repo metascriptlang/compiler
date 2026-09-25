@@ -4,7 +4,7 @@
 // union param as bare msString* (silent UB, warning only).
 // Real program on purpose: compileToC* harnesses cannot see codegen-stage
 // errors (guard-harness-false-green). The Fake ledger balance covers the
-// projection's copy-out cells (msAllocTyped + FakeCopy per ref-member narrow).
+// ref members the projections hand out.
 // GUARD-BALANCE Fake
 // GUARD-JS
 
