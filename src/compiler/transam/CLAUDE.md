@@ -26,7 +26,7 @@ Demand-driven cache of compilation results with red-green invalidation and outpu
 | `hash.ms` | `taHashString`, `taHashKey`, `transAmHashNode` |
 | `intern.ms` | `TaStringInterner`, `internString`, `lookupInterned` |
 | `cancel.ms` | `getCancelVersion`, `checkCancel`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
-| `index.ms` | `TransAmDb`, `createTransAmDb`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
+| `index.ms` | `TransAmDb`, `createTransAmDb`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 
 ## Tests
 

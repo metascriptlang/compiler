@@ -11,7 +11,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
 - **LSP latency** — re-parsing and re-checking a project on every keystroke is too slow; a per-file edit costs O(changed) instead of O(project).
 - **Correctness** — the red-green algorithm keeps every served result consistent with the current file contents.
 
-**Core insight** (the Salsa early cutoff): when a dependency is recomputed, its dependents are not invalidated right away. The engine compares the dependency's **output hash** first. A comment-only edit produces the same parse output hash, so every downstream query stays GREEN.
+**Core insight** (the Salsa early cutoff): when a dependency is recomputed, its dependents are not invalidated right away. The engine compares the dependency's **output hash** first. A hash has to cover everything a consumer reads: a parse is hashed by its text, because positions and comments reach diagnostics, `#line` and hover, and a check folds the hashes of its inputs, so an edit rechecks the file and every module that imports it, transitively. That is the reference's rule for a kept graph (nimsuggest `markDirtyIfNeeded` → `markDirty` + `markClientsDirty`, `modulegraphs.nim`). Until 2026-09-25 the parse hash skipped positions and comments and a check hashed only exported names and type kinds: a line shift kept a module's old checked tree, and a module two imports away kept an `int32` after an inferred export became `int64`.
 
 ## 2. Architecture
 
@@ -67,6 +67,8 @@ A query function in `index.ms` (`dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbTra
 
 Dependency tracking is frame-based on purpose: a sub-query records itself into whatever frame is active, so a query cannot forget a dependency.
 
+A frame starts at HIGH durability and only `recordDurability` lowers it. A query records its own file's durability (`dbParse`, `dbTypeCheck`, `dbLower`); before 2026-09-25 `dbTypeCheck` did not, so every check of a user file claimed HIGH and a dependent verified before that check was recomputed skipped it.
+
 ## 4. Query kinds
 
 `TaQueryKind` (`revision.ms`). A query key is `{ queryKind, fileId }`; `fileId` is the sequential id the file input store assigns to a path.
@@ -79,6 +81,7 @@ Dependency tracking is frame-based on purpose: a sub-query records itself into w
 | `TypeCheck` | AST to `CheckerContext` | `dbTypeCheck` |
 | `Transform` | typed AST to transformed AST | `dbTransform` |
 | `Analyze` | transformed AST to DRC-injected AST | `dbAnalyze` |
+| `Lower` | checked AST to the build's native lowering (the A2 chain), cached by a kept build session; depends on the module's check only, the build compares the inputs that come from other modules ([`HCR.md`](HCR.md) "Watch builds") | `dbLower` |
 | `FileHash`, `ModuleDeps` | declared, not executed as queries by the hub | — |
 
 Import edges are recorded into the module dep graph while a module's exports are registered (`dbRecordDepImports`), not through a `ModuleDeps` query. `dbResolveImport` is a plain function, never cached.
@@ -113,6 +116,8 @@ A type check of a module whose dependency declares a macro runs a full check of 
 - `Preprocess` serves the graph module's `source`, the loader's header inlining, instead of inlining again. A bound db therefore records no dependency on a `.h` file: a header change reaches it only through module text the loader re-inlines, so a bound db kept across builds (`--watch`, [`HCR.md`](HCR.md)) has to rerun the loader for every build. The LSP keeps TransAm's own inlining; the test "an unbound db inlines a C header the way the loader does" pins that both produce the same text.
 - A bound check stamps its module registered at the current revision, so a later dependent's export walk (`dbEnsureExportsRegistered`) stops at modules already checked. The walk still registers the collect-level exports of a dependency not checked yet, which is what an import cycle's back edge needs.
 
+A build session (`msc build --hcr --watch`) keeps one bound db across builds: `checkModuleGraph` takes the session's db and prelude context, binds the new graph (changed `FileText` inputs bump the revision), registers a module's kept checked tree when its check is still current, and records per module the check it produced and the generic instances that check created ([`HCR.md`](HCR.md) "Watch builds").
+
 Kept on purpose: `checkModuleGraph` registers a clone of every parse before any check. The two-phase driver it replaced did the same so that a cross-module `@comptime` could reach a sibling's AST before that sibling's check (a race seen on Linux ARM, not reproducible on the host that measured this); it costs the 0.46–0.49 s clone below.
 
 Self-host (`src/index.ms`, 353 modules), `msc build src/index.ms --gc=drc --danger --emit=c --time`, Windows x64, four interleaved rounds per session on a machine shared with other gates (68–76 % load of 32 threads), `graph load+check` in seconds:
@@ -142,7 +147,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Pattern | Reference file | Why |
 |---------|----------------|-----|
 | Red-green algorithm | `red_green.zig` | Core correctness, Salsa-proven |
-| Content-addressed output hashing | `red_green.zig` | No recomputation on semantics-preserving edits |
+| Content-addressed output hashing | `red_green.zig` | A recomputed dependency whose output did not change leaves its dependents GREEN |
 | Durability levels LOW / MEDIUM / HIGH | `types.zig` | Std files skip verification |
 | BFS transitive invalidation | `module_graph.zig` | Correct propagation, cycle-safe |
 | Dependency stack with push / pop frames | `types.zig` | Automatic dependency tracking |
