@@ -228,3 +228,4 @@ import "./bug211SinkParamTakesUnknown";
 import "./bug480UnsignedShiftC";
 import "./bug481ShiftCountMaskC";
 import "./bug482ShadowedNanInfinityC";
+import "./bug483LibcMacroFieldNamesC";
