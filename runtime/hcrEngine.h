@@ -25,6 +25,9 @@ static inline msString msHcrImportKey(void* raw, int32_t index) {
 	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 2 + 1]);
 }
 
+static inline msString msHcrFailureText(void) { return msStringFromCStr(msHcrImageFailure()); }
+static inline msString msHcrImageExt(void) { return msStringFromCStr(MS_HCR_IMAGE_EXT); }
+
 #if defined(_WIN32)
 static inline uint64_t msHcrFileIdentity(const char* path) {
 	WIN32_FILE_ATTRIBUTE_DATA data;
@@ -33,31 +36,62 @@ static inline uint64_t msHcrFileIdentity(const char* path) {
 	uint64_t size = ((uint64_t)data.nFileSizeHigh << 32) | data.nFileSizeLow;
 	return (written * 1000003ULL) ^ size ^ 1ULL;
 }
-static inline uint32_t msHcrCopyImage(const char* from, const char* to) {
-	return CopyFileA(from, to, FALSE) ? 0 : (uint32_t)GetLastError();
+static inline int32_t msHcrCopyImage(const char* from, const char* to) {
+	if (CopyFileA(from, to, FALSE)) return 1;
+	msHcrImageRecordFailure();
+	return 0;
 }
 static inline int32_t msHcrMakeDir(const char* path) {
-	return (CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) ? 1 : 0;
+	if (CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) return 1;
+	msHcrImageRecordFailure();
+	return 0;
 }
 static inline uint32_t msHcrProcessId(void) { return (uint32_t)GetCurrentProcessId(); }
 #else
-static inline void msHcrEngineUnsupported(void) {
-	fprintf(stderr, "HCR: the reload engine has no loader for this platform yet\n");
-	abort();
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+static inline void msHcrRecordErrno(const char* what, const char* path) {
+	snprintf(msHcrImageFailureText, sizeof(msHcrImageFailureText), "%s %s: %s", what, path, strerror(errno));
 }
-static inline uint64_t msHcrFileIdentity(const char* path) { (void)path; msHcrEngineUnsupported(); return 0; }
-static inline uint32_t msHcrCopyImage(const char* from, const char* to) { (void)from; (void)to; msHcrEngineUnsupported(); return 0; }
-static inline int32_t msHcrMakeDir(const char* path) { (void)path; msHcrEngineUnsupported(); return 0; }
-static inline uint32_t msHcrProcessId(void) { msHcrEngineUnsupported(); return 0; }
-static inline void* msHcrWinOpen(const char* path) { (void)path; msHcrEngineUnsupported(); return NULL; }
-static inline void* msHcrWinSymbol(void* handle, const char* name) { (void)handle; (void)name; msHcrEngineUnsupported(); return NULL; }
-static inline int32_t msHcrWinClose(void* handle) { (void)handle; msHcrEngineUnsupported(); return 0; }
-static inline uint32_t msHcrWinLastError(void) { msHcrEngineUnsupported(); return 0; }
-static inline int32_t msHcrWinIsNull(void* value) { return value == NULL ? 1 : 0; }
-static inline void* msHcrWinNull(void) { return NULL; }
-static inline void* msHcrWinCallHandover(void* raw, void* state) { return ((void* (*)(void*))raw)(state); }
-static inline void msHcrWinCallInit(void* raw) { ((void (*)(void))raw)(); }
-static inline int32_t msHcrWinCallProbe(void* raw) { return ((int32_t (*)(void))raw)(); }
+static inline uint64_t msHcrFileIdentity(const char* path) {
+	struct stat info;
+	if (stat(path, &info) != 0) return 0;
+#if defined(__APPLE__)
+	uint64_t written = (uint64_t)info.st_mtimespec.tv_sec * 1000000000ULL + (uint64_t)info.st_mtimespec.tv_nsec;
+#else
+	uint64_t written = (uint64_t)info.st_mtim.tv_sec * 1000000000ULL + (uint64_t)info.st_mtim.tv_nsec;
+#endif
+	return (written * 1000003ULL) ^ (uint64_t)info.st_size ^ 1ULL;
+}
+static inline int32_t msHcrCopyImage(const char* from, const char* to) {
+	int in = open(from, O_RDONLY | O_CLOEXEC);
+	if (in < 0) { msHcrRecordErrno("cannot open", from); return 0; }
+	int out = open(to, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0755);
+	if (out < 0) { msHcrRecordErrno("cannot create", to); close(in); return 0; }
+	char buffer[65536];
+	for (;;) {
+		ssize_t got = read(in, buffer, sizeof(buffer));
+		if (got == 0) break;
+		if (got < 0) { msHcrRecordErrno("cannot read", from); close(in); close(out); return 0; }
+		for (ssize_t done = 0; done < got;) {
+			ssize_t wrote = write(out, buffer + done, (size_t)(got - done));
+			if (wrote < 0) { msHcrRecordErrno("cannot write", to); close(in); close(out); return 0; }
+			done += wrote;
+		}
+	}
+	close(in);
+	if (close(out) != 0) { msHcrRecordErrno("cannot write", to); return 0; }
+	return 1;
+}
+static inline int32_t msHcrMakeDir(const char* path) {
+	if (mkdir(path, 0755) == 0 || errno == EEXIST) return 1;
+	msHcrRecordErrno("cannot create", path);
+	return 0;
+}
+static inline uint32_t msHcrProcessId(void) { return (uint32_t)getpid(); }
 #endif
 
 #endif
