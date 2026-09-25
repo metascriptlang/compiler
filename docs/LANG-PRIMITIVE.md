@@ -100,11 +100,13 @@ This roadmap tracks the transition of compound types from **STUB** to **PRODUCTI
 *   [x] **M2.3: Key/Value Views**: Implement `map.keys()` and `map.values()` zero-copy views.
 *   **Expectation**: The compiler's module dependency graph can be traversed using native `Set` objects.
 
-### Phase 3: Tuple & Anonymous Structs (P1) — ~~DONE~~
+### Phase 3: Tuple structs (P1) — ~~DONE~~
 **Goal**: Move from `void*` hack to proper C struct representations for Tuples.
 *   [x] **M3.1: Unique Struct Generation**: Update `src/codegen/c/types.ms` to emit a C `struct` for every unique Tuple signature (e.g., `msTuple_string_number`).
 *   [x] **M3.2: Index remapping**: Rewrite `t.0`, `t.1` to direct C struct field access in `nativeLower.ms`.
 *   **Expectation**: Tuples become type-safe, stack-allocated records in C.
+*   Anonymous object types `{ ... }` are not in this family: they are reference objects, like
+    `interface` (see `LANG-STRUCT.md`, Layer 1).
 
 ### Phase 4: Full TS Utility Parity (P2) — ~~DONE~~
 **Goal**: Complete the "Dumb Codegen" mapping for all remaining TS types.
