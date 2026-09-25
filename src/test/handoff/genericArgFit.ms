@@ -197,3 +197,25 @@ test "a type-parameter default is not read as another parameter" {
 	assert strictErrorCount(src + "const r = f(\"s\");") == 0;
 	assert hasError(src + "const r = f<int32>(1);", "Wrong number of type arguments to 'f': expected 2, got 1");
 }
+
+// ===== A constrained type parameter binds under its own name =====
+
+test "an explicit type argument on a constrained parameter is still checked" {
+	const src = CLASSES + "function g<T extends Animal>(a: T, b: T): T { return a; }\nconst c = g<Dog>(dog, animal);";
+	assert hasError(src, "Argument type mismatch in 'g' arg 1: got Animal, expected Dog");
+}
+
+test "a constrained parameter accepts a covering explicit type argument" {
+	const src = CLASSES + "function g<T extends Animal>(a: T, b: T): T { return a; }\nconst c = g<Animal>(dog, animal);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a constrained template parameter checks its explicit binding" {
+	const src = TPL_CLASSES + "template tg<T extends Animal>(a: T, b: T): T { return a; }\nconst c = tg<Dog>(dog, animal);";
+	assert hasError(src, "Argument type mismatch in 'tg' arg 1: got Animal, expected Dog");
+}
+
+test "a constrained template parameter checks its inferred binding" {
+	const src = TPL_CLASSES + "template tg<T extends Animal>(a: T, b: T): T { return a; }\nconst c = tg(dog, \"s\");";
+	assert hasError(src, "Argument type mismatch in 'tg' arg 1: got string, expected Dog");
+}
