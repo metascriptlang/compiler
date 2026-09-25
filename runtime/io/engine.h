@@ -71,7 +71,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data);
 
 #define MS_FS_WATCH_UNSUPPORTED (-2)
 
-#ifdef _WIN32
+#if defined(_WIN32) || (defined(__linux__) && !defined(MS_USE_EPOLL))
 int32_t msFsWatchOpen(msIoEngine* e, msString path);
 int32_t msFsWatchLastError(void);
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive);

@@ -23,6 +23,9 @@
 #include <poll.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 /* ===== Raw Syscalls ===== */
 
@@ -309,6 +312,270 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	return fut;
 }
 
+#define MS_FS_WATCH_BUFFER 65536
+#define MS_FS_WATCH_MASK (IN_CREATE | IN_DELETE | IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_FROM | IN_MOVED_TO)
+
+typedef struct msFsWatcher {
+	int fd;
+	int open;
+	int recursive;
+	int expanded;
+	char* root;
+	int* wds;
+	char** dirs;
+	int32_t count;
+	int32_t cap;
+	msIoRequest* pending;
+} msFsWatcher;
+
+static _Thread_local msFsWatcher* _msFsWatchers = NULL;
+static _Thread_local int32_t _msFsWatcherCount = 0;
+static _Thread_local int32_t _msFsWatchLastError = 0;
+
+static int32_t fsWatchErrorCode(int err) {
+	if (err == ENOENT) return 2;
+	if (err == EACCES) return 5;
+	if (err == ENOTDIR) return 267;
+	return (int32_t)err;
+}
+
+int32_t msFsWatchLastError(void) {
+	return _msFsWatchLastError;
+}
+
+static char* fsWatchJoin(const char* a, const char* b) {
+	size_t la = strlen(a), lb = strlen(b);
+	char* out = (char*)malloc(la + lb + 2);
+	memcpy(out, a, la);
+	size_t at = la;
+	if (la > 0 && lb > 0) out[at++] = '/';
+	memcpy(out + at, b, lb);
+	out[at + lb] = 0;
+	return out;
+}
+
+static int fsWatchAdd(msFsWatcher* w, const char* rel) {
+	char* full = fsWatchJoin(w->root, rel);
+	int wd = inotify_add_watch(w->fd, full, MS_FS_WATCH_MASK | IN_ONLYDIR);
+	free(full);
+	if (wd < 0) return wd;
+	for (int32_t i = 0; i < w->count; i++) {
+		if (w->wds[i] == wd) return wd;
+	}
+	if (w->count == w->cap) {
+		w->cap = w->cap == 0 ? 16 : w->cap * 2;
+		w->wds = (int*)realloc(w->wds, (size_t)w->cap * sizeof(int));
+		w->dirs = (char**)realloc(w->dirs, (size_t)w->cap * sizeof(char*));
+	}
+	w->wds[w->count] = wd;
+	w->dirs[w->count] = strdup(rel);
+	w->count++;
+	return wd;
+}
+
+static void fsWatchAddTree(msFsWatcher* w, const char* rel) {
+	if (fsWatchAdd(w, rel) < 0) return;
+	char* full = fsWatchJoin(w->root, rel);
+	DIR* dir = opendir(full);
+	free(full);
+	if (dir == NULL) return;
+	struct dirent* entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+		char* child = fsWatchJoin(rel, entry->d_name);
+		char* childFull = fsWatchJoin(w->root, child);
+		struct stat info;
+		if (lstat(childFull, &info) == 0 && S_ISDIR(info.st_mode)) fsWatchAddTree(w, child);
+		free(childFull);
+		free(child);
+	}
+	closedir(dir);
+}
+
+static const char* fsWatchDir(msFsWatcher* w, int wd) {
+	for (int32_t i = 0; i < w->count; i++) {
+		if (w->wds[i] == wd) return w->dirs[i];
+	}
+	return NULL;
+}
+
+static void fsWatchForget(msFsWatcher* w, int wd) {
+	for (int32_t i = 0; i < w->count; i++) {
+		if (w->wds[i] != wd) continue;
+		free(w->dirs[i]);
+		w->wds[i] = w->wds[w->count - 1];
+		w->dirs[i] = w->dirs[w->count - 1];
+		w->count--;
+		return;
+	}
+}
+
+static void fsWatchRelease(msFsWatcher* w) {
+	if (w->fd >= 0) close(w->fd);
+	w->fd = -1;
+	for (int32_t i = 0; i < w->count; i++) free(w->dirs[i]);
+	free(w->wds);
+	free(w->dirs);
+	free(w->root);
+	w->wds = NULL;
+	w->dirs = NULL;
+	w->root = NULL;
+	w->count = 0;
+	w->cap = 0;
+}
+
+int32_t msFsWatchOpen(msIoEngine* e, msString path) {
+	(void)e;
+	_msFsWatchLastError = 0;
+	char* root = (char*)malloc((size_t)path.len + 1);
+	memcpy(root, path.p ? path.p->data : "", (size_t)path.len);
+	root[path.len] = 0;
+	struct stat info;
+	if (stat(root, &info) != 0 || !S_ISDIR(info.st_mode)) {
+		_msFsWatchLastError = fsWatchErrorCode(stat(root, &info) != 0 ? errno : ENOTDIR);
+		free(root);
+		return -1;
+	}
+	int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0) {
+		_msFsWatchLastError = fsWatchErrorCode(errno);
+		free(root);
+		return -1;
+	}
+	int32_t handle = _msFsWatcherCount;
+	for (int32_t i = 0; i < _msFsWatcherCount; i++) {
+		if (_msFsWatchers[i].fd < 0 && _msFsWatchers[i].pending == NULL) { handle = i; break; }
+	}
+	if (handle == _msFsWatcherCount) {
+		_msFsWatchers = (msFsWatcher*)realloc(_msFsWatchers, (size_t)(_msFsWatcherCount + 1) * sizeof(msFsWatcher));
+		_msFsWatcherCount++;
+	}
+	msFsWatcher* w = &_msFsWatchers[handle];
+	memset(w, 0, sizeof(msFsWatcher));
+	w->fd = fd;
+	w->open = 1;
+	w->root = root;
+	if (fsWatchAdd(w, "") < 0) {
+		_msFsWatchLastError = fsWatchErrorCode(errno);
+		fsWatchRelease(w);
+		return -1;
+	}
+	return handle;
+}
+
+static void fsWatchArm(msIoEngine* e, msFsWatcher* w, msIoRequest* req) {
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) {
+		free(req->buf);
+		req->buf = NULL;
+		w->pending = NULL;
+		msFutureCompleteT((msFuture_msString*)req->fut, msStringNew("*", 1));
+		freeRequest(e, req);
+		return;
+	}
+	w->pending = req;
+	sqe->opcode = IORING_OP_POLL_ADD;
+	sqe->fd = w->fd;
+	sqe->poll_events = POLLIN;
+	sqe->user_data = (uint64_t)(uintptr_t)req;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
+}
+
+void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
+	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	if (handle < 0 || handle >= _msFsWatcherCount || !_msFsWatchers[handle].open) {
+		msFutureCompleteT(fut, MS_EMPTY_STRING);
+		return fut;
+	}
+	msFsWatcher* w = &_msFsWatchers[handle];
+	w->recursive = recursive != 0;
+	if (w->recursive && !w->expanded) {
+		w->expanded = 1;
+		fsWatchAddTree(w, "");
+	}
+	msIoRequest* req = allocRequest(e);
+	req->op = MS_IO_WATCH;
+	req->fd = w->fd;
+	req->offset = handle;
+	req->buf = (char*)malloc(MS_FS_WATCH_BUFFER);
+	req->len = MS_FS_WATCH_BUFFER;
+	req->fut = fut;
+	fsWatchArm(e, w, req);
+	return fut;
+}
+
+void msFsWatchClose(int32_t handle) {
+	if (handle < 0 || handle >= _msFsWatcherCount) return;
+	msFsWatcher* w = &_msFsWatchers[handle];
+	if (!w->open) return;
+	w->open = 0;
+	if (w->pending == NULL) {
+		fsWatchRelease(w);
+		return;
+	}
+	msIoEngine* e = msGetIoEngine();
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) return;
+	sqe->opcode = IORING_OP_ASYNC_CANCEL;
+	sqe->fd = -1;
+	sqe->addr = (uint64_t)(uintptr_t)w->pending;
+	sqe->user_data = 0;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
+}
+
+static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
+	msFsWatcher* w = &_msFsWatchers[req->offset];
+	w->pending = NULL;
+	if (res > 0 && w->open) {
+		ssize_t got = read(w->fd, req->buf, (size_t)req->len);
+		if (got < 0 && (errno == EAGAIN || errno == EINTR)) {
+			fsWatchArm(e, w, req);
+			return 1;
+		}
+		res = (int32_t)got;
+	}
+	if (res <= 0 || !w->open) {
+		free(req->buf);
+		req->buf = NULL;
+		if (!w->open) fsWatchRelease(w);
+		msFutureCompleteT((msFuture_msString*)req->fut, MS_EMPTY_STRING);
+		return 0;
+	}
+	size_t cap = 256, used = 0;
+	char* out = (char*)malloc(cap);
+	int overflow = 0;
+	for (int32_t at = 0; at < res;) {
+		const struct inotify_event* ev = (const struct inotify_event*)(req->buf + at);
+		at += (int32_t)(sizeof(struct inotify_event) + ev->len);
+		if (ev->mask & IN_Q_OVERFLOW) { overflow = 1; continue; }
+		if (ev->mask & IN_IGNORED) { fsWatchForget(w, ev->wd); continue; }
+		const char* dir = fsWatchDir(w, ev->wd);
+		if (dir == NULL || ev->len == 0 || ev->name[0] == 0) continue;
+		char* rel = fsWatchJoin(dir, ev->name);
+		if (w->recursive && (ev->mask & IN_ISDIR) && (ev->mask & (IN_CREATE | IN_MOVED_TO))) fsWatchAddTree(w, rel);
+		size_t length = strlen(rel);
+		while (used + length + 2 > cap) cap *= 2;
+		out = (char*)realloc(out, cap);
+		if (used > 0) out[used++] = '\n';
+		memcpy(out + used, rel, length);
+		used += length;
+		free(rel);
+	}
+	if (!overflow && used == 0) {
+		free(out);
+		fsWatchArm(e, w, req);
+		return 1;
+	}
+	msString changes = overflow ? msStringNew("*", 1) : msStringNew(out, (int64_t)used);
+	free(out);
+	free(req->buf);
+	req->buf = NULL;
+	msFutureCompleteT((msFuture_msString*)req->fut, changes);
+	return 0;
+}
+
 /* ===== Process Completions ===== */
 
 /* No-op: Linux 5.5+ emits -ECANCELED CQE on fd close. */
@@ -424,6 +691,10 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		}
 		case MS_IO_CLOSE: {
 			msFutureCompleteVoid(req->fut);
+			break;
+		}
+		case MS_IO_WATCH: {
+			if (fsWatchComplete(e, req, res)) continue;
 			break;
 		}
 		}
