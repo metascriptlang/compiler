@@ -23,7 +23,7 @@ import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
 	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
-	setNeedsTryToLoop, setNeedsTryAll, addPending, hasPending, clearPendingForVar, symListHas, symListAdd,
+	setNeedsTryAll, addPending, hasPending, clearPendingForVar, symListHas, symListAdd,
 	addPre,
 	pushOuterStmts, popOuterStmts,
 	testStringRc, classifyRc,
@@ -1384,8 +1384,8 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.BlockStmt => processBlockBody(stmt, dctx, false, false, sloc),
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
-		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryToLoop(dctx); return stmt; },
-		NodeKind.ThrowStmt => processThrow(stmt, dctx, sloc),
+		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); return stmt; },
+		NodeKind.ThrowStmt => processThrow(stmt, dctx),
 		NodeKind.ExportDecl => processExport(stmt, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
@@ -2038,35 +2038,10 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 	return false;
 }
 
-// Nim pRaiseStmt: the raise argument is a sink. An owned-local identifier is
-// moved (destructiveMoveVar via the Consumed walk); a non-movable RC source
-// (field/element read) is copy-temp'd — `tmp = copy(arg); raise tmp`
-// (injectdestructors.nim:773) — so the raise machinery owns exactly one live
-// reference and no aliasing second owner survives the unwind. String throws
-// stay untouched: msThrow copies the message (MS sugar outside the ref domain).
-function processThrow(stmt: Node, dctx: DrcContext, sloc: SourceLocation): Node {
+function processThrow(stmt: Node, dctx: DrcContext): Node {
 	setNeedsTryAll(dctx);
 	const td = stmt.data as ThrowStmtData;
-	const at = td.throwArg.nodeType;
-	if (at == null || at.kind == TypeKind.String) return stmt;
-	const rc = classifyRc(at, dctx);
-	if (!rc.needsCleanup) return stmt;
-	if (td.throwArg.kind == NodeKind.Identifier) {
-		td.throwArg = processNode(td.throwArg, dctx, DrcMode.Consumed);
-		return stmt;
-	}
-	if (td.throwArg.kind == NodeKind.MemberExpr || td.throwArg.kind == NodeKind.ArrayAccess) {
-		const excSym = freshTempSym(dctx.ctx, "exc", at);
-		const tmpDecl = makeVarDecl(excSym.name, td.throwArg, DeclKind.Const, sloc);
-		tmpDecl.nodeType = at;
-		tmpDecl.resolvedSym = excSym;
-		const rcCopy = sinkClassify(at, dctx);
-		const increfRef = rcCopy.copyFn != null ? makeTypedIdentResolved(rcCopy.copyFn, null, sloc) : runtimeRef("msIncref", sloc);
-		const incref = makeExprStmt(
-			makeCall(increfRef, [makeIdentResolved(excSym, sloc)], sloc), sloc);
-		td.throwArg = makeIdentResolved(excSym, sloc);
-		return makeBlock([tmpDecl, incref, stmt], sloc);
-	}
+	td.throwArg = processNode(td.throwArg, dctx, DrcMode.SinkArg);
 	return stmt;
 }
 
@@ -2232,13 +2207,13 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 		if (d.catchName != "" && catchType != null && !isUnresolvedType(catchType) && catchType.kind != TypeKind.Error) {
 			const rcInfo = classifyRc(catchType, dctx);
 			if (rcInfo.needsCleanup) {
+				const body = d.catchBody.kind == NodeKind.BlockStmt ? d.catchBody : makeBlock([d.catchBody], loc);
 				pushScope(dctx, false, false);
 				registerVar(dctx, rcInfo, false, stmt.resolvedSym);
-				d.catchBody = processBlockBody(d.catchBody, dctx, false, false, loc);
+				const processed = processStmtList((body.data as BlockStmtData).statements, dctx, loc);
 				const scope = popScope(dctx);
 				const cleanup = generateCleanup(scope, loc);
-				const cbd = d.catchBody.data as BlockStmtData;
-				for (const cs of cleanup) { cbd.statements.push(cs); }
+				d.catchBody = makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 				handled = true;
 			}
 		}
@@ -2265,6 +2240,7 @@ function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation
 
 function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as SwitchStmtData;
+	d.switchDisc = processNonRcRead(d.switchDisc, dctx);
 	for (const c of d.switchCases) {
 		if (c.kind == NodeKind.SwitchCase) {
 			processSwitchCase(c, dctx, loc);

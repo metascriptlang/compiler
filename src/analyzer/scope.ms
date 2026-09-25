@@ -269,17 +269,6 @@ export function clearMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
 
 // ===== needsTry Propagation =====
 
-// Set needsTry on all scopes from innermost to loop boundary (break/continue)
-export function setNeedsTryToLoop(dctx: DrcContext): void {
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
-		dctx.scopes[i].needsTry = true;
-		if (dctx.scopes[i].isLoop) return;
-	}
-}
-
-// Set needsTry on ALL scopes (return/throw)
 export function setNeedsTryAll(dctx: DrcContext): void {
 	for (let i = 0; i < dctx.scopes.length; i += 1) {
 		dctx.scopes[i].needsTry = true;
@@ -532,20 +521,6 @@ test "setNeedsTryAll" {
 	assert dctx.scopes[0].needsTry;
 	assert dctx.scopes[1].needsTry;
 	assert dctx.scopes[2].needsTry;
-	popScope(dctx);
-	popScope(dctx);
-	popScope(dctx);
-}
-
-test "setNeedsTryToLoop stops at loop" {
-	const dctx = testDrcCtx();
-	pushScope(dctx, false, true);   // function
-	pushScope(dctx, true, false);   // loop
-	pushScope(dctx, false, false);  // block inside loop
-	setNeedsTryToLoop(dctx);
-	assert !dctx.scopes[0].needsTry;  // function — NOT set
-	assert dctx.scopes[1].needsTry;    // loop — set (it's the boundary)
-	assert dctx.scopes[2].needsTry;    // block — set
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
