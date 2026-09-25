@@ -1301,6 +1301,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
+		if (d.operator == ">>>") {
+			ctx.results.push(genLogicalShr(g, node, d.left.nodeType, left, finalRight));
+			return;
+		}
 		// C has no exponent operator; pow() is the call form, same shape as fmod
 		// above. An integer result type casts back — pow is double-valued.
 		if (d.operator == "**") {
@@ -2893,6 +2897,24 @@ function mapBinaryOp(g: CGen, op: string): string {
 	return mapped;
 }
 
+function shiftOperandBits(t: Type | null): int32 {
+	if (t == null) return 32;
+	if (t.kind == TypeKind.Distinct && t.typeReturn != null) return shiftOperandBits(t.typeReturn);
+	return match (t.kind) {
+		TypeKind.Int8 | TypeKind.Uint8 => 8,
+		TypeKind.Int16 | TypeKind.Uint16 => 16,
+		TypeKind.Int64 | TypeKind.Uint64 => 64,
+		_ => 32,
+	};
+}
+
+function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, left: string, right: string): string {
+	const bits = shiftOperandBits(leftType);
+	const unsignedType = `uint${bits}_t`;
+	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
+	return `((${resultType})((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+}
+
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
 //  absorbed into iterative discoverExpr/emitExpr above)
 
@@ -3233,4 +3255,8 @@ test "an await that reaches codegen unlowered is an internal error naming it" {
 
 test "an unlowered kind nested in a lowered one is still an internal error" {
 	assert exprErrors("a + (await p);").contains("internal: AwaitExpr reached C codegen unlowered");
+}
+
+test "unsigned right shift is a logical shift of the operand width with a masked count" {
+	assert exprSnippet("a >>> b;") == "((uint32_t)((uint32_t)(a) >> ((uint32_t)(b) & 31)))";
 }
