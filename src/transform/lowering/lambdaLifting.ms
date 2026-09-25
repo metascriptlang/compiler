@@ -1576,12 +1576,14 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
+			d.switchDisc = walkOrLift(d.switchDisc, state);
 			for (const c of d.switchCases) {
 				walkLift(c, state);
 			}
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
+			for (let t = 0; t < d.caseTests.length; t += 1) d.caseTests[t] = walkOrLift(d.caseTests[t], state);
 			for (const s of d.caseStmts) {
 				walkLift(s, state);
 			}

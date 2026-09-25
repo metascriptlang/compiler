@@ -292,11 +292,13 @@ function detectAllWalk(node: Node | null): void {
 	}
 	if (node.kind == NodeKind.SwitchStmt) {
 		const d = node.data as SwitchStmtData;
+		detectAllWalk(d.switchDisc);
 		for (const c of d.switchCases) detectAllWalk(c);
 		return;
 	}
 	if (node.kind == NodeKind.SwitchCase) {
 		const d = node.data as SwitchCaseData;
+		for (const t of d.caseTests) detectAllWalk(t);
 		for (const s of d.caseStmts) detectAllWalk(s);
 		return;
 	}
