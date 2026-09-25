@@ -202,8 +202,16 @@ export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 /** Returns the element at the specified index. */
 export extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 
-/** Sets the length of the array. */
-export extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+extern function growLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+
+/** Sets the length of the array. Shrinking destroys every evicted element. */
+export function setLength<T>(this arr: T[], newLen: number): void {
+	const n = newLen < 0 ? 0 : newLen;
+	while (arr.length > n) {
+		arr.pop();
+	}
+	arr.growLength(n);
+}
 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
