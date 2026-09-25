@@ -323,10 +323,10 @@ msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
 	return msFutureThenTyped(input, onFulfilled, MS_TYPETAG_PTR);
 }
 
-msFuture* msFutureThenTyped(msFuture* input, msClosure onFulfilled, int typeTag) {
+void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
-	env->output = output; env->input = input; env->onFulfilled = onFulfilled; env->typeTag = typeTag;
+	env->output = output; env->input = (msFuture*)input; env->onFulfilled = onFulfilled; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
 	return output;
 }
@@ -369,10 +369,10 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 	return msFutureCatchTyped(input, onRejected, MS_TYPETAG_PTR);
 }
 
-msFuture* msFutureCatchTyped(msFuture* input, msClosure onRejected, int typeTag) {
+void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv));
-	env->output = output; env->input = input; env->onRejected = onRejected; env->typeTag = typeTag;
+	env->output = output; env->input = (msFuture*)input; env->onRejected = onRejected; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
 	return output;
 }
@@ -394,10 +394,10 @@ static void msFutureFinallyCb(void* raw) {
 	free(e);
 }
 
-msFuture* msFutureFinally(msFuture* input, msClosure onSettled) {
+void* msFutureFinally(void* input, msClosure onSettled) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv));
-	env->output = output; env->input = input; env->onSettled = onSettled;
+	env->output = output; env->input = (msFuture*)input; env->onSettled = onSettled;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});
 	return output;
 }

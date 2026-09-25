@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, runtimeRef } from "../util";
+import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -143,28 +143,34 @@ function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 // fall back to the legacy tag-dispatch path.
 function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
-	if (cd.callee.kind != NodeKind.MemberExpr || cd.arguments.length < 1) return node;
-	const me = cd.callee.data as MemberExprData;
-	const innerType = awaitedType(me.object.nodeType);
-	const cb = cd.arguments[0];
+	const receiverFirst = cd.callee.kind != NodeKind.MemberExpr;
+	if (cd.arguments.length < (receiverFirst ? 2 : 1)) return node;
+	const receiver = receiverFirst ? cd.arguments[0] : (cd.callee.data as MemberExprData).object;
+	const handlers: Node[] = [];
+	for (let i = receiverFirst ? 1 : 0; i < cd.arguments.length; i += 1) handlers.push(cd.arguments[i]);
+	const innerType = awaitedType(receiver.nodeType);
+	const cb = handlers[0];
 	return match (builtinKind) {
 		"PromiseThen" => {
 			const typedFn = futureThenFnForInner(innerType);
-			if (typedFn != "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
+			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
+			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
+				return mkTypedCall("msFutureThenBoxed", [receiver, cb], node.nodeType, loc);
+			}
 			const tag = typeTagFor(innerType);
-			return mkTypedCall("msFutureThenTyped", [me.object, cb, makeNumber(tag, loc)], node.nodeType, loc);
+			return mkTypedCall("msFutureThenTyped", [receiver, cb, makeNumber(tag, loc)], node.nodeType, loc);
 		},
 		"PromiseCatch" => {
 			// Error handler always receives msString (MetaScript errors are strings).
 			const typedFn = futureCatchFnForInner(innerType);
-			if (typedFn != "") return mkTypedCall(typedFn, [me.object, cb], node.nodeType, loc);
-			return mkTypedCall("msFutureCatchTyped", [me.object, cb, makeNumber(3, loc)], node.nodeType, loc);
+			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
+			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(3, loc)], node.nodeType, loc);
 		},
 		_ => {
 			// PromiseFinally — wildcard is safe: outer dispatch restricts to these three.
 			const typedFn = futureFinallyFnForInner(innerType);
-			const finallyArgs: Node[] = [me.object];
-			for (const a of cd.arguments) { finallyArgs.push(a); }
+			const finallyArgs: Node[] = [receiver];
+			for (const a of handlers) { finallyArgs.push(a); }
 			return mkTypedCall(typedFn != "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
 		},
 	};

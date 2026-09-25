@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -2448,7 +2448,16 @@ enum CallMagic {
 	StringConcatArr, StringArrayFromArr, StringAppendArr, NumberArrayFrom,
 	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
-	FutureCreateInline, SpawnInto, WaitForStruct,
+	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
+}
+
+function closureFunctionSym(node: Readonly<Node>): Symbol | null {
+	if (node.kind == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
+		const d = node.data as ObjectLiteralData;
+		return d.properties.length > 0 ? d.properties[0].resolvedSym : null;
+	}
+	const sym = node.resolvedSym;
+	return sym != null && sym.symbolKind == SymbolKind.Function ? sym : null;
 }
 
 function callMagicOf(sym: Symbol | null): CallMagic {
@@ -2469,6 +2478,7 @@ function callMagicOf(sym: Symbol | null): CallMagic {
 		"FutureCreateInline" => CallMagic.FutureCreateInline,
 		"SpawnInto" => CallMagic.SpawnInto,
 		"WaitForStruct" => CallMagic.WaitForStruct,
+		"FutureThenBoxed" => CallMagic.FutureThenBoxed,
 		_ => CallMagic.None,
 	};
 }
@@ -2790,6 +2800,21 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		emitStmtsLine(p, `${valTmp.snippet} = ((${futStructName}*)${futTmp.snippet})->value;`);
 		ctx.results.push(valTmp.snippet);
 		return;
+	}
+
+	// msFutureThenBoxed(input, cb) → the per-T MS_DEFINE_FUTURE_THEN_BOXED instance, T from
+	// the input's Promise<T>. promiseLower picks it for boxed value types.
+	if (magic == CallMagic.FutureThenBoxed && cd.arguments.length >= 2 && cd.arguments[0].nodeType != null) {
+		const innerT = awaitedType(cd.arguments[0].nodeType!);
+		if (innerT != null) {
+			const callback = closureFunctionSym(cd.arguments[1]);
+			const cbType = callback != null ? callback.symbolType : cd.arguments[1].nodeType;
+			const paramType = cbType != null && cbType.kind == TypeKind.Function && cbType.typeChildren.length > 0 ? cbType.typeChildren[0] : innerT;
+			const mutated = callback != null && (callback.mutatedParams & 1) != 0;
+			const byRef = shouldIndirectParam(g.target, paramType, mutated);
+			ctx.results.push(`${ensureFutureThenBoxedInstance(g, innerT, byRef)}(${argsStr})`);
+			return;
+		}
 	}
 
 	// Lazy MS_PROMISE_ALL_FOR emission — side-effect only, falls through to normal

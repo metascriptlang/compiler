@@ -1772,6 +1772,32 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	addNewline(b);
 }
 
+// Emit the MS_DEFINE_FUTURE_THEN_BOXED instance for a boxed value type and return its
+// name. The drop is the type's destructor hook, found the way ensureTypeInfoDef finds it.
+export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: boolean): string {
+	const innerDesc = getTypeDesc(g, innerType);
+	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
+	let drop = "MS_NO_DROP";
+	if (hasAsgnFlag(innerType)) {
+		const destroySym = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
+		const hookName = destroySym != null ? destroySym.name : innerDesc + "Destroy";
+		const hook = destroySym != null ? destroySym : lookupHookSym(hookName);
+		if (hook != null) {
+			drop = mangle(hookName);
+			ensureDrcProto(g, drop, hook);
+		}
+	}
+	const b = sec(g, CSection.GlobalVars);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
+	const argType = byRef ? innerDesc + "*" : innerDesc;
+	const pass = byRef ? "MS_PASS_REF" : "MS_PASS_VALUE";
+	addLine(b, "MS_DEFINE_FUTURE_THEN_BOXED(" + name + ", " + innerDesc + ", " + argType + ", " + pass + ", " + drop + ")");
+	addLine(b, "#endif");
+	addNewline(b);
+	return name;
+}
+
 export function genFutureType(g: CGen, t: Type): string {
 	const innerType = awaitedType(t);
 	const key = typeKey(t);
