@@ -24,6 +24,7 @@ import "./toycodec";
 import "./structuralPrefix";
 import "./drcLifecycle";
 import "./int64Literal";
+import "./constFoldOrder";
 import "./bigintChecker";
 import "./rangeCheckPolicy";
 import "./nominalFit";
