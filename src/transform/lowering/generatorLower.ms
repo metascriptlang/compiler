@@ -14,23 +14,21 @@
 //                                        }
 //                                    }};
 //                                }
-//
-// V1: yield in statement position, while/if with yield.
-// V2 deferred: yield*, yield in expressions, yield in try/catch.
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
-	VariableDeclData, IfStmtData, WhileStmtData,
-	ExprStmtData, ReturnStmtData,
-	BinaryExprData, UnaryExprData, CallExprData,
-	ConditionalExprData, TryCatchStmtData, YieldExprData,
+	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
+	SwitchStmtData, SwitchCaseData, BreakStmtData, ContinueStmtData,
+	ExprStmtData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 	IdentifierData, Symbol, SymbolKind,
 	isEmptyBlock,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
+import { mapChildren } from "../walker";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { addError } from "../../checker/context";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
@@ -38,9 +36,11 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr, makeDefaultValue,
+	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr,
+	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -62,6 +62,8 @@ export interface GenState {
 export interface LoopFrame {
 	breakState: number;
 	continueState: number;
+	label: string;
+	isLoop: boolean;
 }
 
 // Active finally scope (finallyPath port, reference closureiters): a
@@ -72,6 +74,7 @@ export interface LoopFrame {
 export interface FinallyFrame {
 	stmts: Node[];
 	loopDepth: number;
+	hasYield: boolean;
 }
 
 export interface StateCollector {
@@ -81,6 +84,21 @@ export interface StateCollector {
 	finallyStack: FinallyFrame[];
 	stateSym: Symbol;
 	curExcSym: Symbol;
+	genReturns?: boolean;
+	genResultType?: Type;
+}
+
+interface SplitDiag {
+	message: string;
+	loc: SourceLocation;
+}
+
+let pendingSplitDiags: SplitDiag[] = [];
+
+const YIELD_IN_EXPR = "a yield or await inside an expression is not supported on the C backend yet; bind it to a variable first (`const v = await p;`)";
+
+function reportUnsplit(node: Node, message: string): void {
+	pendingSplitDiags.push({ message, loc: node.location });
 }
 
 
@@ -107,6 +125,24 @@ function collectDeclTypes(node: Node, names: string[], types: Type[], syms: Symb
 		}
 	}
 	forEachChild(node, (child: Node): void => { collectDeclTypes(child, names, types, syms); });
+}
+
+function cloneStmts(stmts: Node[]): Node[] {
+	const out: Node[] = [];
+	for (const s of stmts) out.push(cloneNodeKeepSem(s));
+	return out;
+}
+
+function loopPrefix(frames: LoopFrame[], n: number): LoopFrame[] {
+	const out: LoopFrame[] = [];
+	for (let i = 0; i < n; i += 1) out.push(frames[i]);
+	return out;
+}
+
+function finallyPrefix(frames: FinallyFrame[], n: number): FinallyFrame[] {
+	const out: FinallyFrame[] = [];
+	for (let i = 0; i < n; i += 1) out.push(frames[i]);
+	return out;
 }
 
 function lookupDeclIdx(names: string[], name: string): int32 {
@@ -146,47 +182,136 @@ export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym:
 	);
 }
 
-// `{ $state = N; continue; }` — trailing continue skips dead code after the
-// source-level break/continue so it doesn't overwrite $state before the
-// dispatcher re-evaluates. Safe only when no nested loop sits between the
-// rewrite point and the dispatcher; rewriteLoopExits enforces by not
-// descending into nested loops/switch.
-function makeStateGoto(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
-	return makeBlock([makeStateAssign(stateNum, loc, stateSym), makeContinue(loc)], loc);
+function findLabeledFrame(sc: StateCollector, label: string): number {
+	for (let i = sc.loopStack.length - 1; i >= 0; i -= 1) {
+		if (sc.loopStack[i].label == label) return i;
+	}
+	return -1;
 }
 
-// Descends Block/If/Try only — nested loops and switch own their own
-// break/continue scope.
-function rewriteOrRecurse(stmt: Node, top: LoopFrame, loc: SourceLocation, stateSym: Symbol): Node {
-	if (stmt == null) return stmt;
-	if (stmt.kind == NodeKind.BreakStmt) return makeStateGoto(top.breakState, loc, stateSym);
-	if (stmt.kind == NodeKind.ContinueStmt) return makeStateGoto(top.continueState, loc, stateSym);
-	rewriteLoopExits(stmt, top, loc, stateSym);
-	return stmt;
+function innermostLoopFrame(sc: StateCollector): number {
+	for (let i = sc.loopStack.length - 1; i >= 0; i -= 1) {
+		if (sc.loopStack[i].isLoop) return i;
+	}
+	return -1;
 }
 
-function rewriteLoopExits(node: Node, top: LoopFrame, loc: SourceLocation, stateSym: Symbol): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (let i = 0; i < d.statements.length; i += 1) {
-				d.statements[i] = rewriteOrRecurse(d.statements[i], top, loc, stateSym);
-			}
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			d.consequent = rewriteOrRecurse(d.consequent, top, loc, stateSym);
-			d.alternate = rewriteOrRecurse(d.alternate, top, loc, stateSym);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			d.tryBody = rewriteOrRecurse(d.tryBody, top, loc, stateSym);
-			d.catchBody = rewriteOrRecurse(d.catchBody, top, loc, stateSym);
-			d.finallyBody = rewriteOrRecurse(d.finallyBody, top, loc, stateSym);
-		},
-		_ => {},
-	};
+function jumpFrame(sc: StateCollector, node: Node, capBreak: boolean, capContinue: boolean): number {
+	if (node.kind == NodeKind.BreakStmt) {
+		const label = (node.data as BreakStmtData).breakLabel;
+		if (label != "") return findLabeledFrame(sc, label);
+		if (capBreak) return -1;
+		return sc.loopStack.length - 1;
+	}
+	const label = (node.data as ContinueStmtData).continueLabel;
+	if (label != "") return findLabeledFrame(sc, label);
+	if (capContinue) return -1;
+	return innermostLoopFrame(sc);
+}
+
+function isStateJump(stmt: Node, sc: StateCollector): boolean {
+	if (stmt.kind == NodeKind.ReturnStmt) return sc.genReturns == true;
+	if (stmt.kind == NodeKind.BreakStmt || stmt.kind == NodeKind.ContinueStmt) return jumpFrame(sc, stmt, false, false) >= 0;
+	return false;
+}
+
+function jumpExit(stmt: Node, sc: StateCollector, frameIdx: number, loc: SourceLocation): Node[] {
+	if (stmt.kind == NodeKind.ReturnStmt) {
+		return [makeStateAssign(-1, loc, sc.stateSym), makeReturn(makeDoneResult(loc, sc.genResultType), loc)];
+	}
+	const frame = sc.loopStack[frameIdx];
+	if (stmt.kind == NodeKind.BreakStmt) return [makeStateAssign(frame.breakState, loc, sc.stateSym)];
+	if (!frame.isLoop) reportUnsplit(stmt, "internal: a continue targets a switch that was split into states");
+	return [makeStateAssign(frame.continueState, loc, sc.stateSym)];
+}
+
+function crossesYieldFinally(sc: StateCollector, frameIdx: number): boolean {
+	for (const f of sc.finallyStack) {
+		if (f.loopDepth > frameIdx && f.hasYield) return true;
+	}
+	return false;
+}
+
+function inlineCrossedFinallies(sc: StateCollector, frameIdx: number, out: Node[], loc: SourceLocation): void {
+	const loops = sc.loopStack;
+	const fins = sc.finallyStack;
+	for (let f = fins.length - 1; f >= 0; f -= 1) {
+		if (fins[f].loopDepth > frameIdx) {
+			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
+			sc.finallyStack = finallyPrefix(fins, f);
+			for (const s of fins[f].stmts) out.push(rewriteJumps(cloneNodeKeepSem(s), sc, false, false, loc));
+		}
+	}
+	sc.loopStack = loops;
+	sc.finallyStack = fins;
+}
+
+// The emitted `continue` must reach the state dispatcher: a jump nested in a C
+// loop of its own is split instead (hasEscapingJump).
+function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, loc: SourceLocation): Node {
+	if (node == null || isFnBoundary(node)) return node;
+	if (node.kind == NodeKind.ReturnStmt) {
+		if (sc.genReturns != true) return node;
+		const out: Node[] = [];
+		inlineCrossedFinallies(sc, -1, out, loc);
+		for (const s of jumpExit(node, sc, -1, loc)) out.push(s);
+		return makeBlock(out, loc);
+	}
+	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
+		const idx = jumpFrame(sc, node, capBreak, capContinue);
+		if (idx < 0) return node;
+		const exits = jumpExit(node, sc, idx, loc);
+		const out: Node[] = [];
+		inlineCrossedFinallies(sc, idx, out, loc);
+		for (const s of exits) out.push(s);
+		out.push(makeContinue(loc));
+		return makeBlock(out, loc);
+	}
+	let cb = capBreak;
+	let cc = capContinue;
+	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt || node.kind == NodeKind.ForInStmt) {
+		cb = true;
+		cc = true;
+	} else if (node.kind == NodeKind.DoWhileStmt) {
+		cb = true;
+		if (!(node.data as DoWhileStmtData).dwSwitchWrapper) cc = true;
+	} else if (node.kind == NodeKind.SwitchStmt) {
+		cb = true;
+	}
+	mapChildren(node, (child: Node): Node => rewriteJumps(child, sc, cb, cc, loc));
+	return node;
+}
+
+function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, inCLoop: boolean): boolean {
+	if (node == null || isFnBoundary(node)) return false;
+	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesYieldFinally(sc, -1);
+	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
+		const idx = jumpFrame(sc, node, capBreak, capContinue);
+		return idx >= 0 && (inCLoop || crossesYieldFinally(sc, idx));
+	}
+	let cb = capBreak;
+	let cc = capContinue;
+	let inLoop = inCLoop;
+	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt || node.kind == NodeKind.ForInStmt) {
+		cb = true;
+		cc = true;
+		inLoop = true;
+	} else if (node.kind == NodeKind.DoWhileStmt) {
+		cb = true;
+		inLoop = true;
+		if (!(node.data as DoWhileStmtData).dwSwitchWrapper) cc = true;
+	} else if (node.kind == NodeKind.SwitchStmt) {
+		cb = true;
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && hasEscapingJump(child, sc, cb, cc, inLoop)) found = true;
+	});
+	return found;
+}
+
+function needsSplit(stmt: Node, sc: StateCollector): boolean {
+	return containsYield(stmt) || hasEscapingJump(stmt, sc, false, false, false);
 }
 
 export function allocState(sc: StateCollector): number {
@@ -205,48 +330,17 @@ function isGeneratorFlag(flags: string): boolean {
 
 export function containsYield(node: Node | null): boolean {
 	if (node == null) return false;
-	return match (node.kind) {
-		NodeKind.YieldExpr => true,
-		// Stop at nested function boundaries
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => false,
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) {
-				if (containsYield(s)) return true;
-			}
-			return false;
-		},
-		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; return containsYield(d.expr); },
-		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; return containsYield(d.argument); },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return d.initializer != null && containsYield(d.initializer); },
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			return containsYield(d.condition) || containsYield(d.consequent) || containsYield(d.alternate);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			return containsYield(d.whileCondition) || containsYield(d.whileBody);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			return containsYield(d.tryBody) || containsYield(d.catchBody) || containsYield(d.finallyBody);
-		},
-		NodeKind.BinaryExpr => { const d = node.data as BinaryExprData; return containsYield(d.left) || containsYield(d.right); },
-		NodeKind.UnaryExpr => { const d = node.data as UnaryExprData; return containsYield(d.operand); },
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			if (containsYield(d.callee)) return true;
-			for (const a of d.arguments) {
-				if (containsYield(a)) return true;
-			}
-			return false;
-		},
-		NodeKind.ConditionalExpr => {
-			const d = node.data as ConditionalExprData;
-			return containsYield(d.ternaryCondition) || containsYield(d.ternaryConsequent) || containsYield(d.ternaryAlternate);
-		},
-		_ => false,
-	};
+	if (node.kind == NodeKind.YieldExpr) return true;
+	if (isFnBoundary(node)) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && containsYield(child)) found = true;
+	});
+	return found;
+}
+
+function isDirectYield(expr: Node): boolean {
+	return expr.kind == NodeKind.YieldExpr && !containsYield((expr.data as YieldExprData).yieldArg);
 }
 
 // Emit yield: transition to next state + return IteratorResult.
@@ -260,28 +354,36 @@ function emitYield(sc: StateCollector, currentState: number, nextSt: number, yie
 // ===== State Splitting =====
 // Split a linear sequence of statements at yield points.
 
-// Inline the finally bodies of every frame a break/continue crosses
-// (innermost first). targetLoopIdx = loopStack index of the loop being exited;
-// frames entered deeper than the target (loopDepth > targetLoopIdx) are tries
-// the exit leaves, so their finally must run before the state transition.
-function pushCrossedFinallies(sc: StateCollector, targetLoopIdx: number, out: Node[]): void {
-	let f = sc.finallyStack.length - 1;
-	while (f >= 0) {
-		if (sc.finallyStack[f].loopDepth > targetLoopIdx) {
-			for (const s of sc.finallyStack[f].stmts) out.push(s);
-		}
-		f = f - 1;
+function emitInline(stmts: Node[], sc: StateCollector, from: number, loc: SourceLocation, resultType: Type | null): number {
+	let split = false;
+	for (const s of stmts) {
+		if (isStateJump(s, sc) || needsSplit(s, sc)) split = true;
 	}
+	if (!split) {
+		for (const s of stmts) sc.items[from].stmts.push(rewriteJumps(s, sc, false, false, loc));
+		return from;
+	}
+	const next = allocState(sc);
+	splitStmts(stmts, sc, from, next, loc, resultType);
+	return next;
 }
 
-// Inline ALL enclosing finally bodies (innermost first) — a return leaves
-// every try, not just the innermost loop-crossing subset.
-function pushAllFinallies(sc: StateCollector, out: Node[]): void {
-	let f = sc.finallyStack.length - 1;
-	while (f >= 0) {
-		for (const s of sc.finallyStack[f].stmts) out.push(s);
-		f = f - 1;
+function splitJump(stmt: Node, sc: StateCollector, currentState: number, loc: SourceLocation, resultType: Type | null): void {
+	const frameIdx = stmt.kind == NodeKind.ReturnStmt ? -1 : jumpFrame(sc, stmt, false, false);
+	const exits = jumpExit(stmt, sc, frameIdx, loc);
+	const loops = sc.loopStack;
+	const fins = sc.finallyStack;
+	let cur = currentState;
+	for (let f = fins.length - 1; f >= 0; f -= 1) {
+		if (fins[f].loopDepth > frameIdx) {
+			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
+			sc.finallyStack = finallyPrefix(fins, f);
+			cur = emitInline(cloneStmts(fins[f].stmts), sc, cur, loc, resultType);
+		}
 	}
+	sc.loopStack = loops;
+	sc.finallyStack = fins;
+	for (const s of exits) sc.items[cur].stmts.push(s);
 }
 
 export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
@@ -289,40 +391,15 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 	let i = 0;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
-		// break/continue inside a while-with-yield: rewrite to state transition
-		// (see LoopFrame). No active frame → enclosing while has no yield,
-		// natural C semantics apply, leave as-is.
-		if (stmt.kind == NodeKind.BreakStmt && sc.loopStack.length > 0) {
-			// Direct break: post-break stmts are dead, no need for trailing continue.
-			const top = sc.loopStack[sc.loopStack.length - 1];
-			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
-			sc.items[currentState].stmts.push(makeStateAssign(top.breakState, loc, sc.stateSym));
+		if (isStateJump(stmt, sc)) {
+			splitJump(stmt, sc, currentState, loc, resultType);
 			return;
-		} else if (stmt.kind == NodeKind.ContinueStmt && sc.loopStack.length > 0) {
-			const top = sc.loopStack[sc.loopStack.length - 1];
-			pushCrossedFinallies(sc, sc.loopStack.length - 1, sc.items[currentState].stmts);
-			sc.items[currentState].stmts.push(makeStateAssign(top.continueState, loc, sc.stateSym));
-			return;
-		} else if (stmt.kind == NodeKind.ReturnStmt && sc.finallyStack.length > 0) {
-			// finallyPath port: a bare return inside a SPLIT try runs every
-			// enclosing finally before leaving. The return itself is left in
-			// its incoming shape (async consumers pre-rewrite returns into
-			// completion blocks that never reach this arm; generator returns
-			// keep their V1 shape).
-			pushAllFinallies(sc, sc.items[currentState].stmts);
-			sc.items[currentState].stmts.push(stmt);
-			i += 1;
-		} else if (!containsYield(stmt)) {
-			// Nested break/continue inside pushed-as-is stmt (e.g. `if (x) break;`
-			// where the if has no yield) needs the trailing-continue form.
-			if (sc.loopStack.length > 0) {
-				rewriteLoopExits(stmt, sc.loopStack[sc.loopStack.length - 1], loc, sc.stateSym);
-			}
-			sc.items[currentState].stmts.push(stmt);
+		} else if (!needsSplit(stmt, sc)) {
+			sc.items[currentState].stmts.push(rewriteJumps(stmt, sc, false, false, loc));
 			i += 1;
 		} else if (stmt.kind == NodeKind.ExprStmt) {
 			const ed = stmt.data as ExprStmtData;
-			if (ed.expr.kind == NodeKind.YieldExpr) {
+			if (isDirectYield(ed.expr)) {
 				// yield expr; → emit return { value: expr, done: false }, transition
 				const yd = ed.expr.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
@@ -332,13 +409,13 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				}
 				i += 1;
 			} else {
-				// Yield nested in an expression — skip for V1, treat as normal stmt
+				reportUnsplit(stmt, YIELD_IN_EXPR);
 				sc.items[currentState].stmts.push(stmt);
 				i += 1;
 			}
 		} else if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (vd.initializer != null && vd.initializer.kind == NodeKind.YieldExpr) {
+			if (vd.initializer != null && isDirectYield(vd.initializer)) {
 				// const x = yield expr; → yield, then assign on resume
 				const yd = vd.initializer.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
@@ -350,17 +427,9 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 					currentState = nextSt;
 				}
 				i += 1;
-			} else if (vd.initializer != null) {
-				// VariableDecl with yield somewhere in initializer — treat as normal for V1
-				// Convert to assignment since var is lifted
-				const assignStmt = makeExprStmt(
-					makeAssign(makeIdent(vd.declName, loc), vd.initializer, loc),
-					loc,
-				);
-				sc.items[currentState].stmts.push(assignStmt);
-				i += 1;
 			} else {
-				// No initializer — just skip, var is already lifted
+				reportUnsplit(stmt, YIELD_IN_EXPR);
+				sc.items[currentState].stmts.push(stmt);
 				i += 1;
 			}
 		} else if (stmt.kind == NodeKind.WhileStmt) {
@@ -372,9 +441,19 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			splitWhile(stmt, sc, condState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
+		} else if (stmt.kind == NodeKind.DoWhileStmt) {
+			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+			splitDoWhile(stmt, sc, currentState, afterSt, loc, resultType);
+			currentState = afterSt;
+			i += 1;
 		} else if (stmt.kind == NodeKind.IfStmt) {
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
 			splitIf(stmt, sc, currentState, afterSt, loc, resultType);
+			currentState = afterSt;
+			i += 1;
+		} else if (stmt.kind == NodeKind.SwitchStmt) {
+			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
+			splitSwitch(stmt, sc, currentState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
 		} else if (stmt.kind == NodeKind.BlockStmt) {
@@ -389,23 +468,16 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 		} else if (stmt.kind == NodeKind.TryCatchStmt) {
 			const td = stmt.data as TryCatchStmtData;
 			const hasFinally = td.finallyBody != null && !isEmptyBlock(td.finallyBody);
-			// finallyPath port: try-with-finally containing a yield splits with
-			// the finally inlined at each exit (splitTryFinally). A yield inside
-			// the finally body itself stays a loud V1 gap (it would need its own
-			// resumable states) — pushed as-is, codegen's unsupported-expression
-			// comment fails the build, unchanged behaviour. Catch-less and
-			// finally-less tries have nothing to split on.
-			if (hasFinally && containsYield(td.finallyBody)) {
-				sc.items[currentState].stmts.push(stmt);
-				i += 1;
-			} else if (hasFinally) {
+			if (hasFinally) {
 				const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
 				splitTryFinally(stmt, sc, currentState, afterSt, loc, resultType);
 				currentState = afterSt;
 				i += 1;
 			} else if (td.catchBody == null) {
-				sc.items[currentState].stmts.push(stmt);
-				i += 1;
+				const merged: Node[] = extractBodyStmts(td.tryBody);
+				for (let ri = i + 1; ri < stmts.length; ri += 1) merged.push(stmts[ri]);
+				splitStmts(merged, sc, currentState, exitState, loc, resultType);
+				return;
 			} else {
 				const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
 				splitTryCatch(stmt, sc, currentState, afterSt, loc, resultType);
@@ -413,7 +485,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				i += 1;
 			}
 		} else {
-			// Other stmt types containing yield — skip for V1
+			reportUnsplit(stmt, `internal: a ${stmt.kind.toString()} statement that contains a yield or await cannot be split into states`);
 			sc.items[currentState].stmts.push(stmt);
 			i += 1;
 		}
@@ -429,6 +501,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 // bodyStates: ... (recursive split, last transitions back to condState)
 function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
 	const wd = node.data as WhileStmtData;
+	if (containsYield(wd.whileCondition)) reportUnsplit(node, YIELD_IN_EXPR);
 
 	// Condition state = currentState (reuse, already allocated)
 	const condState = currentState;
@@ -447,8 +520,49 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 	);
 
 	const bodyStmts = extractBodyStmts(wd.whileBody);
-	sc.loopStack.push({ breakState: exitState, continueState: condState });
+	sc.loopStack.push({ breakState: exitState, continueState: condState, label: wd.whileLabel, isLoop: true });
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
+	sc.loopStack.pop();
+}
+
+function splitDoWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+	const dd = node.data as DoWhileStmtData;
+	if (containsYield(dd.doCondition)) reportUnsplit(node, YIELD_IN_EXPR);
+	const bodyStart = allocState(sc);
+	const condState = allocState(sc);
+	sc.items[currentState].stmts.push(makeStateAssign(bodyStart, loc, sc.stateSym));
+	sc.loopStack.push({ breakState: exitState, continueState: condState, label: dd.dwLabel, isLoop: !dd.dwSwitchWrapper });
+	splitStmts(extractBodyStmts(dd.doBody), sc, bodyStart, condState, loc, resultType);
+	sc.loopStack.pop();
+	sc.items[condState].stmts.push(
+		makeIf(
+			dd.doCondition,
+			makeBlock([makeStateAssign(bodyStart, loc, sc.stateSym)], loc),
+			makeBlock([makeStateAssign(exitState, loc, sc.stateSym)], loc),
+			loc,
+		),
+	);
+}
+
+function splitSwitch(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+	const sd = node.data as SwitchStmtData;
+	if (containsYield(sd.switchDisc)) reportUnsplit(node, YIELD_IN_EXPR);
+	const starts: number[] = [];
+	for (const c of sd.switchCases) starts.push(allocState(sc));
+	const dispatch: Node[] = [];
+	let hasDefault = false;
+	for (let k = 0; k < sd.switchCases.length; k += 1) {
+		const cd = sd.switchCases[k].data as SwitchCaseData;
+		if (cd.isDefault) hasDefault = true;
+		dispatch.push(makeSwitchCase(cd.caseTests, [makeStateAssign(starts[k], loc, sc.stateSym)], cd.isDefault, loc));
+	}
+	if (!hasDefault) dispatch.push(makeSwitchCase([], [makeStateAssign(exitState, loc, sc.stateSym)], true, loc));
+	sc.items[currentState].stmts.push(makeSwitch(sd.switchDisc, dispatch, loc));
+	sc.loopStack.push({ breakState: exitState, continueState: -1, label: "", isLoop: false });
+	for (let k = 0; k < sd.switchCases.length; k += 1) {
+		const cd = sd.switchCases[k].data as SwitchCaseData;
+		splitStmts(cd.caseStmts, sc, starts[k], exitState, loc, resultType);
+	}
 	sc.loopStack.pop();
 }
 
@@ -497,47 +611,46 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 // the exception path runs the finally then re-raises $curExc out of the
 // machine (reference closureiters end-finally raise branch). Returns the
 // finally state index so later excLanding mark-loops can skip it.
-function appendNormalFinally(sc: StateCollector, exitStateIdx: number, finStmts: Node[], afterSt: number, loc: SourceLocation): number {
+function appendNormalFinally(sc: StateCollector, exitStateIdx: number, frame: FinallyFrame, afterSt: number, loc: SourceLocation, resultType: Type | null): number {
 	const finNormal = allocState(sc);
 	sc.items[exitStateIdx].stmts.push(makeStateAssign(finNormal, loc, sc.stateSym));
-	for (const s of finStmts) sc.items[finNormal].stmts.push(s);
-	sc.items[finNormal].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
+	const end = emitInline(cloneStmts(frame.stmts), sc, finNormal, loc, resultType);
+	sc.items[end].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 	return finNormal;
 }
 
-function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, finStmts: Node[], loc: SourceLocation): void {
-	for (const s of finStmts) sc.items[finReraiseIdx].stmts.push(s);
-	sc.items[finReraiseIdx].stmts.push(makeStateAssign(-1, loc, sc.stateSym));
+function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: FinallyFrame, loc: SourceLocation, resultType: Type | null): void {
+	const end = emitInline(cloneStmts(frame.stmts), sc, finReraiseIdx, loc, resultType);
+	sc.items[end].stmts.push(makeStateAssign(-1, loc, sc.stateSym));
 	const curExcRef = makeTypedIdentResolved(sc.curExcSym, null, loc);
 	if (sc.excType != null) curExcRef.nodeType = sc.excType;
-	sc.items[finReraiseIdx].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
+	sc.items[end].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
 }
 
-// Split a try containing BOTH a yield and a finally (yield-free finally),
+// Split a try that has a finally and contains a yield (in any of its bodies),
 // with or without a catch. finallyPath port (reference closureiters): the
 // reference routes finally exits through a runtime :finallyPath env array;
-// with a yield-free finally body the finally state is single-shot straight
-// line code, so inlining it at each exit is equivalent (the reference itself
-// inlines single-entry states). Exits covered:
+// here each exit runs its own copy of the finally body (split into states when
+// the finally yields), which is equivalent because the exits are mutually
+// exclusive (the reference itself inlines single-entry states). Exits covered:
 //   normal try completion   → finNormal  [fin..., goto afterSt]
 //   normal catch completion → finNormal2 [fin..., goto afterSt]  (catch case)
 //   raise in try body       → catchSt (catch case) / finReraise
 //   raise in catch body     → finReraise [fin..., $state=-1, rethrow $curExc]
 //   break/continue/return crossing the try → splitStmts via sc.finallyStack
-// Exit paths are mutually exclusive, so the shared stmt nodes execute exactly
-// once per execution. tryExit/catchExit keep an excLanding on purpose: a
+// tryExit/catchExit keep an excLanding on purpose: a
 // trailing await's resume read (the re-raising read) executes at their entry.
 // Known divergence from the reference's runtime routing: a finally body that
 // itself raises can run twice on the resume-read boundary path (the reference
 // runs it once) — a corner documented at corpus 420.
 function splitTryFinally(node: Node, sc: StateCollector, currentState: number, afterSt: number, loc: SourceLocation, resultType: Type | null): void {
 	const td = node.data as TryCatchStmtData;
-	const finStmts = extractBodyStmts(td.finallyBody);
 	if (node.nodeType != null) sc.excType = node.nodeType;
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
-	sc.finallyStack.push({ stmts: finStmts, loopDepth: sc.loopStack.length });
+	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, hasYield: containsYield(td.finallyBody) };
+	sc.finallyStack.push(frame);
 
 	if (td.catchBody == null) {
 		const finReraise = allocState(sc);
@@ -545,8 +658,9 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		for (let s = tryStart; s < sc.items.length; s += 1) {
 			if (s != finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
 		}
-		appendReraiseFinally(sc, finReraise, finStmts, loc);
-		appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
+		sc.finallyStack.pop();
+		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
+		appendNormalFinally(sc, tryExit, frame, afterSt, loc, resultType);
 	} else {
 		// tryStart/tryExit are pre-allocated above, so catchSt's index sits
 		// INSIDE the try-body mark range — the `s !== catchSt` guard keeps the
@@ -557,20 +671,25 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		for (let s = tryStart; s < sc.items.length; s += 1) {
 			if (s != catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
 		}
-		const finNormal = appendNormalFinally(sc, tryExit, finStmts, afterSt, loc);
+		sc.finallyStack.pop();
+		const finNormalStart = sc.items.length;
+		appendNormalFinally(sc, tryExit, frame, afterSt, loc, resultType);
+		const finNormalEnd = sc.items.length;
+		sc.finallyStack.push(frame);
 		const catchExit = allocState(sc);
 		const finReraise = allocState(sc);
 		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
-		// finNormal must stay landing-free (single finally run); everything else
-		// in the catch range — catchSt itself, catchExit's entry read included —
-		// runs the finally then re-raises.
+		// The normal-exit finally states stay landing-free (single finally run);
+		// everything else in the catch range — catchSt itself, catchExit's entry
+		// read included — runs the finally then re-raises.
 		for (let s = catchSt; s < sc.items.length; s += 1) {
-			if (s != finReraise && s != finNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			const inFinNormal = s >= finNormalStart && s < finNormalEnd;
+			if (s != finReraise && !inFinNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
 		}
-		appendReraiseFinally(sc, finReraise, finStmts, loc);
-		appendNormalFinally(sc, catchExit, finStmts, afterSt, loc);
+		sc.finallyStack.pop();
+		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
+		appendNormalFinally(sc, catchExit, frame, afterSt, loc, resultType);
 	}
-	sc.finallyStack.pop();
 }
 
 // Rewrite every Identifier named `oldName` in `node`'s subtree to `newName`,
@@ -646,11 +765,12 @@ export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
 // elseStates: ... → joinState
 function splitIf(node: Node, sc: StateCollector, currentState: number, joinState: number, loc: SourceLocation, resultType: Type | null): void {
 	const id = node.data as IfStmtData;
+	if (containsYield(id.condition)) reportUnsplit(node, YIELD_IN_EXPR);
 
 	const thenStart = allocState(sc);
 	const hasElse = id.alternate.kind != NodeKind.NullLiteral && id.alternate.kind != NodeKind.BlockStmt || (id.alternate.kind == NodeKind.BlockStmt && (id.alternate.data as BlockStmtData).statements.length > 0);
 
-	if (hasElse && containsYield(id.alternate)) {
+	if (hasElse && needsSplit(id.alternate, sc)) {
 		const elseStart = allocState(sc);
 		sc.items[currentState].stmts.push(
 			makeIf(
@@ -674,7 +794,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 		const elseBlockStmts: Node[] = [];
 		if (hasElse) {
 			const elseStmts = extractBodyStmts(id.alternate);
-			for (const s of elseStmts) elseBlockStmts.push(s);
+			for (const s of elseStmts) elseBlockStmts.push(rewriteJumps(s, sc, false, false, loc));
 		}
 		elseBlockStmts.push(makeStateAssign(joinState, loc, sc.stateSym));
 
@@ -688,24 +808,6 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 		);
 		const thenStmts = extractBodyStmts(id.consequent);
 		splitStmts(thenStmts, sc, thenStart, joinState, loc, resultType);
-	}
-}
-
-// ===== Return Rewriting =====
-// Rewrite return stmts in generator body: return val → $state = -1; return { value: val, done: true }
-
-function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type | null, stateSym: Symbol): void {
-	for (let i = 0; i < stmts.length; i += 1) {
-		const stmt = stmts[i];
-		if (stmt.kind == NodeKind.ReturnStmt) {
-			const rd = stmt.data as ReturnStmtData;
-			// Replace with block: { $state = -1; return { value: val, done: true }; }
-			const block = makeBlock([
-				makeStateAssign(-1, loc, stateSym),
-				makeReturn(makeIterResult(rd.argument!, true, loc, resultType), loc),
-			], loc);
-			stmts[i] = block;
-		}
 	}
 }
 
@@ -757,8 +859,8 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, loc: SourceLocation): Node {
 	// 1. Collect all local variable names and their types
-	const nc: NameSet = createNameSet();
 	renameRepeatedBindingsInFrame(params, body, "$g");
+	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
 	const dtNames: string[] = [];
 	const dtTypes: Type[] = [];
@@ -774,11 +876,8 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	setFlag(stateSym, SymbolFlag.StateMachine);
 	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
 
-	// 3. Rewrite return statements
-	rewriteReturns(bodyStmts, loc, iterResultType, stateSym);
-
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
@@ -923,6 +1022,11 @@ function walkCheckFuncExpr(node: Node): void {
 
 export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 	walkGenerators(program);
+	for (const d of pendingSplitDiags) {
+		if (ctx.checkerCtx != null) addError(ctx.checkerCtx, d.message, d.loc.line, d.loc.column);
+		else ctx.errors.push(d.message);
+	}
+	pendingSplitDiags = [];
 	return program;
 }
 
@@ -942,7 +1046,7 @@ test "try finally with yield splits" { assert stmtCountAfter("function* gen() { 
 
 test "try catch finally with yield splits" { assert stmtCountAfter("function* gen() { try { yield 1; } catch (e) { y = 3; } finally { x = 2; } }", lowerGenerator) == 1; }
 
-test "yield in finally stays passthrough" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) == 1; }
+test "yield in finally splits" { assert stmtCountAfter("function* gen() { try { x = 1; } finally { yield 2; } }", lowerGenerator) == 1; }
 
 test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) == 1; }
 
