@@ -1,5 +1,5 @@
 import { fullPipeline, findFnDecl } from "./helpers";
-import { Node, NodeKind, FunctionDeclData, BlockStmtData, ReturnStmtData, NumberLiteralData, ProgramData, ClassDeclData, PropertyDeclData } from "../../ast/node";
+import { Node, NodeKind, TypeKind, FunctionDeclData, BlockStmtData, ReturnStmtData, NumberLiteralData, ProgramData, ClassDeclData, PropertyDeclData } from "../../ast/node";
 
 function foldedReturn(source: string, name: string): Node | null {
 	const program = fullPipeline(source);
@@ -55,6 +55,26 @@ test "module const handoff: a readonly static a static block assigns keeps its s
 	assert keepsStaticStorage(source, "K", "frozen");
 	const value = foldedReturn(source, "read");
 	assert value == null || value.kind != NodeKind.NumberLiteral;
+}
+
+test "module const handoff: a float32 const inlines as a float32 literal" {
+	const value = foldedReturn("const STEP: float32 = 0.42; function read(): float32 { return STEP; }", "read");
+	assert value != null && value.kind == NodeKind.NumberLiteral;
+	assert value.nodeType != null && value.nodeType.kind == TypeKind.Float32;
+}
+
+test "module const handoff: float32 arithmetic is left to the backend" {
+	const sum = foldedReturn("const A: float32 = 16777217.0; const B: float32 = 1.0; function read(): float32 { return A + B; }", "read");
+	assert sum != null && sum.kind == NodeKind.BinaryExpr;
+	const product = foldedReturn("const A: float32 = 0.42; function read(): float64 { return A * 3.0; }", "read");
+	assert product != null && product.kind == NodeKind.BinaryExpr;
+}
+
+test "module const handoff: a float32 value read as float64 is not retyped" {
+	const value = foldedReturn("const STEP: float32 = 0.42; const WIDE: float64 = STEP; function read(): float64 { return WIDE; }", "read");
+	assert value != null && value.kind == NodeKind.Identifier;
+	const source = "const STEP: float32 = 0.42; class K { static readonly WIDE: float64 = STEP; } function read(): float64 { return K.WIDE; }";
+	assert keepsStaticStorage(source, "K", "WIDE");
 }
 
 test "module const handoff: a readonly bool static a static block assigns is not folded" {
