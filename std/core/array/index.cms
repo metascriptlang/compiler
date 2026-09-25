@@ -217,7 +217,17 @@ export function setLength<T>(this arr: T[], newLen: number): void {
 export extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
 
 /** Removes deleteCount elements starting at index start. */
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "&msRefArraySplice";
+export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
+	const n = arr.length;
+	if (start < 0 || start >= n || deleteCount <= 0) return;
+	const k = start + deleteCount > n ? n - start : deleteCount;
+	let i = start;
+	while (i + k < n) {
+		arr[i] = arr[i + k];
+		i = i + 1;
+	}
+	arr.setLength(n - k);
+}
 
 /** Removes deleteCount elements at start, then inserts item at start. */
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
