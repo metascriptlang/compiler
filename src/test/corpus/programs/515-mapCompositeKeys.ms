@@ -4,7 +4,6 @@
 // two checker rules: an enum value takes extension methods, and among tied generic extensions
 // the more specialized receiver wins.
 //
-// @skip-js: the JS Map compares struct keys by reference, not by value
 // @stdout: enum=true,false label=green struct=true,2,false,2 param=true nested=7 class=true,false spec=box,any tuple=true,2,false
 // @exit: 0
 
