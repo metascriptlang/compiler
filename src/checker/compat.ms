@@ -320,6 +320,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				// Nominal shortcut: Ref types with same-named inner struct are assignable
 				// (handles cross-module interface identity where Type objects differ but names match)
 				if (source.typeReturn != null && target.typeReturn != null
+					&& source.typeReturn.kind != TypeKind.GenericInstance
 					&& source.typeReturn.typeName != "" && source.typeReturn.typeName == target.typeReturn.typeName) {
 					return true;
 				}
@@ -336,7 +337,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
 				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
-					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
+					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !sameElement(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
 				// PARALOCK: an affine `Promise<T>` (spawn-origin, AwaitableAffine bit set)
 				// upcasts to a plain `Promise<T>` with compatible inner — this is the
@@ -960,11 +961,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
 				if (formal.typeName != actual.typeName) return TypeRelation.None;
 				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
+				let instRel = TypeRelation.Exact;
 				for (let gi = 0; gi < giLimit; gi += 1) {
 					const argRel = typeRelation(formal.typeChildren[gi], actual.typeChildren[gi]);
-					if (argRel == TypeRelation.None) return TypeRelation.None;
+					if (argRel == TypeRelation.Generic) instRel = TypeRelation.Generic;
+					else if (argRel != TypeRelation.Exact && !sameElement(actual.typeChildren[gi], formal.typeChildren[gi])) return TypeRelation.None;
 				}
-				return TypeRelation.Exact;
+				return instRel;
 			},
 			TypeKind.Function => {
 				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
