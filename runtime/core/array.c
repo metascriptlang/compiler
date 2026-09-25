@@ -585,7 +585,7 @@ msRefArray msRefArrayNew(int64_t cap) {
 
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) msDecref(arr->p->data[i]);
+		for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
 		free(arr->p);
 		arr->p = NULL;
 	}
@@ -616,7 +616,7 @@ void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	if (newLen >= arr->len) return;
 	for (int64_t i = newLen; i < arr->len; i++) {
-		msDecref(arr->p->data[i]);
+		msDecrefCyclic(arr->p->data[i]);
 		arr->p->data[i] = NULL;
 	}
 	arr->len = newLen;
@@ -686,7 +686,7 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	if (arr->p == NULL || start < 0 || start >= arr->len) return;
 	if (deleteCount <= 0) return;
 	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-	for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
+	for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
 	int64_t remaining = arr->len - start - deleteCount;
 	if (remaining > 0) {
 		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
@@ -700,7 +700,7 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-		for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
+		for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
 		int64_t remaining = arr->len - start - deleteCount;
 		if (remaining > 0) {
 			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
