@@ -233,3 +233,4 @@ import "./bug524OverloadArgumentsRelated";
 import "./bug525RelationCycleNotDepth";
 import "./bug526EnumEqualityAndPatterns";
 import "./bug527NarrowingDiesWithItsPrefix";
+import "./bug531CallByAddressDropsNarrowing";

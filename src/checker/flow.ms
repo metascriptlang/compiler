@@ -14,7 +14,7 @@ import {
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
-	UpdateExprData, HiddenDerefData,
+	UpdateExprData, NewExprData, OutExprData, HiddenDerefData,
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData,
 } from "../ast/node";
 import {
@@ -26,6 +26,7 @@ import {
 	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
+import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
 //
@@ -449,7 +450,10 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			continue;
 		}
 		if (flags.has(FlowFlag.Call)) {
-			// Assertion functions (Phase 6+). Phase 2: tail-recurse.
+			if (callWritesInto(current.node, state.reference)) {
+				result = flowType(state.declaredType, false);
+				break;
+			}
 			current = current.antecedent;
 			continue;
 		}
@@ -1270,6 +1274,55 @@ function patternWritesInto(target: Node, refNode: Node): boolean {
 		return false;
 	}
 	return holdsBelowTop(refNode, t);
+}
+
+function calleeParams(callee: Node | null): Type[] {
+	if (callee == null) return null as unknown as Type[];
+	let fnType = callee.nodeType;
+	if ((fnType == null || fnType.kind != TypeKind.Function)
+			&& callee.kind == NodeKind.Identifier && callee.resolvedSym != null) {
+		fnType = callee.resolvedSym.symbolType;
+	}
+	if (fnType == null || fnType.kind != TypeKind.Function) return null as unknown as Type[];
+	return fnType.typeChildren;
+}
+
+function callWritesInto(call: Node | null, refNode: Node): boolean {
+	if (call == null) return false;
+	let args: Node[] = [];
+	let callee: Node | null = null;
+	if (call.kind == NodeKind.CallExpr) {
+		const cd = call.data as CallExprData;
+		args = cd.arguments;
+		callee = cd.callee;
+	} else if (call.kind == NodeKind.NewExpr) {
+		args = (call.data as NewExprData).newArguments;
+	} else {
+		return false;
+	}
+	const params = calleeParams(callee);
+	let i = 0;
+	for (const arg of args) {
+		const param = params != null && i < params.length ? params[i] : null as unknown as Type;
+		i = i + 1;
+		let passed = stripHidden(arg);
+		if (passed != null && passed.kind == NodeKind.OutExpr) {
+			passed = (passed.data as OutExprData).outArg;
+		} else if (param == null || param.kind != TypeKind.Var) {
+			passed = null;
+		}
+		if (passed != null && writesThrough(passed, refNode)) return true;
+	}
+	const top = stripHidden(callee);
+	if (top != null && top.kind == NodeKind.MemberExpr) {
+		const md = top.data as MemberExprData;
+		if (isMutatingArrayMethod(md.property) && holdsBelowTop(refNode, md.object)) return true;
+	}
+	return false;
+}
+
+function writesThrough(byAddress: Node, refNode: Node): boolean {
+	return sameLocation(refNode, byAddress) || holdsBelowTop(refNode, byAddress);
 }
 
 // Constrain an assigned value's type to remain within the variable's declared
