@@ -1379,12 +1379,12 @@
       "patterns": [
         {
           "comment": "Modifiers before parameter",
-          "match": "(?<![_$[:alnum:]])(override|public|protected|private|readonly|out)\\s+(?=(override|public|protected|private|readonly|out)\\s+)",
+          "match": "(?<![_$[:alnum:]])(override|public|protected|private|readonly|out|ref)\\s+(?=(override|public|protected|private|readonly|out|ref)\\s+)",
           "captures": { "1": { "name": "storage.modifier.metascript" } }
         },
         {
           "comment": "this parameter (extension method receiver)",
-          "match": "(?:(?<![_$[:alnum:]])(override|public|private|protected|readonly|out)\\s+)?(?:(\\.\\.\\.\\s*))?(?<!=|:)(?<![_$[:alnum:]])(this)(?![_$[:alnum:]])\\s*(\\??)",
+          "match": "(?:(?<![_$[:alnum:]])(override|public|private|protected|readonly|out|ref)\\s+)?(?:(\\.\\.\\.\\s*))?(?<!=|:)(?<![_$[:alnum:]])(this)(?![_$[:alnum:]])\\s*(\\??)",
           "captures": {
             "1": { "name": "storage.modifier.metascript" },
             "2": { "name": "keyword.operator.rest.metascript" },
@@ -1394,7 +1394,7 @@
         },
         {
           "comment": "Regular parameter name",
-          "match": "(?:(?<![_$[:alnum:]])(override|public|private|protected|readonly|out)\\s+)?(?:(\\.\\.\\.\\s*))?(?<!=|:)(?<![_$[:alnum:]])([_$[:alpha:]][_$[:alnum:]]*)(?![_$[:alnum:]])\\s*(\\??)",
+          "match": "(?:(?<![_$[:alnum:]])(override|public|private|protected|readonly|out|ref)\\s+)?(?:(\\.\\.\\.\\s*))?(?<!=|:)(?<![_$[:alnum:]])([_$[:alpha:]][_$[:alnum:]]*)(?![_$[:alnum:]])\\s*(\\??)",
           "captures": {
             "1": { "name": "storage.modifier.metascript" },
             "2": { "name": "keyword.operator.rest.metascript" },
