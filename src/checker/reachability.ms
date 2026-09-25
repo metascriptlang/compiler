@@ -23,7 +23,7 @@ import { hookBaseCName, hookBaseCNameOfSym } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
-import { mangleMonoName } from "../monomorphize/registry";
+import { monoInstanceName } from "../monomorphize/registry";
 import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
 
 // ===== Global Name Index =====
@@ -179,7 +179,7 @@ function walkBody(node: Node, modulePath: string): void {
 			let gi = node.nodeType;
 			if (gi != null && (gi.kind == TypeKind.Ref || gi.kind == TypeKind.Ptr) && gi.typeReturn != null) gi = gi.typeReturn;
 			if (gi != null && gi.kind == TypeKind.GenericInstance && gi.typeName != "" && gi.typeChildren.length > 0) {
-				const monoName = mangleMonoName(gi.typeName, gi.typeChildren);
+				const monoName = monoInstanceName(gi);
 				markAndWalk(ctorMod, monoName);
 				markAndWalk(ctorMod, initFnName(monoName));
 			}
@@ -302,7 +302,7 @@ function markTypeInfoOf(type: Type | null): void {
 	}
 	if (t.kind != TypeKind.Struct && t.kind != TypeKind.TypeReference && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Union) return;
 	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
-		const mono = mangleMonoName(t.typeName, t.typeChildren);
+		const mono = monoInstanceName(t);
 		for (const hn of [mono + "TypeInfo", mono + "Destroy", mono + "Trace"]) {
 			const h = nameIndexLookup(hn);
 			if (h != "") {

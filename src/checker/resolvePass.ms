@@ -14,7 +14,7 @@ import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeSt
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck } from "./compat";
-import { monoTypeKey } from "../monomorphize/registry";
+import { monoBaseName, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -631,7 +631,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			// Reference parity (handleGenericInvocation):
 			// both type annotations and `new` expressions go through the same
 			// instantiation path, producing the same concrete type.
-			recordGenericTypeInstantiation(baseName, genericSym != null ? genericSym.declNode : null, args, ctx);
+			recordGenericTypeInstantiation(baseName, genericSym, args, ctx);
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
 			if (baseSym2 != null) {
@@ -1061,15 +1061,17 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 // Looks up field names/types from parser side-channel, substitutes generic params -> concrete types
 // NOTE: Avoids all `let` string variables — only const strings + number let variables.
 // DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
-export function recordGenericTypeInstantiation(baseName: string, decl: Node | null, args: string[], ctx: CheckerContext): void {
+export function recordGenericTypeInstantiation(baseName: string, genericSym: Symbol | null, args: string[], ctx: CheckerContext): void {
 	const typeArgKey = buildTypeArgKey(args, ctx);
-	const mangledName = baseName + "__" + typeArgKey;
+	const decl = genericSym != null ? genericSym.declNode : null;
+	const instBase = monoBaseName(baseName, genericSym != null ? genericSym.modulePath : "");
+	const mangledName = instBase + "__" + typeArgKey;
 
 	const fieldNamesStr = declFieldNamesJoined(decl);
 	const fieldTypesStr = declFieldTypesJoined(decl);
 
 	if (fieldNamesStr == "") {
-		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
+		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "");
 		return;
 	}
 
@@ -1079,7 +1081,7 @@ export function recordGenericTypeInstantiation(baseName: string, decl: Node | nu
 	const ftParts = splitTopLevel(fieldTypesStr, "|");
 
 	if (fnParts.length == 0) {
-		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
+		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "");
 		return;
 	}
 
@@ -1097,7 +1099,7 @@ export function recordGenericTypeInstantiation(baseName: string, decl: Node | nu
 		resultFieldTypes = resultFieldTypes + "|" + subType;
 	}
 
-	addGenericTypeInst(baseName, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
+	addGenericTypeInst(instBase, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
 }
 
 // ===== Resolve Helpers =====

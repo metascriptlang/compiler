@@ -7,7 +7,7 @@
 import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, peelToStruct, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf } from "../../checker/types";
-import { monoTypeKey } from "../../monomorphize/registry";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
@@ -1058,12 +1058,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// `type UserId = distinct number` case handled above.
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
-			// Build mangled name using monoTypeKey (single source of truth for C-safe type keys).
-			// Must match the checker's naming in resolvePass.ms and checkExprPass.ms.
-			let instName = t.typeName;
-			for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
-				instName = `${instName}${gi == 0 ? "__" : "_"}${monoTypeKey(t.typeChildren[gi])}`;
-			}
+			const instName = monoInstanceName(t);
 			const cacheKey = `object:${instName}`;
 			const cached = typeCacheGet(g.typeCache, cacheKey);
 			if (cached != "") return cached;
@@ -1505,13 +1500,7 @@ function elemArrayCName(elem: Type): string {
 		if (rm != null) return elemArrayCName(rm);
 		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
 	}
-	if (elem.kind == TypeKind.GenericInstance) {
-		let instName = elem.typeName;
-		for (let gi = 0; gi < elem.typeChildren.length; gi += 1) {
-			instName = `${instName}${gi == 0 ? "__" : "_"}${monoTypeKey(elem.typeChildren[gi])}`;
-		}
-		return instName;
-	}
+	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
 		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
 	}

@@ -11,7 +11,7 @@ import { TransformContext, createTransformContext, NameSet, createNameSet, nameS
 import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
-import { mangleMonoName } from "../monomorphize/registry";
+import { monoInstanceName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
@@ -112,7 +112,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			// and codegen's struct name (types.ms:582-588).
 			let elemName = "";
 			if (elem.kind == TypeKind.GenericInstance) {
-				elemName = mangleMonoName(elem.typeName, elem.typeChildren);
+				elemName = monoInstanceName(elem);
 			} else {
 				elemName = elem.typeName != "" ? elem.typeName : structElem.typeName;
 			}
@@ -259,7 +259,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			if (transparentInner != t) return classifyType(transparentInner, ctx);
 			// Result is a boolean-discriminated match-type Union post-migration —
 			// flow through the standard mangled hook generation below.
-			// Monomorphized struct instance: build hook names via `mangleMonoName` so they match
+			// Monomorphized struct instance: build hook names via `monoInstanceName` so they match
 			// codegen's struct naming (src/codegen/c/types.ms:582-588) and destructorLifting's
 			// hook emission (unwrapGenericInstance).
 			//
@@ -271,7 +271,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			if (t.typeName != "") {
 				const bodyHasAsgn = t.typeReturn != null && hasAsgnFlag(t.typeReturn);
 				if (hasAsgnFlag(t) || bodyHasAsgn) {
-					const mangled = mangleMonoName(t.typeName, t.typeChildren);
+					const mangled = monoInstanceName(t);
 					return makeRcInfo(RcKind.Named, mangled, mangled + "Destroy", mangled + "Copy", mangled + "WasMoved", mangled + "Sink", false);
 				}
 			}

@@ -5,7 +5,7 @@
 // or reaches a closure (reference tyProc ccClosure arm).
 //
 // Identity for the back-edge check and the recursion guard is the resolved
-// type NAME (typeName | anonTypeName | mangleMonoName) — the MS-native ItemId
+// type NAME (typeName | anonTypeName | monoInstanceName) — the MS-native ItemId
 // under per-module type copies (NIM-REF CK-19).
 //
 // Intermediate results depend on the walk origin and MUST NOT be memoized;
@@ -20,11 +20,11 @@ import { Type, TypeKind, TypeFlag } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
 import { isAwaitable, unwrapRefNullUnion, isUnresolvedType } from "../checker/types";
 import { anonTypeName, isAnonTypeName } from "../codegen/c/types";
-import { mangleMonoName } from "../monomorphize/registry";
+import { monoInstanceName } from "../monomorphize/registry";
 
 function typeIdentity(t: Type): string {
 	if (t.kind == TypeKind.GenericInstance) {
-		if (t.typeName != "") return mangleMonoName(t.typeName, t.typeChildren);
+		if (t.typeName != "") return monoInstanceName(t);
 		return "";
 	}
 	if (t.typeName != "" && !isAnonTypeName(t.typeName)) return t.typeName;

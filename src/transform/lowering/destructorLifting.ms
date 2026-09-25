@@ -27,7 +27,7 @@ import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolve
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, peelToStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
-import { mangleMonoName } from "../../monomorphize/registry";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
@@ -153,7 +153,7 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	if (gi.typeReturn == null) {
 		return { mangledName: "", body: null as unknown as Type };
 	}
-	const mangledName = mangleMonoName(gi.typeName, gi.typeChildren);
+	const mangledName = monoInstanceName(gi);
 	const src = gi.typeReturn;
 	// Preserve src kind: Union bodies (match-type / TS-style DU) must NOT be
 	// wrapped as Struct — `generateHook` dispatches on `objType.kind` to route

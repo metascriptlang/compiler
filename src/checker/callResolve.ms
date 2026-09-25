@@ -4,7 +4,7 @@
 import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
-import { mangleMonoName } from "../monomorphize/registry";
+import { monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
@@ -110,7 +110,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 			args.push(monoConcreteTypeName(giCtx.typeChildren[pi]));
 		}
 	}
-	recordGenericTypeInstantiation(calleeName, calleeSym != null ? calleeSym.declNode : null, args, ctx);
+	recordGenericTypeInstantiation(calleeName, calleeSym, args, ctx);
 	const baseSym = calleeSym;
 	if (baseSym == null) return calleeType;
 	ensureShaped(baseSym, ctx);
@@ -671,7 +671,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		let mangledName = "";
 		if (innerType != null) {
 			if (innerType.kind == TypeKind.GenericInstance && innerType.typeChildren.length > 0) {
-				mangledName = mangleMonoName(innerType.typeName, innerType.typeChildren);
+				mangledName = monoInstanceName(innerType);
 			} else {
 				mangledName = innerType.typeName;
 			}
