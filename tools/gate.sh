@@ -350,7 +350,6 @@ lane_cmd() {
     hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
     corpus) printf '%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
-    guard) printf 'MSC=%s %s run src/test/guard/run.ms --target=raiser' "$CAND" "$CAND" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
   esac
 }
@@ -640,12 +639,29 @@ with_test_binary() {
   return $rc
 }
 
+run_guard_lane() {
+  local i n=${GATE_GUARD_SHARDS:-$PAR} rc=0 part
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run src/test/guard/run.ms --target=raiser >"$part" 2>&1; echo $? >"$part.rc") &
+  done
+  wait
+  for ((i = 0; i < n; i++)); do
+    part="$OUT/guard.$i.part"
+    cat "$part"
+    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
+    rm -f "$part" "$part.rc"
+  done
+  return $rc
+}
+
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
   case "$lane" in
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|guard|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
