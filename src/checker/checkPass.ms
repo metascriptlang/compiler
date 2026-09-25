@@ -2861,26 +2861,26 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
-	const imps = defaultGlobalImports();
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packStamp = preludePackStamp(stdPath);
 	const packed = tryLoadPreludePack(packKey, packStamp);
 	if (packed != null) return packed;
-	const gensymMark = templateGensymMark();
-	const instanceMark = pendingInstanceMark();
-	const cache = createIdentCache();
-	const ctx = createContextWithCache(cache);
-	ctx.extensionRegistry = createExtensionRegistry();
-	let idx = 0;
-	while (idx < imps.length) {
-		loadPreludeOne(ctx, imps[idx], stdPath, backendExt);
-		idx = idx + 1;
-	}
+	const ctx = checkPreludeFromSource(stdPath, backendExt);
 	// Always write (best-effort): the pack captures whatever scope the fresh
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
 	writePreludePack(packKey, packStamp, ctx);
+	return ctx;
+}
+
+export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
+	const imps = defaultGlobalImports();
+	const gensymMark = templateGensymMark();
+	const instanceMark = pendingInstanceMark();
+	const ctx = createContextWithCache(createIdentCache());
+	ctx.extensionRegistry = createExtensionRegistry();
+	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
 	rewindTemplateGensym(gensymMark);
 	discardPendingInstancesFrom(instanceMark);
 	return ctx;
