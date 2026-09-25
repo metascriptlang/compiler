@@ -14,12 +14,10 @@ export function defaultGlobalImports(): string[] {
 }
 
 let _extraGlobalImports: string[] = [];
-let _extraGlobalImportModules: Map<string, boolean> = new Map<string, boolean>();
 let _extraGlobalImportsBuildFile: string = "";
 
 export function setExtraGlobalImports(paths: string[], buildFile: string = ""): void {
 	_extraGlobalImports = paths;
-	_extraGlobalImportModules = new Map<string, boolean>();
 	_extraGlobalImportsBuildFile = buildFile;
 }
 
@@ -40,29 +38,6 @@ export function isGlobalImport(path: string): boolean {
 
 export function hasExtraGlobalImports(): boolean {
 	return _extraGlobalImports.length > 0;
-}
-
-export function noteExtraGlobalImportModule(moduleIdentity: string): void {
-	_extraGlobalImportModules.set(moduleIdentity, true);
-}
-
-export function isExtraGlobalImportModule(moduleIdentity: string): boolean {
-	return _extraGlobalImportModules.has(moduleIdentity);
-}
-
-let _stdGlobalImportModules: Map<string, string> = new Map<string, string>();
-
-export function noteStdGlobalImportModule(moduleIdentity: string, specifier: string): void {
-	_stdGlobalImportModules.set(moduleIdentity, specifier);
-}
-
-export function isStdPreludeModule(moduleIdentity: string): boolean {
-	return _stdGlobalImportModules.has(moduleIdentity);
-}
-
-export function stdGlobalImportSpecifier(moduleIdentity: string): string {
-	const specifier = _stdGlobalImportModules.get(moduleIdentity);
-	return specifier != null ? specifier : "";
 }
 
 // ===== Tests =====
@@ -124,12 +99,3 @@ test "isGlobalImport rejects non-global" {
 	assert !isGlobalImport("./foo");
 }
 
-test "an extra global import is matched by loader identity, never by spelling" {
-	setExtraGlobalImports(["/proj/gi"]);
-	assert !isExtraGlobalImportModule("/proj/gi.ms");
-	noteExtraGlobalImportModule("/elsewhere/gi.ms");
-	assert isExtraGlobalImportModule("/elsewhere/gi.ms");
-	assert !isExtraGlobalImportModule("/proj/gi.ms");
-	setExtraGlobalImports([]);
-	assert !isExtraGlobalImportModule("/elsewhere/gi.ms");
-}

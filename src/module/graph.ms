@@ -56,6 +56,9 @@ export class Module {
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
 	errors: ModuleError[];     // per-module errors (structured)
+	stdPrelude: boolean;
+	preludeSpecifier: string;
+	extraPrelude: boolean;
 }
 
 // ===== Circular Dependency Info =====
@@ -102,6 +105,9 @@ export function createModule(path: string): Module {
 		exportNames: [],
 		imports: [],
 		errors: [],
+		stdPrelude: false,
+		preludeSpecifier: "",
+		extraPrelude: false,
 	};
 }
 

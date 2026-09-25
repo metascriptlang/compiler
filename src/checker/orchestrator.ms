@@ -7,7 +7,7 @@ import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, isExtraGlobalImportModule, noteExtraGlobalImportModule, hasExtraGlobalImports, noteStdGlobalImportModule, stdGlobalImportSpecifier, isStdPreludeModule } from "./prelude";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
@@ -42,8 +42,8 @@ export function createCheckSession(): CheckSession {
 }
 
 function graphHoldsPrelude(graph: ModuleGraph): boolean {
-	for (const path of graph.loadOrder) {
-		if (stdGlobalImportSpecifier(path) != "") return true;
+	for (const mod of graph.modules) {
+		if (mod.preludeSpecifier != "") return true;
 	}
 	return false;
 }
@@ -56,7 +56,11 @@ function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, co
 	for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
 		if (!provideSource(provider, candidate).ok) continue;
 		const _r = loadModule(graph, candidate, provider, config, 1);
-		if (isExtra) noteExtraGlobalImportModule(moduleIdentity(candidate, config, provider));
+		if (isExtra) {
+			const mod = findModule(graph, moduleIdentity(candidate, config, provider));
+			if (mod == null) graph.errors.push(`internal: globalImports entry '${entry}' loaded no module`);
+			else mod.extraPrelude = true;
+		}
 		return;
 	}
 	if (isExtra) graph.errors.push(`globalImports entry '${entry}' in ${extraGlobalImportsBuildFile()} resolves to no module`);
@@ -68,12 +72,12 @@ export function loadStdGlobalImportModules(graph: ModuleGraph, provider: SourceP
 }
 
 export function noteStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
-	for (const path of graph.loadOrder) noteStdGlobalImportModule(path, "");
+	for (const mod of graph.modules) mod.stdPrelude = true;
 	for (const entry of defaultGlobalImports()) {
 		for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
-			const identity = moduleIdentity(candidate, config, provider);
-			if (findModule(graph, identity) == null) continue;
-			noteStdGlobalImportModule(identity, entry);
+			const mod = findModule(graph, moduleIdentity(candidate, config, provider));
+			if (mod == null) continue;
+			mod.preludeSpecifier = entry;
 			break;
 		}
 	}
@@ -173,8 +177,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			if (!hasModuleError(mod)) mod.errors.push(createModuleError(`internal: ${path} produced no check result`, 0, 0, ErrorSeverity.Error));
 			continue;
 		}
-		if (fresh && isStdPreludeModule(path)) promoteStdModuleIntoPrelude(baseCtx, ctx, stdGlobalImportSpecifier(path), injectedIncludes, injectedFlags);
-		if (fresh && isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
+		if (fresh && mod.stdPrelude) promoteStdModuleIntoPrelude(baseCtx, ctx, mod.preludeSpecifier, injectedIncludes, injectedFlags);
+		if (fresh && mod.extraPrelude) promoteModuleIntoPrelude(baseCtx, ctx);
 		for (const err of ctx.errors) {
 			if (err.severity == Severity.Hint) continue;
 			const sev = match (err.severity) {
@@ -366,6 +370,45 @@ function preludeDeclaresWhatMainBinds(backendExt: string): boolean {
 test "a module binds the prelude module's own declarations, never a second copy" {
 	assert preludeDeclaresWhatMainBinds(".cms");
 	assert preludeDeclaresWhatMainBinds(".jms");
+}
+
+function stdImportWithoutPreludeChecks(): boolean {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const dir = "/tmp/msc-prelude-marks";
+	ensureDir(dir);
+	const mainPath = `${dir}/main.ms`;
+	writeFile(mainPath, "import { Math } from \"std/core/math\";\nconst n = Math.floor(2.5);\nconst t = \" a \".trim();\n");
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadModule(graph, mainPath, provider, config, 1);
+	checkModuleGraph(graph, stdPath, ".cms");
+	const main = findModule(graph, moduleIdentity(mainPath, config, provider));
+	if (main == null) return false;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) return false;
+	}
+	return true;
+}
+
+test "a graph that imports a prelude module without loading the prelude still checks against the full prelude" {
+	assert preludeDeclaresWhatMainBinds(".cms");
+	assert stdImportWithoutPreludeChecks();
+}
+
+test "an extra global import is matched by loader identity, never by spelling" {
+	const dir = "/tmp/msc-extra-global-import";
+	ensureDir(dir);
+	writeFile(`${dir}/gi.ms`, "export const gi = 1;\n");
+	setExtraGlobalImports([`${dir}/gi`]);
+	const config = createDefaultConfig(backendOfExtension(".cms"), "");
+	const provider = createFileSystemProvider();
+	const graph = createModuleGraph();
+	loadExtraGlobalImportModules(graph, provider, config);
+	setExtraGlobalImports([]);
+	const mod = findModule(graph, moduleIdentity(`${dir}/gi.ms`, config, provider));
+	assert mod != null && mod.extraPrelude;
+	assert graph.errors.length == 0;
 }
 
 function itemsOfModuleB(): string {
