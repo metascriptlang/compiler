@@ -241,3 +241,4 @@ import "./bug218GenericReadonlyViewSubstitution";
 import "./bug219GenericCtorThisIsItsInstance";
 import "./bug220GenericCtorThisBindsTypeParams";
 import "./bug221ThrowNonError";
+import "./bug222OptionalRefTruthiness";
