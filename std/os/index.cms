@@ -1,6 +1,11 @@
 // std/os — System information (Node.js os module parity)
 
-import { CpuInfo } from "runtime/os.h";
+@include("runtime/os.h");
+
+extern struct CpuInfo {
+	model: string;
+	speed: int32;
+}
 
 export extern function hostname(): string from "msOsHostname";
 export extern function platform(): string from "msOsPlatform";
