@@ -8,7 +8,7 @@ import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNode
 import { forEachChild } from "../ast/visitor";
 import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createGenericInstance, createRef, createStruct, instantiateGenericBody, isStructType, symGenericParams, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
+import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { CheckerContext, isEngineCheckMode, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
@@ -326,6 +326,16 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		for (const child of t.typeChildren) {
 			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
 		}
+	}
+}
+
+function openGenericParamScope(ctx: CheckerContext, names: string[], types: Type[]): void {
+	openScope(ctx.table, ScopeKind.Block);
+	for (let i = 0; i < names.length && i < types.length; i += 1) {
+		const sym = makeSymbol(names[i].trim(), SymbolKind.TypeAlias, types[i], false);
+		sym.state = SymbolState.Shaped;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		addSymbolToScope(ctx.table.current, sym);
 	}
 }
 
@@ -660,6 +670,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// Reference parity (instantiateGenericParamList): inject concrete type
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
+		openGenericParamScope(bodyCtx, dedup.names, dedup.types);
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -709,6 +720,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.instantiatingCtx = savedHost;
 		// Clean up injected symbols to avoid polluting prelude scope
 		removeInjectedSyms(bodyCtx, injectedSyms);
+		closeScope(bodyCtx.table);
 		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
@@ -838,6 +850,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
 		bindFunctionFlow(clonedBody, clonedBody);
+		openGenericParamScope(bodyCtx, dedup.names, dedup.types);
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {
@@ -858,6 +871,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
 		removeInjectedSyms(bodyCtx, injectedSyms);
+		closeScope(bodyCtx.table);
 		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
