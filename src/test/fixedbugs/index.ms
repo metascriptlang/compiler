@@ -230,5 +230,6 @@ import "./bug331NamedPodUnionFieldTrivial";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug333SeqElemWorklist";
 import "./bug334VecTupleElementHooks";
+import "./bug335GenericInstanceSelfCycle";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
