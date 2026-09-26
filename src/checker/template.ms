@@ -48,6 +48,12 @@ export function rewindTemplateGensym(mark: int32): void {
 	_templateGensymCounter = mark;
 }
 
+export function beginGensymUnit(): int32 {
+	const outer = _templateGensymCounter;
+	_templateGensymCounter = 0;
+	return outer;
+}
+
 export function expandTemplate(ctx: CheckerContext, sym: Symbol, callNode: Node, callData: CallExprData, expectedType: Type | null): Type {
 	if (_templateDepth >= TEMPLATE_DEPTH_LIMIT) {
 		addError(ctx, `Template '${sym.name}' instantiation too deep (limit ${TEMPLATE_DEPTH_LIMIT})`,

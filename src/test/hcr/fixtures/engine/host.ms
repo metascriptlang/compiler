@@ -2,11 +2,12 @@ import { argv, exit } from "std/process";
 
 @include("./hostCalls.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrWinOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrWinSymbol";
-extern function hcrIsNull(value: unknown): int32 from "msHcrWinIsNull";
-extern function hcrLastError(): uint32 from "msHcrWinLastError";
-extern function hcrCopyImage(from: cstring, to: cstring): uint32 from "msHcrCopyImage";
+extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
+extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
+extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
+extern function hcrFailure(): string from "msHcrFailureText";
+extern function hcrImageExt(): string from "msHcrImageExt";
+extern function hcrCopyImage(from: cstring, to: cstring): int32 from "msHcrCopyImage";
 extern function hcrMakeDir(path: cstring): int32 from "msHcrMakeDir";
 extern function hcrProcessId(): uint32 from "msHcrProcessId";
 extern function hcrLaunch(raw: unknown, dir: cstring, stem: cstring): void from "hcrFixtureLaunch";
@@ -30,10 +31,10 @@ const coreDir = `${dir}/.hcr/${hcrProcessId()}/core`;
 for (const path of [`${dir}/.hcr`, `${dir}/.hcr/${hcrProcessId()}`, coreDir]) {
 	if (hcrMakeDir(path) == 0) fail(`cannot create ${path}`);
 }
-const coreCopy = `${coreDir}/${stem}.core.dll`;
-const copyError = hcrCopyImage(`${dir}/${stem}.core.dll`, coreCopy);
-if (copyError != 0) fail(`cannot copy the core image (error ${copyError})`);
+const coreName = `${stem}.core${hcrImageExt()}`;
+const coreCopy = `${coreDir}/${coreName}`;
+if (hcrCopyImage(`${dir}/${coreName}`, coreCopy) == 0) fail(`cannot copy the core image (${hcrFailure()})`);
 const core = hcrOpen(coreCopy);
-if (hcrIsNull(core) != 0) fail(`cannot load ${coreCopy} (error ${hcrLastError()})`);
+if (hcrIsNull(core) != 0) fail(`cannot load ${coreCopy} (${hcrFailure()})`);
 hcrLaunch(required(core, "msHcrLaunch"), dir, stem);
 exit(hcrStart(required(core, "msHcrEngineStart")));

@@ -3,14 +3,15 @@ import { argv, exit } from "std/process";
 @include("runtime/hcr.h");
 @include("./hostCalls.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrWinOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrWinSymbol";
-extern function hcrIsNull(value: unknown): int32 from "msHcrWinIsNull";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrWinCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
-extern function hcrCallProbe(raw: unknown): int32 from "msHcrWinCallProbe";
-extern function hcrNull(): unknown from "msHcrWinNull";
+extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
+extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
+extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
+extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
+extern function hcrCallProbe(raw: unknown): int32 from "msHcrImageCallProbe";
+extern function hcrNull(): unknown from "msHcrImageNull";
 extern function hcrFixtureCore(): unknown from "hcrFixtureCore";
+extern function hcrImageExt(): string from "hcrFixtureImageExt";
 extern function hcrFixtureCallName(raw: unknown, name: cstring): void from "hcrFixtureCallName";
 extern function hcrFixtureCallNameInt(raw: unknown, name: cstring): int32 from "hcrFixtureCallNameInt";
 extern function hcrFixtureImportMatches(imports: unknown, moduleId: cstring, key: unknown): int32 from "hcrFixtureImportMatches";
@@ -53,7 +54,8 @@ function imageName(path: string): string {
 }
 
 function imageModuleId(name: string): string {
-	return name == "module.dll" ? "app" : name.substring("module.".length, name.length - ".dll".length);
+	const ext = hcrImageExt();
+	return name == `module${ext}` ? "app" : name.substring("module.".length, name.length - ext.length);
 }
 
 const images: unknown[] = [];

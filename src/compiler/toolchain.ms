@@ -1,5 +1,6 @@
 // MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
 
+import { stopBuild } from "./io";
 import { exec, env, platform, exit } from "std/process";
 import { exists, ensureDir, remove } from "std/fs";
 import { join } from "std/fs/path";
@@ -170,7 +171,7 @@ export function resolveCC(opts: CliOptions): void {
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
 
-	if (ensureZig(opts.autoYes) == "") exit(1);
+	if (ensureZig(opts.autoYes) == "") stopBuild();
 	// Leave ccBinary empty: getCompilerName resolves managed zig from its warmed
 	// global, which workers read read-only. Stuffing the heap path string into
 	// ccBinary would capture it into the parallel-compile spawn closures.
