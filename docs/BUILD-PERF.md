@@ -1,5 +1,42 @@
 # Build Performance — Roadmap
 
+## Measured 2026-09-26/27 — the dev-loop link tax is thin-LTO (Apple Silicon, 14-core)
+
+Battery: 22 runs, min-of-rounds, uptime recorded per run (logs in
+`/tmp/perf-baseline/` on the measuring machine), installed binary `d9d5e4a2`,
+tree `90c6fb51`, machine idle at start (load 4.8).
+
+| Config | wall (min) | phase D link | note |
+|---|---|---|---|
+| rebuild 1 file (comment), thin | **23.91s** | **14.82s (62%)** | clang 0.06s — object cache hit |
+| rebuild 1 file, `--lto=off` | **9.07s** | **0.20s** | same machine, interleaved A/B |
+| cold `rm -rf out`, thin | 37.96s | 15.50s | clang 11.4s (bitcode compiles fast) |
+| cold, `--lto=off` | 42.07s | 0.25s | clang 28.5s — codegen paid at clang, once |
+| no-change build | 3.83s | — | invocation floor, see below |
+| emission, default vs `--emit-jobs=1` | 0.23s vs 2.73s | — | 341 workers, overlap=true |
+
+The 2026-07-28 note below ("LTO choice is not the win it looks like") holds
+for COLD builds only. In the dev loop the .c is unchanged, every .o is a
+cache hit — but a thin-LTO link re-runs whole-program codegen every time
+(15s here, swinging 15→55s across identical runs), while an off link of the
+same objects is 0.2s of layout. Dev loop therefore builds with
+`--danger --lto=off` (see CLAUDE.md §Build Commands).
+
+The binary does not pay the LTO gain back on this workload: `msc check
+src/index.ms`, interleaved ×5 (2026-09-27, load 6.2 at start), min **4.57s
+user (thin) vs 4.61s user (off)** — within noise; quiet rounds differ ±5%
+with unstable sign under external load. NOT verified: compute-heavy
+workloads (corpus compiles) may still favour thin-LTO — release binaries
+keep it.
+
+Also re-measured: module count **356** (was 251); the invocation floor
+(no-change build / `check` ≈ 3.8–4.0s wall, 0.9GB RSS) is graph load +
+prelude-pack deserialize (~1.2s) + check (~1.6s) — the incremental-compilation
+arc's target, not the C toolchain's. The `toolchainStamp` fixed cost below is
+GONE as of this measurement: main-tree `vendor/` is 51MB now (was 3.0GB);
+hello-world from a dev-tree binary runs 3.83s vs 1.06s warm from the
+installed one.
+
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
 Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
