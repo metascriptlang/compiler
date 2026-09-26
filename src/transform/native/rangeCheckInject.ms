@@ -123,7 +123,19 @@ function destCovers(src: Type | null, dest: Type): boolean {
 	return integerRank(s) <= integerRank(dest);
 }
 
+function isFloatSource(src: Type | null): boolean {
+	const s = peelToRepr(src);
+	if (s == null) return false;
+	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
+}
+
 function checkedConv(ctx: TransformContext, expr: Node, src: Type | null, dest: Type, node: Node): Node {
+	if (dest.kind == TypeKind.Int64) {
+		if (!ctx.rangeChecks || !isFloatSource(src)) return node;
+		const call = makeCall(runtimeRef("msCheckRangeI64", node.location), [expr], node.location);
+		call.nodeType = dest;
+		return call;
+	}
 	const fnName = getRangeCheckForTypeKind(dest.kind);
 	if (fnName == "") return node;
 	if (!ctx.rangeChecks) return node;
