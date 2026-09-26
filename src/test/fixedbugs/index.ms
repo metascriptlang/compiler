@@ -234,5 +234,6 @@ import "./bug455SplitStatementKinds";
 import "./bug457ClosureSwitchDiscriminant";
 import "./bug456AwaitResumeStateOwnEntry";
 import "./bug458JsPromiseThenValue";
+import "./bug459AwaitInExpression";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
