@@ -22,6 +22,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
 import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
+import { widenVariantToUnion } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -201,16 +202,27 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		if (tryData.hasCatch) {
 			// $result.ok ? $result.value : catchVal
 			const okCheck = makeResultMember(sym, resType, "ok", loc);
-			const valueAccess = makeResultMember(sym, resType, "value", loc);
-			// Stamp catchVal with value type so ternary branches have matching C types
-			if (tryData.catchVal.nodeType == null && valueAccess.nodeType != null) {
-				tryData.catchVal.nodeType = valueAccess.nodeType;
-			}
-			let okBranch = valueAccess;
-			const joinedT = node.nodeType;
-			if (joinedT != null && isMaybeType(joinedT)
-				&& valueAccess.nodeType != null && !isMaybeType(valueAccess.nodeType)) {
-				okBranch = makeTypedObjectLiteral(["value", "present"], [valueAccess, makeBool(true, loc)], joinedT, loc);
+			const okValueT = getResultOkType(resType);
+			let okBranch: Node;
+			if (okValueT != null && okValueT.kind == TypeKind.Void) {
+				okBranch = makeNull(loc);
+				okBranch.nodeType = okValueT;
+			} else {
+				const valueAccess = makeResultMember(sym, resType, "value", loc);
+				// Stamp catchVal with value type so ternary branches have matching C types
+				if (tryData.catchVal.nodeType == null && valueAccess.nodeType != null) {
+					tryData.catchVal.nodeType = valueAccess.nodeType;
+				}
+				okBranch = valueAccess;
+				const joinedT = node.nodeType;
+				if (joinedT != null && isMaybeType(joinedT)
+					&& valueAccess.nodeType != null && !isMaybeType(valueAccess.nodeType)) {
+					okBranch = makeTypedObjectLiteral(["value", "present"], [valueAccess, makeBool(true, loc)], joinedT, loc);
+				} else if (joinedT != null && joinedT.kind == TypeKind.Union
+					&& valueAccess.nodeType != null && valueAccess.nodeType.kind != TypeKind.Union) {
+					const widened = widenVariantToUnion(valueAccess, joinedT, valueAccess.nodeType);
+					if (widened != null as unknown as Node) okBranch = widened;
+				}
 			}
 			const condExpr = makeConditional(okCheck, okBranch, tryData.catchVal, loc);
 			condExpr.nodeType = node.nodeType;
