@@ -236,5 +236,6 @@ import "./bug456AwaitResumeStateOwnEntry";
 import "./bug458JsPromiseThenValue";
 import "./bug459AwaitInExpression";
 import "./bug460AsyncEveryStatementKind";
+import "./bug461SuspendingSwitchBreak";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
