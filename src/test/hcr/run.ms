@@ -22,6 +22,7 @@ function resolveMsc(): string {
 const MSC = resolveMsc();
 env.set("NO_COLOR", "1");
 const FIXTURES = `${ROOT}/src/test/hcr/fixtures`;
+const STD_HOST = `${ROOT}/std/hcr/host.ms`;
 const TMP = `${ROOT}/out/hcr`;
 
 function lines(text: string): string[] {
@@ -467,6 +468,9 @@ function indirect(): void {
 	console.log("ok   hcrIndirect");
 	engine();
 	asyncLoop();
+	liftNames();
+	liftKinds();
+	runCommand();
 	if (platform == "windows") windowsReload();
 }
 
@@ -485,7 +489,8 @@ function withoutCopyDir(line: string): string {
 function engine(): void {
 	const tag = "hcrEngine";
 	const dir = freshDir(`${TMP}/engine`);
-	for (const f of ["app.ms", "host.ms", "hostCalls.h", "handlerMisuse.ms"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	for (const f of ["app.ms", "handlerMisuse.ms"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.ms`);
 	const misuse = msc(dir, ["build", "handlerMisuse.ms", "--hcr", "--emit=c"]);
 	need(tag, !succeeded(misuse), "misused reload handlers were accepted");
 	for (const diagnostic of [
@@ -564,7 +569,7 @@ function asyncLoop(): void {
 	const tag = "hcrAsyncLoop";
 	const dir = freshDir(`${TMP}/asyncLoop`);
 	copy(`${FIXTURES}/asyncLoop/app.ms`, `${dir}/app.ms`);
-	for (const f of ["host.ms", "hostCalls.h"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.ms`);
 	const ext = sharedLibraryExt();
 	const exe = platform == "windows" ? "host.exe" : "host";
 	for (const g of [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"]]) {
@@ -593,6 +598,75 @@ function asyncLoop(): void {
 	}
 	need(tag, ran.exitCode == 1 && both(ran).contains("Error: unhandled rejection: left unhandled"),
 		`an unhandled rejection left the host with exit ${ran.exitCode} and no report`);
+	console.log(`ok   ${tag}`);
+}
+
+function liftNames(): void {
+	const tag = "hcrLiftNames";
+	const dir = freshDir(`${TMP}/liftNames`);
+	for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/liftNames/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.ms`);
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=run/module${ext}`], "lifted module variables named with '$' did not build");
+	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	if (!succeeded(ran) || !both(ran).contains("HCR-LIFT hits 3 no change")) {
+		console.log(both(ran));
+		failWith(tag, "a lifted '$' variable or a top-level '||' temporary lost its value");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function liftKinds(): void {
+	const tag = "hcrLiftKinds";
+	const dir = freshDir(`${TMP}/liftKinds`);
+	copy(`${FIXTURES}/liftKinds/app.ms`, `${dir}/app.ms`);
+	copy(STD_HOST, `${dir}/host.ms`);
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	for (const g of [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"]]) {
+		copy(`${FIXTURES}/liftKinds/${g[0]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module${ext}`], `HCR build of liftKinds/${g[0]} failed`);
+	}
+	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	ensureDir(`${dir}/run`);
+	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	}
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-KINDS ")) seen.push(line);
+	}
+	const want = [
+		"HCR-KINDS before: v1 n1,n2 box 3 pair 4 seen 2 calls 2 parsed true",
+		"HCR-KINDS reload: reloaded",
+		"HCR-KINDS after: v2 n1,n2 box 3 pair 4 seen 2 calls 2 parsed true",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "module state of array, struct, class, nullable, Map or Result type did not survive a body reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function runCommand(): void {
+	const tag = "hcrRun";
+	const dir = freshDir(`${TMP}/run`);
+	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
+	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
+	const ran = msc(dir, ["run", "app.ms", "--hcr"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-RUN ")) seen.push(line);
+	}
+	const want = ["HCR-RUN start value 10", "HCR-RUN reloaded logic value 73"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "msc run --hcr did not rebuild the edited module into the running app");
+	}
 	console.log(`ok   ${tag}`);
 }
 
