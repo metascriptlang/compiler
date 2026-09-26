@@ -226,5 +226,6 @@ import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug300VecRefSinkTakesPayload";
+import "./bug301JsonEnumMemberNames";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
