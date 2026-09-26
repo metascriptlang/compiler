@@ -225,6 +225,8 @@ import "./bug208StructIntoPtrVariable";
 import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
+import "./bug420SpreadOperandIsFullExpression";
+import "./bug421PatternAssignmentTargets";
 import "./bug212Float32ConstFold";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug300VecRefSinkTakesPayload";

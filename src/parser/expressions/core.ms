@@ -573,7 +573,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Spread: ...expr
 	if (token.kind == TokenKind.DotDotDot) {
 		advance(state);
-		const spreadOperand = try parsePrimary(state);
+		const spreadOperand = try parseExprWithPrec(state, 0);
 		return Result.ok(createNode(NodeKind.SpreadExpr, { spreadArg: spreadOperand }, token));
 	}
 

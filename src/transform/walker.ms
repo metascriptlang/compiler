@@ -545,6 +545,11 @@ function replaceBlockStmts(node: Node, expander: StmtExpander, ctx: TransformCon
 	node.data = { statements: expandAndRecurseHooked(bd.statements, expander, ctx, onFnEntry, onFnExit) };
 }
 
+function replaceCaseStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const cd = node.data as SwitchCaseData;
+	node.data = { caseTests: cd.caseTests, caseStmts: expandAndRecurseHooked(cd.caseStmts, expander, ctx, onFnEntry, onFnExit), isDefault: cd.isDefault };
+}
+
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
@@ -627,12 +632,7 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 			}
 		},
 		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let j = 0;
-			while (j < d.caseStmts.length) {
-				walkExpandBlocksHooked(d.caseStmts[j], expander, ctx, onFnEntry, onFnExit);
-				j = j + 1;
-			}
+			replaceCaseStmts(node, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;

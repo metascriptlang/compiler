@@ -470,13 +470,6 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 		return buildSwitchDispatch(cases, matchSym, discType, loc, mode, varName, assignSym, ctx);
 	}
 
-	// Check if any case is a wildcard/binding — if not, last arm becomes the else
-	let hasDefault = false;
-	for (let ci = 0; ci < cases.length; ci += 1) {
-		const cd = cases[ci].data as MatchCaseData;
-		if (isWildcard(cd.casePatterns) || isBindingPattern(cd.casePatterns)) { hasDefault = true; }
-	}
-
 	let elseNode = makeBlock([], loc);
 
 	for (let i = cases.length - 1; i >= 0; i -= 1) {
@@ -506,13 +499,6 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 			} else {
 				elseNode = prependToBody(bindDecl, body, loc);
 			}
-			continue;
-		}
-
-		// No wildcard and this is the last arm → use as unconditional else
-		// (checker verified exhaustiveness, so this is safe)
-		if (!hasDefault && i == cases.length - 1 && caseData.caseGuard == null) {
-			elseNode = body;
 			continue;
 		}
 
