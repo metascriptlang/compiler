@@ -1452,7 +1452,7 @@ function vmHandleStrCharAt(vm: RaiserVM, inst: RaiserInstruction): void {
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
 	if (i >= 0 && i < src.strVal.length) {
-		dst.strVal = src.strVal.slice(i, i + 1);
+		dst.strVal = src.strVal.slice(i as int32, (i + 1) as int32);
 	} else {
 		dst.strVal = "";
 	}
@@ -1467,7 +1467,7 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 	dst.kind = RaiserValueKind.String;
 	dst.intVal = 0;
 	dst.floatVal = 0.0;
-	dst.strVal = src.strVal.slice(startReg.intVal, endReg.intVal);
+	dst.strVal = src.strVal.slice(startReg.intVal as int32, endReg.intVal as int32);
 }
 
 // --- Float value extraction (handles int-to-float promotion) ---
