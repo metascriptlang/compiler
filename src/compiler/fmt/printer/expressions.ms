@@ -485,7 +485,7 @@ export function printAwaitExpr(node: Node, options: FormatOptions): Doc {
 export function printYieldExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as YieldExprData;
 	const star = d.isDelegate ? "*" : "";
-	return docGroup([docText("yield" + star + " "), printAtom(d.yieldArg, options)]);
+	return docGroup([docText("yield" + star + " "), callPrintNode(d.yieldArg, options)]);
 }
 
 export function printSizeofExpr(node: Node): Doc {
