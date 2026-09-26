@@ -10,7 +10,7 @@ import { tokenizeFile } from "../cparse/tokenize";
 import { preprocess } from "../cparse/preprocess";
 import { parseTranslationUnit } from "../cparse/parse";
 import { Obj } from "../cparse/obj";
-import { TargetInfo, defaultHostTarget } from "../cparse/target";
+import { TargetInfo, hostTarget } from "../cparse/target";
 import { Diagnostic } from "../cparse/error";
 
 export interface ParseOptions {
@@ -27,7 +27,7 @@ export interface ParseOutput {
 
 export function defaultOptions(): ParseOptions {
 	return {
-		target: defaultHostTarget(),
+		target: hostTarget(),
 		includePaths: [],
 		extraDefines: [],
 		readLog: null as unknown as string[],

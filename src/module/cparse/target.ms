@@ -1,127 +1,104 @@
 // cparse — Target model and predefined macros
-// Parameterizes sizeof/alignof/struct layout so FFI bindings are correct
-// across targets (instead of hardcoding x86-64 Linux ILP64).
 
-export enum TargetTriple {
-	LinuxX86_64,
-	LinuxAarch64,
-	MacosX86_64,
-	MacosAarch64,
-	WindowsX64,
-	Wasm32,
-}
+import { env, exec, platform } from "std/process";
 
 // All size/align values in bytes. Covers primitive C types whose sizes vary
 // across targets. Types with fixed sizes (int32_t, etc.) aren't in this table.
 export interface TargetInfo {
-	triple: TargetTriple;
-	tripleName: string;         // "x86_64-linux-gnu", etc.
-	pointerSize: int32;        // 4 or 8
+	os: string;
+	cpu: string;
+	pointerSize: int32;
 	pointerAlign: int32;
-	shortSize: int32;          // almost always 2
-	intSize: int32;            // 4 on all mainstream targets
-	longSize: int32;           // 4 on Windows LLP64, 8 on LP64
-	longLongSize: int32;       // 8 everywhere we care about
-	floatSize: int32;          // 4
-	doubleSize: int32;         // 8
-	longDoubleSize: int32;     // 8, 12, or 16 depending on target
-	sizeTSigned: boolean;       // size_t signed? (no, but listed for completeness)
+	shortSize: int32;
+	intSize: int32;
+	longSize: int32;           // 4 on Windows LLP64 and on 32-bit CPUs, 8 on LP64
+	longLongSize: int32;
+	floatSize: int32;
+	doubleSize: int32;
+	longDoubleSize: int32;
+	sizeTSigned: boolean;
 	charSigned: boolean;        // default signedness of bare `char`
 }
 
-export function targetLinuxX86_64(): TargetInfo {
+function normalizeCpu(cpu: string): string {
+	if (cpu == "amd64" || cpu == "x64") return "x86_64";
+	if (cpu == "arm64") return "aarch64";
+	if (cpu == "386") return "i386";
+	return cpu;
+}
+
+function cpuPointerSize(cpu: string): int32 {
+	return match (cpu) {
+		"x86_64" | "aarch64" | "riscv64" | "mips64" | "powerpc64" | "sparc64" | "s390x" | "loongarch64" | "sbf" => 8,
+		"i386" | "arm" | "wasm32" | "riscv32" | "mips" | "powerpc" | "sparc" => 4,
+		"avr" | "msp430" => 2,
+		_ => 0,
+	};
+}
+
+function isApple(os: string): boolean {
+	return os == "macos" || os == "ios";
+}
+
+function charIsSigned(os: string, cpu: string): boolean {
+	if (isApple(os) || os == "windows") return true;
+	return !(cpu == "aarch64" || cpu == "arm" || cpu == "riscv32" || cpu == "riscv64" ||
+		cpu == "powerpc" || cpu == "powerpc64" || cpu == "s390x");
+}
+
+function longDoubleSize(os: string, cpu: string): int32 {
+	if (cpu == "x86_64") return 16;
+	if (cpu == "i386") return 12;
+	if (cpu == "aarch64") return isApple(os) || os == "windows" ? 8 : 16;
+	if (cpu == "riscv64" || cpu == "loongarch64" || cpu == "s390x") return 16;
+	return 8;
+}
+
+export function targetFor(os: string, cpu: string): TargetInfo {
+	const o = os == "darwin" ? "macos" : os;
+	const c = normalizeCpu(cpu);
+	const ptr = cpuPointerSize(c);
+	if (ptr == 0) return null as unknown as TargetInfo;
 	return {
-		triple: TargetTriple.LinuxX86_64,
-		tripleName: "x86_64-linux-gnu",
-		pointerSize: 8, pointerAlign: 8,
-		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 16,
-		sizeTSigned: false, charSigned: true,
+		os: o,
+		cpu: c,
+		pointerSize: ptr, pointerAlign: ptr,
+		shortSize: 2,
+		intSize: ptr == 2 ? 2 : 4,
+		longSize: o == "windows" || ptr < 8 ? 4 : 8,
+		longLongSize: 8,
+		floatSize: 4, doubleSize: 8, longDoubleSize: longDoubleSize(o, c),
+		sizeTSigned: false, charSigned: charIsSigned(o, c),
 	};
 }
 
-export function targetLinuxAarch64(): TargetInfo {
-	return {
-		triple: TargetTriple.LinuxAarch64,
-		tripleName: "aarch64-linux-gnu",
-		pointerSize: 8, pointerAlign: 8,
-		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 16,
-		sizeTSigned: false, charSigned: false, // aarch64 char is unsigned
-	};
+function hostOs(): string {
+	return platform == "darwin" ? "macos" : platform;
 }
 
-export function targetMacosX86_64(): TargetInfo {
-	return {
-		triple: TargetTriple.MacosX86_64,
-		tripleName: "x86_64-apple-darwin",
-		pointerSize: 8, pointerAlign: 8,
-		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 16,
-		sizeTSigned: false, charSigned: true,
-	};
+function hostCpu(): string {
+	if (platform == "windows") {
+		return env.get("PROCESSOR_ARCHITECTURE") == "ARM64" ? "aarch64" : "x86_64";
+	}
+	const r = exec("uname -m");
+	const m = r.ok ? r.value : "";
+	if (m.indexOf("arm64") >= 0 || m.indexOf("aarch64") >= 0) return "aarch64";
+	return "x86_64";
 }
 
-export function targetMacosAarch64(): TargetInfo {
-	return {
-		triple: TargetTriple.MacosAarch64,
-		tripleName: "arm64-apple-darwin",
-		pointerSize: 8, pointerAlign: 8,
-		shortSize: 2, intSize: 4, longSize: 8, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 8,
-		sizeTSigned: false, charSigned: true,
-	};
+// Keep the no --cpu default equal to src/compiler/cc.ms crossTargetFlag: the host
+// CPU for a host build, x86_64 for a cross build.
+export function buildTarget(os: string, cpu: string): TargetInfo {
+	const o = os == "darwin" ? "macos" : os;
+	if (cpu != "") return targetFor(o, cpu);
+	if (o == "wasm" || o == "emcc") return targetFor(o, "wasm32");
+	if (o == "solana") return targetFor(o, "sbf");
+	if (o == hostOs()) return targetFor(o, hostCpu());
+	return targetFor(o, "x86_64");
 }
 
-export function targetWindowsX64(): TargetInfo {
-	return {
-		triple: TargetTriple.WindowsX64,
-		tripleName: "x86_64-pc-windows-msvc",
-		pointerSize: 8, pointerAlign: 8,
-		shortSize: 2, intSize: 4, longSize: 4, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 8,
-		sizeTSigned: false, charSigned: true,
-	};
-}
-
-export function targetWasm32(): TargetInfo {
-	return {
-		triple: TargetTriple.Wasm32,
-		tripleName: "wasm32-unknown-unknown",
-		pointerSize: 4, pointerAlign: 4,
-		shortSize: 2, intSize: 4, longSize: 4, longLongSize: 8,
-		floatSize: 4, doubleSize: 8, longDoubleSize: 8,
-		sizeTSigned: false, charSigned: true,
-	};
-}
-
-// Default host target for macOS arm64 (development machine)
-export function defaultHostTarget(): TargetInfo {
-	return targetMacosAarch64();
-}
-
-// Lookup by triple enum.
-export function targetFromTriple(triple: TargetTriple): TargetInfo {
-	return match (triple) {
-		TargetTriple.LinuxX86_64 => targetLinuxX86_64(),
-		TargetTriple.LinuxAarch64 => targetLinuxAarch64(),
-		TargetTriple.MacosX86_64 => targetMacosX86_64(),
-		TargetTriple.MacosAarch64 => targetMacosAarch64(),
-		TargetTriple.WindowsX64 => targetWindowsX64(),
-		TargetTriple.Wasm32 => targetWasm32(),
-		_ => targetMacosAarch64(),
-	};
-}
-
-// Parse a triple name string to a TargetTriple enum. Returns null-ish on unknown.
-export function parseTripleName(name: string): TargetTriple {
-	if (name == "x86_64-linux-gnu" || name == "linux-x86_64") return TargetTriple.LinuxX86_64;
-	if (name == "aarch64-linux-gnu" || name == "linux-aarch64") return TargetTriple.LinuxAarch64;
-	if (name == "x86_64-apple-darwin" || name == "macos-x86_64") return TargetTriple.MacosX86_64;
-	if (name == "arm64-apple-darwin" || name == "macos-aarch64") return TargetTriple.MacosAarch64;
-	if (name == "x86_64-pc-windows-msvc" || name == "windows-x64") return TargetTriple.WindowsX64;
-	if (name == "wasm32-unknown-unknown" || name == "wasm32") return TargetTriple.Wasm32;
-	return TargetTriple.MacosAarch64; // fallback to host
+export function hostTarget(): TargetInfo {
+	return buildTarget(hostOs(), "");
 }
 
 // Predefined macro as a (name, value) pair. The preprocessor ingests these
@@ -135,96 +112,114 @@ function m(name: string, value: string): MacroDef {
 	return { name, value };
 }
 
-// Predefined macros for a target. Minimal starter set — extend as real headers demand.
 export function predefinedMacros(t: TargetInfo): MacroDef[] {
 	const result: MacroDef[] = [
 		m("__STDC__", "1"),
 		m("__STDC_HOSTED__", "1"),
 		m("__STDC_VERSION__", "201112L"),
+		m("__GNUC__", "4"),
+		m("__GNUC_MINOR__", "2"),
 	];
-	match (t.triple) {
-		TargetTriple.LinuxX86_64 => {
-			result.push(m("__linux__", "1")); result.push(m("__unix__", "1")); result.push(m("__gnu_linux__", "1"));
-			result.push(m("__x86_64__", "1")); result.push(m("__LP64__", "1")); result.push(m("_LP64", "1"));
-			result.push(m("__GNUC__", "4")); result.push(m("__GNUC_MINOR__", "2"));
+	match (t.cpu) {
+		"x86_64" => { result.push(m("__x86_64__", "1")); result.push(m("__x86_64", "1")); result.push(m("__amd64__", "1")); result.push(m("__amd64", "1")); },
+		"aarch64" => { result.push(m("__aarch64__", "1")); if (isApple(t.os)) result.push(m("__arm64__", "1")); },
+		"i386" => { result.push(m("__i386__", "1")); result.push(m("__i386", "1")); },
+		"arm" => { result.push(m("__arm__", "1")); },
+		"wasm32" => { result.push(m("__wasm__", "1")); result.push(m("__wasm32__", "1")); },
+		"riscv32" | "riscv64" => { result.push(m("__riscv", "1")); },
+		_ => {},
+	};
+	if (t.pointerSize == 8 && t.longSize == 8) { result.push(m("__LP64__", "1")); result.push(m("_LP64", "1")); }
+	if (!t.charSigned) result.push(m("__CHAR_UNSIGNED__", "1"));
+	match (t.os) {
+		"linux" => {
+			result.push(m("__linux__", "1")); result.push(m("__linux", "1")); result.push(m("__gnu_linux__", "1"));
+			result.push(m("__unix__", "1")); result.push(m("__unix", "1"));
 		},
-		TargetTriple.LinuxAarch64 => {
-			result.push(m("__linux__", "1")); result.push(m("__unix__", "1"));
-			result.push(m("__aarch64__", "1")); result.push(m("__LP64__", "1")); result.push(m("__CHAR_UNSIGNED__", "1"));
-			result.push(m("__GNUC__", "4")); result.push(m("__GNUC_MINOR__", "2"));
+		"android" => {
+			result.push(m("__linux__", "1")); result.push(m("__linux", "1")); result.push(m("__ANDROID__", "1"));
+			result.push(m("__unix__", "1")); result.push(m("__unix", "1"));
 		},
-		TargetTriple.MacosX86_64 => {
-			result.push(m("__APPLE__", "1")); result.push(m("__MACH__", "1")); result.push(m("__unix__", "1"));
-			result.push(m("__x86_64__", "1")); result.push(m("__LP64__", "1"));
-			result.push(m("__GNUC__", "4")); result.push(m("__GNUC_MINOR__", "2"));
+		"macos" | "ios" => { result.push(m("__APPLE__", "1")); result.push(m("__MACH__", "1")); },
+		"freebsd" => { result.push(m("__FreeBSD__", "14")); result.push(m("__unix__", "1")); result.push(m("__unix", "1")); },
+		"windows" => {
+			result.push(m("_WIN32", "1")); result.push(m("WIN32", "1")); result.push(m("__WIN32__", "1")); result.push(m("__MINGW32__", "1"));
+			if (t.pointerSize == 8) { result.push(m("_WIN64", "1")); result.push(m("WIN64", "1")); result.push(m("__WIN64__", "1")); result.push(m("__MINGW64__", "1")); }
 		},
-		TargetTriple.MacosAarch64 => {
-			result.push(m("__APPLE__", "1")); result.push(m("__MACH__", "1")); result.push(m("__unix__", "1"));
-			result.push(m("__aarch64__", "1")); result.push(m("__arm64__", "1")); result.push(m("__LP64__", "1"));
-			result.push(m("__GNUC__", "4")); result.push(m("__GNUC_MINOR__", "2"));
-		},
-		TargetTriple.WindowsX64 => {
-			result.push(m("_WIN32", "1")); result.push(m("_WIN64", "1")); result.push(m("WIN32", "1"));
-			result.push(m("_MSC_VER", "1929")); result.push(m("_M_X64", "100")); result.push(m("_M_AMD64", "100"));
-		},
-		TargetTriple.Wasm32 => {
-			result.push(m("__wasm__", "1")); result.push(m("__wasm32__", "1"));
-		},
+		"emcc" => { result.push(m("__EMSCRIPTEN__", "1")); },
+		_ => {},
 	};
 	return result;
 }
 
-test "default host target is populated" {
-	const t = defaultHostTarget();
+function hasMacro(t: TargetInfo, name: string): boolean {
+	for (const md of predefinedMacros(t)) {
+		if (md.name == name) return true;
+	}
+	return false;
+}
+
+test "host target is populated" {
+	const t = hostTarget();
+	assert t != null;
 	assert t.pointerSize == 8;
 	assert t.intSize == 4;
 }
 
-test "windows x64 uses LLP64 long size" {
-	const t = targetWindowsX64();
+test "windows x64 is LLP64 on the MinGW ABI" {
+	const t = targetFor("windows", "amd64");
 	assert t.longSize == 4;
-	assert t.longLongSize == 8;
+	assert t.pointerSize == 8;
+	assert hasMacro(t, "_WIN32");
+	assert hasMacro(t, "_WIN64");
+	assert hasMacro(t, "__MINGW64__");
+	assert !hasMacro(t, "_MSC_VER");
+	assert !hasMacro(t, "__APPLE__");
+	assert !hasMacro(t, "__LP64__");
 }
 
-test "linux x86_64 predefined includes __LP64__" {
-	const macros = predefinedMacros(targetLinuxX86_64());
-	let found = false;
-	for (const md of macros) {
-		if (md.name == "__LP64__") found = true;
-	}
-	assert found;
-}
-
-test "linux aarch64 char is unsigned" {
-	const t = targetLinuxAarch64();
-	assert t.charSigned == false;
+test "linux x86_64 is LP64 and takes no apple or windows branch" {
+	const t = targetFor("linux", "x86_64");
 	assert t.longSize == 8;
+	assert hasMacro(t, "__linux__");
+	assert hasMacro(t, "__LP64__");
+	assert !hasMacro(t, "__APPLE__");
+	assert !hasMacro(t, "_WIN32");
 }
 
-test "macos x86_64 long double is 16" {
-	const t = targetMacosX86_64();
-	assert t.longDoubleSize == 16;
+test "aarch64 char is unsigned on linux and android, signed on apple" {
+	assert targetFor("linux", "arm64").charSigned == false;
+	assert targetFor("android", "aarch64").charSigned == false;
+	assert hasMacro(targetFor("android", "aarch64"), "__ANDROID__");
+	assert targetFor("macos", "arm64").charSigned == true;
+	assert targetFor("ios", "arm64").charSigned == true;
 }
 
-test "targetFromTriple round-trips" {
-	const t = targetFromTriple(TargetTriple.WindowsX64);
-	assert t.longSize == 4;
+test "darwin is an alias of macos" {
+	const t = targetFor("darwin", "aarch64");
+	assert t.os == "macos";
+	assert hasMacro(t, "__APPLE__");
+	assert hasMacro(t, "__arm64__");
+	assert t.longDoubleSize == 8;
 }
 
-test "parseTripleName linux" {
-	assert parseTripleName("linux-x86_64") == TargetTriple.LinuxX86_64;
-	assert parseTripleName("x86_64-linux-gnu") == TargetTriple.LinuxX86_64;
+test "wasm and emcc are ILP32, emcc names itself" {
+	const w = buildTarget("wasm", "");
+	assert w.cpu == "wasm32";
+	assert w.pointerSize == 4;
+	assert w.longSize == 4;
+	assert !hasMacro(w, "__EMSCRIPTEN__");
+	assert hasMacro(buildTarget("emcc", ""), "__EMSCRIPTEN__");
 }
 
-test "parseTripleName wasm" {
-	assert parseTripleName("wasm32") == TargetTriple.Wasm32;
+test "a cross build without --cpu gets x86_64, --cpu wins" {
+	const cross = buildTarget(platform == "windows" ? "linux" : "windows", "");
+	assert cross.cpu == "x86_64";
+	assert buildTarget("linux", "arm64").cpu == "aarch64";
+	assert buildTarget("bare", "i386").longDoubleSize == 12;
+	assert buildTarget("solana", "").cpu == "sbf";
 }
 
-test "all 6 triples have predefined macros" {
-	assert predefinedMacros(targetLinuxX86_64()).length > 3;
-	assert predefinedMacros(targetLinuxAarch64()).length > 3;
-	assert predefinedMacros(targetMacosX86_64()).length > 3;
-	assert predefinedMacros(targetMacosAarch64()).length > 3;
-	assert predefinedMacros(targetWindowsX64()).length > 3;
-	assert predefinedMacros(targetWasm32()).length > 3;
+test "a cpu with no model is null" {
+	assert targetFor("linux", "vax") == null;
 }
