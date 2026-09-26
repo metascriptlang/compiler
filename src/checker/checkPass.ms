@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -24,10 +24,11 @@ import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShape
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
 import { monoBaseName } from "../monomorphize/registry";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom, CtorEntry, ctorDefaultsMark, ctorDefaultsFrom } from "./instantiate";
+import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { isBuiltinDirective } from "./decoratorHelpers";
-import { declGenericParams } from "./types";
+import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
@@ -3115,7 +3116,15 @@ function checkProgramCore(
 
 // ===== Public API =====
 
-let _preludeCtxByKey: Map<string, CheckerContext> = new Map<string, CheckerContext>();
+interface SharedPrelude {
+	ctx: CheckerContext;
+	typeInstances: GenericTypeInstRow[];
+	duVariants: Type[];
+	ctorDefaults: CtorEntry[];
+	dispatch: DispatchRecords;
+}
+
+let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
 let _graphPreludeFn: (stdPath: string, backendExt: string) => CheckerContext = null as unknown as (stdPath: string, backendExt: string) => CheckerContext;
 
 export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string) => CheckerContext): void {
@@ -3126,15 +3135,38 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|");
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
-		shared = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+		shared = buildSharedPrelude(stdPath, backendExt);
 		_preludeCtxByKey.set(key, shared);
 	}
-	return packContentView(shared);
+	replayPreludeContributions(shared);
+	return packContentView(shared.ctx);
+}
+
+function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
+	const typeInstMark = genericTypeInstMark();
+	const duMark = duVariantMark();
+	const ctorMark = ctorDefaultsMark();
+	const outerDispatch = startDispatchCapture();
+	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	return {
+		ctx,
+		typeInstances: takeGenericTypeInstsFrom(typeInstMark),
+		duVariants: duVariantsFrom(duMark),
+		ctorDefaults: ctorDefaultsFrom(ctorMark),
+		dispatch: endDispatchCapture(outerDispatch),
+	};
+}
+
+function replayPreludeContributions(shared: SharedPrelude): void {
+	for (const row of shared.typeInstances) addGenericTypeInstRow(row);
+	replayDuVariants(shared.duVariants);
+	for (const e of shared.ctorDefaults) registerCtorDefaults(e.name, e.fnType, e.defaults);
+	replayDispatchRecords(shared.dispatch);
 }
 
 export function isSharedPrelude(ctx: CheckerContext): boolean {
 	for (const shared of _preludeCtxByKey.values()) {
-		if (shared.table == ctx.table) return true;
+		if (shared.ctx.table == ctx.table) return true;
 	}
 	return false;
 }
