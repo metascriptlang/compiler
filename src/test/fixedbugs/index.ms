@@ -309,3 +309,4 @@ import "./bug548NullableIntoNonNullSlot";
 import "./bug549GenericConstraintAtCall";
 import "./bug550ConstructorRestArgs";
 import "./bug551PhantomGenericBody";
+import "./bug552GenericAliasToNamedType";

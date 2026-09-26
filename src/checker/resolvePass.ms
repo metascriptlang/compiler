@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -322,6 +322,50 @@ export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, param
 function refWrapsNominal(refType: Type): boolean {
 	const nominal = peelToStructOrUnion(refType.typeReturn);
 	return nominal != null && (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union);
+}
+
+function declaredByAnotherSymbol(t: Type, alias: Symbol): boolean {
+	const owner = t.sym;
+	if (owner == null || owner == alias) return false;
+	const k = owner.symbolKind;
+	return k == SymbolKind.Class || k == SymbolKind.Interface || k == SymbolKind.Struct || k == SymbolKind.Actor || k == SymbolKind.Enum;
+}
+
+function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName: string, genericParams: string, args: Type[], line: int32, col: int32): Type | null {
+	if (alias.symbolKind != SymbolKind.TypeAlias) return null;
+	markUsedIn(ctx, alias);
+	ensureShaped(alias, ctx);
+	const body = alias.symbolType;
+	const isRef = body.kind == TypeKind.Ref && body.typeReturn != null;
+	const inner = isRef ? body.typeReturn : body;
+	const namesDeclared = body.kind == TypeKind.Alias || (inner.kind == TypeKind.Struct && declaredByAnotherSymbol(inner, alias));
+	if (!namesDeclared && inner.kind != TypeKind.GenericInstance && inner.kind != TypeKind.GenericParam) return null;
+	checkTypeArgConstraints(ctx, baseName, genericParams, args, line, col);
+	if (namesDeclared) return body;
+	const inst = substituteAllParams(inner, splitTopLevel(genericParamNamesOf(genericParams), ","), args);
+	if (inst.kind == TypeKind.GenericInstance && inst.typeReturn == null) {
+		const declParams = genericParamsOf(inst);
+		if (declParams != "") instantiateGenericBody(inst, declParams);
+	}
+	return isRef ? createRef(inst) : inst;
+}
+
+function checkTypeArgConstraints(ctx: CheckerContext, baseName: string, genericParams: string, args: Type[], line: int32, col: int32): void {
+	const paramList = splitTopLevel(genericParams, ",");
+	for (let ci = 0; ci < paramList.length && ci < args.length; ci += 1) {
+		const paramStr = paramList[ci].trim();
+		const colonPos = findChar(paramStr, ":");
+		if (colonPos <= 0) continue;
+		const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
+		const constraintType = resolveAnnotation(constraintName, ctx, line, col);
+		if (!isUnresolvedType(constraintType)
+				&& !isUnresolvedType(args[ci])
+				&& args[ci].kind != TypeKind.GenericParam
+				&& !isAssignableCheck(args[ci], constraintType)) {
+			const paramName = paramStr.slice(0, colonPos).trim();
+			addError(ctx, `Type '${typeDisplayName(args[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
+		}
+	}
 }
 
 function bitSetElementAllowed(elem: Type): boolean {
@@ -695,6 +739,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				resolvedArgs.push(resolved);
 				if (resolved.kind != TypeKind.GenericParam) allGenericParams = false;
 			}
+			const aliased = genericSym != null ? instanceOfAliasToNamedType(ctx, genericSym, baseName, genericParams, resolvedArgs, line, col) : null;
+			if (aliased != null) return aliased;
 			if (allGenericParams && resolvedArgs.length > 0) {
 				// Return GenericInstance with GenericParam type args.
 				// This preserves hasGenericParams for unification + enables structural matching.
@@ -729,25 +775,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
-				// Gap 5: validate generic constraints at instantiation.
-				// genericParams = "T:Comparable,U" — params with optional :Constraint suffix.
-				const paramList = splitTopLevel(genericParams, ",");
-				for (let ci = 0; ci < paramList.length; ci += 1) {
-					if (ci >= resolvedArgs.length) break;
-					const paramStr = paramList[ci].trim();
-					const colonPos = findChar(paramStr, ":");
-					if (colonPos > 0) {
-						const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
-						const constraintType = resolveAnnotation(constraintName, ctx, line, col);
-						if (!isUnresolvedType(constraintType)
-								&& !isUnresolvedType(resolvedArgs[ci])
-								&& resolvedArgs[ci].kind != TypeKind.GenericParam
-								&& !isAssignableCheck(resolvedArgs[ci], constraintType)) {
-							const paramName = paramStr.slice(0, colonPos).trim();
-							addError(ctx, `Type '${typeDisplayName(resolvedArgs[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
-						}
-					}
-				}
+				checkTypeArgConstraints(ctx, baseName, genericParams, resolvedArgs, line, col);
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
 				gi2.typeName = baseName;
 				instantiateGenericBody(gi2, genericParams);
@@ -1798,7 +1826,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
-	} else if (!hasGenericAlias && resolved.sym != null
+	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)
 		&& (resolved.kind == TypeKind.Struct || resolved.kind == TypeKind.Enum)) {
 		const wrap = emptyType();
 		wrap.kind = TypeKind.Alias;
