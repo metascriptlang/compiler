@@ -1,8 +1,14 @@
 import { Node, Type, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
-import { GenericTypeInstRow, takeGenericTypeInstsFrom } from "../parser/context";
-import { pendingInstanceKeyOf } from "../checker/instantiate";
+import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
+import { pendingInstanceKeyOf, drainPendingInstances, resetInstantiationState } from "../checker/instantiate";
+import { resetDispatchRegistry } from "../checker/context";
+import { resetDuVariantRegistry } from "../checker/types";
+import { resetDuHashes } from "../analyzer/classify";
+import { resetLinkState } from "../utils/linkState";
+import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
+import { createNameSet } from "../transform/context";
 import { ModuleError } from "../module/graph";
 import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
@@ -60,7 +66,19 @@ export function createBuildSession(keep: boolean): BuildSession {
 	};
 }
 
+export function resetBuildState(): void {
+	resetAllSideChannels();
+	const _stale = drainPendingInstances();
+	resetInstantiationState();
+	resetDispatchRegistry();
+	resetDuVariantRegistry();
+	resetDuHashes();
+	resetLinkState();
+	setGlobalHookOwners(createNameSet());
+}
+
 export function startSessionBuild(session: BuildSession): void {
+	if (session.check.db == null) resetBuildState();
 	session.staleReason = "";
 	session.moduleCount = 0;
 	session.loweredCount = 0;
