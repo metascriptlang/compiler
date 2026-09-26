@@ -7,3 +7,7 @@ test "fmt: enum members keep their explicit values" {
 test "fmt: enum members keep hex and negative values" {
 	assert assertFmtLossless("enum Bits {\n\tA = 0x10,\n\tB = -4,\n}\n");
 }
+
+test "fmt: enum members keep hex and expression values" {
+	assert assertFmtLossless("enum Bits {\n\tA = 0x10,\n\tB = (1 << 2),\n\tC = 1 << 3,\n\tD = A | B,\n}\n");
+}
