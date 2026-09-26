@@ -512,9 +512,9 @@ function wrapperSource(isMacro: boolean, paramList: string, shape: int32, arity:
 	const boolLitKind = NodeKind.BooleanLiteral as int32;
 	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], inheritedKeys: string[], inheritedValues: Node[], init: Node) {\n";
 	s = s + "\tconst sink: Node[] = [];\n";
-	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind}, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
-	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind}, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
-	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind}, line: recv.line, column: recv.column, boolValue: true });\n`;
+	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind} as NodeKind, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
+	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind} as NodeKind, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
+	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind} as NodeKind, line: recv.line, column: recv.column, boolValue: true });\n`;
 	if (isMacro) s = s + `\tconst __dec = (${paramList}) => {};\n`;
 	const contextArg = arity >= 2
 		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues, inheritedKeys: inheritedKeys, inheritedValues: inheritedValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
