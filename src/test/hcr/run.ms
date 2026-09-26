@@ -168,6 +168,131 @@ function moduleAbi(): void {
 	console.log("ok   hcrModuleAbi");
 }
 
+function emittedModuleC(dir: string, stem: string): string {
+	const debug = `${dir}/out/debug`;
+	for (const e of readDir(debug)) {
+		if (!e.startsWith("_") && e.endsWith(`Z${stem}Oms.c`)) return read(`${debug}/${e}`);
+	}
+	return "";
+}
+
+function bundleSection(bundle: string, stem: string): string {
+	const kept: string[] = [];
+	let inside = false;
+	for (const line of lines(bundle)) {
+		if (line.startsWith("// --- Module: ")) inside = line.endsWith(`/${stem} ---`);
+		if (inside) kept.push(line);
+	}
+	return kept.join("\n");
+}
+
+function localNames(): void {
+	const tag = "hcrModuleLocalNames";
+	const dir = freshDir(`${TMP}/localNames`);
+	for (const f of ["app.ms", "a.ms", "b.ms", "tpl.ms"]) copy(`${FIXTURES}/localNames/${f}`, `${dir}/${f}`);
+	const edits = ["a.ms", "aAsyncEdit.ms", "aTemplateEdit.ms"];
+	const cOf: string[] = [];
+	const jsOf: string[] = [];
+	for (const edit of edits) {
+		copy(`${FIXTURES}/localNames/${edit}`, `${dir}/a.ms`);
+		removeAll(`${dir}/out`);
+		mustBuild(tag, dir, ["build", "app.ms", "--emit=c"], `C emission failed with ${edit}`);
+		cOf.push(emittedModuleC(dir, "b"));
+		mustBuild(tag, dir, ["build", "app.ms", "--target=js", "--output=bundle.js"], `JS emission failed with ${edit}`);
+		jsOf.push(bundleSection(read(`${dir}/bundle.js`), "b"));
+	}
+	need(tag, cOf[0].contains("dollarretFut") && cOf[0].contains("tdollart"), "b's C lost its generated async and template names");
+	need(tag, jsOf[0].contains("tdollart"), "b's JS lost its generated template names");
+	for (let i = 1; i < edits.length; i += 1) {
+		need(tag, cOf[i] == cOf[0], `${edits[i]} changed the C of the untouched module b`);
+		need(tag, jsOf[i] == jsOf[0], `${edits[i]} changed the JS of the untouched module b`);
+	}
+	console.log("ok   hcrModuleLocalNames");
+}
+
+interface WatchStep {
+	file: string;
+	target: string;
+	warm: boolean;
+	fails: boolean;
+}
+
+function cFilesIn(dir: string): string[] {
+	const names: string[] = [];
+	if (!exists(dir)) return names;
+	for (const e of readDir(dir)) {
+		if (e.endsWith(".c")) names.push(e);
+	}
+	names.sort();
+	return names;
+}
+
+function partialRecheck(status: string): boolean {
+	const at = status.indexOf("(checked ", 0);
+	if (at < 0) return false;
+	const counts = status.slice(at + 9, status.indexOf(",", at)).split("/");
+	return counts.length == 2 && counts[0] != counts[1];
+}
+
+function watchWarm(): void {
+	const tag = "hcrWatchWarm";
+	const dir = freshDir(`${TMP}/watchWarm`);
+	for (const f of readDir(`${FIXTURES}/watchWarm`)) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "viewShift.ms", target: "view.ms", warm: true, fails: false },
+		{ file: "logicError.ms", target: "logic.ms", warm: false, fails: true },
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicMap.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "shapesBody.ms", target: "shapes.ms", warm: true, fails: false },
+		{ file: "logicExport.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "logicInt64.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "logicOriginal.ms", target: "logic.ms", warm: false, fails: false },
+	];
+	let replay = "";
+	for (const s of steps) replay = replay + `${s.file} ${s.target}\n`;
+	put(`${dir}/replay.txt`, replay);
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt", "--emit=c"]);
+	const statuses: string[] = [];
+	for (const line of lines(both(watched))) {
+		if (line.startsWith("watch: build ")) statuses.push(line);
+	}
+	if (!succeeded(watched) || statuses.length != steps.length + 1) {
+		console.log(both(watched));
+		failWith(tag, `the watch replay reported ${statuses.length} builds, expected ${steps.length + 1}`);
+	}
+
+	for (const f of ["logic.ms", "view.ms", "shapes.ms"]) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	const debug = `${dir}/out/debug`;
+	for (let n = 0; n <= steps.length; n += 1) {
+		const step: WatchStep | null = n > 0 ? steps[n - 1] : null;
+		if (step != null) copy(`${dir}/${step!.file}`, `${dir}/${step!.target}`);
+		for (const f of cFilesIn(debug)) removeAll(`${debug}/${f}`);
+		const cold = msc(dir, ["build", "app.ms", "--hcr", "--emit=c"]);
+		const label = step != null ? `step ${n} (${step!.file})` : "the first build";
+		const status = statuses[n];
+		if (step != null && step!.fails) {
+			need(tag, !succeeded(cold) && status.contains(" failed "), `${label} should fail warm and cold: ${status}`);
+			continue;
+		}
+		if (!succeeded(cold)) {
+			console.log(both(cold));
+			failWith(tag, `the cold build of ${label} failed`);
+		}
+		need(tag, !status.contains(" failed "), `${label} failed warm: ${status}`);
+		const warmFiles = cFilesIn(`${debug}/watch${n}`);
+		const coldFiles = cFilesIn(debug);
+		need(tag, warmFiles.join(",") == coldFiles.join(","), `${label} emitted ${warmFiles.length} files warm, ${coldFiles.length} cold`);
+		for (const f of coldFiles) {
+			need(tag, read(`${debug}/watch${n}/${f}`) == read(`${debug}/${f}`), `${label}: ${f} differs from a cold build`);
+		}
+		if (step != null && step!.warm) {
+			need(tag, status.contains(" built ") && partialRecheck(status), `${label} did not stay warm: ${status}`);
+		}
+	}
+	console.log("ok   hcrWatchWarm");
+}
+
 // ---- hcrIndirect: cross-module calls lowered through module tables ----
 
 interface Emitted {
@@ -253,38 +378,40 @@ function indirect(): void {
 	need(tag, hcr.app.contains("HcrImports000(void) { static const char* const imports[] = { \"logic\", \""), "app does not declare its import of logic with a key");
 	sharedVariable();
 
-	if (platform != "windows") {
+	if (platform != "windows" && platform != "linux") {
 		console.log(`ok   hcrIndirect (emission only: this runner has no host adapter for ${platform})`);
 		return;
 	}
-	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g1/module.dll"], "HCR image link failed");
-	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.shapes.dll"]) {
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g1/module${ext}`], "HCR image link failed");
+	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module.shapes${ext}`]) {
 		need(tag, exists(`${dir}/g1/${image}`), `per-module image g1/${image} missing`);
 	}
 	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/logic.ms`);
-	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g2/module.dll"], "HCR rebuild after the logic edit failed");
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "HCR rebuild after the logic edit failed");
 	copy(`${FIXTURES}/indirect/logicExportEdit.ms`, `${dir}/logic.ms`);
-	mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--output=g3/module.dll"], "HCR rebuild after the logic export edit failed");
-	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "host build failed");
-	const called = execFileResult(`${dir}/host.exe`,
-		["g1/module.logic.dll", "g1/module.shapes.dll", "g1/module.dll", "--", "g2/module.logic.dll", "g3/module.logic.dll"], dir);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g3/module${ext}`], "HCR rebuild after the logic export edit failed");
+	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "host build failed");
+	const called = execFileResult(`${dir}/${exe}`,
+		[`g1/module.logic${ext}`, `g1/module.shapes${ext}`, `g1/module${ext}`, "--", `g2/module.logic${ext}`, `g3/module.logic${ext}`], dir);
 	const want = [
 		"HCR-HOST gen1 hcrIndirectValue -> 37",
 		"HCR-HOST gen1 hcrShapeValue -> 9",
 		"HCR-HOST gen1 hcrErrorValue -> 1",
 		"HCR-HOST gen1 hcrTickValue -> 1",
-		"HCR-HOST key module.dll -> logic matches",
+		`HCR-HOST key module${ext} -> logic matches`,
 		"HCR-HOST staged logic -> 1",
 		"HCR-HOST staged hcrIndirectValue -> 37",
-		"HCR-HOST reloaded g2/module.logic.dll",
+		`HCR-HOST reloaded g2/module.logic${ext}`,
 		"HCR-HOST gen2 hcrIndirectValue -> 163",
 		"HCR-HOST gen2 hcrShapeValue -> 9",
 		"HCR-HOST gen2 hcrErrorValue -> 1",
 		"HCR-HOST gen2 hcrTickValue -> 11",
 		"HCR-HOST rolled back logic",
 		"HCR-HOST rollback hcrIndirectValue -> 37",
-		"HCR-HOST key module.dll -> logic differs",
-		"HCR-HOST rejected g3/module.logic.dll",
+		`HCR-HOST key module${ext} -> logic differs`,
+		`HCR-HOST rejected g3/module.logic${ext}`,
 	];
 	if (lines(both(called).trim()).join("\n") != want.join("\n")) {
 		console.log(both(called));
@@ -292,7 +419,19 @@ function indirect(): void {
 	}
 	console.log("ok   hcrIndirect");
 	engine();
-	windowsReload();
+	if (platform == "windows") windowsReload();
+}
+
+function truncatedImageFailure(ext: string): string {
+	return platform == "windows" ? "error 193" : `run/.hcr/*/module.logic${ext}: cannot read file data`;
+}
+
+function withoutCopyDir(line: string): string {
+	const at = line.indexOf("/.hcr/", 0);
+	if (at < 0) return line;
+	let end = at + "/.hcr/".length;
+	for (let parts = 0; parts < 2; parts += 1) end = line.indexOf("/", end) + 1;
+	return line.slice(0, at) + "/.hcr/*/" + line.slice(end, line.length);
 }
 
 function engine(): void {
@@ -308,6 +447,8 @@ function engine(): void {
 	]) {
 		need(tag, both(misuse).contains(diagnostic), `missing diagnostic: ${diagnostic}`);
 	}
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
 	const generations = [
 		["logic.ms", "lifecycle.ms", "g1"],
 		["logicBodyEdit.ms", "lifecycle.ms", "g2"],
@@ -319,17 +460,17 @@ function engine(): void {
 	for (const g of generations) {
 		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
 		copy(`${FIXTURES}/engine/${g[1]}`, `${dir}/lifecycle.ms`);
-		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[2]}/module.dll`], `HCR build of ${g[0]} + ${g[1]} failed`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[2]}/module${ext}`], `HCR build of ${g[0]} + ${g[1]} failed`);
 	}
-	mustBuild(tag, dir, ["build", "host.ms", "--output=host.exe"], "thin host build failed");
+	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of ["module.dll", "module.core.dll", "module.logic.dll", "module.lifecycle.dll", "module.dll.hcrabi"]) {
+	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module.lifecycle${ext}`, `module${ext}.hcrabi`]) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
 	}
-	const ran = execFileResult(`${dir}/host.exe`, ["run", "module"], dir);
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
-		if (line.startsWith("HCR-ENGINE ")) seen.push(line);
+		if (line.startsWith("HCR-ENGINE ")) seen.push(withoutCopyDir(line));
 	}
 	const want = [
 		"HCR-ENGINE start: value 10 tick 1 version 1",
@@ -338,8 +479,8 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE body edit: reloaded logic",
 		"HCR-ENGINE after body edit: value 73 tick 11 version 1",
-		"HCR-ENGINE truncated image: pending logic (cannot load run/module.logic.dll (error 193))",
-		"HCR-ENGINE same truncated image: pending logic (run/module.logic.dll is not a loadable image yet)",
+		`HCR-ENGINE truncated image: pending logic (cannot load run/module.logic${ext} (${truncatedImageFailure(ext)}))`,
+		`HCR-ENGINE same truncated image: pending logic (run/module.logic${ext} is not a loadable image yet)`,
 		"HCR-ENGINE lifecycle v1: before reload",
 		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE complete image: reloaded logic",
@@ -447,7 +588,7 @@ function fsWatch(): void {
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("WATCH ")) seen.push(line);
 	}
-	const want = platform == "windows" ? [
+	const want = platform == "windows" || platform == "linux" ? [
 		"WATCH missing: no such file or directory: missing",
 		"WATCH write before the first wait: true",
 		"WATCH write in a subdirectory: true",
@@ -468,5 +609,7 @@ console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 fsWatch();
 moduleAbi();
+localNames();
+watchWarm();
 coreLinkClang();
 indirect();

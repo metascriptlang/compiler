@@ -168,18 +168,18 @@ const SAN_PASSL = "-fsanitize=address" + (IS_WIN ? " -pthread" : "");
 // code, or accepts libc headers but lacks the pthread surface used by the native
 // runtime. Ask the driver the question the lane actually asks of it: compile a
 // hello world with the platform headers the runtime requires.
-function ccUsable(cc: string): boolean {
+function ccUsable(cc: string, flags: string = ""): boolean {
 	if (!cmdExists(cc)) { return false; }
 	const dir = OUT_DIR + "ccprobe/";
 	ensureDir(dir);
 	const src = dir + "probe.c";
-	const bin = dir + "probe-" + cc + (IS_WIN ? ".exe" : "");
+	const bin = dir + "probe-" + cc + (flags == "" ? "" : "-flags") + (IS_WIN ? ".exe" : "");
 	const threadHeader = IS_WIN ? "#include <pthread.h>\n" : "";
 	writeFile(src, "#include <string.h>\n#include <stdlib.h>\n" + threadHeader + "int main(void) { return (int)strlen(\"\"); }\n");
 	// A stale probe binary from an earlier run would read as success even if
 	// this driver just failed, so the artifact must not pre-exist the compile.
 	if (exists(bin)) { remove(bin); }
-	const r = runCapture(cc + " " + winPath(src) + " -o " + winPath(bin));
+	const r = runCapture(cc + (flags == "" ? "" : " " + flags) + " " + winPath(src) + " -o " + winPath(bin));
 	return r.exitCode == 0 && exists(bin);
 }
 
@@ -201,7 +201,7 @@ const DANGER_PASSC = (IS_WIN && HAS_CLANG) ? " --passC=-Wno-error=incompatible-p
 // self-link it. Prefer clang (parity with the danger lane), fall back to
 // gcc (stock Linux), and only then go driverless (managed zig), which is
 // correct on the hosts where that combination is known to work.
-const SAN_CC = HAS_CLANG ? " --cc=clang" : (ccUsable("gcc") ? " --cc=gcc" : "");
+const SAN_CC = !SAN ? "" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
 
 // The js lane runs its binary through `node`. Without node installed the cell
 // launches, fails to start, and reports a red that is about the HOST, not the
