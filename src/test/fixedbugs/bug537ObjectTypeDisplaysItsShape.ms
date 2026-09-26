@@ -21,7 +21,7 @@ test "bug537: an unannotated object literal displays its fields" {
 }
 
 test "bug537: a nullable value type displays as its payload or null" {
-	assert hasError("function pick(): string | null { return 3; }\nconsole.log(pick() ?? \"none\");\n", "expected string | null, got int32");
+	assert hasError("function pick(): string | null { return 3; }\nconsole.log(pick() ?? \"none\");\n", "Type 'int32' is not assignable to type 'string | null'");
 }
 
 test "bug537: an object field of object type displays one level deeper" {

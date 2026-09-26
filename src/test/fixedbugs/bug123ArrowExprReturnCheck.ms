@@ -28,8 +28,7 @@ main();
 `;
 	const c = compileToCWithStd(src);
 	assert !c.ok;
-	assert c.error.indexOf("Return type mismatch in '<arrow>'", 0) >= 0;
-	assert c.error.indexOf("expected string, got number", 0) >= 0;
+	assert c.error.indexOf("Type 'number' is not assignable to type 'string'", 0) >= 0;
 }
 
 test "bug123: a value-returning expr arrow into a void slot still compiles" {
