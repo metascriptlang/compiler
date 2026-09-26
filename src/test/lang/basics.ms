@@ -84,3 +84,19 @@ test "char codes" {
 	assert isAlpha("m".code);
 	assert !isAlpha("3".code);
 }
+
+class NestedRows { rows: string[][] = []; }
+
+test "pop of an array of arrays returns the inner array" {
+	const n2: int32[][] = [[1], [2, 3]];
+	const y = n2.pop();
+	assert y.length == 2;
+	assert n2.length == 1;
+	const h = new NestedRows();
+	h.rows.push(["a"]);
+	h.rows.push(["b", "c"]);
+	const r = h.rows.pop();
+	assert r.length == 2;
+	assert r[1] == "c";
+	assert h.rows.length == 1;
+}
