@@ -466,6 +466,11 @@ _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t 
     &((a).data[__idx]); \
 }))
 
+#define msArrayAccessUnchecked(a, i) ((a).p->data[(int32_t)(i)])
+#define msRefArrayAccessUnchecked msArrayAccessUnchecked
+#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int32_t)(i)])
+#define msSpanAccessUnchecked(a, i) ((a).data[(int32_t)(i)])
+
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
 /* ===== Range-Checked Integer Casts ===== */
