@@ -27,7 +27,7 @@ import { detectUnionDisc, parseDiscKey } from "../discDetect";
 // bindSym targets — the macros bind every emitted name in THIS module's scope,
 // so the user imports nothing but the entry macro. encode lives in encoder.ms
 // (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
-import { cborBool, cborText, cborTextMap, cborInt, cborFloat } from "./builder";
+import { cborBool, cborText, cborTextMap, cborInt, cborFloat, _cborEnumName } from "./builder";
 import { encode } from "./encoder";
 
 export macro cborValueOf(t: Node): Node {
@@ -41,12 +41,30 @@ export macro cborValueOf(t: Node): Node {
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
 	// Mirror of std/serialize/json/encode.ms array branch.
 	// Builtin elements → per-type fast helpers (cborArrayOfX).
-	// Non-builtin Identifier (enum / type alias) → `_cborArrayOfInts<T>` generic.
 	// TypeObject element (struct/interface) → `_cborArrayOfStructs<T>` generic.
 	if (tt.kind == NodeKind.TypeArray) {
 		const elemType: Node = tt.typExprElement;
 		let en: string = "";
 		let elemIsStruct: boolean = false;
+		if (elemType.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
+				const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: elemType.enumMembers[mi] });
+			}
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_cborArrayOfEnums" },
+				arguments: [t,
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names }],
+			};
+		}
+		if (elemType.kind == NodeKind.MemberExpr) {
+			error("cborValueOf: an array of the enum-literal type " + elemType.object.name + "." + elemType.property + " is unsupported; type the array by its enum", t);
+		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
 		} else if (elemType.kind == NodeKind.TypeObject) {
@@ -90,7 +108,6 @@ export macro cborValueOf(t: Node): Node {
 				arguments: [t],
 			};
 		}
-		// Non-builtin Identifier (enum / type alias) → generic int helper.
 		if (!isBuiltin) {
 			return {
 				kind: NodeKind.CallExpr,
@@ -238,6 +255,31 @@ export macro cborValueOf(t: Node): Node {
 
 	// Non-struct (atomic) types — emit a direct builder call on `t`.
 	if (tt.kind != NodeKind.TypeObject) {
+		if (tt.kind == NodeKind.MemberExpr) {
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: bindSym("cborText"),
+				arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: tt.property }],
+			};
+		}
+		if (tt.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < tt.enumMembers.length; mi = mi + 1) {
+				const ov: number = tt.enumValues.length == tt.enumMembers.length ? tt.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: tt.enumMembers[mi] });
+			}
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: bindSym("_cborEnumName"),
+				arguments: [
+					{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int32" },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names },
+				],
+			};
+		}
 		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
 		// Bridge emits StringLiteral/BooleanLiteral nodes for these — runtime
 		// value is just a regular string/bool, so route to cborText/cborBool.
@@ -265,18 +307,12 @@ export macro cborValueOf(t: Node): Node {
 			error("cborValueOf: unsupported field type — only atomic types, atomic arrays, and structs are supported in V1", t);
 		}
 		const tn: string = tt.name;
-		// Pick the CborValue constructor matching the atomic type. Unknown
-		// Identifier names (enums, type aliases) fall through to cborInt —
-		// enums encode as their underlying int, aliases inherit their target.
 		const builderName: string = match (tn) {
 			"string" => "cborText",
 			"boolean" => "cborBool",
 			"number" | "float32" | "float64" => "cborFloat",
 			_ => "cborInt",
 		};
-		// cborInt takes int64 — sized-int / enum / primitive-alias fields need
-		// a widening cast. cborFloat takes float64 — float32 widens via cast.
-		// cborText/cborBool/cborFloat-with-float64 accept their input directly.
 		const castType: string = match (builderName) {
 			"cborInt" => "int64",
 			"cborFloat" when (tn == "float32") => "float64",
