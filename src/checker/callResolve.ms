@@ -2928,7 +2928,9 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
 	let objT = objType;
 	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
-	return typeRelation(recvT, objT);
+	const rel = typeRelation(recvT, objT);
+	if (rel == TypeRelation.None && hasGenericParams(recvT)) return TypeRelation.Generic;
+	return rel;
 }
 
 // Resolve overloads with inheritance penalty.

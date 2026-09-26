@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, createBitSet, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -889,6 +889,13 @@ function sameTypeInner(a: Type, b: Type): boolean {
 }
 
 let _relationDepth = 0;
+function setRelation(formal: Type, actual: Type): TypeRelation {
+	if (formal.typeReturn == null || actual.typeReturn == null) return sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None;
+	const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+	if (elemRel == TypeRelation.Exact || elemRel == TypeRelation.Generic || elemRel == TypeRelation.FromLiteral) return elemRel;
+	return TypeRelation.None;
+}
+
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (_relationDepth > 20) return TypeRelation.Generic;
 	_relationDepth = _relationDepth + 1;
@@ -941,7 +948,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formal.typeNames[0] == actual.typeNames[0]) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
-			TypeKind.Set => sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
+			TypeKind.Set => setRelation(formal, actual),
 			TypeKind.SizedArray => {
 				if (formal.typeValue != actual.typeValue) return TypeRelation.None;
 				if (formal.typeReturn != null && actual.typeReturn != null) {
@@ -1870,4 +1877,13 @@ test "readonly propagation stops at the shared type graph" {
 	assert propagateReadonlyView(graph) == graph;
 	assert isReadonlyView(propagateReadonlyView(user));
 	assert isReadonlyView(createReadonlyView(graph));
+}
+
+test "two sets relate as their element types do, and below a generic match they do not" {
+	const color = createEnum("Color", ["Red", "Green"], [0, 1]);
+	const shade = createEnum("Shade", ["Dark", "Light"], [0, 1]);
+	assert typeRelation(createBitSet(color), createBitSet(color)) == TypeRelation.Exact;
+	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
+	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
+	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
 }
