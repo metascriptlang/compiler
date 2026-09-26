@@ -23,8 +23,5 @@ async function f(): Promise<int32> {
 	}
 	return acc;
 }
-function main(): void {
-	const acc = await f();
-	console.log(`try-await-lowering acc=${acc}`);
-}
-main();
+const acc = await f();
+console.log(`try-await-lowering acc=${acc}`);
