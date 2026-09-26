@@ -33,7 +33,7 @@ function flagsAreAsync(flags: string): boolean {
 }
 
 // Function-like nodes own a scope for the one-diagnostic-per-body rule.
-function isFunctionLike(node: Node): boolean {
+export function isFunctionLike(node: Node): boolean {
 	return node.kind == NodeKind.FunctionDecl
 		|| node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ArrowFunction
