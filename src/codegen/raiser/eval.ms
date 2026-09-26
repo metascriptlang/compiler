@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, createNode, NodeKind, ProgramData } from "../../ast/node";
+import { Node, Symbol, SymbolKind, createNode, NodeKind, ProgramData } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, Severity, addError, setEngineCheckMode } from "../../checker/context";
@@ -196,8 +196,9 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
-	if (!isRoutineSym(sym)) return -1;
-	const name = sym.name;
+	const isClass = sym.symbolKind == SymbolKind.Class;
+	if (!isRoutineSym(sym) && !isClass) return -1;
+	const name = isClass ? sym.name + "_new" : sym.name;
 	const seenIdx = _engine.seen.get(name);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
@@ -206,7 +207,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seeds: Symbol[] = [];
 	if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
-			if (s.name != name) seeds.push(s);
+			if (s.name != sym.name) seeds.push(s);
 		}
 	}
 	const clone = cloneNodeForCheck(sym.declNode);
