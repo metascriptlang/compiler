@@ -233,14 +233,20 @@ function readonlyViewSuffix(types: Type[]): string {
 
 // Add a type symbol to scope if not already present. Returns true if injected.
 // Prefers caller's authoritative symbol type; falls back to provided type.
-function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
-	if (lookupSymbol(ctx.table, name) != null) return;
+function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): boolean {
+	if (lookupSymbol(ctx.table, name) != null) return false;
 	const callerSym = lookupSymbol(callerCtx.table, name);
 	const symType = callerSym != null ? callerSym.symbolType : fallbackType;
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
 	sym.nameId = getIdentId(ctx.table.identCache, name);
 	addSymbolToScope(ctx.table.current, sym);
 	injected.push(sym);
+	return true;
+}
+
+function injectFieldTypeSyms(struct: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
+	if (struct.typeChildren == null) return;
+	for (const field of struct.typeChildren) injectConcreteTypeSyms(field, ctx, callerCtx, injected);
 }
 
 // Inject concrete type symbols into scope so resolveAnnotation finds them during re-check.
@@ -256,7 +262,8 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	// flow-based narrowing exactly.
 	if (t.kind == TypeKind.Ref && tr != null) {
 		if (tr.kind == TypeKind.Struct && tr.typeName != "") {
-			tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected);
+			if (tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected)) injectFieldTypeSyms(tr, ctx, callerCtx, injected);
+			return;
 		}
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
@@ -277,8 +284,15 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	// T=Color emits the function signature mangled correctly but the body's
 	// `out` declared as untyped msRefArray, breaking the assignment site at
 	// C compile time.
-	if ((t.kind == TypeKind.Struct || t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct)
-			&& t.typeName != "") {
+	if (t.kind == TypeKind.Struct) {
+		if (t.typeName == "" || tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected)) injectFieldTypeSyms(t, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind == TypeKind.EnumLiteral && tr != null) {
+		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
+		return;
+	}
+	if ((t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct) && t.typeName != "") {
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}
