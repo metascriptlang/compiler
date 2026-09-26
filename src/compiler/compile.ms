@@ -2777,6 +2777,10 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		writeOutput(dispPath, dispatcher);
 		console.log(`${green("  Wrote")} ${bold(dispPath)}`);
 		console.log(success(`Emitted ${compiled + 1} C module(s)`));
+		if (opts.genDeps) {
+			const depsDir = outDirForMode(opts.mode);
+			writeDepsFile(graph, entryPath, depsDir);
+		}
 		if (opts.showTime) printTiming("emitted", t0);
 		session.lastBuilt = true;
 		return BuildStatus.Built;
