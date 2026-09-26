@@ -99,3 +99,4 @@ import "./cases/stableLayout";
 import "./cases/compileTimeBlocks";
 import "./cases/yieldArgument";
 import "./cases/matchCaseCommas";
+import "./cases/nestedTypeArgsWritten";

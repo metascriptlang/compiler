@@ -17,7 +17,7 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
+import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -105,6 +105,17 @@ function bindsInsideUnary(op: string, operand: Node): boolean {
 	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
 }
 
+function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions): string {
+	if (node.typeArg == "") return "";
+	let raw = "";
+	if (callee != null && callee.location != null && callee.kind == NodeKind.Identifier) {
+		raw = rawGenericsAt(options.source, callee.location.line, callee.location.column, (callee.data as IdentifierData).name);
+	} else if (callee != null && callee.location != null && callee.kind == NodeKind.MemberExpr) {
+		raw = rawGenericsAt(options.source, callee.location.line, callee.location.column, "." + (callee.data as MemberExprData).property);
+	}
+	return raw != "" ? raw : "<" + node.typeArg + ">";
+}
+
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as CallExprData;
 	const args: Doc[] = [];
@@ -112,8 +123,7 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
-	const callParts: Doc[] = [printAtom(d.callee, options), docText(typeArgs + "(")];
+	const callParts: Doc[] = [printAtom(d.callee, options), docText(writtenTypeArgs(node, d.callee, options) + "(")];
 	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
@@ -407,8 +417,7 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	for (const arg of d.newArguments) {
 		args.push(callPrintNode(arg, options));
 	}
-	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
-	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(typeArgs + "(")];
+	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(writtenTypeArgs(node, d.newCallee, options) + "(")];
 	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) newParts.push(p);
 	newParts.push(docText(")"));
 	return docGroup(newParts);
