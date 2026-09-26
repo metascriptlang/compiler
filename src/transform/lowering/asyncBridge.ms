@@ -892,6 +892,7 @@ function walkBridge(node: Node): void {
 // ===== Entry Point =====
 
 export function lowerAsyncBridge(program: Node, ctx: TransformContext): Node {
+	asyncNameCounter = 0;
 	walkBridge(program);
 	return program;
 }

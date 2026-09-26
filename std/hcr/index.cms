@@ -14,18 +14,19 @@ extern function msHcrImportCount(raw: unknown): int32;
 extern function msHcrImportId(raw: unknown, index: int32): string;
 extern function msHcrImportKey(raw: unknown, index: int32): string;
 extern function msHcrFileIdentity(path: cstring): uint64;
-extern function msHcrCopyImage(from: cstring, to: cstring): uint32;
+extern function msHcrCopyImage(from: cstring, to: cstring): int32;
 extern function msHcrMakeDir(path: cstring): int32;
 extern function msHcrProcessId(): uint32;
-extern function hcrOpen(path: cstring): unknown from "msHcrWinOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrWinSymbol";
-extern function hcrClose(handle: unknown): int32 from "msHcrWinClose";
-extern function hcrLastError(): uint32 from "msHcrWinLastError";
-extern function hcrIsNull(value: unknown): int32 from "msHcrWinIsNull";
-extern function hcrNull(): unknown from "msHcrWinNull";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrWinCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
-extern function hcrCallStatus(raw: unknown): int32 from "msHcrWinCallProbe";
+extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
+extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
+extern function hcrClose(handle: unknown): int32 from "msHcrImageClose";
+extern function msHcrFailureText(): string;
+extern function msHcrImageExt(): string;
+extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
+extern function hcrNull(): unknown from "msHcrImageNull";
+extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
+extern function hcrCallStatus(raw: unknown): int32 from "msHcrImageCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 
@@ -71,10 +72,8 @@ interface HcrCandidate {
 
 struct HcrLoad {
 	image: HcrImage;
-	error: uint32;
+	failure: string;
 }
-
-const NOT_AN_HCR_IMAGE: uint32 = 0xFFFFFFFF;
 
 let started = false;
 let launchDir = "";
@@ -93,15 +92,19 @@ function result(kind: HcrReloadKind, names: string[], reason: string): HcrReload
 }
 
 function corePath(): string {
-	return `${launchDir}/${launchStem}.core.dll`;
+	return `${launchDir}/${launchStem}.core${msHcrImageExt()}`;
 }
 
 function bundlePath(): string {
-	return `${launchDir}/${launchStem}.dll.hcrabi`;
+	return `${launchDir}/${launchStem}${msHcrImageExt()}.hcrabi`;
+}
+
+function entryPath(): string {
+	return `${launchDir}/${launchStem}${msHcrImageExt()}`;
 }
 
 function imagePath(moduleId: string): string {
-	return moduleId == entryId ? `${launchDir}/${launchStem}.dll` : `${launchDir}/${launchStem}.${moduleId}.dll`;
+	return moduleId == entryId ? entryPath() : `${launchDir}/${launchStem}.${moduleId}${msHcrImageExt()}`;
 }
 
 function baseName(path: string): string {
@@ -150,23 +153,17 @@ function describe(handle: unknown): HcrImage {
 function copyLoad(source: string): HcrLoad {
 	const dir = `${copyRoot}/${generation}`;
 	const empty: HcrImage = { handle: hcrNull(), moduleId: "", key: "", importIds: [], importKeys: [], typeNames: [], typeKeys: [], state: hcrNull() };
-	if (msHcrMakeDir(dir) == 0) return { image: empty, error: hcrLastError() };
+	if (msHcrMakeDir(dir) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const copy = `${dir}/${baseName(source)}`;
-	const copyError = msHcrCopyImage(source, copy);
-	if (copyError != 0) return { image: empty, error: copyError };
+	if (msHcrCopyImage(source, copy) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const handle = hcrOpen(copy);
-	if (hcrIsNull(handle) != 0) return { image: empty, error: hcrLastError() };
+	if (hcrIsNull(handle) != 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const image = describe(handle);
 	if (image.moduleId == "") {
 		hcrClose(handle);
-		return { image: empty, error: NOT_AN_HCR_IMAGE };
+		return { image: empty, failure: `${source} is not an HCR module image` };
 	}
-	return { image, error: 0 };
-}
-
-function loadFailure(source: string, error: uint32): string {
-	if (error == NOT_AN_HCR_IMAGE) return `${source} is not an HCR module image`;
-	return `cannot load ${source} (error ${error})`;
+	return { image, failure: "" };
 }
 
 function forgetAfter(count: int32): void {
@@ -179,7 +176,7 @@ function beginDiscovery(): void {
 
 function discover(moduleId: string, source: string, order: HcrCandidate[]): string {
 	const loaded = copyLoad(source);
-	if (loaded.error != 0) return loadFailure(source, loaded.error);
+	if (loaded.failure != "") return loaded.failure;
 	const module: HcrModule = {
 		moduleId: loaded.image.moduleId,
 		source,
@@ -231,7 +228,7 @@ export function start(): int32 {
 	bundleIdentity = msHcrFileIdentity(bundlePath());
 	const order: HcrCandidate[] = [];
 	beginDiscovery();
-	const failure = discover("", `${launchDir}/${launchStem}.dll`, order);
+	const failure = discover("", entryPath(), order);
 	if (failure != "") fatal(failure);
 	started = true;
 	for (const item of order) item.module.image.state = handover(item.image, hcrNull());
@@ -306,11 +303,11 @@ export function reload(): HcrReloadResult {
 			return result(HcrReloadKind.Pending, [module.moduleId], `${module.source} is not a loadable image yet`);
 		}
 		const loaded = copyLoad(module.source);
-		if (loaded.error != 0) {
+		if (loaded.failure != "") {
 			module.failedIdentity = identity;
 			pending = true;
 			release(candidates);
-			return result(HcrReloadKind.Pending, [module.moduleId], loadFailure(module.source, loaded.error));
+			return result(HcrReloadKind.Pending, [module.moduleId], loaded.failure);
 		}
 		if (loaded.image.moduleId != module.moduleId) {
 			hcrClose(loaded.image.handle);
