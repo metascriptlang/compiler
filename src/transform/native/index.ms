@@ -18,7 +18,7 @@ import { TransformContext } from "../context";
 import { markClosureCalls } from "./closureCallMarker";
 // closureCallLower removed — Reference parity: dispatch generated at codegen time
 import { injectRangeChecks } from "./rangeCheckInject";
-import { injectIntChecks } from "./intCheckInject";
+import { injectIntChecks, lowerNumberBitwiseOperands } from "./intCheckInject";
 import { coerceOptionals } from "./optionalCoercion";
 import { lowerBuiltins } from "./builtinLower";
 import { lowerStringOps } from "./stringOpLower";
@@ -28,6 +28,7 @@ import { insertVarParamDerefs } from "./varParamDeref";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	let result = markClosureCalls(program, ctx);
+	result = lowerNumberBitwiseOperands(result, ctx);
 	result = injectRangeChecks(result, ctx);
 	result = injectIntChecks(result, ctx);
 	result = coerceOptionals(result, ctx);

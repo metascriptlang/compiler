@@ -9,12 +9,42 @@
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
 // and its result is converted back, so it wraps at its own width.
 
-import { Node, NodeKind, BinaryExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelToRepr, createPrimitive } from "../../checker/types";
-import { wrapInConv } from "../../checker/fit";
+import { wrapInConv, isBitwiseBinaryOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, runtimeRef } from "../util";
+
+export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
+	walkNode(program, (n: Node): Node => toInt32Visitor(n));
+	return program;
+}
+
+function toInt32Visitor(node: Node): Node {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (!isBitwiseBinaryOp(d.operator)) return node;
+		d.left = toInt32Operand(d.left);
+		d.right = toInt32Operand(d.right);
+	} else if (node.kind == NodeKind.UnaryExpr) {
+		const d = node.data as UnaryExprData;
+		if (d.unaryOp == "~") d.operand = toInt32Operand(d.operand);
+	}
+	return node;
+}
+
+function toInt32Operand(operand: Node): Node {
+	if (operand == null || operand.kind != NodeKind.HiddenStdConv) return operand;
+	const d = operand.data as HiddenStdConvData;
+	const dest = peelToRepr(d.convType);
+	if (dest == null || dest.kind != TypeKind.Int32 || d.convExpr == null) return operand;
+	const src = peelToRepr(d.convExpr.nodeType);
+	if (src == null || !(src.kind == TypeKind.Number || src.kind == TypeKind.Float64 || src.kind == TypeKind.Float32)) return operand;
+	const call = makeCall(runtimeRef("msToInt32", operand.location), [d.convExpr], operand.location);
+	call.nodeType = d.convType;
+	return call;
+}
 
 export function injectIntChecks(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (n: Node): Node => intCheckVisitor(n, ctx));

@@ -572,7 +572,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.BooleanLiteral => "MS_BOOL",
-		TypeKind.Char => "char",
+		TypeKind.Char => "uint8_t",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",

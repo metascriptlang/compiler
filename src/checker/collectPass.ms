@@ -347,7 +347,7 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath == "") {
 		sym.modulePath = ctx.modulePath;
-		if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		if (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Variable) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
 	}
 }
 
@@ -726,7 +726,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	// Link node → symbol for resolvePass + LSP go-to-definition
 	methodSym.location = member.location;
 	methodSym.modulePath = ctx.modulePath;
-	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, md.methodName);
+	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, mangledName);
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;

@@ -354,7 +354,8 @@ export function mangledGlobalName(sym: Symbol | null, name: string): string {
 		? `__static${sym.location.line.toString()}_${sym.location.column.toString()}`
 		: "";
 	if (sym != null && sym.modulePath != "") {
-		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + site;
+		const ordinal = sym.disamb > 0 ? `_u${sym.disamb}` : "";
+		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + ordinal + site;
 	}
 	return safeName(baseName) + site;
 }

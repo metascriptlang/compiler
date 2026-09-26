@@ -8,6 +8,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, Symbol
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
+import { mangle } from "../codegen/c/names";
 
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -1245,7 +1246,7 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 // an overload set — a static member, a routine nested in another body — still
 // gets a distinct name.
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
-	const key = modulePath + "\t" + name;
+	const key = modulePath + "\t" + mangle(name);
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;
