@@ -1,22 +1,25 @@
 // For-Of Lowering — transforms for-of loops into index-based while loops
 // Follows reference for_of_lower.zig
 //
-// Arrays/Strings:
+// Arrays/Strings (a string yields its UTF-8 bytes as char, as Nim's items does for string):
 //   for (const item of arr) { body }
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol } from "../../ast/node";
+import {
+	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol,
+	BlockStmtData, WhileStmtData, VariableDeclData, CallExprData,
+} from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	extractBodyStmts, boolToDeclKind,
+	runtimeRef, extractBodyStmts, boolToDeclKind,
 } from "../util";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====
 
@@ -104,6 +107,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const elemArrType = (iterType != null && iterType.kind == TypeKind.Ref
 			&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array)
 		? iterType.typeReturn : iterType;
+	const isString = iterType != null && iterType.kind == TypeKind.String;
 
 	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
 	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
@@ -130,8 +134,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	preamble.push(idxDecl);
 
 	// const $len = <iter>.length;  — captured once (new elements from push won't be visited)
-	const lenExpr = makeMember(cloneExpr(iterExpr, loc), "length", loc);
-	const lenDecl = makeVarDecl(lenSym.name, lenExpr, DeclKind.Const, loc);
+	const lenDecl = makeVarDecl(lenSym.name, lengthOf(iterExpr, isString, loc), DeclKind.Const, loc);
 	lenDecl.resolvedSym = lenSym;
 	preamble.push(lenDecl);
 
@@ -173,7 +176,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = <iter>[$idx];
-		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		const itemAccess = isString
+			? makeCall(runtimeRef("msStringByteAt", loc), [cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc)], loc)
+			: makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		if (bindingSym != null) {
 			itemDecl.resolvedSym = bindingSym;
@@ -182,7 +187,10 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// passes can see the monomorphized binding type. Same reason as the iterator
 		// path above — without this, generic for..of bindings degrade to `void*` in
 		// generated C and break DRC hook resolution.
-		if (elemArrType != null && elemArrType.typeReturn != null) {
+		if (isString) {
+			itemDecl.nodeType = charType();
+			itemAccess.nodeType = charType();
+		} else if (elemArrType != null && elemArrType.typeReturn != null) {
 			itemDecl.nodeType = elemArrType.typeReturn;
 			itemAccess.nodeType = elemArrType.typeReturn;
 		}
@@ -206,6 +214,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	preamble.push(whileNode);
 	return makeBlock(preamble, loc);
+}
+
+function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {
+	if (!isString) return makeMember(cloneExpr(iterExpr, loc), "length", loc);
+	const call = makeCall(runtimeRef("msStringByteLength", loc), [cloneExpr(iterExpr, loc)], loc);
+	call.nodeType = int32Type();
+	return call;
 }
 
 // Clone a simple expression node (Identifier or MemberExpr) for reuse in lowered code.
@@ -238,3 +253,23 @@ test "for-of preserves surrounding stmts" { assert stmtCountAfter("x(); for (con
 test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) == NodeKind.BlockStmt; }
 
 test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) == 3; }
+
+function loweredLoop(iterType: Type): Node {
+	const parsed = parseInput("for (const x of arr) { use(x); }");
+	if (!parsed.ok) throw new Error(parsed.error);
+	const stmt = getStmts(parsed.value)[0];
+	(stmt.data as ForOfStmtData).forOfIterable.nodeType = iterType;
+	const block = getStmts(lowerForOf(parsed.value, makeCtx()))[0];
+	const stmts = (block.data as BlockStmtData).statements;
+	return stmts[stmts.length - 1];
+}
+
+test "a string for-of binds each byte as a char" {
+	const loop = loweredLoop(stringType());
+	const item = ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements[0];
+	assert item.kind == NodeKind.VariableDecl;
+	assert item.nodeType!.kind == TypeKind.Char;
+	const read = (item.data as VariableDeclData).initializer;
+	assert read.kind == NodeKind.CallExpr;
+	assert ((read.data as CallExprData).callee.data as IdentifierData).name == "msStringByteAt";
+}
