@@ -764,7 +764,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 	if (containsYield(id.condition)) reportUnsplit(node, YIELD_IN_EXPR);
 
 	const thenStart = allocState(sc);
-	const hasElse = id.alternate.kind != NodeKind.NullLiteral && id.alternate.kind != NodeKind.BlockStmt || (id.alternate.kind == NodeKind.BlockStmt && (id.alternate.data as BlockStmtData).statements.length > 0);
+	const hasElse = id.alternate != null && (id.alternate.kind != NodeKind.NullLiteral && id.alternate.kind != NodeKind.BlockStmt || (id.alternate.kind == NodeKind.BlockStmt && (id.alternate.data as BlockStmtData).statements.length > 0));
 
 	if (hasElse && needsSplit(id.alternate, sc)) {
 		const elseStart = allocState(sc);
