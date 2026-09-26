@@ -237,5 +237,6 @@ import "./bug531CallByAddressDropsNarrowing";
 import "./bug528AliasedConditionGoesStale";
 import "./bug529MemberOnNever";
 import "./bug532SameShapeObjectTypesRelateExactly";
+import "./bug533NamedFunctionIntoClosureSlotRelated";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
