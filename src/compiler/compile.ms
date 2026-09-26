@@ -689,7 +689,8 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const analyzed = analyzeProgram(hcrResult, ctx);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-			printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+			const e = ctx.errors[ei];
+			renderModuleError(modPath, job.source, { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Error });
 		}
 		throw new Error(BUILD_STOPPED);
 	}
@@ -3002,7 +3003,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				const e = ctx.errors[ei];
+				renderModuleError(modPath, cm.source, { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Error });
 			}
 			exit(1);
 		}
