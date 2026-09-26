@@ -248,3 +248,5 @@ import "./bug231SyncAwaitOnJs";
 import "./bug241MatchBlockArmContext";
 import "./bug221ExplicitDeref";
 import "./bug222ExplicitDerefRefused";
+import "./bug223JsValueStructCopiedAtStore";
+import "./bug224JsValueStructAssignedInPlace";
