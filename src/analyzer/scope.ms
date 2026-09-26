@@ -51,20 +51,11 @@ export interface DrcScope {
 	isFunction: boolean;          // is this a function scope?
 }
 
-// ===== Outer Statement Context (for cross-scope last-read analysis) =====
-
-export class OuterEntry {
-	outerStmts: Node[];
-	fromIndex: number;
-	isFunctionBoundary: boolean;  // function boundary — stop cross-scope search
-}
-
 // ===== DRC Context =====
 
 export interface DrcContext {
 	ctx: TransformContext;
 	scopes: DrcScope[];          // scope stack
-	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
 	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
@@ -94,7 +85,6 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 	return {
 		ctx,
 		scopes: [],
-		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
 		finallyProtectedVars: [],
@@ -386,17 +376,6 @@ export function symListAdd(list: Symbol[], sym: Symbol): void {
 
 export function hasPre(dctx: DrcContext): boolean {
 	return currentScope(dctx).preStmts.length > 0;
-}
-
-// ===== Outer Statement Context Operations =====
-
-export function pushOuterStmts(dctx: DrcContext, stmts: Node[], fromIndex: number, isFunctionBoundary: boolean): void {
-	const entry: OuterEntry = { outerStmts: stmts, fromIndex, isFunctionBoundary };
-	dctx.outerCtx.push(entry);
-}
-
-export function popOuterStmts(dctx: DrcContext): void {
-	dctx.outerCtx.pop();
 }
 
 // ===== Test Helpers =====
