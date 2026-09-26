@@ -250,3 +250,7 @@ import "./bug221ExplicitDeref";
 import "./bug222ExplicitDerefRefused";
 import "./bug223JsValueStructCopiedAtStore";
 import "./bug224JsValueStructAssignedInPlace";
+import "./bug225GenericTypeParamStaticCall";
+import "./bug226EnumTypeStaticExtension";
+import "./bug226EnumNameDiagnostics";
+import "./bug227StaticExtensionSameNameAcrossModules";
