@@ -35,7 +35,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
-import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym } from "./template";
+import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
@@ -2999,7 +2999,9 @@ function checkProgramCore(
 	defineBuiltinConstants(ctx);
 	openScope(ctx.table, ScopeKind.Module);
 	drainSeedSymbols(ctx.table);
+	const outerGensym = beginGensymUnit();
 	runThreePasses(ctx, program);
+	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
 	stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);

@@ -5,7 +5,7 @@ import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compi
 import { setParserDefines } from "./parser/context";
 import { defineSymbol } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
+import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
@@ -147,7 +147,8 @@ export function main(): int32 {
 				if (cfg.valid && opts.outputPath == "" && cfg.build.outFile != "") {
 					opts.outputPath = cfg.build.outFile;
 				}
-				cmdBuildC(opts.inputFile, opts, cfg.resolve);
+				if (opts.watch) cmdWatchC(opts.inputFile, opts, cfg.resolve);
+				else cmdBuildC(opts.inputFile, opts, cfg.resolve);
 			}
 		},
 		"add" => {

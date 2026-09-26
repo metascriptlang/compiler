@@ -116,6 +116,11 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 	return copy;
 }
 
+function foldedOperand(expr: Node, depth: int32): Node {
+	if (expr != null && (expr.kind == NodeKind.NumberLiteral || expr.kind == NodeKind.BooleanLiteral)) return expr;
+	return constantLiteralOf(expr, depth);
+}
+
 function constantLiteralOf(expr: Node, depth: int32): Node {
 	const none = null as unknown as Node;
 	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return none;
@@ -138,16 +143,16 @@ function constantLiteralOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.BinaryExpr => {
 			const d = expr.data as BinaryExprData;
-			const left = constantLiteralOf(d.left, depth + 1);
+			const left = foldedOperand(d.left, depth + 1);
 			if (left == null) return none;
-			const right = constantLiteralOf(d.right, depth + 1);
+			const right = foldedOperand(d.right, depth + 1);
 			if (right == null) return none;
 			const folded = foldBinaryLiterals(d.operator, left, right, expr);
 			return folded != expr ? folded : none;
 		},
 		NodeKind.UnaryExpr => {
 			const d = expr.data as UnaryExprData;
-			const operand = constantLiteralOf(d.operand, depth + 1);
+			const operand = foldedOperand(d.operand, depth + 1);
 			if (operand == null) return none;
 			const folded = foldUnaryLiteral(d.unaryOp, operand, expr);
 			return folded != expr ? folded : none;
