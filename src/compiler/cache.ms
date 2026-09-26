@@ -14,7 +14,7 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
-import { exists, readFile, writeFile, rename, copyFile, fileSize, remove, readDir, ensureDir } from "std/fs";
+import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, remove, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
@@ -319,6 +319,30 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 		result = result + `:${path}=${hashFile(path)}`;
 	}
 	return result;
+}
+
+export function publishFirstCompile(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number): Result<string, string> {
+	const dependencies = nativeDependencyPaths(srcPath, compileCmd);
+	let settled = dependencies.length > 0;
+	// cc read these before they are hashed here: one written since the compile started may
+	// not be what cc read (ccache's include-file-too-new rule), so it keeps the first name.
+	for (const path of dependencies) {
+		const modified = modifiedTime(path);
+		if (modified < 0 || modified >= Math.floor(startedSeconds)) settled = false;
+	}
+	if (!settled) {
+		writeCompileCache(oFile, fp);
+		return Result.ok(oFile);
+	}
+	const resolvedFp = computeFingerprint(srcPath, compileCmd);
+	const resolved = stableOFileFp(srcPath, resolvedFp);
+	const tmp = `${resolved}.tmp.${performance.now()}`;
+	if (!copyFile(oFile, tmp).ok || !renameReplace(tmp, resolved)) {
+		tryRemoveFile(tmp);
+		if (!exists(resolved)) return Result.err(`failed to publish object ${resolved}`);
+	}
+	writeCompileCache(resolved, resolvedFp);
+	return Result.ok(resolved);
 }
 
 // ===== Global Content-Addressed Cache =====
