@@ -25,7 +25,7 @@ process.exit(main());
 test "bug217: a Ptr<T> receiver on a T extension is the free call's mismatch" {
 	const dot = receiverError217("console.log(ptr.get());");
 	const free = receiverError217("console.log(get(ptr));");
-	assert dot.indexOf("Argument type mismatch in 'get' arg 0: got Ptr<S217>, expected S217", 0) >= 0, dot;
+	assert dot.indexOf("Argument type mismatch in 'get' receiver: got Ptr<S217>, expected S217", 0) >= 0, dot;
 	assert free.indexOf("Argument type mismatch in 'get' arg 0: got Ptr<S217>, expected S217", 0) >= 0, free;
 }
 
@@ -36,7 +36,7 @@ test "bug217: a const receiver cannot pass a this ref receiver" {
 
 test "bug217: a temporary cannot be a this ref receiver" {
 	const error = receiverError217("mk().bump();");
-	assert error.indexOf("'bump' arg 0: out parameter requires a variable, not an expression", 0) >= 0, error;
+	assert error.indexOf("'bump' receiver: out parameter requires a variable, not an expression", 0) >= 0, error;
 }
 
 test "bug217: a value parameter cannot be a this ref receiver" {
