@@ -9,7 +9,7 @@
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
+import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1297,6 +1297,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
+	refuseHookReceiverByValue(ctx, node, paramTypes);
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1413,6 +1414,22 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
+}
+
+function hookWritesItsReceiver(name: string): boolean {
+	return name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onTrace";
+}
+
+function refuseHookReceiverByValue(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
+	const d = node.data as FunctionDeclData;
+	if (!hookWritesItsReceiver(d.fnName) || paramTypes.length == 0 || getExtReceiverType(d.fnFlags) == "") return;
+	const recv = paramTypes[0];
+	if (recv == null || isUnresolvedType(recv)) return;
+	const k = recv.kind;
+	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Var || k == TypeKind.GenericParam) return;
+	const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
+	addError(ctx, "signature for '" + d.fnName + "' must take its receiver by reference: '" + typeDisplayName(recv)
+		+ "' is a value type, so 'this' would be a copy of the destination the hook has to write", loc.line, loc.column);
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
