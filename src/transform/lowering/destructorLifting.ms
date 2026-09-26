@@ -945,6 +945,15 @@ function hookParamDeref(sym: Symbol, loc: SourceLocation): Node {
 	return makeHiddenDeref(makeIdentResolved(sym, loc), loc);
 }
 
+function userHookArg(hookSym: Symbol, index: number, param: Symbol, classType: Type | null, loc: SourceLocation): Node {
+	if (classType != null) return makeIdentResolved(param, loc);
+	const fnType = hookSym.symbolType;
+	const want = fnType != null && fnType.typeChildren != null && index < fnType.typeChildren.length
+		? fnType.typeChildren[index] : null;
+	if (want != null && want.kind == TypeKind.Var) return makeIdentResolved(param, loc);
+	return hookParamDeref(param, loc);
+}
+
 function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocation): void {
 	const lhs = makeMember(hookParamDeref(dest, loc), "_tag", loc);
 	const rhs = makeMember(hookParamDeref(src, loc), "_tag", loc);
@@ -1211,13 +1220,16 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(typeName, hook, lctx);
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
-		const u1 = makeIdentResolved(s1, loc);
-		const u2 = makeIdentResolved(s2, loc);
+		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
 		if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
 		} else {
+			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
+	} else if (hook == "sink" && hasUserDefinedHook(typeName, "destroy", lctx)) {
+		genCall(cName + "Destroy", "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
+		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
 	} else {
 		// Inheritance: ensure base class hooks exist (Implementation parity).
 		// ensureHooksByName does sym lookup + dispatch to unified ensureHooks —
