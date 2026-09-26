@@ -12,7 +12,7 @@ import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName, hashToBase36, typeKey } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -339,6 +339,11 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			}
 			return noRcInfo();
 		},
+		TypeKind.SizedArray => {
+			if (!classifyType(t.typeReturn, ctx).needsCleanup) return noRcInfo();
+			const sn = sizedArrayHookName(t);
+			return makeRcInfo(RcKind.Named, sn, sn + "Destroy", sn + "Copy", sn + "WasMoved", sn + "Sink", false);
+		},
 		TypeKind.Tuple => {
 			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
 			// name MUST be tupleTypeName — the single source codegen + hooks share — so
@@ -353,6 +358,10 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		},
 		_ => noRcInfo(),
 	};
+}
+
+export function sizedArrayHookName(t: Type): string {
+	return "msSized_" + hashToBase36(typeKey(t));
 }
 
 export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {

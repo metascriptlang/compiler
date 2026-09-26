@@ -377,8 +377,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 
 /* --- Closure lifecycle --- */
-#define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecref((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
-#define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)
+#define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecrefCyclic((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
+#define msClosureCopy(c)      do { if ((c).env != NULL) msIncrefCyclic((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureSink(d, ...) do { msClosureDestroy(d); (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)

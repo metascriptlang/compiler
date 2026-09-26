@@ -204,6 +204,7 @@ export function createSizedArray(element: Type | null, size: int32): Type {
 	t.kind = TypeKind.SizedArray;
 	t.typeReturn = element;
 	t.typeValue = size;
+	if (element != null) propagateToOwner(t, element);
 	return t;
 }
 

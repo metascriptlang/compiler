@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
+import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
@@ -35,6 +35,7 @@ import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
+import { sizedArrayHookName } from "../../analyzer/classify";
 
 // ===== Global Hook Ownership Registry =====
 // Reference parity: attachedOps[] is global — hooks generated once per canonical type.
@@ -88,6 +89,7 @@ class LiftCtx {
 	checkerCtx: CheckerContext;  // borrowed — do NOT store full TransformContext (causes double-free)
 	tempCounter: number;
 	generated: NameSet;    // fully generated types (dedup)
+	trivial: NameSet;
 	generating: NameSet;   // currently generating (cycle guard)
 	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
@@ -348,17 +350,21 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
 // Generates: var $i = 0; while ($i < arr.length) { fillBody(elem, arr[$i], ...); $i = $i + 1; }
 function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	genElementLoop(hook, elemType, null, xf, yf, lctx, buf, loc);
+}
+
+function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const counterName = "$i_" + ctr.toString();
-	buf.items.push(makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc));
+	const counterDecl = makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc);
 
 	// reference parity: set nodeType on result.
 	// Set nodeType on cloned array expressions so nativeLower can rewrite arr[i] → msXxxArrayAccess(arr, i).
 	const arrType = xf.nodeType;
 	const xClone = clonePath(xf, loc);
 	if (xClone.nodeType == null && arrType != null) { xClone.nodeType = arrType; }
-	const lenAccess = makeMember(clonePath(xf, loc), "length", loc);
+	const lenAccess = bound != null ? bound : makeMember(clonePath(xf, loc), "length", loc);
 	const cond = makeBinary(makeIdent(counterName, loc), "<", lenAccess, loc);
 
 	const xi = makeArrayAccess(xClone, makeIdent(counterName, loc), loc);
@@ -368,14 +374,16 @@ function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: Li
 	if (hook == "trace") {
 		// Reference: trace passes raw callback (y), not y[i]
 		fillBody(hook, xi, yf, "", elemType, lctx, bodyBuf, visited, loc);
-	} else if (hook == "copy") {
+	} else if (hook == "copy" || hook == "sink") {
 		const yClone = clonePath(yf, loc);
 		if (yClone.nodeType == null && yf.nodeType != null) { yClone.nodeType = yf.nodeType; }
 		const yi = makeArrayAccess(yClone, makeIdent(counterName, loc), loc);
 		fillBody(hook, xi, yi, "", elemType, lctx, bodyBuf, visited, loc);
-	} else if (hook == "destroy") {
+	} else {
 		fillBody(hook, xi, xi, "", elemType, lctx, bodyBuf, visited, loc);
 	}
+	if (bodyBuf.items.length == 0) return;
+	buf.items.push(counterDecl);
 
 	// $i = $i + 1
 	bodyBuf.items.push(makeExprStmt(makeAssign(
@@ -466,7 +474,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				loc
 			);
 			const destroyBuf = newBuf();
-			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
+			arrayOp("destroy", elem, clonePath(xf, loc), clonePath(xf, loc), lctx, destroyBuf, loc);
 			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
 			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 		},
@@ -487,21 +495,28 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, buf: NodeBuf, loc: SourceLocation): void {
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
 		"sink" => {
-			// =sink owns the old value: decref dest before taking src (guard self-assign),
-			// mirroring stringOp/arrayOp sinks. The prior raw assign leaked the old ref of
-			// every value-type Ref field on each reassignment-sink. decref is null-safe.
-			const guardCond = makeBinary(clonePath(xf, loc), "!==", clonePath(yf, loc), loc);
-			const destroyBuf = newBuf();
-			genCall(decrefFn, "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
-			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
-			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+			if (isCyclic && !atomic) {
+				const ctr = lctx.tempCounter;
+				lctx.tempCounter = ctr + 1;
+				const oldName = "$old_" + ctr.toString();
+				const oldInit = clonePath(xf, loc);
+				if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
+				buf.items.push(makeVarDecl(oldName, oldInit, DeclKind.Let, loc));
+				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+				const oldRef = makeIdent(oldName, loc);
+				oldRef.nodeType = oldInit.nodeType;
+				genCall(decrefFn, "destroy", oldRef, oldRef, buf, loc);
+			} else {
+				genCall(decrefFn, "destroy", clonePath(xf, loc), yf, buf, loc);
+				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+			}
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -590,6 +605,17 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const elem = fieldType.typeReturn;
 			if (elem != null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
 		},
+		TypeKind.SizedArray => {
+			const elem = fieldType.typeReturn;
+			if (elem != null && sizedArrayNeedsHooks(fieldType, lctx, loc)) {
+				ensureSizedArrayHooks(fieldType, lctx, loc);
+				if (hook != "trace" || isCyclicType(elem, lctx, visited)) {
+					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
+				}
+			} else {
+				defaultOp(hook, xf, yf, buf, loc);
+			}
+		},
 		TypeKind.Struct => {
 			// Anon structs from `{...}` type annotations have empty typeName (created
 			// via createStruct("", ...) in resolvePass). Codegen emits them as
@@ -621,14 +647,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
+				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
 		TypeKind.BigInt => {
 			// msBigInt is a refcounted heap value that can never form a cycle and
 			// carries no atomic count — the plain non-cyclic ref ops, matching the
 			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, fieldName, false, false, buf, loc);
+			refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
@@ -691,7 +717,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
+					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 				}
 				return;
 			}
@@ -706,6 +732,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					const unionCName = hookCName(fieldType.typeName, fieldType, lctx);
 					if (namedTypeHasHooks(unionCName, lctx)) {
 						namedObjOp(hook, unionCName, xf, yf, buf, loc);
+					} else {
+						defaultOp(hook, xf, yf, buf, loc);
 					}
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
@@ -760,7 +788,7 @@ function unionTagIs(n: Node, idx: number, loc: SourceLocation): Node {
 function tagGuardedStringCall(fnName: string, xf: Node, px: Node, py: Node, sIdx: number, buf: NodeBuf, loc: SourceLocation): void {
 	const b = newBuf();
 	genCall(fnName, "destroy", px, py, b, loc);
-	buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+	buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), null, loc));
 }
 
 function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
@@ -799,7 +827,7 @@ function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBu
 		genCall("msStringIncref", "destroy", clonePath(px, loc), py, incBuf, loc);
 		const podBuf = newBuf();
 		defaultOp("copy", clonePath(xf, loc), clonePath(yf, loc), podBuf, loc);
-		podBuf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(incBuf.items, loc), makeNull(loc), loc));
+		podBuf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(incBuf.items, loc), null, loc));
 		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock([xStr], loc), makeBlock(podBuf.items, loc), loc));
 		return;
 	}
@@ -925,6 +953,44 @@ function hasAnyUserHook(typeName: string, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(typeName, "trace", lctx);
 }
 
+function baseHookOwner(typeName: string, hook: string, lctx: LiftCtx): string {
+	let a = getBaseClass(typeName, lctx);
+	while (a != "") {
+		const own = hasUserDefinedHook(a, hook, lctx);
+		const takes = hook == "destroy" || hook == "wasMoved"
+			? own
+			: own || hasUserDefinedHook(a, "destroy", lctx);
+		if (takes) {
+			if (hook != "trace") return a;
+			const sym = lookupSymbol(lctx.checkerCtx.table, a);
+			if (sym != null && isCyclicType(unwrapRef(sym.symbolType), lctx, createNameSet())) return a;
+			return "";
+		}
+		a = getBaseClass(a, lctx);
+	}
+	return "";
+}
+
+function classFieldCount(className: string, lctx: LiftCtx): number {
+	const sym = lookupSymbol(lctx.checkerCtx.table, className);
+	if (sym == null || sym.symbolType == null) return 0;
+	return unwrapRef(sym.symbolType).typeNames.length;
+}
+
+function callBaseHook(owner: string, hook: string, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	ensureHooksByName(owner, lctx, loc, null);
+	const ownerRef = lookupSymbol(lctx.checkerCtx.table, owner).symbolType;
+	const a1 = makeHiddenSubConv(makeIdentResolved(s1, loc), ownerRef, loc);
+	const args: Node[] = [a1];
+	if (hook == "trace") {
+		args.push(makeIdentResolved(s2, loc));
+	} else if (hook == "copy" || hook == "sink") {
+		args.push(makeHiddenSubConv(makeIdentResolved(s2, loc), ownerRef, loc));
+	}
+	const name = hookCName(owner, null, lctx) + hookSuffix(hook);
+	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc), args, loc), loc));
+}
+
 // ===== Union variant arm generation (if/else chain on _tag) =====
 
 // Emit `dest._tag = src._tag` (variant discriminator copy). Used by sink and
@@ -933,6 +999,15 @@ function hasAnyUserHook(typeName: string, lctx: LiftCtx): boolean {
 // keeping the ident raw (Reference liftdestructors.nim:1340 `newDeref`).
 function hookParamDeref(sym: Symbol, loc: SourceLocation): Node {
 	return makeHiddenDeref(makeIdentResolved(sym, loc), loc);
+}
+
+function userHookArg(hookSym: Symbol, index: number, param: Symbol, classType: Type | null, loc: SourceLocation): Node {
+	if (classType != null) return makeIdentResolved(param, loc);
+	const fnType = hookSym.symbolType;
+	const want = fnType != null && fnType.typeChildren != null && index < fnType.typeChildren.length
+		? fnType.typeChildren[index] : null;
+	if (want != null && want.kind == TypeKind.Var) return makeIdentResolved(param, loc);
+	return hookParamDeref(param, loc);
 }
 
 function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocation): void {
@@ -1045,7 +1120,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				? [a1]
 				: [a1, a2];
 				const callStmt = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(helperName, attachedOpOf(hook)), null, loc), callArgs, loc), loc);
-				chain = makeIf(cond, makeBlock([callStmt], loc), chain != null ? chain : makeNull(loc), loc);
+				chain = makeIf(cond, makeBlock([callStmt], loc), chain, loc);
 			}
 		}
 		vi -= 1;
@@ -1134,7 +1209,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 		if (armBuf.items.length > 0) {
 			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain != null ? chain : makeNull(loc), loc);
+			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain, loc);
 		}
 		vi -= 1;
 	}
@@ -1201,13 +1276,16 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookSym = getUserDefinedHookSym(typeName, hook, lctx);
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
-		const u1 = makeIdentResolved(s1, loc);
-		const u2 = makeIdentResolved(s2, loc);
+		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
 		if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
 		} else {
+			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
+	} else if (hook == "sink" && hasUserDefinedHook(typeName, "destroy", lctx)) {
+		genCall(cName + "Destroy", "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
+		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
 	} else {
 		// Inheritance: ensure base class hooks exist (Implementation parity).
 		// ensureHooksByName does sym lookup + dispatch to unified ensureHooks —
@@ -1224,12 +1302,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const x1 = hookParamDeref(s1, loc);
 		const x2 = isTrace ? makeIdentResolved(s2, loc) : hookParamDeref(s2, loc);
 
-		// Phase 4: when child class has flattened parent fields (HasInheritedFields
-		// flag set in resolveClass), suppress parent hook genCall — fields are
-		// walked inline by the per-field loops below, so calling parent destroy
-		// would double-free. ensureHooksByName above is preserved (parent type
-		// still needs hooks emitted for cross-module references).
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
+		const owner = fieldsFlattened ? baseHookOwner(typeName, hook, lctx) : "";
+		const firstOwn = owner != "" ? classFieldCount(owner, lctx) : 0;
 		if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
@@ -1238,19 +1313,23 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		} else if (hook == "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
-			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
+			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
+			if (owner != "") {
+				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
 				genCall(baseCName + "Destroy", hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
-			if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
+			if (owner != "") {
+				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
 				genCall(baseCName + hookSuffix(hook), hook, x1, x2, buf, loc);
 			}
-			for (let i = 0; i < objType.typeNames.length; i += 1) {
+			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
@@ -1383,7 +1462,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
 	const cName = hookCName(typeName, objType, lctx);
-	if (nameSetContains(lctx.generated, cName)) return;
+	if (nameSetContains(lctx.generated, cName) || nameSetContains(lctx.trivial, cName)) return;
 	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
 	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
 	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
@@ -1462,8 +1541,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 				emitMinimalTypeInfo(typeName, lctx, loc);
 				claimGlobalTypeInfo(cName);
 			}
-			nameSetAdd(lctx.generated, cName);
-			if (shouldEmitHooks) claimGlobal(cName);
+			nameSetAdd(lctx.trivial, cName);
 			return;
 		}
 	}
@@ -1614,7 +1692,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 		// Generate: if (!fieldEq) return false;
 		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
 		const notEq = makeUnary("!", eqExpr, loc);
-		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
@@ -1744,6 +1822,58 @@ function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: Source
 	generateTupleHook("wasMoved", tupleName, t, lctx, loc);
 }
 
+function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
+	const elem = t.typeReturn;
+	if (elem == null) return false;
+	const probe = newBuf();
+	fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "", elem, lctx, probe, createNameSet(), loc);
+	return probe.items.length > 0;
+}
+
+function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const elem = t.typeReturn;
+	if (elem == null) return;
+	const buf = newBuf();
+	const isUnary = hook == "destroy" || hook == "wasMoved";
+	const hookParamT = createVar(t);
+	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	if (!isUnary) {
+		buf.items.push(makeIf(
+			makeBinary(makeIdentResolved(s1, loc), "===", makeIdentResolved(s2, loc), loc),
+			makeBlock([makeReturn(null as unknown as Node, loc)], loc), null, loc));
+	}
+	const x1 = hookParamDeref(s1, loc);
+	x1.nodeType = t;
+	const x2 = hookParamDeref(s2, loc);
+	x2.nodeType = t;
+	genElementLoop(hook, elem, makeNumber(t.typeValue as number, loc), x1, x2, lctx, buf, loc);
+	const suffix = hookSuffix(hook);
+	const fnNode = isUnary
+		? makeFnDecl(name + suffix, [s1], [name], makeBlock(buf.items, loc), "", "void", loc)
+		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
+	setHookParamType(fnNode, 0, createVar(t));
+	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
+	markLifecycleOp(fnNode, name + suffix, hook);
+	lctx.collector.push(fnNode);
+}
+
+function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (t == null || t.kind != TypeKind.SizedArray || t.typeReturn == null) return;
+	const name = sizedArrayHookName(t);
+	if (nameSetContains(lctx.generated, name)) return;
+	if (isGloballyOwned(name)) { nameSetAdd(lctx.generated, name); return; }
+	if (nameSetContains(lctx.generating, name)) return;
+	if (!sizedArrayNeedsHooks(t, lctx, loc)) return;
+	nameSetAdd(lctx.generating, name);
+	nameSetAdd(lctx.generated, name);
+	claimGlobal(name);
+	generateSizedArrayHook("destroy",  name, t, lctx, loc);
+	generateSizedArrayHook("copy",     name, t, lctx, loc);
+	generateSizedArrayHook("sink",     name, t, lctx, loc);
+	generateSizedArrayHook("wasMoved", name, t, lctx, loc);
+}
+
 // On-demand msTuple_<hash>Eq for a tuple compared as a struct/tuple field (fieldEqExpr).
 // Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
 function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
@@ -1775,7 +1905,7 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
-		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
@@ -1804,11 +1934,11 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		// if (a._i < b._i) return true;
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		// if (a._i > b._i) return false;
 		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
@@ -1834,10 +1964,10 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	while (i < t.typeChildren.length) {
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
@@ -2178,6 +2308,9 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 			if (node.nodeType.kind == TypeKind.Tuple) {
 				ensureTupleHooks(tupleTypeName(node.nodeType), node.nodeType, lctx, node.location);
 			}
+			if (node.nodeType.kind == TypeKind.SizedArray) {
+				ensureSizedArrayHooks(node.nodeType, lctx, node.location);
+			}
 			if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName == "") {
 				ensureAnonUnionHooks(node.nodeType, lctx, node.location);
 			}
@@ -2255,6 +2388,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		checkerCtx: ctx.checkerCtx,
 		tempCounter: ctx.tempCounter,
 		generated: createNameSet(),
+		trivial: createNameSet(),
 		generating: createNameSet(),
 		collector: [],
 		cyclicCache: createNameSet(),
