@@ -66,6 +66,7 @@ answer either question. Putting one there needs a run that shows both outcomes.
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
+env:  GATE_TIER_DIFF 1 = run only the test tiers whose emitted C or JS differs from the merge-base control (needs the select pass's ctl, else whole); 2 = compute and report only
 USAGE
 }
 
@@ -75,6 +76,40 @@ ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
   ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_LEDGER"
+}
+tier_differ() { [ "$(printf '%s' "$1" | cut -f2-4)" != "$(printf '%s' "$2" | cut -f2-4)" ]; }
+
+tier_select() {
+  local mode=$1 f sf sha key ctl t0=$SECONDS n=0 n_run=0 keep=""
+  sha=$(git merge-base "$base" HEAD) || { say "tier-select: no merge base, whole"; return 1; }
+  key=$(tree_key "$sha")
+  ctl="$OUT/ctl-$key/msc"
+  [ -x "$ctl" ] || { say "tier-select: no control compiler at $(printf '%s' "$sha" | cut -c1-8), whole"; return 1; }
+  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
+    say "tier-select: blind paths in the diff, whole"; return 1
+  fi
+  rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
+  for f in $TIERS; do
+    sf=${f//\//__}
+    ( GATE_EMIT_DIR="$OUT/tier" bash "$0" --emit-one "$ctl" "c.$sf" "$f" "$TOP/$f" >"$OUT/tier/c.$sf.sig" 2>/dev/null ) &
+  done
+  wait
+  for f in $TIERS; do
+    sf=${f//\//__}
+    ( GATE_EMIT_DIR="$OUT/tier" bash "$0" --emit-one "$CAND" "k.$sf" "$f" "$TOP/$f" >"$OUT/tier/k.$sf.sig" 2>/dev/null ) &
+  done
+  wait
+  for f in $TIERS; do
+    sf=${f//\//__}
+    n=$((n + 1))
+    if tier_differ "$(tail -1 "$OUT/tier/c.$sf.sig" 2>/dev/null)" "$(tail -1 "$OUT/tier/k.$sf.sig" 2>/dev/null)"; then
+      keep="$keep$f\n"; n_run=$((n_run + 1))
+    fi
+  done
+  printf '%b' "$keep" >"$OUT/tier/keep"
+  say "tier-select: $n_run/$n tiers differ, $(fmt_secs $((SECONDS - t0)))$( [ "$mode" -eq 1 ] && printf ' · enforcing' || printf ' · shadow' )"
+  ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
+  return 0
 }
 
 inert_range() {
@@ -334,6 +369,10 @@ CASES
   got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
   want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  if tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'b\t1\t2\t0\t9')"; then printf 'FAIL tier differ: name only\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t9\t2\t0\t9')"; then printf 'FAIL tier differ: c digest\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t9\t0\t9')"; then printf 'FAIL tier differ: js digest\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t2\t1\t9')"; then printf 'FAIL tier differ: rc\n'; bad=1; fi
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -497,12 +536,16 @@ test_one() {
   echo $? >"$part.rc"
 }
 
+
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     tests)
       jobs=$(test_jobs)
+      if [ "${GATE_TIER_DIFF:-0}" -ge 1 ] && tier_select "${GATE_TIER_DIFF:-0}" && [ "${GATE_TIER_DIFF:-0}" -eq 1 ]; then
+        jobs=$(awk -v k="$OUT/tier/keep" 'BEGIN { while ((getline l < k) > 0) w[l] = 1 } w[$1] { print }' <<<"$jobs")
+      fi
       while read -r f shard; do
         if [ "$shard" = - ]; then
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
