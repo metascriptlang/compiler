@@ -1,3 +1,5 @@
+// @ledger-slack(Box): 3
+// @ledger-slack(msRefArrayRefCell): 1
 interface Box { s: string; }
 
 let counter: int32 = 0;
@@ -25,3 +27,12 @@ console.log("calls=" + counter + " " + arr.join(","));
 const brr: string[] = ["a", "b", "c"];
 brr[nextIdx()] = "z" + counter;
 console.log("calls=" + counter + " " + brr.join(","));
+
+function inFunction(): void {
+	const local: Box[] = [{ s: "a" }, { s: "b" }, { s: "c" }];
+	let k: int32 = 0;
+	local[k++] = { s: "z" };
+	local[nextIdx() - 1] = { s: "y" };
+	console.log("k=" + k + " calls=" + counter + " " + local[0].s + local[1].s + local[2].s);
+}
+inFunction();
