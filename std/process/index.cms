@@ -35,6 +35,7 @@ extern function msProcessGetEnv(name: string): string;
 extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
 extern function msProcessPlatform(): string;
+extern function msProcessArch(): string;
 
 // =============================================================================
 // Command-line arguments
@@ -211,6 +212,10 @@ export class env {
 // Values: "windows" | "darwin" | "linux" | "other". Compare with `platform === "..."`.
 
 export const platform: string = msProcessPlatform();
+
+// The CPU this program was compiled for, in `--cpu` spelling: "amd64" | "arm64" | "i386" |
+// "arm" | "wasm32" | "riscv64" | "other".
+export const arch: string = msProcessArch();
 
 // =============================================================================
 // Executable lookup (PATH search)

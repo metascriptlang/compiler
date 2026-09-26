@@ -1045,6 +1045,29 @@ static inline msString msProcessPlatform(void) {
 #endif
 }
 
+/**
+ * Return the CPU this program was compiled for, spelled as `--cpu` spells it:
+ * "amd64", "arm64", "i386", "arm", "wasm32", "riscv64", or "other".
+ * Resolved at compile time via CPU macros — no syscall cost.
+ */
+static inline msString msProcessArch(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+	return msStringFromCStr("amd64");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	return msStringFromCStr("arm64");
+#elif defined(__i386__) || defined(_M_IX86)
+	return msStringFromCStr("i386");
+#elif defined(__arm__) || defined(_M_ARM)
+	return msStringFromCStr("arm");
+#elif defined(__wasm32__)
+	return msStringFromCStr("wasm32");
+#elif defined(__riscv) && __riscv_xlen == 64
+	return msStringFromCStr("riscv64");
+#else
+	return msStringFromCStr("other");
+#endif
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -12,6 +12,7 @@ import { isExecutable } from "../fs";
 
 extern function msProcessCwd(): string from "msProcessCwd";
 extern function msProcessPlatform(): string from "msProcessPlatform";
+extern function msProcessArch(): string from "msProcessArch";
 extern function msProcessGetEnv(name: string): string from "msProcessGetEnv";
 extern function msProcessSetEnv(name: string, value: string): number from "msProcessSetEnv";
 extern function msProcessUnsetEnv(name: string): number from "msProcessUnsetEnv";
@@ -123,6 +124,7 @@ export class env {
 }
 
 export const platform: string = msProcessPlatform();
+export const arch: string = msProcessArch();
 
 const WIN_EXE_EXTS: string[] = [".exe", ".cmd", ".bat"];
 

@@ -14,6 +14,7 @@ export extern function exit(code: number): void;
 export extern function cwd(): string;
 extern class process {
 	static extern platform: string;
+	static extern arch: string;
 }
 extern function execSync(cmd: string): string;
 extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
@@ -30,6 +31,12 @@ export { readFile, writeFile } from "../fs/index";
 // sees the same values across backends.
 const nodePlatform: string = process.platform;
 export const platform: string = nodePlatform == "win32" ? "windows" : nodePlatform;
+
+const nodeArch: string = process.arch;
+export const arch: string = nodeArch == "x64" ? "amd64"
+	: nodeArch == "ia32" ? "i386"
+	: nodeArch == "arm64" || nodeArch == "arm" || nodeArch == "riscv64" ? nodeArch
+	: "other";
 
 export function fileExists(path: string): boolean {
 	return existsSync(path);
