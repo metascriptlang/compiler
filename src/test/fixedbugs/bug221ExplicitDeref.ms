@@ -1,5 +1,5 @@
 // Symptom: `p[]` was a parse error, so a Ptr<T> account had no written deref for a `this ref` call, a copy out or a whole assignment.
-// Root cause: the postfix `[` always parsed an index; Nim parses `a[]` as a deref (parser.nim:917, semDeref at semexprs.nim:1709).
+// Root cause: the postfix `[` always parsed an index, never a deref.
 // Fix: `x[]` parses as a HiddenDeref flagged ExplicitDeref, the checker types it as the pointee of a Ptr<T> or Ref<T>, and JS writes `x[] = v` into the pointee in place (msValAssign).
 
 struct In221 { v: int32; }

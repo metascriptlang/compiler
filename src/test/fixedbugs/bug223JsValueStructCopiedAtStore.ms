@@ -1,6 +1,6 @@
 // Symptom: on JS a value struct stored through a native call kept aliasing its source: `xs.push(v); v.n = 2` read 2 back (C 1), and `fill`, `slice`, `at`, `concat`, `Map.set` and `[...xs]` shared objects the same way.
-// Root cause: native externs know no value semantics, and the JS preludes neither copied a stored argument in nor a returned element out; Nim copies at the store (jsgen.nim mAppendSeqElem `nimCopy(null, v)`).
-// Fix: a value struct passed to a `sink` parameter of a native extern is copied in, a value-struct result of a native extern is copied out, `[...xs]` copies each element, and `fill` assigns every slot like Nim's system.fill.
+// Root cause: native externs know no value semantics, and the JS preludes neither copied a stored argument in nor a returned element out.
+// Fix: a value struct passed to a `sink` parameter of a native extern is copied in, a value-struct result of a native extern is copied out, `[...xs]` copies each element, and `fill` assigns every slot on its own.
 
 struct S223 { n: int32; }
 struct In223 { v: int32; tags: Vec<int32>; }

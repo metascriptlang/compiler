@@ -1,5 +1,5 @@
 // Symptom: on JS assigning a value struct into a location that already held one rebound it to a new object, so a Ptr to that location went stale: `const p = arr[0] as Ptr<S>; arr[0] = {n: 2}; p.n` read 1 (C 2).
-// Root cause: every assignment emitted `x = copy(v)`; Nim's jsgen emits `x = nimCopy(x, y)` and nimCopy writes into the existing object (jssys.nim nimCopy).
+// Root cause: every assignment emitted `x = copy(v)`, a new object, instead of writing into the one the location already held.
 // Fix: an assignment into an element, a field or a binding writes into the object in place (msValAssign, msValStore for a location with evaluated parts); a value parameter and a for-of binding are views and still rebind to their own copy.
 
 struct S224 { n: int32; }

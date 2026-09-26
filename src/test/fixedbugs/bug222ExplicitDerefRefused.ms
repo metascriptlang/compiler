@@ -1,5 +1,5 @@
 // Symptom: `x[]` was a parse error for every operand, so no diagnostic said which operands a deref takes.
-// Root cause: no explicit deref existed; Nim's semDeref accepts only ptr and ref and reports a type mismatch otherwise (semexprs.nim:1709-1723).
+// Root cause: no explicit deref existed, so nothing refused an operand that is not a pointer or a reference.
 // Fix: the checker accepts a Ptr<T> other than Ptr<void> and a Ref<T> of a value type, and names the operand otherwise.
 import { compileToCWithStd } from "../helpers";
 

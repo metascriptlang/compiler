@@ -17,7 +17,7 @@ export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // wrong for numbers.
 export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
 export extern function sort(this arr: string[]): void from "#.sort()";
-// Nim's system.fill: one assignment per slot, so a value struct gets its own
+// One assignment per slot, so a value struct gets its own
 // copy in every slot (native fill would store one object in all of them).
 export function fill<T>(this arr: T[], value: T): void {
 	for (let i = 0; i < arr.length; i += 1) {

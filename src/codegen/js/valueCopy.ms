@@ -289,8 +289,7 @@ function storeFnName(gen: JSGenerator, t: Type): string {
 }
 
 // Assignment of a value struct into a location that already holds one writes
-// into that location's object, as Nim's jsgen emits `x = nimCopy(x, y)`
-// (jssys.nim nimCopy reuses dest): every Ptr to the location keeps seeing it,
+// into that location's object: every Ptr to the location keeps seeing it,
 // as on C. `x[] = v` writes through the pointer. A view binding rebinds (the
 // caller emits `x = copy(v)`); so does a location that cannot be named twice
 // without evaluating its parts twice, through `msValStore_` (object, key).
@@ -349,8 +348,7 @@ function arrayOf(t: Type | null): Type | null {
 }
 
 // Native code knows no value semantics. A value that crosses into it through a
-// `sink` parameter is stored there, so it is copied in (Nim's store magics copy,
-// jsgen.nim mAppendSeqElem `nimCopy(null, v)`); a value that comes back out
+// `sink` parameter is stored there, so it is copied in; a value that comes back out
 // shares the native store's object, so it is copied out — for an array result
 // of value structs, element by element.
 export function emitNativeArg(gen: JSGenerator, arg: Node, formal: Type | null): void {
