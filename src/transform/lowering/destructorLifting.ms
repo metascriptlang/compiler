@@ -488,21 +488,28 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, buf: NodeBuf, loc: SourceLocation): void {
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
 		"sink" => {
-			// =sink owns the old value: decref dest before taking src (guard self-assign),
-			// mirroring stringOp/arrayOp sinks. The prior raw assign leaked the old ref of
-			// every value-type Ref field on each reassignment-sink. decref is null-safe.
-			const guardCond = makeBinary(clonePath(xf, loc), "!==", clonePath(yf, loc), loc);
-			const destroyBuf = newBuf();
-			genCall(decrefFn, "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
-			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
-			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+			if (isCyclic && !atomic) {
+				const ctr = lctx.tempCounter;
+				lctx.tempCounter = ctr + 1;
+				const oldName = "$old_" + ctr.toString();
+				const oldInit = clonePath(xf, loc);
+				if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
+				buf.items.push(makeVarDecl(oldName, oldInit, DeclKind.Let, loc));
+				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+				const oldRef = makeIdent(oldName, loc);
+				oldRef.nodeType = oldInit.nodeType;
+				genCall(decrefFn, "destroy", oldRef, oldRef, buf, loc);
+			} else {
+				genCall(decrefFn, "destroy", clonePath(xf, loc), yf, buf, loc);
+				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+			}
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -622,14 +629,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
+				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
 		TypeKind.BigInt => {
 			// msBigInt is a refcounted heap value that can never form a cycle and
 			// carries no atomic count — the plain non-cyclic ref ops, matching the
 			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, fieldName, false, false, buf, loc);
+			refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
@@ -692,7 +699,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), buf, loc);
+					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 				}
 				return;
 			}
