@@ -807,6 +807,112 @@ function loopsHoldAll(loops: LoopEnv[], top: number, names: NameSet): boolean {
 	return true;
 }
 
+function collectIterationNames(n: Node | null, state: LiftState, names: NameSet, routines: Node[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.VariableDecl) {
+		const sym = n.resolvedSym;
+		if (isRoutineSym(state, sym)) {
+			routines.push(n);
+		} else if (sym == null || !hasFlag(sym, SymbolFlag.Global)) {
+			nameSetAdd(names, (n.data as VariableDeclData).declName);
+		}
+	}
+	if (isFuncBoundary(n)) return;
+	forEachChild(n, (c: Node): void => { collectIterationNames(c, state, names, routines); });
+}
+
+function boundaryParams(n: Node): string[] {
+	if (n.kind == NodeKind.ArrowFunction) return (n.data as ArrowFunctionData).arrowParams;
+	if (n.kind == NodeKind.FunctionExpr) return (n.data as FunctionExprData).funcExprParams;
+	if (n.kind == NodeKind.FunctionDecl) return (n.data as FunctionDeclData).params;
+	return [];
+}
+
+function collectDeclaredWithin(n: Node | null, out: NameSet): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.VariableDecl) nameSetAdd(out, (n.data as VariableDeclData).declName);
+	if (n.kind == NodeKind.TryCatchStmt && (n.data as TryCatchStmtData).catchName != "") nameSetAdd(out, (n.data as TryCatchStmtData).catchName);
+	if (isFuncBoundary(n)) {
+		for (const p of boundaryParams(n)) nameSetAdd(out, p);
+	}
+	forEachChild(n, (c: Node): void => { collectDeclaredWithin(c, out); });
+}
+
+function collectIdents(n: Node | null, out: Node[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		out.push(n);
+		return;
+	}
+	forEachChild(n, (c: Node): void => { collectIdents(c, out); });
+}
+
+function closureReads(fn: Node, routines: Node[], own: NameSet, idents: Node[]): void {
+	const units: Node[] = [fn];
+	for (let i = 0; i < units.length; i += 1) {
+		collectDeclaredWithin(units[i], own);
+		const start = idents.length;
+		collectIdents(units[i], idents);
+		for (let k = start; k < idents.length; k += 1) {
+			const sym = idents[k].resolvedSym;
+			if (sym == null) continue;
+			for (const r of routines) {
+				const init = (r.data as VariableDeclData).initializer;
+				if (r.resolvedSym != sym || init == null) continue;
+				let seen = false;
+				for (const u of units) {
+					if (u == init) seen = true;
+				}
+				if (!seen) units.push(init);
+			}
+		}
+	}
+}
+
+function heldPastIteration(id: Node, state: LiftState): boolean {
+	const name = (id.data as IdentifierData).name;
+	for (const l of state.loopEnvs) {
+		if (nameSetContains(l.names, name)) return true;
+	}
+	if (state.sharedEnvActive && envHasField(state.sharedEnvStructType, name)) return true;
+	if (chainIndexOf(state.sharedEnvChainTypes, name) >= 0) return true;
+	const info = routineInfoOf(state, id.resolvedSym);
+	return info != null && info.envStructType != null;
+}
+
+function closureReachesPast(n: Node | null, inner: NameSet, routines: Node[], state: LiftState): boolean {
+	if (n == null) return false;
+	if (!isFuncBoundary(n)) {
+		let found = false;
+		forEachChild(n, (c: Node): void => {
+			if (!found) found = closureReachesPast(c, inner, routines, state);
+		});
+		return found;
+	}
+	const own = createNameSet();
+	const idents: Node[] = [];
+	closureReads(n, routines, own, idents);
+	let inside = false;
+	let past = false;
+	for (const id of idents) {
+		const name = (id.data as IdentifierData).name;
+		if (nameSetContains(own, name)) continue;
+		if (nameSetContains(inner, name)) {
+			inside = true;
+		} else if (heldPastIteration(id, state)) {
+			past = true;
+		}
+	}
+	return inside && past;
+}
+
+function iterationReachesPast(body: Node, state: LiftState): boolean {
+	const inner = createNameSet();
+	const routines: Node[] = [];
+	collectIterationNames(body, state, inner, routines);
+	return closureReachesPast(body, inner, routines, state);
+}
+
 function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
 	if (!state.sharedEnvActive && state.sharedEnvName != "") return body;
 	const decls = iterationCaptures(body, state);
@@ -824,9 +930,15 @@ function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
 		parentSym = state.sharedEnvVarSym;
 		parentType = state.sharedEnvStructType;
 	}
-	const fields: string[] = [UP_FIELD];
-	const fieldTypes: string[] = [parentSym != null ? "" : "unknown"];
-	const resolved: Type[] = [parentSym != null ? createRef(parentType) : createPtr(voidType())];
+	if (parentSym != null && !iterationReachesPast(body, state)) parentSym = null;
+	const fields: string[] = [];
+	const fieldTypes: string[] = [];
+	const resolved: Type[] = [];
+	if (parentSym != null) {
+		fields.push(UP_FIELD);
+		fieldTypes.push("");
+		resolved.push(createRef(parentType));
+	}
 	const names = createNameSet();
 	for (const d of decls) {
 		const vd = d.data as VariableDeclData;
