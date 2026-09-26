@@ -12,7 +12,14 @@
 //             as a statement and as a value; a boolean or literal selector whose values all have
 //             an arm is exhaustive. A string or float selector keeps its statement form open.
 
-import { errorCount, hasError } from "../handoff/helpers";
+import { checkSource, errorCount, hasError } from "../handoff/helpers";
+import { parseSource } from "../../parser/statements/validation";
+import { resetAllSideChannels } from "../../parser/context";
+import { checkProgramWithRegistry } from "../../checker/checkPass";
+import { getPreludeContext } from "../../checker/orchestrator";
+import { ExportRegistry } from "../../checker/context";
+import { Module, ModuleGraph } from "../../module/graph";
+import { NodeKind, ProgramData, FunctionDeclData, BlockStmtData, ExprStmtData, MatchExprData, createNodeAt } from "../../ast/node";
 
 const NONEX544 = "Non-exhaustive match: not every";
 
@@ -42,4 +49,28 @@ test "bug544: a string or float match whose value is used must carry `_`" {
 	assert hasError("function g(x: float64): string {\n\tconst r = match (x) {\n\t\t0.5 => \"half\",\n\t\t1.0 => \"one\",\n\t};\n\treturn r;\n}\n", NONEX544 + " 'float64' value");
 	assert hasError("function show(n: int32): void {}\nfunction h(s: string): void {\n\tshow(match (s) { \"a\" => 1, \"b\" => 2 });\n}\n", NONEX544 + " 'string' value");
 	assert errorCount("function note(s: string): void {}\nfunction k(cmd: string): void {\n\tmatch (cmd) {\n\t\t\"list\" => note(\"l\"),\n\t\t\"show\" => note(\"s\"),\n\t};\n}\n") == 0;
+}
+
+function builtMatchStmtHas544(source: string, needle: string): boolean {
+	checkSource("const warm544: int32 = 0;");
+	resetAllSideChannels();
+	const pr = parseSource(source);
+	if (!pr.ok) return false;
+	const fn = (pr.value.data as ProgramData).programStmts[0];
+	const body = (fn.data as FunctionDeclData).fnBody.data as BlockStmtData;
+	for (let i = 0; i < body.statements.length; i += 1) {
+		const s = body.statements[i];
+		if (s.kind != NodeKind.ExprStmt || (s.data as ExprStmtData).expr.kind != NodeKind.MatchExpr) continue;
+		const me = (s.data as ExprStmtData).expr.data as MatchExprData;
+		body.statements[i] = createNodeAt(NodeKind.MatchStmt, { matchStmtDisc: me.matchDisc, matchStmtCases: me.matchCases }, s.location);
+	}
+	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, getPreludeContext());
+	for (const e of ctx.errors) if (e.message.indexOf(needle) >= 0) return true;
+	return false;
+}
+
+test "bug544: a match statement built as a node covers every boolean or integer value too" {
+	assert builtMatchStmtHas544("function f(b: boolean): int32 {\n\tlet r: int32 = -1;\n\tmatch (b) {\n\t\ttrue => { r = 10; },\n\t}\n\treturn r;\n}\n", NONEX544 + " 'boolean' value");
+	assert builtMatchStmtHas544("function g(n: int32): int32 {\n\tlet r: int32 = -1;\n\tmatch (n) {\n\t\t1 => { r = 10; },\n\t}\n\treturn r;\n}\n", NONEX544 + " 'int32' value");
+	assert !builtMatchStmtHas544("function h(b: boolean): int32 {\n\tlet r: int32 = -1;\n\tmatch (b) {\n\t\ttrue => { r = 10; },\n\t\tfalse => { r = 20; },\n\t}\n\treturn r;\n}\n", NONEX544);
 }
