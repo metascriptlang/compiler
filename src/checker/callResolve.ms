@@ -4087,6 +4087,7 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 
 export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MatchExprData;
+	const valueIsUsed = node != ctx.stmtPosExpr;
 	callCheckExpr(ctx, d.matchDisc, null);
 	const discType = d.matchDisc.nodeType;
 	let returnType = inferredType();
@@ -4248,7 +4249,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		checkEnumExhaustiveness(ctx, discType!, coveredMembers, node.location.line, node.location.column, discEnd);
 	}
 	if (!isExhaustive && discType.kind != TypeKind.Enum && !(narrowIsStringDU && narrowUnion != null) && !isUnresolvedType(discType)
-			&& mustCoverEveryValue(discType)) {
+			&& (valueIsUsed || mustCoverEveryValue(discType))) {
 		reportUncoveredMatch(ctx, discType, node, d.matchDisc);
 	}
 	// Tier 2: report missing string DU variants
