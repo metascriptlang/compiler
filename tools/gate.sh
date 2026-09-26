@@ -788,7 +788,7 @@ lane_body() {
 PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
-ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
+ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
 PAR=${GATE_PAR:-$(share_of_cores 10)}
@@ -838,6 +838,12 @@ for phase in "${PHASES[@]}"; do
   log="$OUT/$lane.log"
   rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
   secs=$(sed -n 's/^SECS=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1)
+  if [ "$lane" = san ] && [ "$rc" = 77 ] && grep -q '!! SAN BLOCKED' "$log"; then
+    say "gate: san $(fmt_secs "${secs:-0}") · BLOCKED on this host, $(sed -n 's/^ *!! SAN BLOCKED — //p' "$log" | head -1)"
+    blocked="$blocked san"
+    ledger san "${secs:-0}" "$rc" 0 0 0 0 "$ADMIT_WAITED"
+    continue
+  fi
   { read -r only_csv; read -r lanes_csv; } <"$OUT/$lane.scope" || { only_csv=""; lanes_csv=""; }
   reused=""
   [ "$reuse" -eq 0 ] || reused=" (reused log)"
@@ -905,6 +911,6 @@ if [ "$record" -eq 1 ]; then
   exit 0
 fi
 
-say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))"
+say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
 [ "$verdict" = GREEN ]
