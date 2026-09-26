@@ -137,6 +137,15 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	exit(1);
 }
 
+_Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
+	if (val >= -9223372036854775808.0 && val < 9223372036854775808.0 && val == (double)(int64_t)val) {
+		msRaiseRangeError((int64_t)val, lo, hi);
+	}
+	fprintf(stderr, "Error: value %.17g not in range %lld .. %lld\n",
+		val, (long long)lo, (long long)hi);
+	exit(1);
+}
+
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
 		(long long)tag, (long long)expected);

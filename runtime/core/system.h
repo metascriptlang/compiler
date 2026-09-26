@@ -520,42 +520,26 @@ static inline uint64_t msHiXorLo(uint64_t a, uint64_t b) { __uint128_t r = (__ui
    Inline condition (fast path), helper call only on error (slow path). */
 
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
+_Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 
-static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int8_t)iv;
+/* Converting a double outside the destination's range, NaN included, is
+   undefined in C (C11 6.3.1.4): the bounds are tested on the double first. */
+static inline double msCheckRangeF(double v, int64_t lo, int64_t hi) {
+	if (!(v > (double)lo - 1.0 && v < (double)hi + 1.0)) msRaiseRangeErrorF(v, lo, hi);
+	return v;
 }
 
-static inline uint8_t msCheckRangeU8(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint8_t)iv;
-}
+static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) { return (int8_t)msCheckRangeF(v, lo, hi); }
+static inline uint8_t msCheckRangeU8(double v, int64_t lo, int64_t hi) { return (uint8_t)msCheckRangeF(v, lo, hi); }
+static inline int16_t msCheckRangeI16(double v, int64_t lo, int64_t hi) { return (int16_t)msCheckRangeF(v, lo, hi); }
+static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { return (uint16_t)msCheckRangeF(v, lo, hi); }
+static inline int32_t msCheckRangeI32(double v, int64_t lo, int64_t hi) { return (int32_t)msCheckRangeF(v, lo, hi); }
+static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { return (uint32_t)msCheckRangeF(v, lo, hi); }
 
-static inline int16_t msCheckRangeI16(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int16_t)iv;
-}
-
-static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint16_t)iv;
-}
-
-static inline int32_t msCheckRangeI32(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int32_t)iv;
-}
-
-static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint32_t)iv;
+static inline int64_t msCheckRangeI64(double v) {
+	if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) msRaiseRangeErrorF(v, INT64_MIN, INT64_MAX);
+	return (int64_t)v;
 }
 
 #endif /* SYSTEM_H */
