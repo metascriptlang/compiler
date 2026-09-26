@@ -378,7 +378,8 @@ function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
 		|| sym.symbolKind == SymbolKind.Actor
 		|| sym.symbolKind == SymbolKind.TypeAlias
 		|| sym.symbolKind == SymbolKind.Interface
-		|| sym.symbolKind == SymbolKind.Struct) return true;
+		|| sym.symbolKind == SymbolKind.Struct
+		|| sym.symbolKind == SymbolKind.Enum) return true;
 	if (sym.symbolKind != SymbolKind.Function) return false;
 	if (obj.kind != NodeKind.Identifier) return false;
 	if (ctx.extensionRegistry == null) return false;
@@ -3225,22 +3226,14 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr.
 	// Skip "toString" — that's a method call, not a member access.
 	// builtinLower handles enum .toString() → EnumName_toString(value).
-	const enumTypeRef = d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Enum;
 	if (objType.kind == TypeKind.Enum && d.property != "toString"
-			&& (enumTypeRef || objType.typeNames.indexOf(d.property) >= 0)) {
+			&& objType.typeNames.indexOf(d.property) >= 0) {
 		const enumName = objType.typeName;
 		const propName = d.property;
 		// Extern C enums: member names are already full C identifiers (e.g. WGPUCullMode_Back)
 		const enumSym = objType.sym;
 		const isExternEnum = enumSym != null && hasFlag(enumSym, SymbolFlag.ImportC);
 		const mangledName = isExternEnum ? propName : enumName + "_" + propName;
-		let memberExists = false;
-		for (const m of objType.typeNames) {
-			if (m == propName) { memberExists = true; break; }
-		}
-		if (!memberExists) {
-			addError(ctx, `Property '${propName}' does not exist on type '${enumName}'. Available: ${objType.typeNames.join(", ")}`, node.location.line, node.location.column);
-		}
 		// Tier 1: narrow to EnumLiteral when the context directly expects the literal form
 		// (return type, variable annotation, etc). Union<EnumLiteral...> narrowing is deferred
 		// to Tier 2 (discriminated union narrowing at call sites). The literal type is also
@@ -3251,7 +3244,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			&& expectedType.typeName == enumName
 			&& expectedType.typeNames.length > 0
 			&& expectedType.typeNames[0] == propName;
-		const litType = (memberExists) ? createEnumLiteral(objType, propName) : objType;
+		const litType = createEnumLiteral(objType, propName);
 		const reportedType = wantsLiteral ? litType : objType;
 		// Create synthetic symbol for the enum member (no scope lookup needed).
 		// Enum member mangled names are NOT in scope — resolved here at use site.
@@ -3267,7 +3260,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		node.resolvedSym = memberSym;
 		// Always store the LITERAL type on resolvedSym so call-argument narrowing can read it
 		// even when no expectedType flowed through. (See checkCallExpr arg loop.)
-		if (memberExists) memberSym.symbolType = litType;
+		memberSym.symbolType = litType;
 		node.nodeType = reportedType;
 		return reportedType;
 	}
