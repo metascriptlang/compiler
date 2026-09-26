@@ -9,7 +9,7 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg } from "./compat";
+import { CandidateScore, TypeRelation, checkGenericSpecialization, cmpCandidates, complexDisambiguation, countRelation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -2760,9 +2760,11 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	// Build candidate list: getExtFnType for authoritative type, stripReceiverParam for scoring.
 	const candidates: Type[] = [];
 	const recvFormals: (Type | null)[] = [];
+	const recvRelations: TypeRelation[] = [];
 	let ei = 0;
 	while (ei < exts.length) {
-		let srcType = getExtFnType(exts[ei]);
+		const declType = getExtFnType(exts[ei]);
+		let srcType = declType;
 		if (hasGenericParams(srcType)) {
 			const eb = createUnifyBindings();
 			unifyType(srcType.typeChildren[0], objType, eb);
@@ -2773,9 +2775,11 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		if (!exts[ei].isStatic && srcType.typeChildren.length > 0) {
 			candidates.push(stripReceiverParam(srcType));
 			recvFormals.push(srcType.typeChildren[0]);
+			recvRelations.push(receiverRelation(declType.typeChildren[0], objType));
 		} else {
 			candidates.push(srcType);
 			recvFormals.push(null);
+			recvRelations.push(TypeRelation.None);
 		}
 		ei = ei + 1;
 	}
@@ -2787,7 +2791,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		scopeDepths.push(exts[di].scopeDepth);
 		di = di + 1;
 	}
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -2918,9 +2922,18 @@ function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContex
 	return -1;
 }
 
+function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
+	if (objType == null) return TypeRelation.None;
+	let recvT = formal;
+	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
+	let objT = objType;
+	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
+	return typeRelation(recvT, objT);
+}
+
 // Resolve overloads with inheritance penalty.
 function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[],
-	argTypes: Type[], scopeDepths: number[]): number {
+	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
 	let bestType: Type | null = null;
@@ -2930,6 +2943,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		if (candidates[i].kind != TypeKind.Function) { i = i + 1; continue; }
 		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
 		if (isNoMatch(score)) { i = i + 1; continue; }
+		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
 			score.calleeScope = scopeDepths[i];
 		}

@@ -1166,17 +1166,21 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			score.exactMatches = -1;
 			return score;
 		}
-		match (rel) {
-			TypeRelation.Exact => { score.exactMatches = score.exactMatches + 1; },
-			TypeRelation.FromLiteral => { score.intConvMatches = score.intConvMatches + 256; },
-			TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
-			TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
-			TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
-			TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
-			_ => {},
-		};
+		countRelation(score, rel);
 	}
 	return score;
+}
+
+export function countRelation(score: CandidateScore, rel: TypeRelation): void {
+	match (rel) {
+		TypeRelation.Exact => { score.exactMatches = score.exactMatches + 1; },
+		TypeRelation.FromLiteral => { score.intConvMatches = score.intConvMatches + 256; },
+		TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
+		TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
+		TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
+		TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
+		_ => {},
+	};
 }
 
 // Compare inheritance penalties. -1 = inactive (sentinel).
