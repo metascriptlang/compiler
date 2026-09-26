@@ -238,6 +238,7 @@ import "./bug459AwaitInExpression";
 import "./bug460AsyncEveryStatementKind";
 import "./bug461SuspendingSwitchBreak";
 import "./bug462AwaitReadsOperandsFirst";
+import "./bug463ClosurePerIterationBinding";
 import "./bug464StateMachineClosureShares";
 import "./bug465SpawnHandleUsedBeyondAwait";
 import "./bug212Float32ConstFold";
