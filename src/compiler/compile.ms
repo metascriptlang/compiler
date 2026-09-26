@@ -2660,10 +2660,12 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
