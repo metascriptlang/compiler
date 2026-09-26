@@ -402,8 +402,8 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			// finallyPath port: try-with-finally containing a yield splits with
 			// the finally inlined at each exit (splitTryFinally). A yield inside
 			// the finally body itself stays a loud V1 gap (it would need its own
-			// resumable states) — pushed as-is, codegen's unsupported-expression
-			// comment fails the build, unchanged behaviour. Catch-less and
+			// resumable states) — pushed as-is, codegen reports the unlowered
+			// YieldExpr and fails the build. Catch-less and
 			// finally-less tries have nothing to split on.
 			if (hasFinally && containsYield(td.finallyBody)) {
 				sc.items[currentState].stmts.push(stmt);

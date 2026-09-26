@@ -590,6 +590,12 @@ function pushUnloweredNew(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void
 	ctx.results.push("MS_NIL");
 }
 
+function pushUnloweredExpr(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void {
+	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
+	addCGenError(g, "internal: expression kind=" + node.kind.toString() + " reached codegen unlowered in " + g.modulePath + " proc " + pn, node.location.line, node.location.column);
+	ctx.results.push("MS_NIL");
+}
+
 // Comma-join top N results from the stack, then remove them.
 function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	let s = "";
@@ -1121,8 +1127,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		return;
 	}
 
-	// Fallback
-	ctx.results.push(`/* unsupported expression: kind=${kind.toString()} */`);
+	pushUnloweredExpr(g, ctx, node);
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -2251,9 +2256,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 	// NewExpr handled entirely in discover phase (inline allocation)
 
-	// Fallback
 	truncResults(ctx, cc);
-	ctx.results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
+	pushUnloweredExpr(g, ctx, node);
 }
 
 // ===== Primitive-union lowering (float32 | string payloads) =====
