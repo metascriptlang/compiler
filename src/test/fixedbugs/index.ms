@@ -239,6 +239,7 @@ import "./bug489CtorDefaultsByOwnerC";
 import "./bug491CatchBindingSymbolC";
 import "./bug493ThrownStringIsErrorJS";
 import "./bug492EnumDiscriminantFromTagC";
+import "./bug494PlatformMacrosUndefinedC";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
