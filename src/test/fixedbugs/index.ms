@@ -236,6 +236,7 @@ import "./bug490StaticIntLiteralExactC";
 import "./bug487AnonRecursiveTypeNameC";
 import "./bug488AnonTypeInfoTraceC";
 import "./bug489CtorDefaultsByOwnerC";
+import "./bug491CatchBindingSymbolC";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
