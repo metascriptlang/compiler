@@ -64,11 +64,17 @@ answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
+ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
 USAGE
 }
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'gate: %s\n' "$*" >&2; exit 2; }
+ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+ledger() {
+  [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
+  ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_LEDGER"
+}
 
 inert_range() {
   local paths
@@ -157,6 +163,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) CAND="$CAND.exe" ;;
 esac
 EMIT="$OUT/emit"
+GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
 
 reds_of() {
   local lane=$1 log=$2 rc=$3
@@ -318,6 +325,9 @@ CASES
   got=$(printf '%s p\n' ok failed stale new | control_todo "$log" "$log/keys" | cut -d' ' -f1 | paste -sd'|' -)
   rm -rf "$log"
   [ "$got" = "failed|stale|new" ] || { printf 'FAIL control reuse of emits: want "failed|stale|new", got "%s"\n' "$got"; bad=1; }
+  got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
+  want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
+  [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -439,8 +449,8 @@ admit() {
   n=$(cores)
   while :; do
     l=$(load1)
-    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && return 0
-    [ "$waited" -lt "$max" ] || { say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
+    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
+    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
     say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
     sleep 60; waited=$((waited + 60))
   done
@@ -778,7 +788,7 @@ lane_body() {
 PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
-ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
+ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
 PAR=${GATE_PAR:-$(share_of_cores 10)}
@@ -851,6 +861,7 @@ for phase in "${PHASES[@]}"; do
   totals=$(totals_of "$lane" "$log")
   [ -z "$totals" ] || line="$line · $totals case"
   say "$line"
+  red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new))" "$n_new" "$n_flaky" "$ADMIT_WAITED"
   ran="$ran $lane"
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED
@@ -890,8 +901,10 @@ if [ "$record" -eq 1 ]; then
   diff -u "$KNOWN.prev" "$KNOWN" | sed -n '3,$p'
   rm -f "$KNOWN.prev"
   say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$KNOWN") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> src/test/known-red.json"
+  ledger total $((SECONDS - start)) 0 "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
   exit 0
 fi
 
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))"
+ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
 [ "$verdict" = GREEN ]
