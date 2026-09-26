@@ -1,7 +1,7 @@
 // MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
 
 import { stopBuild } from "./io";
-import { exec, env, platform, exit } from "std/process";
+import { exec, env, platform, arch, exit } from "std/process";
 import { exists, ensureDir, remove } from "std/fs";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
@@ -44,13 +44,7 @@ export function managedZigCompiler(): string {
 }
 
 function hostArch(): string {
-	if (platform == "windows") {
-		return env.get("PROCESSOR_ARCHITECTURE") == "ARM64" ? "aarch64" : "x86_64";
-	}
-	const r = exec("uname -m");
-	const m = r.ok ? r.value : "";
-	if (m.indexOf("arm64") >= 0 || m.indexOf("aarch64") >= 0) return "aarch64";
-	return "x86_64";
+	return arch == "arm64" ? "aarch64" : "x86_64";
 }
 
 function hostOs(): string {

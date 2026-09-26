@@ -1,6 +1,6 @@
 // cparse — Target model and predefined macros
 
-import { env, exec, platform } from "std/process";
+import { arch, platform } from "std/process";
 
 // All size/align values in bytes. Covers primitive C types whose sizes vary
 // across targets. Types with fixed sizes (int32_t, etc.) aren't in this table.
@@ -72,33 +72,8 @@ export function targetFor(os: string, cpu: string): TargetInfo {
 	};
 }
 
-function hostOs(): string {
-	return platform == "darwin" ? "macos" : platform;
-}
-
-function hostCpu(): string {
-	if (platform == "windows") {
-		return env.get("PROCESSOR_ARCHITECTURE") == "ARM64" ? "aarch64" : "x86_64";
-	}
-	const r = exec("uname -m");
-	const m = r.ok ? r.value : "";
-	if (m.indexOf("arm64") >= 0 || m.indexOf("aarch64") >= 0) return "aarch64";
-	return "x86_64";
-}
-
-// Keep the no --cpu default equal to src/compiler/cc.ms crossTargetFlag: the host
-// CPU for a host build, x86_64 for a cross build.
-export function buildTarget(os: string, cpu: string): TargetInfo {
-	const o = os == "darwin" ? "macos" : os;
-	if (cpu != "") return targetFor(o, cpu);
-	if (o == "wasm" || o == "emcc") return targetFor(o, "wasm32");
-	if (o == "solana") return targetFor(o, "sbf");
-	if (o == hostOs()) return targetFor(o, hostCpu());
-	return targetFor(o, "x86_64");
-}
-
 export function hostTarget(): TargetInfo {
-	return buildTarget(hostOs(), "");
+	return targetFor(platform, arch);
 }
 
 // Predefined macro as a (name, value) pair. The preprocessor ingests these
@@ -204,20 +179,25 @@ test "darwin is an alias of macos" {
 }
 
 test "wasm and emcc are ILP32, emcc names itself" {
-	const w = buildTarget("wasm", "");
+	const w = targetFor("wasm", "wasm32");
 	assert w.cpu == "wasm32";
 	assert w.pointerSize == 4;
 	assert w.longSize == 4;
 	assert !hasMacro(w, "__EMSCRIPTEN__");
-	assert hasMacro(buildTarget("emcc", ""), "__EMSCRIPTEN__");
+	assert hasMacro(targetFor("emcc", "wasm32"), "__EMSCRIPTEN__");
 }
 
-test "a cross build without --cpu gets x86_64, --cpu wins" {
-	const cross = buildTarget(platform == "windows" ? "linux" : "windows", "");
-	assert cross.cpu == "x86_64";
-	assert buildTarget("linux", "arm64").cpu == "aarch64";
-	assert buildTarget("bare", "i386").longDoubleSize == 12;
-	assert buildTarget("solana", "").cpu == "sbf";
+test "cpu spellings of --cpu and of clang name one target" {
+	assert targetFor("linux", "amd64").cpu == "x86_64";
+	assert targetFor("linux", "arm64").cpu == "aarch64";
+	assert targetFor("bare", "i386").longDoubleSize == 12;
+	assert targetFor("solana", "sbf").pointerSize == 8;
+}
+
+test "the host target is the compiler's own os and cpu" {
+	const t = hostTarget();
+	assert t != null;
+	assert t.os == (platform == "darwin" ? "macos" : platform);
 }
 
 test "a cpu with no model is null" {

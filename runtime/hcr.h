@@ -51,6 +51,9 @@ static inline uint64_t msHcrImageAddress(void* value) { return (uint64_t)(uintpt
 static inline void* msHcrImageCallHandover(void* raw, void* state) { return ((void* (*)(void*))raw)(state); }
 static inline void msHcrImageCallInit(void* raw) { ((void (*)(void))raw)(); }
 static inline int32_t msHcrImageCallProbe(void* raw) { return ((int32_t (*)(void))raw)(); }
+static inline void msHcrImageCallLaunch(void* raw, const char* dir, const char* stem) {
+	((void (*)(const char*, const char*))raw)(dir, stem);
+}
 
 typedef struct MsHcrHandle {
 	void* const* current;

@@ -29,6 +29,8 @@ extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
 extern function hcrCallStatus(raw: unknown): int32 from "msHcrImageCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
+extern function msDrainUntilIdle(): void;
+extern function msReportOrphanFailures(): int32;
 
 export enum HcrReloadKind {
 	NoChange,
@@ -234,7 +236,8 @@ export function start(): int32 {
 	for (const item of order) item.module.image.state = handover(item.image, hcrNull());
 	for (const item of order) hcrCallInit(required(item.image, "DatInit000"));
 	for (const item of order) hcrCallInit(required(item.image, "Init000"));
-	return 0;
+	msDrainUntilIdle();
+	return msReportOrphanFailures() != 0 ? 1 : 0;
 }
 
 function release(candidates: HcrCandidate[]): void {

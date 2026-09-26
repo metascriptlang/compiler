@@ -21,14 +21,15 @@ import {
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig, Backend } from "./resolver";
 import { lex } from "../lexer/lexer";
-import { createState } from "../parser/context";
+import { createState, getParserDefines, setParserDefines } from "../parser/context";
+import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
-import { TargetInfo, buildTarget, hostTarget } from "./cparse/target";
+import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
@@ -166,23 +167,11 @@ function headerCacheEngage(source: string, modulePath: string, provider: SourceP
 	return _hcKeyFn(source, modulePath, compactReplacement, t != null ? `${t.os}-${t.cpu}` : "");
 }
 
-let _headerOs = "";
-let _headerCpu = "";
-let _headerTarget: TargetInfo = null as unknown as TargetInfo;
-let _headerTargetResolved = false;
-
-export function setHeaderTarget(os: string, cpu: string): void {
-	_headerOs = os;
-	_headerCpu = cpu;
-	_headerTargetResolved = false;
-}
-
 export function headerTarget(): TargetInfo {
-	if (!_headerTargetResolved) {
-		_headerTarget = _headerOs == "" ? hostTarget() : buildTarget(_headerOs, _headerCpu);
-		_headerTargetResolved = true;
-	}
-	return _headerTarget;
+	const defs = getParserDefines();
+	const os = definedValue(defs, "os");
+	const cpu = definedValue(defs, "cpu");
+	return os != "" && cpu != "" ? targetFor(os, cpu) : hostTarget();
 }
 
 export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
@@ -335,7 +324,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		if (target == null) {
 			if (outErrors != null) {
 				const noTargetLine = countLinesBefore(result, importIdx) - insertedLines;
-				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${_headerOs} --cpu=${_headerCpu}`, noTargetLine, 1, ErrorSeverity.Error));
+				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, noTargetLine, 1, ErrorSeverity.Error));
 			}
 			searchPos = importIdx + 7;
 			continue;
@@ -825,16 +814,19 @@ function inlinePlatHeaderFor(os: string, cpu: string, errs: ModuleError[]): stri
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/tmp/mstarget/plat.h", "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n"));
 	const src = "import { platWin, platApple, platOther } from " + "\"./plat.h\";\n";
-	setHeaderTarget(os, cpu);
+	const saved = getParserDefines();
+	const defs = createDefineTable();
+	initDefines(defs, "c", os, cpu, "drc", 0);
+	setParserDefines(defs);
 	try {
 		return inlineHeaderImports(src, "/tmp/mstarget/main.ms", createMapProvider(entries), false, errs);
 	} finally {
-		setHeaderTarget("", "");
+		setParserDefines(saved);
 	}
 }
 
 test "inlineHeaderImports takes the _WIN32 branch for a windows build" {
-	const inlined = inlinePlatHeaderFor("windows", "", []);
+	const inlined = inlinePlatHeaderFor("windows", "amd64", []);
 	assert inlined.indexOf("extern function platWin") >= 0;
 	assert inlined.indexOf("extern function platApple") < 0;
 	assert inlined.indexOf("extern function platOther") < 0;
@@ -848,7 +840,7 @@ test "inlineHeaderImports takes neither the apple nor the windows branch for a l
 }
 
 test "inlineHeaderImports takes the __APPLE__ branch for a macos build" {
-	const inlined = inlinePlatHeaderFor("macos", "", []);
+	const inlined = inlinePlatHeaderFor("macos", "arm64", []);
 	assert inlined.indexOf("extern function platApple") >= 0;
 	assert inlined.indexOf("extern function platOther") < 0;
 }
