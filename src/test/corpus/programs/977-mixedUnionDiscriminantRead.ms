@@ -37,15 +37,17 @@ function label(e: BA): string {
 function run(): void {
 	const a: Av = { kind: K.A, x: 1, name: "3" };
 	const b: Bv = { kind: K.B, y: 2, name: "n" };
-	console.log(nameBA(a), nameBA(b), nameAB(a), nameAB(b));
-	console.log(nameInline(a), nameInline(b));
-	console.log(num(a), num(b));
+	const parts: string[] = [];
+	parts.push(`${nameBA(a)} ${nameBA(b)} ${nameAB(a)} ${nameAB(b)}`);
+	parts.push(`${nameInline(a)} ${nameInline(b)}`);
+	parts.push(`${num(a)} ${num(b)}`);
 	const p: Pt = { kind: "pt", x: 4 };
 	const n: Nd = { kind: "nd", name: "q" };
-	console.log(shapeTag(p), shapeTag(n), shapeInline(p), shapeInline(n));
+	parts.push(`${shapeTag(p)} ${shapeTag(n)} ${shapeInline(p)} ${shapeInline(n)}`);
 	const ok: Res = { ok: true, v: 5 } as Ok;
 	const er: Res = { ok: false, msg: "bad" } as Er;
-	console.log(isOk(ok), isOk(er));
-	console.log(label(a), label(b));
+	parts.push(`${isOk(ok)} ${isOk(er)}`);
+	parts.push(`${label(a)} ${label(b)}`);
+	console.log(parts.join("|"));
 }
 run();
