@@ -6,7 +6,7 @@
 // in genAsgn/genObjConstr. Vec and T[] are both plain JS arrays at runtime, so
 // a generic structural clone cannot exist — the walker must be per-type.
 
-import { Node, NodeKind, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
 import {
 	BinaryExprData, ConditionalExprData, TypeAssertionData,
 } from "../../ast/node";
@@ -15,12 +15,16 @@ import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 let ownerGen: JSGenerator | null = null;
 let copyKeys: string[] = [];
 let copyNames: string[] = [];
+let assignKeys: string[] = [];
+let assignNames: string[] = [];
 
 function registryFor(gen: JSGenerator): void {
 	if (ownerGen != gen) {
 		ownerGen = gen;
 		copyKeys = [];
 		copyNames = [];
+		assignKeys = [];
+		assignNames = [];
 	}
 }
 
@@ -189,4 +193,70 @@ export function valueCopyFnName(gen: JSGenerator, t: Type | null): string {
 	const repr = jsValueRepr(t);
 	if (!needsValueCopy(repr)) return "";
 	return copyFnName(gen, repr as Type);
+}
+
+// Assignment into a location that already holds a value copies in place:
+// every other pointer to that location keeps seeing it, as on C.
+function assignFnName(gen: JSGenerator, t: Type): string {
+	registryFor(gen);
+	const key = typeKey(t);
+	let i = 0;
+	while (i < assignKeys.length) {
+		if (assignKeys[i] == key) return assignNames[i];
+		i += 1;
+	}
+	const name = "msValAssign_" + identFromKey(key);
+	assignKeys.push(key);
+	assignNames.push(name);
+	gen.staticSlots.push(buildAssignFn(gen, t, name));
+	return name;
+}
+
+function assignExpr(gen: JSGenerator, t: Type | null, dst: string, src: string): string {
+	t = jsValueRepr(t);
+	if (!needsValueCopy(t)) return src;
+	return assignFnName(gen, t as Type) + "(" + dst + ", " + src + ")";
+}
+
+function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
+	const copy = copyFnName(gen, t);
+	let body = "";
+	if (t.kind == TypeKind.Struct) {
+		let i = 0;
+		while (i < t.typeNames.length) {
+			const f = t.typeNames[i];
+			const ft = i < t.typeChildren.length ? t.typeChildren[i] : null;
+			body = body + "d." + f + " = " + assignExpr(gen, ft, "d." + f, "v." + f) + "; ";
+			i += 1;
+		}
+	} else if (t.kind == TypeKind.Tuple) {
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			const at = "[" + i.toString() + "]";
+			body = body + "d" + at + " = " + assignExpr(gen, t.typeChildren[i], "d" + at, "v" + at) + "; ";
+			i += 1;
+		}
+	} else {
+		body = "if (d.length !== v.length) return " + copy + "(v); "
+			+ "if (ArrayBuffer.isView(d)) { d.set(v); return d; } "
+			+ "for (let i = 0; i < v.length; i++) d[i] = " + assignExpr(gen, t.typeReturn, "d[i]", "v[i]") + "; ";
+	}
+	return "function " + name + "(d, v) { if (v === null || v === undefined) return v; "
+		+ "if (d === null || d === undefined) return " + copy + "(v); " + body + "return d; }\n";
+}
+
+// Emits `x[] = v` — a whole-pointee assignment through a Ptr<T> or Ref<T> —
+// or returns false for any other left side (the caller emits a plain
+// assignment). Other places keep rebinding until JS value semantics copy at
+// every store (NIM-REF CG-40).
+export function emitValueAssign(gen: JSGenerator, left: Node, right: Node): boolean {
+	if (left.kind != NodeKind.HiddenDeref || !left.flags.has(NodeFlag.ExplicitDeref)) return false;
+	const t = jsValueRepr(left.nodeType);
+	if (!needsValueCopy(t)) return false;
+	emit(gen, assignFnName(gen, t as Type) + "(");
+	emitNode(gen, left);
+	emit(gen, ", ");
+	emitNode(gen, right);
+	emit(gen, ")");
+	return true;
 }

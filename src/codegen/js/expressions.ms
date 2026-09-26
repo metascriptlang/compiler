@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
-import { emitCopyOnRead } from "./valueCopy";
+import { emitCopyOnRead, emitValueAssign } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -279,9 +279,11 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as BinaryExprData;
 	// Assignment doesn't need outer parens
 	if (d.operator == "=") {
-		emitNode(gen, d.left);
-		emit(gen, " = ");
-		emitCopyOnRead(gen, d.right);
+		if (!emitValueAssign(gen, d.left, d.right)) {
+			emitNode(gen, d.left);
+			emit(gen, " = ");
+			emitCopyOnRead(gen, d.right);
+		}
 	} else if (d.operator == "+=" || d.operator == "-=" || d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
 		emitNode(gen, d.left);
 		emit(gen, " ");
