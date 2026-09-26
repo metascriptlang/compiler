@@ -15,8 +15,9 @@
 @compile("vendor/miniz/miniz_tdef.c");
 @compile("vendor/miniz/miniz_zip.c");
 
+@include("runtime/compress/zip.h");
+
 import { CompressError, CompressErrorKind, compressError } from "./errors";
-import { msZipReaderCtx } from "runtime/compress/zip.h";
 // Re-export for callers — keep in sync with inflate.cms / deflate.cms
 export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
 

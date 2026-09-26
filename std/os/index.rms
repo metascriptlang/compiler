@@ -1,0 +1,10 @@
+// std/os — Raiser tier: what derives from the std/process bridges (Tier 2).
+// hostname, cpus, memory, uptime and release read host state and have no bridge.
+
+import { env, platform } from "../process";
+
+export function homeDir(): string {
+	return env.get(platform == "windows" ? "USERPROFILE" : "HOME");
+}
+
+export const EOL: string = "\n";

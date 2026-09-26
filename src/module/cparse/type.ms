@@ -7,7 +7,7 @@
 // - Helpers: isInteger, isFlonum, isNumeric, copyType
 // - Struct layout: computeStructLayout, computeUnionLayout
 
-import { TargetInfo, targetLinuxX86_64, targetMacosAarch64, targetWindowsX64, targetWasm32 } from "./target";
+import { TargetInfo, targetFor } from "./target";
 
 export enum CTypeKind {
 	Void,
@@ -320,7 +320,7 @@ export function makeMember(name: string, type: CType): CMember {
 // ===== Tests =====
 
 test "int type is target-sized on linux x86_64" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const intT = makeInt(target);
 	assert intT.size == 4;
 	assert intT.align == 4;
@@ -328,21 +328,21 @@ test "int type is target-sized on linux x86_64" {
 }
 
 test "pointer inherits target pointer size on wasm32" {
-	const target = targetWasm32();
+	const target = targetFor("wasm", "wasm32");
 	const ptrT = makePointer(target, makeVoid());
 	assert ptrT.size == 4;
 	assert ptrT.align == 4;
 }
 
 test "long differs between linux and windows" {
-	const linux = targetLinuxX86_64();
-	const win = targetWindowsX64();
+	const linux = targetFor("linux", "x86_64");
+	const win = targetFor("windows", "x86_64");
 	assert makeLong(linux).size == 8;
 	assert makeLong(win).size == 4;
 }
 
 test "array size = element * count" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const arr = makeArray(makeInt(target), 10);
 	assert arr.size == 40;
 	assert arr.align == 4;
@@ -350,47 +350,47 @@ test "array size = element * count" {
 }
 
 test "array incomplete has size -1" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const arr = makeArray(makeInt(target), -1);
 	assert arr.size == -1;
 	assert arr.arrayLen == -1;
 }
 
 test "func type size is 1" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const fn = makeFunc(makeInt(target));
 	assert fn.size == 1;
 	assert fn.returnType.kind == CTypeKind.Int;
 }
 
 test "enum uses int size" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const e = makeEnum(target);
 	assert e.size == 4;
 	assert e.isSigned == true;
 }
 
 test "isInteger covers enum" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	assert isInteger(makeEnum(target)) == true;
 	assert isInteger(makeFloat(target)) == false;
 }
 
 test "isFlonum" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	assert isFlonum(makeDouble(target)) == true;
 	assert isFlonum(makeInt(target)) == false;
 }
 
 test "isNumeric covers both" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	assert isNumeric(makeInt(target)) == true;
 	assert isNumeric(makeFloat(target)) == true;
 	assert isNumeric(makePointer(target, makeVoid())) == false;
 }
 
 test "copyType sets origin" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const original = makeInt(target);
 	const copy = copyType(original);
 	assert copy.kind == CTypeKind.Int;
@@ -398,7 +398,7 @@ test "copyType sets origin" {
 }
 
 test "struct layout with padding" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	// struct { char a; int b; } — expect 4 bytes padding after a
 	const st = makeStruct();
 	st.members = [
@@ -414,7 +414,7 @@ test "struct layout with padding" {
 }
 
 test "struct layout packed" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const st = makeStruct();
 	st.isPacked = true;
 	st.members = [
@@ -429,7 +429,7 @@ test "struct layout packed" {
 }
 
 test "union layout" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const un = makeUnion();
 	un.members = [
 		makeMember("i", makeInt(target)),
@@ -443,7 +443,7 @@ test "union layout" {
 }
 
 test "struct with flexible array member" {
-	const target = targetLinuxX86_64();
+	const target = targetFor("linux", "x86_64");
 	const st = makeStruct();
 	st.members = [
 		makeMember("len", makeInt(target)),
@@ -457,7 +457,7 @@ test "struct with flexible array member" {
 }
 
 test "long double differs by target" {
-	assert makeLongDouble(targetLinuxX86_64()).size == 16;
-	assert makeLongDouble(targetMacosAarch64()).size == 8;
-	assert makeLongDouble(targetWindowsX64()).size == 8;
+	assert makeLongDouble(targetFor("linux", "x86_64")).size == 16;
+	assert makeLongDouble(targetFor("macos", "aarch64")).size == 8;
+	assert makeLongDouble(targetFor("windows", "x86_64")).size == 16;
 }
