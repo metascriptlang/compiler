@@ -366,12 +366,6 @@ msString msStringArrayPop(msStringArray* arr) {
 	return arr->p->data[arr->len];
 }
 
-msString msStringArrayAt(msStringArray* arr, int64_t idx) {
-	int64_t i = idx < 0 ? arr->len + idx : idx;
-	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
-	return arr->p->data[i];
-}
-
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
 	if (arr->p == NULL) return -1;
 	for (int64_t i = 0; i < arr->len; i++) {

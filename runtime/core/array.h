@@ -137,7 +137,6 @@ void msStringArrayDestroy(msStringArray* arr);
 void msStringArrayPush(msStringArray* arr, msString value);
 msString msStringArrayPop(msStringArray* arr);
 msString msStringArrayShift(msStringArray* arr);
-msString msStringArrayAt(msStringArray* arr, int64_t idx);
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value);
 bool msStringArrayIncludes(msStringArray* arr, msString value);
 msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end);
@@ -219,12 +218,11 @@ msString msAsString(msUint8Array* arr);
 	(arr_ptr)->len++; \
 } while(0)
 
-/* Access element at index with negative index support. Returns value. */
-#define msGenericArrayAt(arr_ptr, idx) ({ \
+#define msGenericArrayCheckedIndex(arr_ptr, idx) ({ \
 	int64_t _gx = (idx); \
 	int64_t _gi = _gx < 0 ? (arr_ptr)->len + _gx : _gx; \
 	if ((uint64_t)_gi >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_gx, (arr_ptr)->len); \
-	(arr_ptr)->p->data[_gi]; \
+	_gi; \
 })
 
 /* Pop last element. Returns the value. */

@@ -122,9 +122,6 @@ export extern function pop(this arr: string[]): string from "&msStringArrayPop";
  */
 export extern function shift(this arr: string[]): string from "&msStringArrayShift";
 
-/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
-export extern function at(this arr: string[], idx: number): string from "&msStringArrayAt";
-
 /**
  * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
  * @param value The value to locate in the array.
@@ -199,8 +196,13 @@ export extern function push<T>(this arr: T[], sink value: T): void from "&msGene
  */
 export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 
-/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
-export extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
+extern function checkedIndex<T>(this arr: T[], idx: number): int64 from "&msGenericArrayCheckedIndex";
+
+/** Returns a copy of the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
+export function at<T>(this arr: T[], idx: number): T {
+	const element = arr[arr.checkedIndex(idx)];
+	return element;
+}
 
 extern function growLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
