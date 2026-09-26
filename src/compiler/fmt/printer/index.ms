@@ -19,7 +19,7 @@ import {
 } from "./literals";
 import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr, printCallExpr,
-	printMemberExpr, printArrayAccess, printObjectLiteral, printArrayLiteral,
+	printMemberExpr, printArrayAccess, printDerefExpr, printObjectLiteral, printArrayLiteral,
 	printArrowFunction, printConditionalExpr, printSpreadExpr, printNewExpr,
 	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
 	printOutExpr, printSizeofExpr, printArrayPattern, printObjectPattern,
@@ -97,6 +97,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.CallExpr => printCallExpr(node, options),
 		NodeKind.MemberExpr => printMemberExpr(node, options),
 		NodeKind.ArrayAccess => printArrayAccess(node, options),
+		NodeKind.HiddenDeref => printDerefExpr(node, options),
 		NodeKind.ObjectLiteral => printObjectLiteral(node, options),
 		NodeKind.ArrayLiteral => printArrayLiteral(node, options),
 		NodeKind.ArrowFunction => printArrowFunction(node, options),

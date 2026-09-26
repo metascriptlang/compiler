@@ -3,7 +3,7 @@
 import {
 	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
-	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
+	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
@@ -195,6 +195,12 @@ export function printUpdateExpr(node: Node, options: FormatOptions): Doc {
 		return docGroup([docText(d.updateOp), callPrintNode(d.updateArg, options)]);
 	}
 	return docGroup([callPrintNode(d.updateArg, options), docText(d.updateOp)]);
+}
+
+export function printDerefExpr(node: Node, options: FormatOptions): Doc {
+	const d = node.data as HiddenDerefData;
+	if (!node.flags.has(NodeFlag.ExplicitDeref)) return callPrintNode(d.expr, options);
+	return docGroup([printAtom(d.expr, options), docText("[]")]);
 }
 
 export function printArrayAccess(node: Node, options: FormatOptions): Doc {
