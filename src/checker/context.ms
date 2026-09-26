@@ -1143,6 +1143,7 @@ export class CheckerContext {
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	liftedLocalTypeDecls: Node[];
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
+	instantiatingCtx: CheckerContext;
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
 	interfNames: HashMap<Symbol, string>;
@@ -1221,6 +1222,7 @@ export function createContext(): CheckerContext {
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
+		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
 		interfNames: new HashMap<Symbol, string>(),

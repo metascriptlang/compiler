@@ -558,7 +558,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
-	const existing = lookupSymbol(ctx.table, mangledName);
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const existing = lookupSymbol(host.table, mangledName);
 	if (existing != null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		_igfHits = _igfHits + 1;
@@ -603,9 +604,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
 	instSym.declNode = cloned;
-	let rootScope = ctx.table.current;
+	let rootScope = host.table.current;
 	while (rootScope.parent != null) rootScope = rootScope.parent;
-	instSym.nameId = getIdentId(ctx.table.identCache, mangledName);
+	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	addSymbolToScope(rootScope, instSym);
 	cloned.resolvedSym = instSym;
 
@@ -614,9 +615,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
 	if (cd.fnBody != null) {
 		const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
-		// Register instance in body-check scope so recursive lookups find it
-		instSym.nameId = getIdentId(bodyCtx.table.identCache, mangledName);
-		addSymbolToScope(bodyCtx.table.current, instSym);
+		const savedHost = bodyCtx.instantiatingCtx;
+		bodyCtx.instantiatingCtx = host;
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
 		// Reference parity (instantiateGenericParamList): inject concrete type
@@ -667,6 +667,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
 		}
 		bodyCtx.modulePath = savedModulePath;
+		bodyCtx.instantiatingCtx = savedHost;
 		// Clean up injected symbols to avoid polluting prelude scope
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		truncateCallerExtensions(bodyCtx, extPreCount);
@@ -787,6 +788,8 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
 	if (clonedBody != null) {
 		const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+		const savedHost = bodyCtx.instantiatingCtx;
+		bodyCtx.instantiatingCtx = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
@@ -809,6 +812,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		rewindTemplateGensym(outerGensym);
 		bodyCtx.modulePath = savedModulePath;
+		bodyCtx.instantiatingCtx = savedHost;
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
