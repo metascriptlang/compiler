@@ -250,3 +250,4 @@ import "./bug542FallingOffNonVoidFunction";
 import "./bug530ReadBeforeAssignNoDefault";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
+import "./bug548NullableIntoNonNullSlot";
