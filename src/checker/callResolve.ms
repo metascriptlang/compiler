@@ -661,10 +661,16 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			}
 		}
 	}
+	const ctorRestIdx = hasCtor && ctorFormalTypes != null && ctorFormalTypes.length > 0
+		&& ctorFormalTypes[ctorFormalTypes.length - 1].kind == TypeKind.Varargs ? ctorFormalTypes.length - 1 : -1;
 	let ai = 0;
 	while (ai < d.newArguments.length) {
 		let argExpected: Type | null = null;
-		if (hasCtor && ctorFormalTypes != null && ai < ctorFormalTypes.length) {
+		if (ctorRestIdx >= 0 && ai >= ctorRestIdx) {
+			const restArr = unwrapRef(unwrapVarargs(ctorFormalTypes![ctorRestIdx]));
+			const restElem = getElementType(restArr);
+			argExpected = restElem.kind == TypeKind.Inferred || d.newArguments[ai].kind == NodeKind.SpreadExpr ? restArr : restElem;
+		} else if (hasCtor && ctorFormalTypes != null && ai < ctorFormalTypes.length) {
 			argExpected = ctorFormalTypes[ai];
 		} else if (!hasCtor && innerType != null && innerType.typeChildren != null && ai < innerType.typeChildren.length) {
 			argExpected = innerType.typeChildren[ai];

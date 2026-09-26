@@ -257,3 +257,4 @@ import "./bug546StrictFlagsReachTheCheck";
 import "./bug547MixedUnionDiscriminant";
 import "./bug548NullableIntoNonNullSlot";
 import "./bug549GenericConstraintAtCall";
+import "./bug550ConstructorRestArgs";
