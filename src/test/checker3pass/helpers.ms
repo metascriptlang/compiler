@@ -15,7 +15,7 @@
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { resetAllSideChannels } from "../../parser/context";
+import { resetBuildState } from "../../compiler/buildSession";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { CheckerContext, Severity } from "../../checker/context";
@@ -33,7 +33,7 @@ export interface CheckResult {
 // Stops after Pass 3. No monomorphize, no transform, no codegen — keeps
 // the post-check AST intact so scenarios can inspect nodeType directly.
 export function checkOnly(source: string): CheckResult {
-	resetAllSideChannels();
+	resetBuildState();
 	const modPath = canonicalModulePath("test/checker3pass.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);

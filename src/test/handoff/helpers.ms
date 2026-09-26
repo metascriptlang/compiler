@@ -5,8 +5,7 @@
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { checkProgramWithRegistry } from "../../checker/checkPass";
-import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
+import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, Severity, ExportRegistry } from "../../checker/context";
 import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
@@ -14,33 +13,26 @@ import { transformProgram } from "../../transform/index";
 import { transformForNative } from "../../transform/native/index";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
-import { createMapProvider, loadModuleGraph } from "../../module/loader";
 import { Module, ModuleGraph } from "../../module/graph";
-import { resetAllSideChannels } from "../../parser/context";
+import { resetBuildState } from "../../compiler/buildSession";
 
 export function checkSource(source: string): CheckerContext {
-	resetAllSideChannels();
+	resetBuildState();
+	const prelude = preludeContextFor("", ".cms");
 	// Single-source check: one pass with null graph/mod so top-level symbols land
 	// in the returned ctx.table. The graph two-pass path registers them in the
 	// export registry instead, leaving ctx.table empty for introspection.
-	if (getPreludeContext() == null) {
-		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
-		checkModuleGraph(g, "");
-	}
 	const pr = parseSource(source);
 	if (!pr.ok) return null as unknown as CheckerContext;
-	return checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, getPreludeContext());
+	return checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
 }
 
 export function fullPipeline(source: string): Node {
-	resetAllSideChannels();
-	if (getPreludeContext() == null) {
-		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
-		checkModuleGraph(g, "");
-	}
+	resetBuildState();
+	const prelude = preludeContextFor("", ".cms");
 	const pr = parseSource(source);
 	if (!pr.ok) return null as unknown as Node;
-	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, getPreludeContext());
+	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
 	const monoed = monomorphizeProgram(pr.value, ctx);
 	validateTypedAST(ctx, monoed);
 	const transformed = transformProgram(monoed, ctx, false);

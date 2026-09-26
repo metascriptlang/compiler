@@ -6,7 +6,7 @@
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { resetAllSideChannels } from "../parser/context";
+import { resetBuildState } from "../compiler/buildSession";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
@@ -17,8 +17,7 @@ import { expandMacros } from "../compiler/meta/expand";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
-import { createTransformContextWithChecker, createNameSet } from "../transform/context";
-import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
+import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
@@ -52,13 +51,8 @@ function collectErrors(errors: CheckerError[], prefix: string): string {
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
 function setTarget(ctx: CheckerContext, target: TargetInfo): void { ctx.targetInfo = target; }
 
-function beginCompilation(): void {
-	resetAllSideChannels();
-	setGlobalHookOwners(createNameSet());
-}
-
 export function compileToC(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
-	beginCompilation();
+	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
 	const modPath = canonicalModulePath("test/e2e.ms");
@@ -107,7 +101,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 // repo root), so sources may `import { Node } from "std/meta"` etc. The plain
 // compileToC keeps stdPath empty — std imports resolve only via prelude there.
 export function compileToCWithStd(source: string): CompileResult {
-	beginCompilation();
+	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -153,7 +147,7 @@ export function compileToCWithStd(source: string): CompileResult {
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
 export function compileToJS(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
-	beginCompilation();
+	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -182,7 +176,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 }
 
 export function compileTestBuildToJS(source: string): CompileResult {
-	beginCompilation();
+	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -215,7 +209,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 // Compile project to C — same pipeline as compile.ms:
 // checkModuleGraph (2-phase) → computeAliveSet (global DCE) → per-module codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
-	beginCompilation();
+	resetBuildState();
 	// Map-provider keys must be canonical: loadModule canonicalizes every path and
 	// relative imports resolve to absolute, so a raw key like "src/doc.ms" never
 	// matches the "/abs/.../src/doc.ms" lookup and the module silently fails to load
@@ -320,7 +314,7 @@ function isEntryPath(entries: MapEntry[], modPath: string): boolean {
 // runs post-mono in BOTH loops so macro-emitted callees (e.g. bindSym targets)
 // reach the alive set.
 export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string): string[] {
-	beginCompilation();
+	resetBuildState();
 	const canonEntries: MapEntry[] = [];
 	for (const e of entries) {
 		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
@@ -348,7 +342,7 @@ export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string):
 }
 
 export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string): string {
-	beginCompilation();
+	resetBuildState();
 	const canonEntries: MapEntry[] = [];
 	for (const e of entries) {
 		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
@@ -441,7 +435,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 
 // Compile project to JS
 export function compileProjectToJS(entries: MapEntry[], entryPath: string): string {
-	beginCompilation();
+	resetBuildState();
 	// Canonicalize map keys so relative imports resolve — see compileProjectToC.
 	const canonEntries: MapEntry[] = [];
 	for (const e of entries) {
@@ -535,7 +529,7 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 // JS twin of compileProjectToCWithStd: std resolves from disk, only the
 // map-provided entry modules are emitted.
 export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string): string {
-	beginCompilation();
+	resetBuildState();
 	const canonEntries: MapEntry[] = [];
 	for (const e of entries) {
 		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
