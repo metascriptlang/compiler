@@ -820,7 +820,50 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	for (const member of classData.classBody) {
 		if (member.kind == NodeKind.ConstructorDecl) { ctorNode = member; }
 	}
-	if (ctorNode == null) return;
+	const loc = ctorNode != null && ctorNode.location != null ? ctorNode.location : (classDeclNode.location != null ? classDeclNode.location : makeLoc(0, 0));
+	const structBase = unwrapClassStruct(classSym);
+	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
+	const concreteClassType = createRef(substStruct);
+	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, ctorFnName, concreteClassType, ctx, loc));
+	// Set classNode.nodeType to the concrete (instantiated) class type so the
+	// methodToFunction transform can pull the right receiver type when lifting
+	// the ctor — without it, `this` falls back to `void*` in the generated
+	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
+	// check at the C level.
+	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
+	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
+	classNode.nodeType = concreteClassType;
+	classNode.resolvedSym = classSym;
+	addPendingInstance(classNode);
+	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
+}
+
+function unwrapClassStruct(classSym: Symbol): Type {
+	const t = classSym.symbolType;
+	return t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+}
+
+// Mono receiver: Ref<Struct{substituted fields}> named `mangledClass`. genClassDecl
+// reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
+// Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
+function instanceStruct(structBase: Type, mangledClass: string, names: string[], types: Type[]): Type {
+	let substStruct: Type = structBase;
+	for (let si = 0; si < names.length; si += 1) {
+		if (si < types.length) substStruct = substituteType(substStruct, names[si].trim(), types[si]);
+	}
+	if (substStruct == structBase) {
+		const newNames: string[] = [];
+		for (const n of substStruct.typeNames) newNames.push(n);
+		const newChildren: Type[] = [];
+		for (const c of substStruct.typeChildren) newChildren.push(c);
+		return createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
+	}
+	substStruct.typeName = mangledClass;
+	return substStruct;
+}
+
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], types: Type[], ctorFnName: string, concreteClassType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -831,11 +874,11 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const fnParamTypes: string[] = [];
 	for (const p of ctorData.ctorParams) { fnParams.push(p); }
 	for (const pt of ctorData.ctorParamTypes) { fnParamTypes.push(pt); }
-	substituteTypeStrings(fnParamTypes, dedup.names, dedup.types);
+	substituteTypeStrings(fnParamTypes, names, types);
 
 	// Substitute type vars in body
 	if (clonedBody != null) {
-		replaceTypeVars(clonedBody, dedup.names, dedup.types);
+		replaceTypeVars(clonedBody, names, types);
 	}
 
 	// Clone constructor defaults (for default-fill at call sites)
@@ -846,9 +889,6 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		}
 	}
 
-	// We emit a ClassDecl with just the constructor; methodToFunction lifts it into a
-	// top-level `<Class>_init` FunctionDecl, and NewExpr inlines alloc + `_init` call.
-	const loc = ctorNode.location != null ? ctorNode.location : makeLoc(0, 0);
 	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
 
@@ -859,26 +899,6 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		resolvedParamTypes.push(pt);
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
-
-	// Mono receiver: Ref<Struct{substituted fields}> named `mangledClass`. genClassDecl
-	// reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
-	// Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
-	let structBase: Type = classSym.symbolType;
-	if (structBase.kind == TypeKind.Ref && structBase.typeReturn != null) structBase = structBase.typeReturn;
-	let substStruct: Type = structBase;
-	for (let si = 0; si < dedup.names.length; si += 1) {
-		if (si < dedup.types.length) substStruct = substituteType(substStruct, dedup.names[si].trim(), dedup.types[si]);
-	}
-	if (substStruct == structBase) {
-		const newNames: string[] = [];
-		for (const n of substStruct.typeNames) newNames.push(n);
-		const newChildren: Type[] = [];
-		for (const c of substStruct.typeChildren) newChildren.push(c);
-		substStruct = createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
-	} else {
-		substStruct.typeName = mangledClass;
-	}
-	const concreteClassType = createRef(substStruct);
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols
@@ -894,7 +914,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		bindFunctionFlow(clonedBody, clonedBody);
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
 		const injectedSyms: Symbol[] = [];
-		for (const ct of dedup.types) {
+		for (const ct of types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
 		}
 		const extPreCount = injectCallerExtensions(bodyCtx, ctx);
@@ -917,22 +937,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Store constructor type + defaults for cross-module default-fill lookup.
 	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
 	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType!, fnDefaults);
-
-	// Emit ClassDecl with the field initializers and the constructor (struct already emitted by
-	// monoEmitTypeInstNodes); ctorLower merges the initializers into the constructor body.
-	// Set classNode.nodeType to the concrete (instantiated) class type so the
-	// methodToFunction transform can pull the right receiver type when lifting
-	// the ctor — without it, `this` falls back to `void*` in the generated
-	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
-	// check at the C level.
-	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	classBody.push(ctorDeclNode);
-	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
-	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
-	classNode.nodeType = concreteClassType;
-	classNode.resolvedSym = classSym;
-	addPendingInstance(classNode);
-	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
+	return ctorDeclNode;
 }
 
 // Register callback at module load time
