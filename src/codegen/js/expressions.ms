@@ -17,6 +17,7 @@ import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverl
 import { emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
 
@@ -222,7 +223,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 		return sym.modulePath != gen.currentModulePath ? recordNeededImport(gen, sym.modulePath, emitted) : emitted;
 	}
 	if (sym.symbolKind == SymbolKind.Function) {
-		if (moduleExportsName(gen, effPath, baseName)) {
+		if (moduleExportsName(gen, effPath, baseName) && !isStaticExtensionSym(sym)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads != null && sym.overloads.length > 0);
 			// The declaring side compiles alone, so a set spanning modules
 			// never shows in its symbol state — both sides read the collision
