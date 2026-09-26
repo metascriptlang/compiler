@@ -8,7 +8,8 @@
 //             is either an inline struct or a pointer, so no such prefix exists.
 // Fix:        the discriminant is read from the wrapper's `_tag`, the one discriminator outside
 //             the slots, mapped to the literal its variant pins; a narrowed read goes through the
-//             narrowed slot, and a write that reaches codegen is an internal error.
+//             narrowed slot; the checker refuses a write to the discriminant, and one that still
+//             reaches codegen is an internal error.
 
 import { compileToC } from "../helpers";
 
@@ -62,7 +63,7 @@ test "bug486: three variants read the tag once" {
 	assert !body.contains("v0.kind");
 }
 
-test "bug486: a write to an un-narrowed discriminant is refused by codegen" {
+test "bug486: a write to an un-narrowed discriminant is refused" {
 	const c = cOf(MIXED + "export function w(m: Pt | Nd): void { m.kind = \"pt\"; }\n");
-	assert c.contains("internal: write to the discriminant 'kind'");
+	assert c.contains("cannot assign to 'kind': it is the discriminant of 'Pt | Nd'");
 }
