@@ -1085,10 +1085,12 @@ export function literalTagDiscriminant(unionType: Type | null): string {
 	if (unionType == null || unionType.typeChildren == null) return "";
 	if (isDiscriminatedUnion(unionType)) {
 		const dt = unionType.typeExtra;
-		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(unionType) : "";
+		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String || dt.kind == TypeKind.Enum) ? getDiscriminantName(unionType) : "";
 	}
 	const strDisc = findSharedStringDiscriminant(unionType);
-	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(unionType);
+	if (strDisc != "") return strDisc;
+	const boolDisc = findSharedBooleanDiscriminant(unionType);
+	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(unionType);
 }
 
 export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: string): boolean {
