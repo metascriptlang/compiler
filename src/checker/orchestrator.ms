@@ -3,7 +3,7 @@
 
 import { platform } from "std/process";
 import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
-import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports } from "./context";
+import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
@@ -215,7 +215,9 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			};
 			mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
 		}
-		for (const e of collectExports(ctx, path)) mod.exportNames.push(e.name);
+		for (const e of collectExports(ctx, path)) {
+			if (!isStaticExtensionSym(e.sym)) mod.exportNames.push(e.name);
+		}
 	}
 	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {

@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, Progra
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, stampOwner, stampItem, addRuntimeConverter } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, stampOwner, stampItem, addRuntimeConverter, isStaticExtensionSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -954,8 +954,10 @@ export function importSymFromRegistry(
 		defineOrError(ctx, hole, defNode);
 		return hole;
 	}
-	const r = defineSymbolAs(ctx.table, alias, sym);
-	if (!r.ok) addError(ctx, r.error, nameLoc.line, nameLoc.column);
+	if (!isStaticExtensionSym(sym)) {
+		const r = defineSymbolAs(ctx.table, alias, sym);
+		if (!r.ok) addError(ctx, r.error, nameLoc.line, nameLoc.column);
+	}
 	noteImported(ctx, sym);
 	if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, sym.symbolType, sym.symbolKind, alias, "", false);

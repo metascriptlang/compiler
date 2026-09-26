@@ -250,7 +250,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 			const extSym = ext.sym;
 			if (extSym == null || !isExportedBy(ctx, extSym)) continue;
 			const name = exportedNameOf(ctx, extSym);
-			if (!emitted.has(name)) {
+			if (!emitted.has(name) || isStaticExtensionSym(extSym)) {
 				exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx, name));
 				emitted.add(name);
 			}
@@ -913,6 +913,11 @@ export function methodCarriesMonoBody(symType: Type): boolean {
 
 export function isStaticExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "sext:") != "";
+}
+
+export function isStaticExtensionSym(sym: Symbol): boolean {
+	const decl = sym.declNode;
+	return decl != null && decl.kind == NodeKind.FunctionDecl && isStaticExtensionFlag((decl.data as FunctionDeclData).fnFlags);
 }
 
 export function getExtReceiverName(flags: string): string {
