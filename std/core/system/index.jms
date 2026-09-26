@@ -49,6 +49,12 @@ function msFieldError(head: string, actual: number): never {
 	unreachable;
 }
 
+@compilerFunc
+function msCharToString(c: char): string {
+	@emit(`return ${c} < 128 ? String.fromCharCode(${c}) : "\\uFFFD";`);
+	unreachable;
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
