@@ -1,5 +1,6 @@
 // @stdout: 11 20 1|getBox 2|f 1.5 3|mk 1
 // @xfail(raiser): the Raiser VM truncates a float64 `x++` to an integer (0.5++ gives 1)
+// @ledger-slack(Box): 1
 let calls: int32 = 0;
 function next(): int32 {
 	calls = calls + 1;
