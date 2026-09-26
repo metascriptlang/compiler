@@ -23,6 +23,77 @@ function anyHasGenericParams(types: Type[]): boolean {
 	return false;
 }
 
+interface ForwardNullable {
+	target: Type;
+	members: Type[];
+}
+
+interface ForwardOwner {
+	owner: Type;
+	member: Type;
+}
+
+const _forwardNullables: ForwardNullable[] = [];
+const _forwardOwners: ForwardOwner[] = [];
+
+function isUnresolvedAlias(t: Type | null): boolean {
+	if (t == null || t.kind != TypeKind.Inferred || t.sym == null) return false;
+	return t.sym.symbolKind == SymbolKind.TypeAlias;
+}
+
+function isForwardAlias(t: Type | null): boolean {
+	if (!isUnresolvedAlias(t) || t == null || t.sym == null) return false;
+	return t.sym.state == SymbolState.Shaping;
+}
+
+function isDeferredNullable(t: Type): boolean {
+	for (const entry of _forwardNullables) {
+		if (entry.target == t) return true;
+	}
+	return false;
+}
+
+function deferNullableUnion(members: Type[]): Type {
+	const target = createUnion(members);
+	_forwardNullables.push({ target: target, members: members });
+	return target;
+}
+
+function recordForwardFields(owner: Type, fieldTypes: Type[]): void {
+	for (const t of fieldTypes) {
+		if (isForwardAlias(t) || isDeferredNullable(t)) _forwardOwners.push({ owner: owner, member: t });
+	}
+}
+
+function settleForwardTypes(): void {
+	let i = 0;
+	while (i < _forwardNullables.length) {
+		const entry = _forwardNullables[i];
+		let waiting = false;
+		let failed = false;
+		for (const m of entry.members) {
+			if (isForwardAlias(m)) waiting = true;
+			else if (isUnresolvedAlias(m)) failed = true;
+		}
+		if (waiting) {
+			i = i + 1;
+			continue;
+		}
+		if (!failed) assignType(entry.target, nullableUnionOf(entry.members));
+		_forwardNullables.splice(i, 1);
+	}
+	let j = 0;
+	while (j < _forwardOwners.length) {
+		const entry = _forwardOwners[j];
+		if (isForwardAlias(entry.member) || isDeferredNullable(entry.member)) {
+			j = j + 1;
+			continue;
+		}
+		propagateToOwner(entry.owner, entry.member);
+		_forwardOwners.splice(j, 1);
+	}
+}
+
 // stripRestParamPrefix — in-place strip of the legacy "..." prefix from the
 // last entry of an AST param-name array. Mirrors what createFunction does for
 // Function.typeNames so downstream consumers (codegen, scope binding, LSP) see
@@ -418,6 +489,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			}
 		}
 		if (members.length > 0 && isNullableShape(members) && !anyHasGenericParams(members)) {
+			for (const m of members) {
+				if (isForwardAlias(m)) return deferNullableUnion(members);
+			}
 			return nullableUnionOf(members);
 		}
 		if (members.length > 0) return createUnion(members);
@@ -507,7 +581,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 			}
 		}
-		return createRef(createStruct("", names, types, true));
+		const objectType = createStruct("", names, types, true);
+		recordForwardFields(objectType, types);
+		return createRef(objectType);
 	}
 
 	// Tuple type: [T, U, ...] — bracket at start AND end, distinct from `T[]` array suffix.
@@ -1651,6 +1727,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 			assignType(sym.symbolType, resolved);
 			node.nodeType = sym.symbolType;
 		}
+		settleForwardTypes();
 		return;
 	}
 
@@ -1733,6 +1810,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		assignType(sym.symbolType, resolved);
 		node.nodeType = sym.symbolType;
 	}
+	settleForwardTypes();
 }
 
 // Resolve discriminated union: type X = match (disc: EnumType) { EnumVal => { fields }, ... }

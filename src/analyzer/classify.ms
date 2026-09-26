@@ -89,6 +89,13 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		const n = arrayCTypeName(t);
 		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 	}
+	if (elem.kind == TypeKind.Tuple) {
+		if (!classifyType(elem, ctx).needsCleanup) {
+			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+		}
+		const n = arrayCTypeName(t);
+		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
 	// kind (Struct/Union/GenericInstance). GenericInstance whose base

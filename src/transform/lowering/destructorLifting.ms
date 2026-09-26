@@ -2158,10 +2158,16 @@ function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellTraces.push({ name: refArrayCellName(arrT), elemType: elem });
 }
 
-function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
+function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet, anonSeen: Type[]): void {
 	if (t == null) return;
 	if (t.typeName != "" && nameSetContains(visited, t.typeName)) return;
 	if (t.typeName != "") nameSetAdd(visited, t.typeName);
+	if (t.typeName == "" && t.kind == TypeKind.Struct) {
+		for (const seen of anonSeen) {
+			if (seen == t) return;
+		}
+		anonSeen.push(t);
+	}
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
 	}
@@ -2182,11 +2188,11 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 	}
 	if (t.typeChildren != null) {
 		for (const child of t.typeChildren) {
-			scanTypeForArrays(child, lctx, visited);
+			scanTypeForArrays(child, lctx, visited, anonSeen);
 		}
 	}
 	if (t.typeReturn != null) {
-		scanTypeForArrays(t.typeReturn, lctx, visited);
+		scanTypeForArrays(t.typeReturn, lctx, visited, anonSeen);
 	}
 }
 
@@ -2194,7 +2200,7 @@ function scanRootForArrays(root: Type, lctx: LiftCtx): void {
 	const epoch = instantiatedBodyCount();
 	const seen = lctx.arrayRootEpochs.get(root);
 	if (seen != null && seen == epoch) return;
-	scanTypeForArrays(root, lctx, createNameSet());
+	scanTypeForArrays(root, lctx, createNameSet(), []);
 	if (instantiatedBodyCount() == epoch) lctx.arrayRootEpochs.set(root, epoch);
 }
 
@@ -2348,7 +2354,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				|| (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
 					&& node.nodeType.typeReturn.kind == TypeKind.Array)) {
 				const arrVisited: NameSet = createNameSet();
-				scanTypeForArrays(node.nodeType, lctx, arrVisited);
+				scanTypeForArrays(node.nodeType, lctx, arrVisited, []);
 			}
 			// A bare tuple local (reassigned or dropped) needs the same named hooks, but
 			// fillBody only emits them for tuples that appear as a struct field — pre-register
