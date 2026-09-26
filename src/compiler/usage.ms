@@ -60,6 +60,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
 	console.log("  " + cyan("-f") + ", " + cyan("--force") + "           Force full rebuild");
 	console.log("  " + cyan("--tests-in-dir") + "        test: only the tests of modules under the entry's directory");
+	console.log("  " + cyan("--tests-shard") + "=<i>/<n>  test: only every n-th tested module, starting at i");
 	console.log("");
 	console.log(yellow("EXAMPLES:"));
 	console.log("  msc build hello.ms                      " + dim("# Build single file to C"));

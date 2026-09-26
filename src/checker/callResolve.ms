@@ -9,7 +9,7 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip } from "./compat";
+import { CandidateScore, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -1381,6 +1381,21 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	return getReturnType(calleeType!);
 }
 
+function hasAddress(node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Temp);
+	}
+	let base: Node | null = null;
+	if (node.kind == NodeKind.MemberExpr) base = (node.data as MemberExprData).object;
+	else if (node.kind == NodeKind.ArrayAccess) base = (node.data as ArrayAccessData).array;
+	if (base == null) return node.kind == NodeKind.HiddenDeref;
+	const baseType = base.nodeType;
+	const heapBase = baseType != null && (baseType.kind == TypeKind.Ref || baseType.kind == TypeKind.Ptr
+		|| baseType.kind == TypeKind.Array || baseType.kind == TypeKind.Span);
+	return heapBase || hasAddress(base);
+}
+
 // Resolve generic return type using explicit type arg (e.g. parse<Person>)
 function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], isActorMethodCall: boolean): void {
 	relateArgs(ctx, node, calleeType, (node.data as CallExprData).arguments, argTypes, isActorMethodCall);
@@ -1518,10 +1533,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			}
 			const formalAwaitsBinding = pi < args.length && args[pi] != null
 				&& hasGenericParams(paramType);
+			let addressAtC = false;
 			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
-				if (promotesToNullablePtr(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
+				if (takesAddressAtCArg(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
-						+ " — a struct value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
+						+ " — a value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
 						node.location.line, node.location.column);
 				} else if (needsStdConv(argTypes[pi], paramType)) {
 					// float/number → integer: the fractional part would be cut
@@ -1533,6 +1549,13 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						addError(ctx, "implicit " + typeDisplayName(argTypes[pi]) + " → " + typeDisplayName(paramType)
 							+ " narrowing in '" + calleeName + "' " + argLabel(pi, hasReceiver)
 							+ " drops the fractional part — write an explicit 'as " + typeDisplayName(paramType) + "'",
+							node.location.line, node.location.column);
+					}
+				} else if (takesAddressAtCArg(argTypes[pi], paramType)) {
+					addressAtC = hasAddress(args[pi]);
+					if (!addressAtC) {
+						addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": expression has no address — the C parameter " + typeDisplayName(paramType)
+							+ " takes the address of a variable, a field or an element; store the " + typeDisplayName(argTypes[pi]) + " in a variable first",
 							node.location.line, node.location.column);
 					}
 				} else {
@@ -1566,7 +1589,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 				}
 			}
-			if (needsStdConv(argTypes[pi], paramType)) {
+			if (needsStdConv(argTypes[pi], paramType) || addressAtC) {
 				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 				const convTok = createToken(TokenKind.Ident, "", args[pi].location.line);
 				const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: args[pi], convType: paramType }, convTok);

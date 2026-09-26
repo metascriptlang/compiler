@@ -1,5 +1,4 @@
 // @xfail(raiser): raiser runtime error: attempt to access a nil address
-// @xfail(esm): tree emit: prelude container class binding never imported into the referencing module
 // Parity program — a `BitSet<E>` as a hash-map key. C hashes it by value through
 // the set's own hash; JS uses the native Map over the same word.
 //

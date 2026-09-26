@@ -542,6 +542,15 @@ export function promotesToNullablePtr(source: Type | null, target: Type | null):
 	return ptr != null && ptr.kind == TypeKind.Ptr && ptr.typeReturn != null && isAssignable(source, ptr.typeReturn);
 }
 
+export function takesAddressAtCArg(source: Type | null, target: Type | null): boolean {
+	if (promotesToNullablePtr(source, target)) return true;
+	if (source == null || target == null || target.kind != TypeKind.Union) return false;
+	const ptr = nonNullMemberOfNullable(target);
+	if (ptr == null || ptr.kind != TypeKind.Ptr || ptr.typeReturn == null) return false;
+	const isCValue = isNumeric(source) || source.kind == TypeKind.Boolean || source.kind == TypeKind.Enum || source.kind == TypeKind.Struct;
+	return isCValue && (ptr.typeReturn.kind == TypeKind.Void || sameType(source, ptr.typeReturn));
+}
+
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
