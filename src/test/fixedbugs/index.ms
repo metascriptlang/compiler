@@ -226,6 +226,7 @@ import "./bug209NullablePtrPromotionExternOnly";
 import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug330ArrayFieldCycleTraced";
+import "./bug331NamedPodUnionFieldTrivial";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
