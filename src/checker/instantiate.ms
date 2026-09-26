@@ -7,7 +7,7 @@
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
-import { resolveAnnotation } from "./resolvePass";
+import { resolveAnnotation, ensureShaped } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -118,6 +118,35 @@ export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 		if (e.name == ctorFnName) return e;
 	}
 	return null as unknown as CtorEntry;
+}
+
+let _instanceHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
+	const key = instanceName + "." + methodName;
+	if (!_instanceHooks.has(key)) return null;
+	return _instanceHooks.get(key);
+}
+
+function isUserHookName(name: string): boolean {
+	return name == "onDestroy" || name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onClone" || name == "onTrace";
+}
+
+function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
+	for (const raw of classData.classBody) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member == null || member.kind != NodeKind.MethodDecl) continue;
+		const md = member.data as MethodDeclDataLocal;
+		if (md.methodIsStatic || !isUserHookName(md.methodName)) continue;
+		const hookSym = member.resolvedSym;
+		if (hookSym == null) {
+			addError(ctx, "internal: hook '" + md.methodName + "' of generic class instance '" + instanceName + "' has no symbol", loc.line, loc.column);
+			continue;
+		}
+		ensureShaped(hookSym, ctx);
+		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
+		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, inst);
+	}
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
@@ -889,6 +918,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = classSym;
 	addPendingInstance(classNode);
+	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
 }
 
 // Register callback at module load time
