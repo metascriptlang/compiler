@@ -311,6 +311,7 @@ import "./bug549GenericConstraintAtCall";
 import "./bug550ConstructorRestArgs";
 import "./bug551PhantomGenericBody";
 import "./bug552GenericAliasToNamedType";
+import "./bug553ConstantExpressionFitsUnsignedSlot";
 import "./bug204_generic_distinct_param";
 import "./bug205_generic_distinct_param_mismatch";
 import "./bug206_sized_array_length";
