@@ -10,7 +10,7 @@ import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { walkNode, mapChildren } from "../walker";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, makeBreak, makeSwitchWrapper, extractBodyStmts } from "../util";
-import { isFnBoundary, isLoopKind } from "./jumpRetarget";
+import { isFnBoundary, LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -18,12 +18,6 @@ import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } fro
 export function lowerForLoop(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => lowerForNode(node, ctx));
 	return program;
-}
-
-interface LoopJumps {
-	bodyLabel: string;
-	loopLabel: string;
-	loopBroken: boolean;
 }
 
 function lowerForNode(node: Node, ctx: TransformContext): Node {
@@ -49,7 +43,7 @@ function lowerForNode(node: Node, ctx: TransformContext): Node {
 	let whileLabel = "";
 	if (d.forUpdate != null) {
 		const updateStmt = makeExprStmt(d.forUpdate, loc);
-		if (hasLoopContinue(bodyStmts)) {
+		if (hasLoopContinue(bodyStmts, "")) {
 			if (loopSuspends(d, bodyStmts)) {
 				rewriteContinues(bodyStmts, updateStmt);
 			} else {
@@ -76,23 +70,6 @@ function lowerForNode(node: Node, ctx: TransformContext): Node {
 	return makeBlock(outerStmts, loc);
 }
 
-function hasLoopContinue(stmts: Node[]): boolean {
-	for (const s of stmts) {
-		if (continuesLoop(s)) return true;
-	}
-	return false;
-}
-
-function continuesLoop(node: Node): boolean {
-	if (node.kind == NodeKind.ContinueStmt) return (node.data as ContinueStmtData).continueLabel == "";
-	if (isLoopKind(node.kind) || isFnBoundary(node.kind)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && continuesLoop(child)) found = true;
-	});
-	return found;
-}
-
 function loopSuspends(d: ForStmtData, bodyStmts: Node[]): boolean {
 	if (d.forCondition != null && hasSuspendPoint(d.forCondition)) return true;
 	if (hasSuspendPoint(d.forUpdate)) return true;
@@ -110,28 +87,6 @@ function hasSuspendPoint(node: Node): boolean {
 		if (!found && hasSuspendPoint(child)) found = true;
 	});
 	return found;
-}
-
-function retargetLoopJumps(node: Node, jumps: LoopJumps, inSwitch: boolean): Node {
-	if (node == null) return node;
-	if (node.kind == NodeKind.ContinueStmt) {
-		if ((node.data as ContinueStmtData).continueLabel != "") return node;
-		const leave = makeBreak(node.location);
-		(leave.data as BreakStmtData).breakLabel = jumps.bodyLabel;
-		return leave;
-	}
-	if (node.kind == NodeKind.BreakStmt) {
-		const bd = node.data as BreakStmtData;
-		if (bd.breakLabel == "" && !inSwitch) {
-			bd.breakLabel = jumps.loopLabel;
-			jumps.loopBroken = true;
-		}
-		return node;
-	}
-	if (isLoopKind(node.kind) || isFnBoundary(node.kind)) return node;
-	const childInSwitch = inSwitch || node.kind == NodeKind.SwitchStmt;
-	mapChildren(node, (child: Node): Node => retargetLoopJumps(child, jumps, childInSwitch));
-	return node;
 }
 
 // Rewrite continue → { update; continue; } at current loop level.

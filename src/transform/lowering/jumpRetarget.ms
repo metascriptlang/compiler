@@ -13,6 +13,8 @@
 import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { forEachChild } from "../../ast/visitor";
+import { mapChildren } from "../walker";
+import { makeBreak, makeBool, makeBlock, makeIf, makeUnary, makeSwitchWrapper, extractBodyStmts } from "../util";
 
 const TK_LOOP = 1;
 const TK_WRAPPER = 2;
@@ -49,6 +51,81 @@ export function isLoopKind(kind: NodeKind): boolean {
 		|| kind == NodeKind.ForStmt
 		|| kind == NodeKind.ForOfStmt
 		|| kind == NodeKind.ForInStmt;
+}
+
+export interface LoopJumps {
+	bodyLabel: string;
+	loopLabel: string;
+	loopBroken: boolean;
+}
+
+function isSwitchWrapper(node: Node): boolean {
+	return node.kind == NodeKind.DoWhileStmt && (node.data as DoWhileStmtData).dwSwitchWrapper;
+}
+
+function continuesLoop(node: Node, loopLabel: string): boolean {
+	if (node.kind == NodeKind.ContinueStmt) {
+		const label = (node.data as ContinueStmtData).continueLabel;
+		return label == "" || label == loopLabel;
+	}
+	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !isSwitchWrapper(node))) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && continuesLoop(child, loopLabel)) found = true;
+	});
+	return found;
+}
+
+export function hasLoopContinue(stmts: Node[], loopLabel: string): boolean {
+	for (const s of stmts) {
+		if (continuesLoop(s, loopLabel)) return true;
+	}
+	return false;
+}
+
+export function retargetLoopJumps(node: Node, jumps: LoopJumps, inSwitch: boolean): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.ContinueStmt) {
+		const label = (node.data as ContinueStmtData).continueLabel;
+		if (label != "" && label != jumps.loopLabel) return node;
+		const leave = makeBreak(node.location);
+		(leave.data as BreakStmtData).breakLabel = jumps.bodyLabel;
+		return leave;
+	}
+	if (node.kind == NodeKind.BreakStmt) {
+		const bd = node.data as BreakStmtData;
+		if (bd.breakLabel == "" && !inSwitch) {
+			bd.breakLabel = jumps.loopLabel;
+			jumps.loopBroken = true;
+		}
+		return node;
+	}
+	const wrapper = isSwitchWrapper(node);
+	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !wrapper)) return node;
+	const childInSwitch = inSwitch || wrapper || node.kind == NodeKind.SwitchStmt;
+	mapChildren(node, (child: Node): Node => retargetLoopJumps(child, jumps, childInSwitch));
+	return node;
+}
+
+export function moveDoWhileTestIntoBody(stmt: Node, pre: Node[], cond: Node, ctx: TransformContext): void {
+	const wd = stmt.data as DoWhileStmtData;
+	const loc = stmt.location;
+	let body: Node[] = extractBodyStmts(wd.doBody);
+	if (hasLoopContinue(body, wd.dwLabel)) {
+		ctx.tempCounter += 1;
+		const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: wd.dwLabel != "" ? wd.dwLabel : `__lp${ctx.tempCounter}`, loopBroken: false };
+		let i = 0;
+		while (i < body.length) {
+			body[i] = retargetLoopJumps(body[i], jumps, false);
+			i += 1;
+		}
+		body = [makeSwitchWrapper(body, jumps.bodyLabel, loc)];
+		if (jumps.loopBroken) wd.dwLabel = jumps.loopLabel;
+	}
+	for (const s of pre) body.push(s);
+	body.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
+	wd.doCondition = makeBool(true, loc);
+	wd.doBody = makeBlock(body, loc);
 }
 
 function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {
