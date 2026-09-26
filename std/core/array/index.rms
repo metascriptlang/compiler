@@ -175,4 +175,4 @@ export function shift<T>(this arr: T[]): T {
 }
 
 // string ← uint8[] kernel (host bridge; mirrors array/index.cms asString)
-export extern function asString(this arr: uint8[]): string from "msAsString";
+export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";

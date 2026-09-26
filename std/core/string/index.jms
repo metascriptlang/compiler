@@ -25,14 +25,14 @@ function wtf8Cached(s: string): uint8[] {
 }
 
 // Fresh mutable copy — the cache entry must never escape.
-export function asBytes(this s: string): uint8[] {
+export function asBytes(this s: string): Readonly<uint8[]> {
 	const c = wtf8Cached(s);
 	@emit(`return ${c}.slice();`);
 	unreachable;
 }
 
 // WTF-8 decode — 3-byte sequences may decode to lone surrogates (round-trip).
-export function asString(this arr: uint8[]): string {
+export function asString(this arr: Readonly<uint8[]>): string {
 	@emit(`var b = ${arr}, r = "", i = 0;
 	while (i < b.length) {
 		var x = b[i];
