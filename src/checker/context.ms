@@ -930,6 +930,12 @@ export function extractGenericNames(flags: string): string[] {
 	return result;
 }
 
+export function extractGenericParamNames(flags: string): string[] {
+	const names: string[] = [];
+	for (const param of extractGenericNames(flags)) names.push(splitTopLevel(param, ":")[0].trim());
+	return names;
+}
+
 export function stripGenFlag(flags: string): string {
 	if (flags == "") return "";
 	const parts = splitTopLevel(flags, "|");

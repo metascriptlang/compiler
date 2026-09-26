@@ -256,3 +256,4 @@ import "./bug545SwitchCaseFallsThrough";
 import "./bug546StrictFlagsReachTheCheck";
 import "./bug547MixedUnionDiscriminant";
 import "./bug548NullableIntoNonNullSlot";
+import "./bug549GenericConstraintAtCall";

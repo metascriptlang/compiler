@@ -1914,8 +1914,14 @@ export function genericParamsOf(t: Type | null): string {
 		const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
 		owner = base != null ? base.sym : null;
 	}
-	if (owner != null && owner.declNode != null) return declGenericParams(owner.declNode);
+	if (owner != null && owner.declNode != null) return genericParamNamesOf(declGenericParams(owner.declNode));
 	return builtinGenericParams(cur.typeName);
+}
+
+export function genericParamNamesOf(params: string): string {
+	const names: string[] = [];
+	for (const param of splitTopLevel(params, ",")) names.push(splitTopLevel(param, ":")[0].trim());
+	return names.join(",");
 }
 
 export function declFieldNamesJoined(decl: Node | null): string {
