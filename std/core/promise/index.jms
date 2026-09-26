@@ -15,9 +15,9 @@ export extern class Promise<T> {
 	static extern resolve(value: T): Promise<T>;
 	static extern reject(error: string): Promise<void>;
 
-	// Instance surface used by the spawn twin below. The C prelude declares
-	// the full then/catch/finally trio; js only needs then (errors travel via
-	// the native rejection path, not MS methods).
+	// Instance surface. The C prelude declares the full then/catch/finally
+	// trio; js only needs then (errors travel via the native rejection path,
+	// not MS methods).
 	extern then(fn: () => T): Promise<T>;
 }
 
@@ -27,10 +27,8 @@ export extern class Promise<T> {
 // native promise flattening, sync bodies evaluate inside `.then` and resolve
 // immediately. Parallelism stays a C-backend concern (tier 2 worker_threads
 // is deliberately NOT built until a real workload demands it).
-export function spawn<T>(fn: () => T): Promise<T> {
-	const seed: Promise<T> = Promise.resolve(null as unknown as T);
-	return seed.then(fn);
-}
+@builtin("PromiseSpawn")
+export extern function spawn<T>(fn: () => T): Promise<T> from "Promise.resolve().then(#)";
 
 // sleepAsync — the C twin's msSleepAsync (a timer the exit drain pumps before
 // the process ends). On js the native event loop IS the drain: a pending
