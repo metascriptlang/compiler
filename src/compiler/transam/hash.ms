@@ -59,6 +59,7 @@ function enumToNum(kind: TaQueryKind): number {
 		TaQueryKind.Transform => 4,
 		TaQueryKind.Analyze => 5,
 		TaQueryKind.ModuleDeps => 6,
+		TaQueryKind.Lower => 8,
 		_ => 0,
 	};
 }
