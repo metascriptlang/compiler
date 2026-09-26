@@ -260,5 +260,13 @@ export function msStringLength(s: string): int32 {
 	unreachable;
 }
 
+export function msStringByteLength(s: string): int32 {
+	return wtf8Cached(s).length;
+}
+
+export function msStringByteAt(s: string, idx: int32): int32 {
+	return s.byteAt(idx);
+}
+
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
