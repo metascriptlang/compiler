@@ -1,4 +1,5 @@
 // @stdout: local ab as ab field ab slot ab captured ab array cd class e
+// @xfail(raiser): raiser runtime error: attempt to access a nil address — a closure that writes a local it captures crashes the VM (`let n = 0; const f = (): void => { n = 5; }; f();` fails the same way on v0.2.55)
 // note: after a null guard (`if (got == null) return …;`) the slot is narrowed, so `return got!` or `return got as Box` is an identity assertion around `got.value`. The return walked that assertion in Consumed mode, which copies a field only in SinkArg mode, so the struct's bits were returned without its copy hook and the local's scope exit then destroyed the arrays the result still pointed at: the local, `as` and captured cases printed empty names, and the field case returned a second owner of `slot.got`'s array. An assignment already walks a conversion in SinkArg mode; the return now does the same.
 
 struct Box {
