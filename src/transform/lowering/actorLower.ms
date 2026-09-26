@@ -276,11 +276,10 @@ function findImplSym(result: Node[], implName: string): Symbol {
 	return null as unknown as Symbol;
 }
 
-function buildDispatchBody(methods: Node[], actorName: string, thisSym: Symbol, msgParamSym: Symbol, loc: SourceLocation, result: Node[]): Node {
+function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Type, thisSym: Symbol, msgParamSym: Symbol, loc: SourceLocation, result: Node[]): Node {
 	const stmts: Node[] = [];
 	// Cast void* this to actor's Ref type via HiddenStdConv (no C cast emitted — just type annotation).
 	// This tells codegen the argument is already a pointer, preventing &() struct promotion.
-	const actorRefType = createRef(createStruct(actorName, [], [], true));
 	const thisIdent = makeTypedIdentResolved(thisSym, createPtr(voidType()), loc);
 	const castThis = createNode(NodeKind.HiddenStdConv, {
 		convExpr: thisIdent,
@@ -702,10 +701,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 
 // ===== Emit dispatch function =====
 
-function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc: SourceLocation, result: Node[]): Node {
+function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, methods: Node[], loc: SourceLocation, result: Node[]): Node {
 	const dispatchNativeName = name + "_dispatch";
 	const dispatchParamSyms = actorParamSyms(["this", "_dmsg"], [createPtr(voidType()), createPtr(voidType())]);
-	const dispatchBody = buildDispatchBody(methods, name, dispatchParamSyms[0], dispatchParamSyms[1], loc, result);
+	const dispatchBody = buildDispatchBody(methods, name, actorType, dispatchParamSyms[0], dispatchParamSyms[1], loc, result);
 	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: dispatchNativeName,
 		params: ["this", "_dmsg"],
@@ -749,6 +748,11 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const d = node.data as ActorDeclData;
 	const name = d.actorName;
 	const result: Node[] = [];
+	if (node.resolvedSym == null) {
+		ctx.errors.push(`internal: actor lowering met actor '${name}' without a symbol`);
+		return result;
+	}
+	const actorType = node.resolvedSym.symbolType;
 
 	result.push(emitActorStruct(node, d, loc));
 
@@ -787,7 +791,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	// Emit system message handler if actor has onExit or onDown
 	if (hasOnExit || hasOnDown || hasOnIdle) {
 		const sysHandlerName = name + "_systemMsg_impl";
-		const actorRefType = createRef(createStruct(name, [], [], true));
+		const actorRefType = actorType;
 		const sysParamSyms = actorParamSyms(["this", "_smsg"], [createPtr(voidType()), createPtr(voidType())]);
 		const selfIdent = makeTypedIdentResolved(sysParamSyms[0], actorRefType, loc);
 		const stmts: Node[] = [];
@@ -863,7 +867,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	}
 
 	if (methods.length > 0) {
-		const dispatchNode = emitActorDispatch(d, name, methods, loc, result);
+		const dispatchNode = emitActorDispatch(d, name, actorType, methods, loc, result);
 		result.push(dispatchNode);
 		const dispatchSym = dispatchNode.resolvedSym;
 		dispatchSyms.push(dispatchSym!);
