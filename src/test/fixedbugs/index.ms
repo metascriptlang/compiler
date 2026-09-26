@@ -227,3 +227,4 @@ import "./bug210StaticExtensionParamModifiers";
 import "./bug211SinkParamTakesUnknown";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
+import "./bug561ConstGenericParamRejected";
