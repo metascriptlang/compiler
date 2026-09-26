@@ -31,7 +31,7 @@ import {
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -468,14 +468,15 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 		}
 	}
 
-	// 6. Convert variable declarations to assignments in all state bodies
+	// 6. Convert the declarations of the locals that outlive a state to assignments
+	const lifted = localsSpanningStates(sc, nc);
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	for (let si = 0; si < sc.items.length; si += 1) {
-		convertDeclsToAssigns(sc.items[si].stmts, nc, loc);
+		convertDeclsToAssigns(sc.items[si].stmts, lifted, loc);
 		if (sc.items[si].isYield) {
 			const yfName = "$yf" + si;
-			nameSetAdd(nc, yfName);
+			nameSetAdd(lifted, yfName);
 			// Set $yf type to Promise<T> where T = yield variable type
 			const yfVarType = sc.items[si].yieldVarType;
 			const yfFutType = promiseTypeFor(yfVarType);
@@ -545,7 +546,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
-	for (const localName of nc.items) {
+	for (const localName of lifted.items) {
 		const origType = findVarType(varTypes, localName);
 		const defaultInit = (origType != null) ? makeDefaultValue(origType, loc) : makeNull(loc);
 		const localDecl = makeVarDecl(localName, defaultInit, DeclKind.Let, loc);

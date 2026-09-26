@@ -25,10 +25,11 @@ export class TransformContext {
 	pendingCarrierEqs: Type[];   // synthesized carrier structs (Maybe<T>) compared by ==; carried as Type because they have no symbol-table entry to look the name up by
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
+	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet() };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
