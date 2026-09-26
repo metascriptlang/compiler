@@ -514,7 +514,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
 		TypeKind.GenericInstance => {
-			let giKey = `ginst:${t.typeName}`;
+			let giKey = `ginst:${monoInstanceName(t)}`;
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
 			return giKey;
 		},
