@@ -1,4 +1,4 @@
-// @stdout: local-types 8 12
+// @stdout: local-types 8 12 4 6
 function f(): int32 {
 	type N = int32;
 	interface P { x: int32; }
@@ -18,4 +18,15 @@ function g(k: int32): int32 {
 	return 0;
 }
 
-console.log(`local-types ${f()} ${g(4)}`);
+function h(): int32 {
+	struct Q { y: int32 }
+	const q: Q = { y: 4 };
+	return q.y;
+}
+
+function m(): int32 {
+	class C { n: int32 = 3; twice(): int32 { return this.n * 2; } }
+	return new C().twice();
+}
+
+console.log(`local-types ${f()} ${g(4)} ${h()} ${m()}`);

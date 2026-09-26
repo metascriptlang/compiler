@@ -127,7 +127,7 @@ export function genStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
 		NodeKind.AssertStmt => { addCGenError(g, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
-		NodeKind.ClassDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.InterfaceDecl => {},
+		NodeKind.ClassDecl | NodeKind.StructDecl | NodeKind.ActorDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.InterfaceDecl => {},
 		_ => { addUnloweredError(g, p, node); },
 	};
 }
