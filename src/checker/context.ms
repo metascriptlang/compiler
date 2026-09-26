@@ -1306,10 +1306,6 @@ export function createContext(): CheckerContext {
 	};
 }
 
-export function compilationOf(ctx: CheckerContext): CheckerContext {
-	return ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
-}
-
 export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerContext {
 	const ctx = createContext();
 	ctx.moduleGraph = graph;
