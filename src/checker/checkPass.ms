@@ -1674,7 +1674,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// `Foo` is non-nullable. Order matters: stamp BEFORE check would compare
 	// the expected type against itself (trivially passes); check BEFORE stamp
 	// compares Null against expected, which is the real safety question.
-	if (d.argument.kind == NodeKind.NullLiteral) {
+	if (d.argument.kind == NodeKind.NullLiteral && ctx.matchExprDepth == 0) {
 		if (ctx.currentFunction != null
 			&& ctx.currentFunction.symbolType.kind == TypeKind.Function
 			&& ctx.currentFunction.symbolType.typeReturn != null) {
@@ -1730,7 +1730,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (errSentinel) {
 		checkExpr(ctx, d.argument, null);
 	} else {
-		checkExpr(ctx, d.argument, returnExpected);
+		checkExpr(ctx, d.argument, ctx.matchExprDepth > 0 ? ctx.matchArmExpected : returnExpected);
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.

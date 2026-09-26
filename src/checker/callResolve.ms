@@ -4117,6 +4117,7 @@ function resolveEngineNodeVirtualProp(ctx: CheckerContext, recvType: Type, prop:
 
 export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MatchExprData;
+	const asStatement = node == ctx.stmtPosExpr;
 	callCheckExpr(ctx, d.matchDisc, null);
 	const discType = d.matchDisc.nodeType;
 	let returnType = inferredType();
@@ -4190,17 +4191,22 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 			callCheckExpr(ctx, cd.caseGuard, null);
 		}
 		let bodyType = inferredType();
-		if (cd.caseBody.kind == NodeKind.BlockStmt) {
+		if (cd.caseBody.kind == NodeKind.BlockStmt && asStatement) {
+			callCheckStmt(ctx, cd.caseBody);
+		} else if (cd.caseBody.kind == NodeKind.BlockStmt) {
+			const outerArmExpected = ctx.matchArmExpected;
+			ctx.matchArmExpected = expectedType;
 			ctx.matchExprDepth = ctx.matchExprDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
 			ctx.matchExprDepth = ctx.matchExprDepth - 1;
+			ctx.matchArmExpected = outerArmExpected;
 			const bd = cd.caseBody.data as BlockStmtData;
 			if (bd.statements.length > 0) {
 				const last = bd.statements[bd.statements.length - 1];
 				if (last.kind == NodeKind.ReturnStmt) {
 					const rd = last.data as ReturnStmtData;
-					if (rd.argument != null) {
-						callCheckExpr(ctx, rd.argument, expectedType); if (rd.argument.nodeType != null) { bodyType = rd.argument.nodeType; }
+					if (rd.argument != null && rd.argument.nodeType != null) {
+						bodyType = rd.argument.nodeType;
 					}
 				}
 			}
@@ -4220,6 +4226,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
+		if (cd.caseBody.kind == NodeKind.BlockStmt && asStatement) continue;
 		if (cd.caseBody.kind == NodeKind.BlockStmt) {
 			const bd = cd.caseBody.data as BlockStmtData;
 			if (bd.statements.length > 0) {
