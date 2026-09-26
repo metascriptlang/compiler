@@ -26,7 +26,7 @@ import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig
 import { createDefaultConfig, Backend } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
-import { Module, ModuleGraph, findModule } from "../module/graph";
+import { ErrorSeverity, Module, ModuleGraph, findModule } from "../module/graph";
 import { Node, ProgramData } from "../ast/node";
 import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { platform } from "std/process";
@@ -63,6 +63,15 @@ function checkedUnit(path: string): CheckedUnit | null {
 	return { path, program, ctx };
 }
 
+function loadFailure(mod: Module, where: string = ""): string {
+	for (const e of mod.errors) {
+		if (e.severity != ErrorSeverity.Error) continue;
+		const pr = parseSource(mod.source);
+		return pr.ok ? `load${where}: ${e.message}` : `parse${where}: ${pr.error}`;
+	}
+	return "";
+}
+
 function uncheckedError(mod: Module): string {
 	const pr = parseSource(mod.source);
 	return pr.ok ? `internal: ${mod.path} was not checked by the graph phase` : `parse: ${pr.error}`;
@@ -93,10 +102,12 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
-	checkModuleGraph(graph, "", ".cms", platform, target);
-
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, "", ".cms", platform, target);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -142,10 +153,12 @@ export function compileToCWithStd(source: string): CompileResult {
 	const config = createDefaultConfig(Backend.C, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
-	checkModuleGraph(graph, stdPath);
-
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, stdPath);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -181,10 +194,12 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
-	checkModuleGraph(graph, "", ".cms", platform, target);
-
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, "", ".cms", platform, target);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -210,10 +225,12 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	const config = createDefaultConfig(Backend.JS, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
-	checkModuleGraph(graph, stdPath);
-
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, stdPath);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -252,6 +269,12 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 			msg = `${msg} ${e}`;
 		}
 		return msg;
+	}
+	for (const modPath of graph.loadOrder) {
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		const loadErr = loadFailure(mod, ` [${modPath}]`);
+		if (loadErr != "") return `ERROR: ${loadErr}`;
 	}
 
 	checkModuleGraph(graph, "");
@@ -355,9 +378,15 @@ export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string):
 	const messages: string[] = [];
 	for (const e of graph.errors) messages.push(`${e}`);
 	if (messages.length > 0) return messages;
-	checkModuleGraph(graph, stdPath);
 	const mod = findModule(graph, entryPath);
 	if (mod == null) return messages;
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") {
+		const pr = parseSource(mod.source);
+		messages.push(pr.ok ? loadErr : `${pr.error}`);
+		return messages;
+	}
+	checkModuleGraph(graph, stdPath);
 	const unit = checkedUnit(entryPath);
 	if (unit == null) {
 		const pr = parseSource(mod.source);
@@ -387,6 +416,13 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 			msg = `${msg} ${e}`;
 		}
 		return msg;
+	}
+	for (const modPath of graph.loadOrder) {
+		if (!isEntryPath(canonEntries, modPath)) continue;
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		const loadErr = loadFailure(mod, ` [${modPath}]`);
+		if (loadErr != "") return `ERROR: ${loadErr}`;
 	}
 
 	checkModuleGraph(graph, stdPath);
@@ -465,6 +501,12 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 			msg = `${msg} ${e}`;
 		}
 		return msg;
+	}
+	for (const modPath of graph.loadOrder) {
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		const loadErr = loadFailure(mod, ` [${modPath}]`);
+		if (loadErr != "") return `ERROR: ${loadErr}`;
 	}
 
 	checkModuleGraph(graph, "");
@@ -565,6 +607,13 @@ export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string
 			msg = `${msg} ${e}`;
 		}
 		return msg;
+	}
+	for (const modPath of graph.loadOrder) {
+		if (!isEntryPath(canonEntries, modPath)) continue;
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		const loadErr = loadFailure(mod, ` [${modPath}]`);
+		if (loadErr != "") return `ERROR: ${loadErr}`;
 	}
 
 	checkModuleGraph(graph, stdPath, ".jms");
