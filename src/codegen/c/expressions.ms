@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -97,19 +97,63 @@ function literalDiscriminantOf(u: Type): string {
 		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(u) : "";
 	}
 	const strDisc = findSharedStringDiscriminant(u);
-	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(u);
+	if (strDisc != "") return strDisc;
+	const boolDisc = findSharedBooleanDiscriminant(u);
+	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(u);
 }
 
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
 	const lits: string[] = [];
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const lt = findFieldInVariant(u.typeChildren[vi], disc);
-		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral)) {
+		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? enumMemberOfKey(lt.typeReturn, lt.typeNames[0]) : -1;
+		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral && enumMember < 0)) {
 			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return tagRead;
 		}
-		lits.push(lt.kind == TypeKind.BooleanLiteral ? cBoolLiteral(booleanLiteralValue(lt)) : typeofStr(g, lt.typeName));
+		if (enumMember >= 0) {
+			lits.push(`${getTypeDesc(g, lt.typeReturn)}_${mangle(lt.typeReturn.typeNames[enumMember])}`);
+		} else {
+			lits.push(lt.kind == TypeKind.BooleanLiteral ? cBoolLiteral(booleanLiteralValue(lt)) : typeofStr(g, lt.typeName));
+		}
 	}
+	return tagToLiteral(p, lits, tagRead);
+}
+
+function enumMemberOfKey(enumT: Type, key: string): int32 {
+	for (let mi = 0; mi < enumT.typeNames.length; mi += 1) {
+		const m = enumT.typeNames[mi];
+		if (key == m || key.endsWith("." + m) || key == enumT.typeName + "_" + m) return mi as int32;
+	}
+	return -1;
+}
+
+function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
+	const enumT = u.typeExtra;
+	const members: string[] = [];
+	if (enumT == null || enumT.kind != TypeKind.Enum) return members;
+	let identity = true;
+	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
+		const key = vi + 1 < u.typeNames.length ? u.typeNames[vi + 1] : "";
+		const mi = enumMemberOfKey(enumT, key);
+		if (mi < 0) {
+			addCGenError(g, `internal: variant ${vi} of '${typeDisplayName(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			return [];
+		}
+		const mt = enumT.typeChildren != null && mi < enumT.typeChildren.length ? enumT.typeChildren[mi] : null;
+		const value = mt != null ? mt.typeValue : mi;
+		if (value != vi) identity = false;
+		members.push(`${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[mi])}`);
+	}
+	return identity ? [] : members;
+}
+
+function enumDiscriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, tagRead: string): string {
+	const members = enumTagMembers(g, node, u);
+	return members.length == 0 ? tagRead : tagToLiteral(p, members, tagRead);
+}
+
+function tagToLiteral(p: CProc, lits: string[], tagRead: string): string {
 	let tag = tagRead;
 	let prefix = "";
 	if (lits.length > 2) {
@@ -1301,7 +1345,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
 			const ut = peelToStructOrUnion(md.object.nodeType);
-			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && literalDiscriminantOf(ut) == md.property) {
+			const isEnumDiscWrite = ut != null && ut.kind == TypeKind.Union && isDiscriminatedUnion(ut) && getDiscriminantName(ut) == md.property
+				&& enumTagMembers(g, node, ut).length > 0;
+			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && (literalDiscriminantOf(ut) == md.property || isEnumDiscWrite)) {
 				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 		}
@@ -1542,7 +1588,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) == d.property) {
-				ctx.results.push(`${obj}${acc}_tag`);
+				const enumDeclTy = mainDeclTy != null && isDiscriminatedUnion(mainDeclTy) ? mainDeclTy : objType;
+				ctx.results.push(enumDiscriminantFromTag(g, p, node, enumDeclTy, `${obj}${acc}_tag`));
 				return;
 			}
 			// Variant field access: s.radius → s.v<N>.radius.
@@ -1602,8 +1649,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
-					const chainTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
-					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}${chainTail}`);
+					if (discSuffix != "") {
+						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${obj}${objIsPtr ? "->" : "."}${discSuffix}`));
+						return;
+					}
+					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`);
 					return;
 				}
 				if (declVarIdx >= 0) {
@@ -1641,8 +1691,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				const ptrType = idSym != null && isPointerType(idSym.symbolType);
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
-					const identTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
-					ctx.results.push(`${cName}${acc2}${identTail}`);
+					if (discSuffix != "") {
+						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${cName}${acc2}${discSuffix}`));
+						return;
+					}
+					ctx.results.push(`${cName}${acc2}v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`);
 					return;
 				}
 			}
