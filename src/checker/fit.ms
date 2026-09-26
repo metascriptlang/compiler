@@ -5,7 +5,7 @@
 import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
@@ -1157,7 +1157,22 @@ export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, tar
 	addError(ctx, "Type '" + typeDisplayName(source) + "' is not assignable to type '" + typeDisplayName(target) + "' — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
 }
 
+// A refused value is retyped to its slot, so the checks after the slot do not report the same mismatch again.
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
+	const mark = ctx.errors.length;
+	const fitted = fitSlot(ctx, expr, formal, exprType);
+	if (formal == null || fitted != expr || !reportedErrorSince(ctx, mark)) return fitted;
+	return wrapInConv(expr, formal);
+}
+
+function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
+	for (let i = mark; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) return true;
+	}
+	return false;
+}
+
+function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal == null || exprType == null) return expr;
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	if (formal.kind == TypeKind.Unknown || isUnresolvedType(formal)) {

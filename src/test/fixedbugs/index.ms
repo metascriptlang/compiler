@@ -302,6 +302,7 @@ import "./bug502CtorArgByFormalC";
 import "./bug213ExternScalarTakesAddress";
 import "./bug390ExplicitMoveOfElementRejected";
 import "./bug561ConstGenericParamRejected";
+import "./bug562SlotRefusalReportedOnce";
 import "./bug543ForInIsRefused";
 import "./bug544MatchCoversEveryValue";
 import "./bug545SwitchCaseFallsThrough";
