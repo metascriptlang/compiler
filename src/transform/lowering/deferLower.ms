@@ -12,18 +12,11 @@
 // - Node* fields work through pointers: lowerDeferInNode(d.fnBody) modifies
 //   the body node in-place (data changes, pointer stays same).
 
-import {
-	Node, NodeKind, SourceLocation,
-	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
-	FunctionExprData, MethodDeclData, ConstructorDeclData,
-	DeferStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData,
-	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
-	DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData,
-	MatchStmtData, MatchCaseData,
-} from "../../ast/node";
+import { Node, NodeKind, SourceLocation, ProgramData, BlockStmtData, DeferStmtData, SwitchCaseData } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt, makeTryFinally } from "../util";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====
 
@@ -42,9 +35,8 @@ function hasDefer(stmts: Node[]): boolean {
 }
 
 // ===== Recursive Node Lowering =====
-// Walk into all block-containing nodes and lower defers in their statement lists.
-// For Program/BlockStmt: if defers found, build new stmts and write back via node.data.
-// For other nodes: recurse into children (Node* modifications go through pointer).
+// Every statement list (program, block, switch case) lowers its defers; every
+// other node only recurses into its children, so no node kind can hide a defer.
 
 function lowerDeferInNode(node: Node): void {
 	match (node.kind) {
@@ -68,92 +60,19 @@ function lowerDeferInNode(node: Node): void {
 				walkStmtList(d.statements);
 			}
 		},
-		NodeKind.FunctionDecl => {
-			const d = node.data as FunctionDeclData;
-			lowerDeferInNode(d.fnBody);
-		},
-		NodeKind.ArrowFunction => {
-			const d = node.data as ArrowFunctionData;
-			lowerDeferInNode(d.arrowBody);
-		},
-		NodeKind.FunctionExpr => {
-			const d = node.data as FunctionExprData;
-			lowerDeferInNode(d.funcExprBody);
-		},
-		NodeKind.MethodDecl => {
-			const d = node.data as MethodDeclData;
-			lowerDeferInNode(d.methodBody);
-		},
-		NodeKind.ConstructorDecl => {
-			const d = node.data as ConstructorDeclData;
-			lowerDeferInNode(d.ctorBody);
-		},
-		NodeKind.ExportDecl => {
-			const d = node.data as ExportDeclData;
-			lowerDeferInNode(d.exportedDecl);
-		},
-		NodeKind.ClassDecl => {
-			const d = node.data as ClassDeclData;
-			for (const member of d.classBody) {
-				lowerDeferInNode(member);
-			}
-		},
-		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			lowerDeferInNode(d.decoratedNode);
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			lowerDeferInNode(d.consequent);
-			lowerDeferInNode(d.alternate);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			lowerDeferInNode(d.whileBody);
-		},
-		NodeKind.ForStmt => {
-			const d = node.data as ForStmtData;
-			lowerDeferInNode(d.forBody);
-		},
-		NodeKind.ForOfStmt => {
-			const d = node.data as ForOfStmtData;
-			lowerDeferInNode(d.forOfBody);
-		},
-		NodeKind.ForInStmt => {
-			const d = node.data as ForInStmtData;
-			lowerDeferInNode(d.forInBody);
-		},
-		NodeKind.DoWhileStmt => {
-			const d = node.data as DoWhileStmtData;
-			lowerDeferInNode(d.doBody);
-		},
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			for (const c of d.switchCases) {
-				lowerDeferInNode(c);
-			}
-		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			walkStmtList(d.caseStmts);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			lowerDeferInNode(d.tryBody);
-			lowerDeferInNode(d.catchBody);
-			lowerDeferInNode(d.finallyBody);
-		},
-		NodeKind.MatchStmt => {
-			const d = node.data as MatchStmtData;
-			for (const c of d.matchStmtCases) {
-				lowerDeferInNode(c);
+			if (hasDefer(d.caseStmts)) {
+				const newStmts = lowerDeferInBlock(d.caseStmts, node.location);
+				walkStmtList(newStmts);
+				node.data = { caseTests: d.caseTests, caseStmts: newStmts, isDefault: d.isDefault };
+			} else {
+				walkStmtList(d.caseStmts);
 			}
 		},
-		NodeKind.MatchCase => {
-			const d = node.data as MatchCaseData;
-			lowerDeferInNode(d.caseBody);
+		_ => {
+			forEachChild(node, (child: Node): void => lowerDeferInNode(child));
 		},
-		_ => {},
 	};
 }
 
@@ -227,3 +146,23 @@ test "multiple defers nest" {
 	assert stmtCountAfter("defer a(); defer b(); work();", lowerDefer) == 1;
 	assert firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) == NodeKind.TryCatchStmt;
 }
+
+function holdsDefer(node: Node): boolean {
+	if (node.kind == NodeKind.DeferStmt) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && holdsDefer(child)) found = true;
+	});
+	return found;
+}
+
+function deferLeftAfter(input: string): boolean {
+	const r = parseInput(input);
+	if (!r.ok) return true;
+	lowerDefer(r.value, makeCtx());
+	return holdsDefer(r.value);
+}
+
+test "defer in a switch case lowers" { assert !deferLeftAfter("switch (k) { case 1: defer a(); b(); default: c(); }"); }
+
+test "defer in an arrow argument lowers" { assert !deferLeftAfter("each(xs, (x) => { defer a(); b(); });"); }
