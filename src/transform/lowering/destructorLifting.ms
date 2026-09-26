@@ -35,6 +35,7 @@ import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
+import { sizedArrayHookName } from "../../analyzer/classify";
 
 // ===== Global Hook Ownership Registry =====
 // Reference parity: attachedOps[] is global — hooks generated once per canonical type.
@@ -349,17 +350,21 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
 // Generates: var $i = 0; while ($i < arr.length) { fillBody(elem, arr[$i], ...); $i = $i + 1; }
 function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	genElementLoop(hook, elemType, null, xf, yf, lctx, buf, loc);
+}
+
+function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const counterName = "$i_" + ctr.toString();
-	buf.items.push(makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc));
+	const counterDecl = makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc);
 
 	// reference parity: set nodeType on result.
 	// Set nodeType on cloned array expressions so nativeLower can rewrite arr[i] → msXxxArrayAccess(arr, i).
 	const arrType = xf.nodeType;
 	const xClone = clonePath(xf, loc);
 	if (xClone.nodeType == null && arrType != null) { xClone.nodeType = arrType; }
-	const lenAccess = makeMember(clonePath(xf, loc), "length", loc);
+	const lenAccess = bound != null ? bound : makeMember(clonePath(xf, loc), "length", loc);
 	const cond = makeBinary(makeIdent(counterName, loc), "<", lenAccess, loc);
 
 	const xi = makeArrayAccess(xClone, makeIdent(counterName, loc), loc);
@@ -369,14 +374,16 @@ function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: Li
 	if (hook == "trace") {
 		// Reference: trace passes raw callback (y), not y[i]
 		fillBody(hook, xi, yf, "", elemType, lctx, bodyBuf, visited, loc);
-	} else if (hook == "copy") {
+	} else if (hook == "copy" || hook == "sink") {
 		const yClone = clonePath(yf, loc);
 		if (yClone.nodeType == null && yf.nodeType != null) { yClone.nodeType = yf.nodeType; }
 		const yi = makeArrayAccess(yClone, makeIdent(counterName, loc), loc);
 		fillBody(hook, xi, yi, "", elemType, lctx, bodyBuf, visited, loc);
-	} else if (hook == "destroy") {
+	} else {
 		fillBody(hook, xi, xi, "", elemType, lctx, bodyBuf, visited, loc);
 	}
+	if (bodyBuf.items.length == 0) return;
+	buf.items.push(counterDecl);
 
 	// $i = $i + 1
 	bodyBuf.items.push(makeExprStmt(makeAssign(
@@ -597,6 +604,17 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Array => {
 			const elem = fieldType.typeReturn;
 			if (elem != null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
+		},
+		TypeKind.SizedArray => {
+			const elem = fieldType.typeReturn;
+			if (elem != null && sizedArrayNeedsHooks(fieldType, lctx, loc)) {
+				ensureSizedArrayHooks(fieldType, lctx, loc);
+				if (hook != "trace" || isCyclicType(elem, lctx, visited)) {
+					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
+				}
+			} else {
+				defaultOp(hook, xf, yf, buf, loc);
+			}
 		},
 		TypeKind.Struct => {
 			// Anon structs from `{...}` type annotations have empty typeName (created
@@ -1804,6 +1822,58 @@ function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: Source
 	generateTupleHook("wasMoved", tupleName, t, lctx, loc);
 }
 
+function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
+	const elem = t.typeReturn;
+	if (elem == null) return false;
+	const probe = newBuf();
+	fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "", elem, lctx, probe, createNameSet(), loc);
+	return probe.items.length > 0;
+}
+
+function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const elem = t.typeReturn;
+	if (elem == null) return;
+	const buf = newBuf();
+	const isUnary = hook == "destroy" || hook == "wasMoved";
+	const hookParamT = createVar(t);
+	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	if (!isUnary) {
+		buf.items.push(makeIf(
+			makeBinary(makeIdentResolved(s1, loc), "===", makeIdentResolved(s2, loc), loc),
+			makeBlock([makeReturn(null as unknown as Node, loc)], loc), null, loc));
+	}
+	const x1 = hookParamDeref(s1, loc);
+	x1.nodeType = t;
+	const x2 = hookParamDeref(s2, loc);
+	x2.nodeType = t;
+	genElementLoop(hook, elem, makeNumber(t.typeValue as number, loc), x1, x2, lctx, buf, loc);
+	const suffix = hookSuffix(hook);
+	const fnNode = isUnary
+		? makeFnDecl(name + suffix, [s1], [name], makeBlock(buf.items, loc), "", "void", loc)
+		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
+	setHookParamType(fnNode, 0, createVar(t));
+	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
+	markLifecycleOp(fnNode, name + suffix, hook);
+	lctx.collector.push(fnNode);
+}
+
+function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (t == null || t.kind != TypeKind.SizedArray || t.typeReturn == null) return;
+	const name = sizedArrayHookName(t);
+	if (nameSetContains(lctx.generated, name)) return;
+	if (isGloballyOwned(name)) { nameSetAdd(lctx.generated, name); return; }
+	if (nameSetContains(lctx.generating, name)) return;
+	if (!sizedArrayNeedsHooks(t, lctx, loc)) return;
+	nameSetAdd(lctx.generating, name);
+	nameSetAdd(lctx.generated, name);
+	claimGlobal(name);
+	generateSizedArrayHook("destroy",  name, t, lctx, loc);
+	generateSizedArrayHook("copy",     name, t, lctx, loc);
+	generateSizedArrayHook("sink",     name, t, lctx, loc);
+	generateSizedArrayHook("wasMoved", name, t, lctx, loc);
+}
+
 // On-demand msTuple_<hash>Eq for a tuple compared as a struct/tuple field (fieldEqExpr).
 // Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
 function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
@@ -2237,6 +2307,9 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 			// here so classify.ms's msTuple_<hash>{Destroy,Sink} reference isn't undefined.
 			if (node.nodeType.kind == TypeKind.Tuple) {
 				ensureTupleHooks(tupleTypeName(node.nodeType), node.nodeType, lctx, node.location);
+			}
+			if (node.nodeType.kind == TypeKind.SizedArray) {
+				ensureSizedArrayHooks(node.nodeType, lctx, node.location);
 			}
 			if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName == "") {
 				ensureAnonUnionHooks(node.nodeType, lctx, node.location);
