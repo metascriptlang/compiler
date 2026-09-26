@@ -48,6 +48,31 @@ function graphHoldsPrelude(graph: ModuleGraph): boolean {
 	return false;
 }
 
+function preludeClosure(graph: ModuleGraph, config: ResolverConfig): HashSet<string> {
+	const owned = new HashSet<string>();
+	const provider = createFileSystemProvider();
+	const pending: string[] = [];
+	for (const entry of defaultGlobalImports()) {
+		for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
+			const mod = findModule(graph, moduleIdentity(candidate, config, provider));
+			if (mod == null) continue;
+			pending.push(mod.path);
+			break;
+		}
+	}
+	while (pending.length > 0) {
+		const path = pending.pop()!;
+		if (owned.has(path)) continue;
+		owned.add(path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const ie of mod.imports) {
+			if (ie.sourcePath != "") pending.push(ie.sourcePath);
+		}
+	}
+	return owned;
+}
+
 // Cached prelude context — built once by checkModuleGraph, retrieved by callers.
 let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
@@ -123,7 +148,10 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
-	const baseCtx = kept != null ? kept.preludeCtx : graphHoldsPrelude(graph) ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
+	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
+	const holdsPrelude = graphHoldsPrelude(graph);
+	const baseCtx = kept != null ? kept.preludeCtx : holdsPrelude ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
+	const preludeOwned = holdsPrelude ? new HashSet<string>() : preludeClosure(graph, resolverConfig);
 	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
@@ -133,7 +161,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const _tf0 = performance.now();
 	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64);
 	if (kept == null) {
-		dbSetResolverConfig(db, config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath));
+		dbSetResolverConfig(db, resolverConfig);
 		db.preludeCtx = baseCtx;
 	}
 	if (session != null) {
@@ -145,7 +173,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	dbBindGraph(db, graph);
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null || mod.source == "") continue;
+		if (mod == null || mod.source == "" || preludeOwned.has(path)) continue;
 		const parsed = dbParse(db, path);
 		if (parsed == null) continue;
 		registerModuleProgram(path, kept != null && dbCheckIsCurrent(db, path) ? dbGetCheckedProgram(db, path) : cloneNodeForCheck(parsed));
@@ -155,7 +183,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const _tc0 = performance.now();
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null || mod.source == "") continue;
+		if (mod == null || mod.source == "" || preludeOwned.has(path)) continue;
 		mod.exportNames = [];
 		const injectedIncludes = baseCtx.includeDirectives;
 		const injectedFlags = baseCtx.compilerFlags;
