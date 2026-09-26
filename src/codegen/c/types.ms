@@ -247,7 +247,7 @@ function anonFieldKey(t: Type | null): string {
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "varargs:empty",
 		TypeKind.Union => {
-			if (t.typeName.length > 0) return "union:" + t.typeName;
+			if (t.typeName.length > 0) return "union:" + structKeyIdentity(t);
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
@@ -482,7 +482,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
 			if (t.typeName.length > 0) {
-				return "union:" + t.typeName;
+				return "union:" + structKeyIdentity(t);
 			} else {
 				let key = "union(";
 				let ui = 0;
@@ -1502,7 +1502,7 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCName(rm);
-		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : resolvedTypeCName(elem, true);
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {

@@ -92,6 +92,12 @@ export function monoBaseName(baseName: string, ownerPath: string): string {
 	return baseName + "_" + hashToBase36(ownerPath);
 }
 
+export function monoRoutineBaseName(baseName: string, ownerPath: string, disamb: int32): string {
+	const qualified = monoBaseName(baseName, ownerPath);
+	if (disamb <= 0) return qualified;
+	return qualified + "_u" + disamb.toString();
+}
+
 // One spelling of "the name of this generic instance", shared by checker,
 // analyzer, transform and codegen so the struct, its hooks and every call site
 // cannot drift apart.
@@ -157,7 +163,11 @@ export function monoTypeKey(t: Type | null): string {
 			return key + "_r_" + monoTypeKey(t.typeReturn);
 		},
 		TypeKind.Union => {
-			if (t.typeName != "") return t.typeName;
+			if (t.typeName != "") {
+				const owner = monoOwnerPath(t);
+				if (owner != "") return t.typeName + "_" + hashToBase36(owner);
+				return t.typeName;
+			}
 			let key = "union";
 			for (const child of t.typeChildren) {
 				key = key + "_" + monoTypeKey(child);
@@ -377,6 +387,28 @@ test "registry separates anonymous struct instantiations" {
 	monoRegister(reg, "wrap", params, [named]);
 	monoRegister(reg, "wrap", params, [tagged]);
 	assert reg.entries.length == 2;
+}
+
+test "monoRoutineBaseName keys a generic routine by owner and ordinal" {
+	assert monoRoutineBaseName("wrap", "/p/a.ms", 0) != monoRoutineBaseName("wrap", "/p/b.ms", 0);
+	assert monoRoutineBaseName("put", "/p/a.ms", 0) != monoRoutineBaseName("put", "/p/a.ms", 1);
+	assert monoRoutineBaseName("put", "/p/a.ms", 0) == monoBaseName("put", "/p/a.ms");
+	assert monoRoutineBaseName("put", "", 0) == "put";
+}
+
+test "monoTypeKey keys named unions by owner" {
+	const i32: Type = { kind: TypeKind.Int32, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const ua: Type = { kind: TypeKind.Union, typeName: "U", typeNames: [], typeChildren: [i32, str], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const ub: Type = { kind: TypeKind.Union, typeName: "U", typeNames: [], typeChildren: [i32, str], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const symA = makeSymbol("U", SymbolKind.TypeAlias, ua, false);
+	symA.modulePath = "/p/a.ms";
+	ua.sym = symA;
+	const symB = makeSymbol("U", SymbolKind.TypeAlias, ub, false);
+	symB.modulePath = "/p/b.ms";
+	ub.sym = symB;
+	assert monoTypeKey(ua) != monoTypeKey(ub);
+	assert mangleMonoName("id", [ua]) != mangleMonoName("id", [ub]);
 }
 
 test "findEntry returns null for missing" {

@@ -4,11 +4,15 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
+import { monoRoutineBaseName } from "../monomorphize/registry";
+import { callCheckExpr } from "./checkerCallbacks";
+import { fitNode } from "./fit";
+import { createContext } from "./context";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
@@ -510,7 +514,10 @@ export function instantiateTimings(): float64[] {
 }
 
 export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol {
-	if (ctx.genericInstDepth > 50) return null as unknown as Symbol;
+	if (ctx.genericInstDepth > 50) {
+		addError(ctx, "generic instantiation too nested: instantiating '" + sym.name + "' goes deeper than 50 nested instantiations", callLoc.line, callLoc.column);
+		return null as unknown as Symbol;
+	}
 	_igfCalls = _igfCalls + 1;
 
 	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
@@ -546,7 +553,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 			if (recv != "") mangleBase = recv + "_" + sym.name;
 		}
 	}
-	const mangledName = mangleMonoName(mangleBase, dedup.types) + readonlyViewSuffix(dedup.types);
+	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types) + readonlyViewSuffix(dedup.types);
 
 	// Cache check — skip if already instantiated.
 	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
@@ -668,6 +675,57 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	_igfTime = _igfTime + (performance.now() - _ig0);
 	return instSym;
+}
+
+function instanceFieldType(instStruct: Type, fieldName: string): Type | null {
+	for (let i = 0; i < instStruct.typeNames.length; i += 1) {
+		if (instStruct.typeNames[i] == fieldName && i < instStruct.typeChildren.length) return instStruct.typeChildren[i];
+	}
+	return null;
+}
+
+function instanceFieldInits(classData: ClassDeclData, names: string[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
+	const fields: Node[] = [];
+	for (const raw of classData.classBody) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic || pd.propInitializer == null) continue;
+		const fieldType = instanceFieldType(instStruct, pd.propName);
+		if (fieldType == null) {
+			addError(ctx, "internal: field '" + pd.propName + "' of generic class '" + classSym.name + "' has no slot in its instance '" + instStruct.typeName + "'", loc.line, loc.column);
+			continue;
+		}
+		const field = monoCloneNode(member);
+		replaceTypeVars(field, names, types);
+		field.nodeType = fieldType;
+		fields.push(field);
+	}
+	if (fields.length == 0) return fields;
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const savedModulePath = bodyCtx.modulePath;
+	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const injectedSyms: Symbol[] = [];
+	for (const ct of types) {
+		injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
+	}
+	const extPreCount = injectCallerExtensions(bodyCtx, ctx);
+	const errBefore = bodyCtx.errors.length;
+	for (const field of fields) {
+		const fpd = field.data as PropertyDeclData;
+		clearCheckerState(fpd.propInitializer);
+		callCheckExpr(bodyCtx, fpd.propInitializer, field.nodeType);
+		if (fpd.propInitializer.nodeType != null) {
+			fpd.propInitializer = fitNode(bodyCtx, fpd.propInitializer, field.nodeType, fpd.propInitializer.nodeType);
+		}
+	}
+	if (bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
+		addError(ctx, "in instantiation of '" + classSym.name + displayTypeArgs(types) + "': " + bodyCtx.errors[errBefore].message, loc.line, loc.column);
+	}
+	bodyCtx.modulePath = savedModulePath;
+	removeInjectedSyms(bodyCtx, injectedSyms);
+	truncateCallerExtensions(bodyCtx, extPreCount);
+	return fields;
 }
 
 // ===== On-Demand Constructor Instantiation =====
@@ -805,13 +863,14 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
 	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType!, fnDefaults);
 
-	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes).
+	// Emit ClassDecl with the field initializers and the constructor (struct already emitted by
+	// monoEmitTypeInstNodes); ctorLower merges the initializers into the constructor body.
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
 	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
 	// check at the C level.
-	const classBody: Node[] = [];
+	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
 	classBody.push(ctorDeclNode);
 	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
@@ -822,3 +881,23 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 // Register callback at module load time
 registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx, callLoc); });
+
+test "an instantiation past the depth limit is an error naming the generic" {
+	const ctx = createContext();
+	ctx.genericInstDepth = 51;
+	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
+	const inst = instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	assert inst == null;
+	assert ctx.errors.length == 1;
+	assert ctx.errors[0].message.indexOf("generic instantiation too nested: instantiating 'nest'") >= 0;
+	assert ctx.errors[0].line == 4;
+}
+
+test "an instantiation at the depth limit is still attempted" {
+	const ctx = createContext();
+	ctx.genericInstDepth = 50;
+	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
+	instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	assert ctx.errors.length == 0;
+	assert ctx.genericInstDepth == 50;
+}

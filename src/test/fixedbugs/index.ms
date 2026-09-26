@@ -268,3 +268,4 @@ import "./bug535ObjectTypeLayoutAtEverySlot";
 import "./bug486UnionDiscriminantFromTagC";
 import "./bug213ExternScalarTakesAddress";
 import "./bug390ExplicitMoveOfElementRejected";
+import "./bug561ConstGenericParamRejected";
