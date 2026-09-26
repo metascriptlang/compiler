@@ -39,7 +39,7 @@ test "bug209: an int32 sum past the type's range is left to the runtime" {
 test "bug209: the lowest int32 modulo -1 is left to the runtime" {
 	const js = compileToJS("function f(): int32 { return (-2147483647 - 1) % -1; }");
 	assert js.ok, js.ok ? "" : js.error;
-	assert js.value.contains("% (-1)") || js.value.contains("% -1"), js.value;
+	assert js.value.contains("msModI32((-2147483648), (-1))"), js.value;
 }
 
 test "bug209: float division still keeps the fraction" {
