@@ -264,6 +264,7 @@ export enum NodeFlag {
 	ProtocolCall,
 	Parenthesized, // parser: the expression was written inside grouping parentheses
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
+	CommaWritten,  // parser: a comma was written after this match case
 }
 
 // ===== Node Kind Enum =====

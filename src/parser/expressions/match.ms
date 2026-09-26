@@ -3,7 +3,7 @@
 // Uses callback injection to avoid circular imports with expression.ms
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, takePendingComments } from "../context";
 import { parseOk, parseMemberChain, tryParseLiteralKeyword } from "./util";
 import { isIdentLike } from "../util";
@@ -54,6 +54,7 @@ export function parseMatchExpr(
 
 		// Optional comma between cases
 		if (current(state).kind == TokenKind.Comma) {
+			caseNode.flags = caseNode.flags.incl(NodeFlag.CommaWritten);
 			advance(state);
 		}
 		prevEndLine = state.tokens[state.position - 1].line as int32;

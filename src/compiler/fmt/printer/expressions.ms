@@ -427,8 +427,9 @@ export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchExprData;
 	const cases: Doc[] = [];
-	for (const c of d.matchCases) {
-		cases.push(wrapNodeComments(c, printMatchCase(c, options)));
+	for (let i = 0; i < d.matchCases.length; i += 1) {
+		const c = d.matchCases[i];
+		cases.push(wrapNodeComments(c, printMatchCase(c, options, i == d.matchCases.length - 1)));
 	}
 	return docGroup([
 		docText("match ("),
@@ -440,7 +441,7 @@ export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-export function printMatchCase(node: Node, options: FormatOptions): Doc {
+export function printMatchCase(node: Node, options: FormatOptions, isLast: boolean): Doc {
 	const d = node.data as MatchCaseData;
 	const pats: Doc[] = [];
 	for (const p of d.casePatterns) {
@@ -453,8 +454,14 @@ export function printMatchCase(node: Node, options: FormatOptions): Doc {
 	}
 	parts.push(docText(" => "));
 	parts.push(callPrintNode(d.caseBody, options));
-	parts.push(docText(","));
+	if (writesCaseComma(node, d.caseBody, options, isLast)) parts.push(docText(","));
 	return docGroup(parts);
+}
+
+function writesCaseComma(node: Node, body: Node, options: FormatOptions, isLast: boolean): boolean {
+	if (node.flags.has(NodeFlag.CommaWritten)) return true;
+	if (body.kind == NodeKind.BlockStmt) return false;
+	return isLast || options.source == "";
 }
 
 export function printTryExpr(node: Node, options: FormatOptions): Doc {
