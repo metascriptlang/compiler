@@ -1117,20 +1117,15 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			const newTmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
+			if (ctorChildren == null && d.newArguments.length > 0) {
+				addCGenError(g, `internal: the constructor of '${bareNew}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			}
 			let initArgs = newTmp;
-			for (const argNode of d.newArguments) {
+			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
+				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
-				// `_init` parameters go through the same `shouldIndirectParam`
-				// promotion that any other function uses (Bug 9). Mirror it on
-				// the caller side: if the user's ctor arg type is ccgIntroducedPtr
-				// (Array, Union, Span, big struct) and the arg isn't already a
-				// pointer, take its address — same convention `shimCallArg` uses
-				// for ordinary call sites. Without this, the caller passes a
-				// value where the lifted `_init` signature expects a pointer.
-				if (argNode.nodeType != null
-						&& ccgIntroducedPtr(g.target, argNode.nodeType)
-						&& !isPointerType(argNode.nodeType)) {
-					argSnippet = safeAddrOf(g, p, argSnippet, argNode, argNode.nodeType);
+				if (ctorChildren != null && ai < ctorChildren.length) {
+					argSnippet = shimCallArg(g, p, argSnippet, ctorChildren[ai], argNode, 0, ai);
 				}
 				initArgs = initArgs + ", " + argSnippet;
 			}

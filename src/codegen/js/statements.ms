@@ -12,7 +12,6 @@ import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlo
 import { safeJsName, jsSymbolName } from "./expressions";
 import { emitCopyOnRead } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isStringLike } from "../../checker/types";
 
 // A failing assert must abandon the rest of its test body — the C harness does
 // this with `goto` after setting msErr, so the JS side throws and lets the
@@ -310,12 +309,6 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 export function emitThrowStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	emitIndent(gen);
-	if (isStringLike(d.throwArg.nodeType)) {
-		emit(gen, "throw new Error(");
-		emitNode(gen, d.throwArg);
-		emit(gen, ");\n");
-		return;
-	}
 	emit(gen, "throw ");
 	emitNode(gen, d.throwArg);
 	emit(gen, ";\n");

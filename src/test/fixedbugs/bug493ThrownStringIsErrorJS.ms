@@ -5,8 +5,9 @@
 //             not compile on C (`msString` cast to `msException*`).
 // Root cause: the checker types every catch binding as Error. C minted an Error from a thrown
 //             `string` (msThrow) but not from a string-literal type, and JS threw the string as is.
-// Fix:        every string-like throw argument becomes an Error with that message: msThrow on C,
-//             `throw new Error(...)` on JS.
+// Fix:        the checker boxes every string-like throw argument into `new Error(...)` (main
+//             1debbcc8), so both backends throw that Error; on C the union parameter reaches
+//             Error's string parameter by value (bug502).
 
 import { compileToC, compileToJS } from "../helpers";
 
@@ -33,8 +34,10 @@ test "bug493: a thrown string-literal union is an Error on JS" {
 	assert js.contains("throw new Error(l)");
 }
 
-test "bug493: a thrown string-literal union mints an exception on C" {
+test "bug493: a thrown string-literal union is an Error on C" {
 	const c = cOf(LIT);
-	assert c.contains("msThrow(");
+	assert c.contains("_init(_new");
+	assert c.contains(", (*l));");
+	assert c.contains("msCurrException = (msException*)(_new");
 	assert !c.contains("(msException*)(l");
 }

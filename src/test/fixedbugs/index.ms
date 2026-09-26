@@ -298,6 +298,7 @@ import "./bug498FloatToInt64RangeCheckC";
 import "./bug499CharIsUnsignedC";
 import "./bug500NumberBitwiseToInt32C";
 import "./bug501MangledNamesStayDistinctC";
+import "./bug502CtorArgByFormalC";
 import "./bug213ExternScalarTakesAddress";
 import "./bug390ExplicitMoveOfElementRejected";
 import "./bug561ConstGenericParamRejected";

@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType, isStringLike } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CTryEntry,
@@ -737,7 +737,7 @@ function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		}
 	}
 	const argType = d.throwArg.nodeType;
-	if (isStringLike(argType)) {
+	if (argType != null && argType.kind == TypeKind.String) {
 		emitStmtsLine(p, "msThrow(" + genExpr(g, p, d.throwArg) + ");");
 		emitErrorGoto(p);
 		return;

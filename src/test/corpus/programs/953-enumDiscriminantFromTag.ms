@@ -29,16 +29,18 @@ function showD3(d: D3): string {
 
 function mkD(b: boolean): D { return b ? { kind: S.B, y: "yy" } : { kind: S.A, x: 3 }; }
 
-function run(): void {
+function run(): string {
+	const lines: string[] = [];
 	const a: E = { kind: K.A, x: 1 } as Av;
 	const b: E = { kind: K.B, y: 2 } as Bv;
-	console.log(nameE(a), nameE(b), a.kind == K.A, b.kind == K.B);
+	lines.push(`${nameE(a)} ${nameE(b)} ${a.kind == K.A} ${b.kind == K.B}`);
 	const da = mkD(false);
 	const db = mkD(true);
-	console.log(showD(da), showD(db), (da.kind as int32).toString(), (db.kind as int32).toString());
+	lines.push(`${showD(da)} ${showD(db)} ${(da.kind as int32).toString()} ${(db.kind as int32).toString()}`);
 	const c: D3 = { kind: K3.C, z: 9 };
 	const x: D3 = { kind: K3.A, x: 1 };
 	const y: D3 = { kind: K3.B, y: "q" };
-	console.log(showD3(c) + showD3(x) + showD3(y), (c.kind as int32).toString());
+	lines.push(`${showD3(c) + showD3(x) + showD3(y)} ${(c.kind as int32).toString()}`);
+	return lines.join("|");
 }
-run();
+console.log(run());
