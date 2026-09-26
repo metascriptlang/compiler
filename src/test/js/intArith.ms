@@ -8,16 +8,34 @@
 
 import { compileToJS } from "../helpers";
 
-test "int32 division truncates" {
-	const result = compileToJS("function f(a: int32, b: int32): int32 { return a / b; }");
+test "int32 division by a literal truncates" {
+	const result = compileToJS("function f(a: int32): int32 { return a / 3; }");
 	assert result.ok;
 	assert result.value.contains("| 0");
 }
 
-test "uint32 division shifts unsigned" {
-	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a / b; }");
+test "int32 division by a variable calls the checked division" {
+	const result = compileToJS("function f(a: int32, b: int32): int32 { return a / b; }");
+	assert result.ok;
+	assert result.value.contains("msDivI32(");
+}
+
+test "int32 division by the literal -1 calls the checked division" {
+	const result = compileToJS("function f(a: int32): int32 { return a / -1; }");
+	assert result.ok;
+	assert result.value.contains("msDivI32(");
+}
+
+test "uint32 division by a literal shifts unsigned" {
+	const result = compileToJS("function f(a: uint32): uint32 { return a / 3; }");
 	assert result.ok;
 	assert result.value.contains(">>> 0");
+}
+
+test "uint32 division by a variable calls the checked division" {
+	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a / b; }");
+	assert result.ok;
+	assert result.value.contains("msDivU32(");
 }
 
 test "uint8 division masks to a byte" {
@@ -26,10 +44,22 @@ test "uint8 division masks to a byte" {
 	assert result.value.contains("& 255");
 }
 
-test "int64 division truncates through the global Math" {
+test "int64 division by a variable calls the checked division" {
 	const result = compileToJS("function f(a: int64, b: int64): int64 { return a / b; }");
 	assert result.ok;
-	assert result.value.contains("Math.trunc");
+	assert result.value.contains("msDivI64(");
+}
+
+test "int32 power calls the integer power" {
+	const result = compileToJS("function f(a: int32, b: int32): int32 { return a ** b; }");
+	assert result.ok;
+	assert result.value.contains("msPowI32(");
+}
+
+test "float power stays the operator" {
+	const result = compileToJS("function f(a: float64, b: float64): float64 { return a ** b; }");
+	assert result.ok;
+	assert !result.value.contains("msPow");
 }
 
 test "float division is left alone" {
@@ -41,16 +71,22 @@ test "float division is left alone" {
 // Nim wraps `%` in Math.trunc; measured, that is a no-op once both operands are
 // genuinely integral, and MS deliberately emits nothing. NIM-REF CG-9 carries
 // the row. This test is what makes that divergence a decision rather than drift.
-test "remainder is left alone" {
-	const result = compileToJS("function f(a: int32, b: int32): int32 { return a % b; }");
+test "remainder by a literal is left alone" {
+	const result = compileToJS("function f(a: int32): int32 { return a % 3; }");
 	assert result.ok;
 	assert !result.value.contains("| 0");
 }
 
-test "compound divide on an identifier truncates and loses the compound form" {
+test "remainder by a variable calls the checked remainder" {
+	const result = compileToJS("function f(a: int32, b: int32): int32 { return a % b; }");
+	assert result.ok;
+	assert result.value.contains("msModI32(");
+}
+
+test "compound divide on an identifier calls the checked division and loses the compound form" {
 	const result = compileToJS("function f(b: int32): int32 { let a: int32 = 10; a /= b; return a; }");
 	assert result.ok;
-	assert result.value.contains("| 0");
+	assert result.value.contains("msDivI32(");
 	assert !result.value.contains("/=");
 }
 
@@ -64,10 +100,10 @@ test "compound divide on a float is left alone" {
 // HiddenDeref, which a single-module compile never produces — measured, and the
 // reason a green suite here still shipped a hard error on every real build.
 // Runtime coverage: corpus/programs/016-jsIntegerModel.ms.
-test "compound divide through an index over identifiers still truncates" {
+test "compound divide through an index over identifiers still checks" {
 	const result = compileToJS("function f(arr: int32[], i: int32, b: int32): int32 { arr[i] /= b; return arr[i]; }");
 	assert result.ok;
-	assert result.value.contains("| 0");
+	assert result.value.contains("msDivI32(");
 	assert !result.value.contains("/=");
 }
 
@@ -97,9 +133,8 @@ test "compound add on a signed call-indexed left side stays untouched" {
 
 // ===== uint32 wrap =====
 //
-// C wraps mod 2^32 at this width and nowhere else — uint8/uint16 follow C's
-// integer promotion on both backends already, and signed overflow traps on
-// C-debug rather than producing a value. So every test here is uint32.
+// Signed 32- and 64-bit overflow traps on C-debug rather than producing a value;
+// uint32 wraps mod 2^32 and the 8/16-bit widths wrap at their own width.
 
 test "uint32 addition wraps" {
 	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a + b; }");
@@ -183,8 +218,51 @@ test "int32 addition is left alone" {
 	assert !result.value.contains("| 0");
 }
 
-test "uint8 addition is left alone because C promotes it" {
+test "uint8 addition wraps at a byte" {
 	const result = compileToJS("function f(a: uint8, b: uint8): uint8 { return a + b; }");
 	assert result.ok;
-	assert !result.value.contains(">>> 0");
+	assert result.value.contains("& 255");
+}
+
+test "int8 addition wraps with a sign extension" {
+	const result = compileToJS("function f(a: int8, b: int8): int8 { return a + b; }");
+	assert result.ok;
+	assert result.value.contains("<< 24");
+}
+
+test "int16 negation wraps with a sign extension" {
+	const result = compileToJS("function f(a: int16): int16 { return -a; }");
+	assert result.ok;
+	assert result.value.contains("<< 16");
+}
+
+test "uint8 shift masks its count to the byte width" {
+	const result = compileToJS("function f(a: uint8, n: uint8): uint8 { return a << n; }");
+	assert result.ok;
+	assert result.value.contains("& 7");
+}
+
+test "int8 unsigned shift reads the byte unsigned" {
+	const result = compileToJS("function f(a: int8, n: int8): int8 { return a >>> n; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
+}
+
+test "uint8 postfix increment wraps and reads back the value before it" {
+	const result = compileToJS("function f(a: uint8): uint8 { let x = a; const b = x++; return b + x; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
+	assert !result.value.contains("x++");
+}
+
+test "uint32 prefix decrement wraps" {
+	const result = compileToJS("function f(a: uint32): uint32 { let x = a; --x; return x; }");
+	assert result.ok;
+	assert result.value.contains(">>> 0");
+}
+
+test "int32 increment is left alone" {
+	const result = compileToJS("function f(a: int32): int32 { let x = a; x++; return x; }");
+	assert result.ok;
+	assert result.value.contains("x++");
 }

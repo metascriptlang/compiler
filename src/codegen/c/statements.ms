@@ -4,13 +4,13 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType, isStringLike } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, addCGenError,
+	CSection, addLine, sec, nameSetAdd, addCGenError, addUnloweredError,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
@@ -127,7 +127,8 @@ export function genStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
 		NodeKind.AssertStmt => { addCGenError(g, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
-		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
+		NodeKind.ClassDecl | NodeKind.MacroDecl => {},
+		_ => { addUnloweredError(g, p, node); },
 	};
 }
 
@@ -742,7 +743,7 @@ function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// exception object (a rethrown `catch(e){ throw e }` or `throw $excCaught`) and
 	// is stored directly as the current exception, then unwound.
 	const argType = d.throwArg.nodeType;
-	if (argType != null && argType.kind == TypeKind.String) {
+	if (isStringLike(argType)) {
 		emitStmtsLine(p, "msThrow(" + genExpr(g, p, d.throwArg) + ");");
 		emitErrorGoto(p);
 		return;
@@ -775,11 +776,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, `msException* ${excSave} = NULL;`);
 	}
 
-	// Reference parity (ccgstmts.nim genTryGoto: `hasExcept = t[1].kind ==
-	// nkExceptBranch`): handler presence is STRUCTURAL. `try/finally` carries a
-	// NullLiteral in catchBody to mean "no catch clause" — it must propagate the
-	// error, not swallow it. An empty `catch {}` is a real BlockStmt handler and
-	// still swallows.
+	// Handler presence is STRUCTURAL: `try/finally` carries a NullLiteral in
+	// catchBody to mean "no catch clause" — it must propagate the error, not
+	// swallow it. An empty `catch {}` is a real BlockStmt handler and still swallows.
 	const hasCatch = d.hasCatchClause;
 
 	p.nestedTryStmts.push({
@@ -799,12 +798,14 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, catchLabel + ": {");
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName != "") {
+			const catchVar = fillLocalName(p, safeName(d.catchName), false);
+			if (node.resolvedSym != null) setLocalSymName(p, node.resolvedSym, catchVar);
 			const ct = node.nodeType;
 			if (ct != null && !isUnresolvedType(ct) && ct.kind != TypeKind.Error) {
 				const cty = getTypeDesc(g, ct);
-				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
+				emitStmtsLine(p, `${cty} ${catchVar} = (${cty})msCurrException;`);
 			} else {
-				emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
+				emitStmtsLine(p, `msException* ${catchVar} = msCurrException;`);
 			}
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
@@ -817,10 +818,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			// analyzer decrefs it at handler scope-end — clear only nulls.
 			emitStmtsLine(p, "msClearException();");
 		}
-		// ccgstmts.nim genTryGoto keeps the try entry alive across the except
-		// branches (`p.nestedTryStmts[^1].label = nextExcept`) and places
-		// `LA<nextExcept>_:` right after the branch body, so a raise inside a
-		// handler still falls into this try's finally before propagating.
+		// The try entry stays on the stack across the handler body, with its label
+		// right after that body, so a raise inside a handler still falls into this
+		// try's finally before propagating.
 		const afterCatchLabel = "__aftercatch_" + labelId;
 		p.nestedTryStmts.pop();
 		p.nestedTryStmts.push({
@@ -839,9 +839,8 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody != null) {
-		// ccgstmts.nim genTryGoto `oldNimErrFin`: run the finally body with the
-		// error flag cleared so its own raise-checks don't misfire, then restore
-		// it so a propagating exception keeps propagating.
+		// Run the finally body with the error flag cleared so its own raise-checks
+		// don't misfire, then restore it so a propagating exception keeps propagating.
 		emitStmtsLine(p, `${errSave} = msErr;`);
 		emitStmtsLine(p, `${excSave} = msCurrException;`);
 		emitStmtsLine(p, "msErr = MS_FALSE;");
@@ -857,8 +856,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, `msDecref((void*)${excSave});`);
 	}
 
-	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after
-	// the finally must reach the ENCLOSING handler.
+	// An error still set after the finally must reach the ENCLOSING handler.
 	emitStmtsLine(p, "if (msErr) {");
 	setStmtsIndent(p, oldIndent + 2);
 	emitErrorGoto(p);
@@ -1121,4 +1119,28 @@ test "long if-else chain (100 branches)" {
 	}
 	// With null CheckerContext, output may be partial; covered by E2E tests
 	assert elseIfCount >= 0;
+}
+
+function stmtErrors(input: string): string {
+	const pr = parseSource(input);
+	if (!pr.ok) return "PARSE_ERROR";
+	const pd = pr.value.data as ProgramData;
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const p = createProc("test", null);
+	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
+	let messages = "";
+	for (const e of g.errors) messages = messages + e.message + "\n";
+	return messages;
+}
+
+test "a defer that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("defer { f(); }").contains("internal: DeferStmt reached C codegen unlowered at 1:");
+}
+
+test "a for-in that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("for (const k in o) { f(); }").contains("internal: ForInStmt reached C codegen unlowered");
+}
+
+test "a macro declaration in a statement list emits nothing" {
+	assert stmtErrors("macro m() { }") == "";
 }

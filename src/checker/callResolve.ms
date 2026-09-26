@@ -4,7 +4,7 @@
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
-import { monoInstanceName } from "../monomorphize/registry";
+import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
@@ -679,7 +679,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			if (innerType.kind == TypeKind.GenericInstance && innerType.typeChildren.length > 0) {
 				mangledName = monoInstanceName(innerType);
 			} else {
-				mangledName = innerType.typeName;
+				mangledName = monoBaseName(innerType.typeName, d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "");
 			}
 		}
 		const ctorFnName = mangledName + "_new";

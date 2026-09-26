@@ -29,7 +29,7 @@ test "bug481: uint32 >> is logical with a 5-bit count" {
 	assert c.contains("((uint32_t)((uint32_t)(a) >> ((uint32_t)(n) & 31)))");
 }
 
-test "bug481: an int8 << shifts the promoted int32 with a 5-bit count" {
+test "bug481: an int8 << shifts the 8-bit view with a 3-bit count and wraps at 8 bits" {
 	const c = cOf("export function f(a: int8, n: int8): int8 { return a << n; }\n");
-	assert c.contains("((int32_t)((uint32_t)(a) << ((uint32_t)(n) & 31)))");
+	assert c.contains("((int8_t)((uint8_t)(a) << ((uint8_t)(n) & 7)))");
 }

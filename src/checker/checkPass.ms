@@ -25,6 +25,7 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
+import { monoBaseName } from "../monomorphize/registry";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -1136,7 +1137,8 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// reaches the class through an import can no longer read the signature off
 			// the AST. The shared registry is the order-independent carrier.
 			if (className != "" && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-				registerCtorDefaults(className + "_new", node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
+				const ctorOwner = classType.sym != null ? classType.sym.modulePath : ctx.modulePath;
+				registerCtorDefaults(monoBaseName(className, ctorOwner) + "_new", node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
 			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).

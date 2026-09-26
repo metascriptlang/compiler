@@ -100,3 +100,119 @@ export class AbortController {
 export template `!=`<T>(a: T, b: T): boolean { return !(a == b); }
 export template `>`<T>(a: T, b: T): boolean { return b < a; }
 export template `>=`<T>(a: T, b: T): boolean { return b <= a; }
+
+// ===== Checked integer division, modulo and power =====
+// The operator lowering calls these (runtime/core/checkedArith.h on C); their
+// bodies are emitted whole so the integer operators inside are not lowered again.
+
+@compilerFunc
+function msDivI32(a: int32, b: int32): int32 {
+	@emit(`if (${b} === 0) throw new Error("division by zero");
+	if (${b} === -1 && ${a} === -2147483648) throw new Error("over- or underflow");
+	return (${a} / ${b}) | 0;`);
+	unreachable;
+}
+
+@compilerFunc
+function msModI32(a: int32, b: int32): int32 {
+	@emit(`if (${b} === 0) throw new Error("division by zero");
+	return (${a} % ${b}) | 0;`);
+	unreachable;
+}
+
+@compilerFunc
+function msDivU32(a: uint32, b: uint32): uint32 {
+	@emit(`if (${b} === 0) throw new Error("division by zero");
+	return (${a} / ${b}) >>> 0;`);
+	unreachable;
+}
+
+@compilerFunc
+function msModU32(a: uint32, b: uint32): uint32 {
+	@emit(`if (${b} === 0) throw new Error("division by zero");
+	return ${a} % ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msDivI64(a: int64, b: int64): int64 {
+	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	if (${b} === -1n && ${a} === -9223372036854775808n) throw new Error("over- or underflow");
+	return ${a} / ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msModI64(a: int64, b: int64): int64 {
+	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	return ${a} % ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msDivU64(a: uint64, b: uint64): uint64 {
+	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	return ${a} / ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msModU64(a: uint64, b: uint64): uint64 {
+	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	return ${a} % ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msPowI32(a: int32, b: int32): int32 {
+	@emit(`if (${b} < 0) throw new Error("value " + ${b} + " not in range 0 .. 2147483647");
+	let r = 1, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1) { r = r * x; if (r > 2147483647 || r < -2147483648) throw new Error("over- or underflow"); }
+		y = y >>> 1;
+		if (y === 0) return r | 0;
+		x = x * x;
+		if (x > 2147483647 || x < -2147483648) throw new Error("over- or underflow");
+	}`);
+	unreachable;
+}
+
+@compilerFunc
+function msPowU32(a: uint32, b: uint32): uint32 {
+	@emit(`let r = 1, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1) { r = r * x; if (r > 4294967295) throw new Error("over- or underflow"); }
+		y = y >>> 1;
+		if (y === 0) return r;
+		x = x * x;
+		if (x > 4294967295) throw new Error("over- or underflow");
+	}`);
+	unreachable;
+}
+
+@compilerFunc
+function msPowI64(a: int64, b: int64): int64 {
+	@emit(`if (${b} < 0n) throw new Error("value " + ${b} + " not in range 0 .. 9223372036854775807");
+	let r = 1n, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1n) { r = r * x; if (r > 9223372036854775807n || r < -9223372036854775808n) throw new Error("over- or underflow"); }
+		y = y >> 1n;
+		if (y === 0n) return r;
+		x = x * x;
+		if (x > 9223372036854775807n || x < -9223372036854775808n) throw new Error("over- or underflow");
+	}`);
+	unreachable;
+}
+
+@compilerFunc
+function msPowU64(a: uint64, b: uint64): uint64 {
+	@emit(`let r = 1n, x = ${a}, y = ${b};
+	for (;;) {
+		if (y & 1n) { r = r * x; if (r > 18446744073709551615n) throw new Error("over- or underflow"); }
+		y = y >> 1n;
+		if (y === 0n) return r;
+		x = x * x;
+		if (x > 18446744073709551615n) throw new Error("over- or underflow");
+	}`);
+	unreachable;
+}

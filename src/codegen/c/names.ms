@@ -226,13 +226,14 @@ export function classInitCName(classCName: string): string {
 	return classCName + "_init";
 }
 
-// Static field global name: "Counter.total" → "Counter__total"
-export function staticFieldCName(qualifiedName: string): string {
+// Static field global name: "Counter.total" → "Counter__total__<module>"
+export function staticFieldCName(sym: Readonly<Symbol> | null, qualifiedName: string): string {
 	const dotIdx = qualifiedName.indexOf(".");
-	if (dotIdx >= 0) {
-		return mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length));
-	}
-	return mangle(qualifiedName);
+	const base = dotIdx >= 0
+		? mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length))
+		: mangle(qualifiedName);
+	if (sym != null && sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
+	return base;
 }
 
 // ===== Symbol-aware C name: shared early-exit =====

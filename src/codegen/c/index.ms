@@ -13,7 +13,7 @@ import { forEachChild } from "../../ast/visitor";
 import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
 import {
 	CGen, CSection, AliveSet, CEmissionFacts,
-	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd,
+	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 } from "./context";
 import { genDecl, registerDeclCName } from "./declarations";
 import { mangleModuleName } from "./names";
@@ -177,6 +177,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
+	undefPlatformMacros(g);
 
 	output.code = assembleOutput(g);
 	output.errors = g.errors;

@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -23,6 +23,7 @@ import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
+import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -96,19 +97,63 @@ function literalDiscriminantOf(u: Type): string {
 		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(u) : "";
 	}
 	const strDisc = findSharedStringDiscriminant(u);
-	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(u);
+	if (strDisc != "") return strDisc;
+	const boolDisc = findSharedBooleanDiscriminant(u);
+	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(u);
 }
 
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
 	const lits: string[] = [];
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const lt = findFieldInVariant(u.typeChildren[vi], disc);
-		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral)) {
+		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? enumMemberOfKey(lt.typeReturn, lt.typeNames[0]) : -1;
+		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral && enumMember < 0)) {
 			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return tagRead;
 		}
-		lits.push(lt.kind == TypeKind.BooleanLiteral ? cBoolLiteral(booleanLiteralValue(lt)) : typeofStr(g, lt.typeName));
+		if (enumMember >= 0) {
+			lits.push(`${getTypeDesc(g, lt.typeReturn)}_${mangle(lt.typeReturn.typeNames[enumMember])}`);
+		} else {
+			lits.push(lt.kind == TypeKind.BooleanLiteral ? cBoolLiteral(booleanLiteralValue(lt)) : typeofStr(g, lt.typeName));
+		}
 	}
+	return tagToLiteral(p, lits, tagRead);
+}
+
+function enumMemberOfKey(enumT: Type, key: string): int32 {
+	for (let mi = 0; mi < enumT.typeNames.length; mi += 1) {
+		const m = enumT.typeNames[mi];
+		if (key == m || key.endsWith("." + m) || key == enumT.typeName + "_" + m) return mi as int32;
+	}
+	return -1;
+}
+
+function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
+	const enumT = u.typeExtra;
+	const members: string[] = [];
+	if (enumT == null || enumT.kind != TypeKind.Enum) return members;
+	let identity = true;
+	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
+		const key = vi + 1 < u.typeNames.length ? u.typeNames[vi + 1] : "";
+		const mi = enumMemberOfKey(enumT, key);
+		if (mi < 0) {
+			addCGenError(g, `internal: variant ${vi} of '${typeDisplayName(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			return [];
+		}
+		const mt = enumT.typeChildren != null && mi < enumT.typeChildren.length ? enumT.typeChildren[mi] : null;
+		const value = mt != null ? mt.typeValue : mi;
+		if (value != vi) identity = false;
+		members.push(`${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[mi])}`);
+	}
+	return identity ? [] : members;
+}
+
+function enumDiscriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, tagRead: string): string {
+	const members = enumTagMembers(g, node, u);
+	return members.length == 0 ? tagRead : tagToLiteral(p, members, tagRead);
+}
+
+function tagToLiteral(p: CProc, lits: string[], tagRead: string): string {
 	let tag = tagRead;
 	let prefix = "";
 	if (lits.length > 2) {
@@ -1044,7 +1089,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const bareNew = bareTypeName(g, cName);
 			const initName = classInitCName(cName);
-			const ctorEntry = lookupCtorDefaults(bareNew + "_new");
+			const ctorEntry = lookupCtorDefaults(monoBaseName(bareNew, d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "") + "_new");
 			let ctorChildren: Type[] = null as unknown as Type[];
 			if (ctorEntry != null && ctorEntry.fnType != null) {
 				ctorChildren = ctorEntry.fnType.typeChildren;
@@ -1180,7 +1225,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		if (parentName != "") {
 			const parentBare = bareTypeName(g, parentName);
 			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(parentBare + "_new");
+			const parentEntry = lookupCtorDefaults(monoBaseName(parentBare, parentSym.modulePath) + "_new");
 			let parentChildren: Type[] = null as unknown as Type[];
 			if (parentEntry != null && parentEntry.fnType != null) {
 				parentChildren = parentEntry.fnType.typeChildren;
@@ -1300,7 +1345,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
 			const ut = peelToStructOrUnion(md.object.nodeType);
-			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && literalDiscriminantOf(ut) == md.property) {
+			const isEnumDiscWrite = ut != null && ut.kind == TypeKind.Union && isDiscriminatedUnion(ut) && getDiscriminantName(ut) == md.property
+				&& enumTagMembers(g, node, ut).length > 0;
+			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && (literalDiscriminantOf(ut) == md.property || isEnumDiscWrite)) {
 				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 		}
@@ -1366,13 +1413,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(genShift(g, node, d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
-		// C has no exponent operator; pow() is the call form, same shape as fmod
-		// above. An integer result type casts back — pow is double-valued.
 		if (d.operator == "**") {
 			const rt = node.nodeType;
 			if (rt != null && isIntegerType(rt)) {
-				ctx.results.push(`((${getTypeDesc(g, rt)})pow(${left}, ${finalRight}))`);
-				return;
+				addCGenError(g, `internal: integer '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
 			}
 			ctx.results.push(`pow(${left}, ${finalRight})`);
 			return;
@@ -1397,6 +1441,19 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			return;
 		}
 		const cOp = mapBinaryOp(g, d.operator);
+		const narrowC = subIntTypeDesc(g, node.nodeType);
+		if (narrowC != "" && isWrappingArithOp(d.operator)) {
+			ctx.results.push(`((${narrowC})((uint32_t)(${left}) ${cOp} (uint32_t)(${finalRight})))`);
+			return;
+		}
+		if (narrowC != "" && (d.operator == "/" || d.operator == "%")) {
+			ctx.results.push(`((${narrowC})(${left} ${cOp} ${finalRight}))`);
+			return;
+		}
+		if (subIntTypeDesc(g, d.left.nodeType) != "" && (d.operator == "+=" || d.operator == "-=" || d.operator == "*=")) {
+			ctx.results.push(`(${left} ${cOp} (uint32_t)(${finalRight}))`);
+			return;
+		}
 		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
 	}
@@ -1408,6 +1465,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const d = node.data as UnaryExprData;
 		if (d.unaryOp == "typeof") {
 			ctx.results.push(genTypeofExpr(g, d.operand, operand));
+			return;
+		}
+		const narrowUnary = subIntTypeDesc(g, node.nodeType);
+		if (narrowUnary != "" && (d.unaryOp == "-" || d.unaryOp == "~")) {
+			ctx.results.push(`((${narrowUnary})(${d.unaryOp}${operand}))`);
 			return;
 		}
 		ctx.results.push(`(${d.unaryOp}${operand})`);
@@ -1459,7 +1521,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			const staticCName = staticFieldCName(node.resolvedSym.name);
+			const staticCName = staticFieldCName(node.resolvedSym, node.resolvedSym.name);
 			// Declared in every module that reads it. The owning module also defines
 			// it, and an extern next to the definition is legal C — so this needs no
 			// knowledge of which module we are in, which a prelude symbol cannot give.
@@ -1541,7 +1603,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) == d.property) {
-				ctx.results.push(`${obj}${acc}_tag`);
+				const enumDeclTy = mainDeclTy != null && isDiscriminatedUnion(mainDeclTy) ? mainDeclTy : objType;
+				ctx.results.push(enumDiscriminantFromTag(g, p, node, enumDeclTy, `${obj}${acc}_tag`));
 				return;
 			}
 			// Variant field access: s.radius → s.v<N>.radius.
@@ -1601,8 +1664,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
-					const chainTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
-					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}${chainTail}`);
+					if (discSuffix != "") {
+						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${obj}${objIsPtr ? "->" : "."}${discSuffix}`));
+						return;
+					}
+					ctx.results.push(`${obj}${objIsPtr ? "->" : "."}v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`);
 					return;
 				}
 				if (declVarIdx >= 0) {
@@ -1640,8 +1706,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				const ptrType = idSym != null && isPointerType(idSym.symbolType);
 					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
-					const identTail = discSuffix != "" ? discSuffix : `v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`;
-					ctx.results.push(`${cName}${acc2}${identTail}`);
+					if (discSuffix != "") {
+						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${cName}${acc2}${discSuffix}`));
+						return;
+					}
+					ctx.results.push(`${cName}${acc2}v${declVarIdx}${variantSlotAccess(declTy, declVarIdx)}${field}`);
 					return;
 				}
 			}
@@ -2971,7 +3040,17 @@ function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, lef
 	const bits = shiftOperandBits(leftType);
 	const unsignedType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
-	return `((${resultType})((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+}
+
+// An 8- or 16-bit shift is computed in the promoted int, so it wraps at the
+// left operand's width before it widens to the result type.
+function atLeftWidth(g: CGen, leftType: Type | null, bits: int32, resultType: string): string {
+	if (bits >= 32) return "";
+	const lt = integerTypeOf(leftType);
+	if (lt == null) return "";
+	const leftC = getTypeDesc(g, lt);
+	return leftC == resultType ? "" : `(${leftC})`;
 }
 
 function integerTypeOf(t: Type | null): Type | null {
@@ -2990,16 +3069,24 @@ function isUnsignedInteger(t: Type): boolean {
 
 function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | null, left: string, right: string): string {
 	const bits = shiftOperandBits(leftType);
-	if (bits < 32) {
-		const promoted = op == "<<" ? `(uint32_t)(${left}) << ((uint32_t)(${right}) & 31)` : `(int32_t)(${left}) >> ((uint32_t)(${right}) & 31)`;
-		return `((int32_t)(${promoted}))`;
-	}
 	const lt = integerTypeOf(leftType);
 	if (op == ">>" && lt != null && isUnsignedInteger(lt)) return genLogicalShr(g, node, leftType, left, right);
 	const countType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : `int${bits}_t`;
 	const operandType = op == "<<" ? countType : `int${bits}_t`;
-	return `((${resultType})((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
+	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
+}
+
+// The operands go unsigned so C's promotion to int cannot overflow (uint16 *
+// uint16), and the result wraps at its own width.
+function subIntTypeDesc(g: CGen, t: Type | null): string {
+	const it = integerTypeOf(t);
+	if (it == null || shiftOperandBits(it) >= 32) return "";
+	return getTypeDesc(g, t);
+}
+
+function isWrappingArithOp(op: string): boolean {
+	return op == "+" || op == "-" || op == "*";
 }
 
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
