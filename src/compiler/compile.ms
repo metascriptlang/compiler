@@ -65,7 +65,7 @@ import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCo
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
@@ -988,6 +988,7 @@ interface CompileJob {
 	fileFlags: string;
 	fp: string;            // precomputed fingerprint; written post-compile
 	dependencyFile: string;
+	dependenciesKnown: boolean;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -1072,7 +1073,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
 					} else {
-						jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile });
+						jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown });
 					}
 				}
 			}
@@ -1093,6 +1094,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	// parent terminal by the spawn dispatcher in previous versions, and the
 	// failure path here just stopBuild()s after logging. Direct serial compile/link
 	// paths (cmdBuildC body) preserve full Result + stderr display.
+	const startedSeconds = Date.now() / 1000;
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
@@ -1135,9 +1137,20 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
-		registerNativeDependencies(j.fullPath, fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary));
-		writeCompileCache(j.oFile, j.fp);
-		oFiles.push(j.oFile);
+		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary);
+		registerNativeDependencies(j.fullPath, compileCmd);
+		if (j.dependenciesKnown) {
+			writeCompileCache(j.oFile, j.fp);
+			oFiles.push(j.oFile);
+		} else {
+			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
+			if (published.ok) {
+				oFiles.push(published.value);
+			} else {
+				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
+				stopBuild();
+			}
+		}
 		ci = ci + 1;
 	}
 	return oFiles;

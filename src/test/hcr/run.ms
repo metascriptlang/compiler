@@ -168,6 +168,53 @@ function moduleAbi(): void {
 	console.log("ok   hcrModuleAbi");
 }
 
+function linkKeys(dir: string): string[] {
+	const cache = `${dir}/out/debug/.cache`;
+	const keys: string[] = [];
+	for (const e of readDir(cache)) {
+		if (e.startsWith("link.") && e.endsWith(".cache")) keys.push(`${e}\n${read(`${cache}/${e}`)}`);
+	}
+	return keys;
+}
+
+function firstWarmBuild(): void {
+	const tag = "hcrFirstWarmBuild";
+	const dir = freshDir(`${TMP}/firstWarm`);
+	copy(`${FIXTURES}/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${dir}/logic.ms`);
+	const build = ["build", "app.ms", "--hcr", "--output=module.hcr"];
+	mustBuild(tag, dir, build, "cold build failed");
+	const cold = linkKeys(dir);
+	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
+	mustBuild(tag, dir, build, "body-edit build failed");
+	let relinked = 0;
+	for (const key of linkKeys(dir)) {
+		if (!cold.includes(key)) relinked += 1;
+	}
+	need(tag, cold.length > 0, "the cold build left no link keys");
+	need(tag, relinked == 1, `the first warm build relinked ${relinked} images, expected only logic's`);
+
+	const plain = freshDir(`${TMP}/firstWarmPlain`);
+	copy(`${FIXTURES}/app.ms`, `${plain}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${plain}/logic.ms`);
+	const plainBuild = ["build", "app.ms", "--verbose", "--output=app"];
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	mustBuild(tag, plain, plainBuild, "cold plain build failed");
+	copy(`${FIXTURES}/logicBodyEdit.ms`, `${plain}/logic.ms`);
+	const warm = mustBuild(tag, plain, plainBuild, "plain body-edit build failed");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	let recompiled = 0;
+	let reused = 0;
+	for (const line of lines(warm)) {
+		if (!line.trim().startsWith("@compile ")) continue;
+		if (line.endsWith("(cached)")) reused += 1; else recompiled += 1;
+	}
+	need(tag, reused + recompiled > 0, "the first warm plain build reported no @compile object");
+	need(tag, recompiled == 0, `the first warm plain build compiled ${recompiled} @compile objects again`);
+	console.log(`ok   ${tag}`);
+}
+
 function emittedModuleC(dir: string, stem: string): string {
 	const debug = `${dir}/out/debug`;
 	for (const e of readDir(debug)) {
@@ -609,6 +656,7 @@ console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 fsWatch();
 moduleAbi();
+firstWarmBuild();
 localNames();
 watchWarm();
 coreLinkClang();
