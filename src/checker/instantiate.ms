@@ -703,6 +703,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturnStmts = savedReturnStmts;
 		if (bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
+			while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();
 		}
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
