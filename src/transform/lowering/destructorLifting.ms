@@ -2114,7 +2114,10 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 	}
 
 	// Per-type value struct element arrays (reference parity: each sequence gets its own hooks)
-	for (const entry of lctx.seqElemTypes) {
+	let wi = 0;
+	while (wi < lctx.seqElemTypes.length) {
+		const entry = lctx.seqElemTypes[wi];
+		wi += 1;
 		if (!nameSetContains(lctx.generated, entry.name) && !isGloballyOwned(entry.name)) {
 			nameSetAdd(lctx.generated, entry.name);
 			claimGlobal(entry.name);
