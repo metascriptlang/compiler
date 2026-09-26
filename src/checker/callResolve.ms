@@ -698,15 +698,16 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		const ctorFnName = mangledName + "_new";
 		const ctorEntry = mangledName != "" ? lookupCtorDefaults(ctorFnName) : null;
+		const classModule = d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "";
 		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
 			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
-				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren);
+				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule);
 		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams != null
 				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
 			// Path 2: non-generic constructors — defaults on class sym
 			const defaults = d.newCallee.resolvedSym.defaultParams;
 			const ctorParamTypes = getCtorParamTypes(d.newCallee.resolvedSym);
-			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes);
+			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule);
 		}
 	}
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.Ref || resolvedType.kind == TypeKind.GenericInstance)) {
