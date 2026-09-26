@@ -21,7 +21,7 @@ import {
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
-import { isAssignable } from "./compat";
+import { isAssignable, unmetConstraint } from "./compat";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -247,6 +247,14 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 				args[candFrom[cj]].location.line, args[candFrom[cj]].location.column);
 			return false;
 		}
+	}
+	for (let bi = 0; bi < boundNames.length; bi += 1) {
+		const unmet = unmetConstraint(symType, boundNames[bi], boundTypes[bi], boundNames, boundTypes);
+		if (unmet == null) continue;
+		const at = boundFrom[bi] >= 0 ? args[boundFrom[bi]].location : callNode.location;
+		addError(ctx, `Type '${typeDisplayName(boundTypes[bi])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${boundNames[bi]}' in '${sym.name}'`,
+			at.line, at.column);
+		return false;
 	}
 	return true;
 }

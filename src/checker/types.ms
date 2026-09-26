@@ -3259,6 +3259,20 @@ export function getElementType(t: Type): Type {
 	return inferredType();
 }
 
+export function typeParamConstraint(t: Type | null, name: string, depth: int32): Type | null {
+	if (t == null || depth > 20) return null;
+	if (t.kind == TypeKind.GenericParam) return t.typeName == name ? t.typeExtra : null;
+	const fromReturn = typeParamConstraint(t.typeReturn, name, depth + 1);
+	if (fromReturn != null) return fromReturn;
+	const fromExtra = typeParamConstraint(t.typeExtra, name, depth + 1);
+	if (fromExtra != null) return fromExtra;
+	for (const c of t.typeChildren) {
+		const fromChild = typeParamConstraint(c, name, depth + 1);
+		if (fromChild != null) return fromChild;
+	}
+	return null;
+}
+
 // Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
 function collectGenericParamNames(t: Type | null, names: string[], depth: int32): void {
 	if (t == null) return;

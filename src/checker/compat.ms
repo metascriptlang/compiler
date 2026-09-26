@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, createBitSet, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, createBitSet, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -235,6 +235,15 @@ let _assignDepth = 0;
 let _isaCount: float64 = 0;
 let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
+export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[]): Type | null {
+	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
+	const raw = typeParamConstraint(owner, name, 0);
+	if (raw == null) return null;
+	const constraint = substituteAllParams(raw, names, types);
+	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
+	return isAssignable(bound, constraint) ? null : constraint;
+}
+
 export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (_assignDepth > 20) return true;
 	_isaCount = _isaCount + 1;

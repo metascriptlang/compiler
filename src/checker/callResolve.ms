@@ -9,7 +9,7 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, TypeRelation, checkGenericSpecialization, cmpCandidates, complexDisambiguation, countRelation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, typeRelation } from "./compat";
+import { CandidateScore, TypeRelation, checkGenericSpecialization, cmpCandidates, complexDisambiguation, countRelation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, unmetConstraint, isNoMatch, isNominalMismatch, needsStdConv, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -2299,6 +2299,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
+	if (reportUnmetConstraints(ctx, node, calleeType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
+
 	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx, node.location);
 	if (instSym == null) return null as unknown as Type;
 
@@ -2306,6 +2308,22 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	cd.callee.resolvedSym = instSym;
 	cd.callee.nodeType = instSym.symbolType;
 	return instSym.symbolType;
+}
+
+function reportUnmetConstraints(ctx: CheckerContext, node: Node, calleeType: Type, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
+	const cd = node.data as CallExprData;
+	let unmetAny = false;
+	for (let i = 0; i < eb.names.length; i += 1) {
+		if (receiverBindings != null && hasBindingName(receiverBindings, eb.names[i])) continue;
+		const unmet = unmetConstraint(calleeType, eb.names[i], eb.types[i], eb.names, eb.types);
+		if (unmet == null) continue;
+		unmetAny = true;
+		const from = i < ebFrom.length ? ebFrom[i] : -1;
+		const at = from >= 0 && from < cd.arguments.length ? cd.arguments[from].location : node.location;
+		addError(ctx, `Type '${typeDisplayName(eb.types[i])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${eb.names[i]}' in '${getCalleeName(cd.callee)}'`,
+			at.line, at.column);
+	}
+	return unmetAny;
 }
 
 // Tier 1: locate the implementation symbol in an overload set.
