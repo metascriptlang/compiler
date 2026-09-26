@@ -219,3 +219,14 @@ test "a constrained template parameter checks its inferred binding" {
 	const src = TPL_CLASSES + "template tg<T extends Animal>(a: T, b: T): T { return a; }\nconst c = tg(dog, \"s\");";
 	assert hasError(src, "Argument type mismatch in 'tg' arg 1: got string, expected Dog");
 }
+
+test "a numeric constraint keeps the explicit type argument over a wider literal" {
+	const src = "function g<T extends number>(a: T, b: T): T { return a; }\n";
+	assert hasError(src + "const c = g<int32>(1, 2.5);", "Argument type mismatch in 'g' arg 1: got float64, expected int32");
+	assert strictErrorCount(src + "const c = g<float64>(1, 2.5);") == 0;
+}
+
+test "a constrained parameter after an unconstrained one keeps its explicit binding" {
+	const src = CLASSES + "function g<U, T extends Animal>(u: U, a: T, b: T): T { return a; }\nconst c = g<string, Dog>(\"u\", dog, animal);";
+	assert hasError(src, "Argument type mismatch in 'g' arg 2: got Animal, expected Dog");
+}
