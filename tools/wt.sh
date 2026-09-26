@@ -395,11 +395,12 @@ sync_main_path() {
 }
 
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 qd item
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
       --no-gate) gate=0 ;;
+      --async) async=1 ;;
       *) target=$1 ;;
     esac
     shift
@@ -416,6 +417,16 @@ cmd_land() {
   new=$(git -C "$w" rev-parse HEAD)
   [ "$new" != "$old" ] || die "land: nothing to land"
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
+  if [ "$async" -eq 1 ]; then
+    qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
+    mkdir -p "$qd"
+    rm -f "$qd/$target.red"
+    item="$qd/$(date +%s%N)-$target.item"
+    printf 'name=%s\nworktree=%s\n' "$target" "$w" >"$item"
+    (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &)
+    say "land: $target queued ($(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ') pending) — the runner gates it when the machine is free; $BASE moves only on green; gate log lands in $qd/$target.gate.log"
+    exit 0
+  fi
   if [ "$gate" -eq 1 ]; then
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
   else
@@ -449,6 +460,14 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   done <<<"$paths"
   [ "$failed" -eq 0 ] || die "land: $BASE is at $(git -C "$MAIN" rev-parse --short "$new"); the paths above need a manual merge"
   say "landed $(git -C "$MAIN" rev-list --count "$old..$new") commit(s): $BASE $(git -C "$MAIN" rev-parse --short "$old")..$(git -C "$MAIN" rev-parse --short "$new")"
+}
+
+wt_context_extra() {
+  local qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue} n r
+  [ -d "$qd" ] || return 0
+  n=$(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ')
+  r=$(cd "$qd" 2>/dev/null && ls -- *.red 2>/dev/null | sed 's/\.red$//' | paste -sd, -)
+  if [ "$n" -gt 0 ] || [ -n "$r" ]; then say "land-queue: $n pending${r:+ · RED: $r}"; fi
 }
 
 cmd_context() {
