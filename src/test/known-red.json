@@ -8,7 +8,6 @@
     "704-macroExprHoist [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "704-macroExprHoist [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "704-macroExprHoist [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "711-jsxParseNative [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'jsx-parse-native acc=5000'; measured 2026-09-21"},
     "762-bitSetMacro [c]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [danger]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
