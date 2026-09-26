@@ -760,7 +760,7 @@ function unionTagIs(n: Node, idx: number, loc: SourceLocation): Node {
 function tagGuardedStringCall(fnName: string, xf: Node, px: Node, py: Node, sIdx: number, buf: NodeBuf, loc: SourceLocation): void {
 	const b = newBuf();
 	genCall(fnName, "destroy", px, py, b, loc);
-	buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), makeNull(loc), loc));
+	buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(b.items, loc), null, loc));
 }
 
 function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
@@ -799,7 +799,7 @@ function primitiveUnionOp(hook: string, u: Type, xf: Node, yf: Node, buf: NodeBu
 		genCall("msStringIncref", "destroy", clonePath(px, loc), py, incBuf, loc);
 		const podBuf = newBuf();
 		defaultOp("copy", clonePath(xf, loc), clonePath(yf, loc), podBuf, loc);
-		podBuf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(incBuf.items, loc), makeNull(loc), loc));
+		podBuf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock(incBuf.items, loc), null, loc));
 		buf.items.push(makeIf(unionTagIs(xf, sIdx, loc), makeBlock([xStr], loc), makeBlock(podBuf.items, loc), loc));
 		return;
 	}
@@ -1045,7 +1045,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				? [a1]
 				: [a1, a2];
 				const callStmt = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(helperName, attachedOpOf(hook)), null, loc), callArgs, loc), loc);
-				chain = makeIf(cond, makeBlock([callStmt], loc), chain != null ? chain : makeNull(loc), loc);
+				chain = makeIf(cond, makeBlock([callStmt], loc), chain, loc);
 			}
 		}
 		vi -= 1;
@@ -1134,7 +1134,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 		if (armBuf.items.length > 0) {
 			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain != null ? chain : makeNull(loc), loc);
+			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain, loc);
 		}
 		vi -= 1;
 	}
@@ -1614,7 +1614,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 		// Generate: if (!fieldEq) return false;
 		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
 		const notEq = makeUnary("!", eqExpr, loc);
-		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
@@ -1775,7 +1775,7 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
-		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
@@ -1804,11 +1804,11 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
 		// if (a._i < b._i) return true;
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		// if (a._i > b._i) return false;
 		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
@@ -1834,10 +1834,10 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	while (i < t.typeChildren.length) {
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
 		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
