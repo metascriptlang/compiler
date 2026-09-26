@@ -1054,6 +1054,7 @@ export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: st
 export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: string): boolean {
 	if (unionType == null || unionType.typeChildren == null) return false;
 	if (unwrapRefNullUnion(unionType) != null) return false;
+	if (duSharedFieldSlotDiffers(unionType, fieldName)) return true;
 	let firstSig = "";
 	let found = 0;
 	let variants = 0;
@@ -1078,6 +1079,32 @@ export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: stri
 	}
 	if (found == 0) return false;
 	return found < variants;
+}
+
+export function literalTagDiscriminant(unionType: Type | null): string {
+	if (unionType == null || unionType.typeChildren == null) return "";
+	if (isDiscriminatedUnion(unionType)) {
+		const dt = unionType.typeExtra;
+		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(unionType) : "";
+	}
+	const strDisc = findSharedStringDiscriminant(unionType);
+	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(unionType);
+}
+
+export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: string): boolean {
+	if (unionType == null || unionType.typeChildren == null) return false;
+	let firstInline = -1;
+	for (const member of unionType.typeChildren) {
+		const variant = peelToStruct(member);
+		if (variant == null || variant.typeNames == null || !variant.typeNames.includes(fieldName)) continue;
+		const inline = inlineVariantStruct(member) != null ? 1 : 0;
+		if (firstInline < 0) {
+			firstInline = inline;
+		} else if (inline != firstInline) {
+			return literalTagDiscriminant(unionType) != fieldName;
+		}
+	}
+	return false;
 }
 
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
