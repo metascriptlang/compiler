@@ -432,7 +432,10 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 		let at = 0;
 		while (at < pre.length && pre[at] != marks[i]) at += 1;
 		if (at == pre.length) {
-			console.log("DRC INTERNAL ERROR: operand order mark lost at " + marks[i].location.line + ":" + marks[i].location.column);
+			dctx.ctx.checkerCtx.errors.push({
+				message: "DRC internal error: a hoist flushed the statement's pre-list between two operands, so their order cannot be kept",
+				line: marks[i].location.line, column: marks[i].location.column, fatal: false,
+			});
 			return;
 		}
 		const captured: Node[] = [];
