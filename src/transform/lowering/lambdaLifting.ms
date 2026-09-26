@@ -811,7 +811,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 			}
 		}
 		const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);
-		if (envDecl.nodeType != null) { envStructType = envDecl.nodeType; }
+		envStructType = envDecl.nodeType!;
 		state.envStructs.push(envDecl);
 	}
 
