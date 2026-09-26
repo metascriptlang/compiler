@@ -11,6 +11,7 @@ import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPoin
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
+import { constantLiteralOf } from "./constFold";
 
 // ===== Operator Inference =====
 
@@ -642,9 +643,32 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
-	if (expr.kind != NodeKind.UnaryExpr) return false;
-	const u = expr.data as UnaryExprData;
-	return u.unaryOp == "-" && isNodeIntLit(u.operand) && literalFitsInType(u.operand, target, true);
+	if (expr.kind == NodeKind.UnaryExpr) {
+		const u = expr.data as UnaryExprData;
+		if (u.unaryOp == "-" && isNodeIntLit(u.operand)) return literalFitsInType(u.operand, target, true);
+	}
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || !isNodeIntLit(folded)) return false;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) return false;
+	return foldedIntFits(value, target);
+}
+
+function foldedIntFits(value: int64, target: Type): boolean {
+	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
+		return foldedIntFits(value, target.typeReturn);
+	}
+	return match (target.kind) {
+		TypeKind.Int8   => value >= -128 && value <= 127,
+		TypeKind.Int16  => value >= -32768 && value <= 32767,
+		TypeKind.Int32  => value >= -2147483648 && value <= 2147483647,
+		TypeKind.Int64  => true,
+		TypeKind.Uint8  => value >= 0 && value <= 255,
+		TypeKind.Uint16 => value >= 0 && value <= 65535,
+		TypeKind.Uint32 => value >= 0 && value <= 4294967295,
+		TypeKind.Uint64 => value >= 0,
+		_ => false,
+	};
 }
 
 export function reportIntConv(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
