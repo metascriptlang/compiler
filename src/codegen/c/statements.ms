@@ -10,7 +10,7 @@ import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, addCGenError,
+	CSection, addLine, sec, nameSetAdd, addCGenError, addUnloweredError,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
@@ -127,7 +127,8 @@ export function genStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
 		NodeKind.AssertStmt => { addCGenError(g, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
-		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
+		NodeKind.ClassDecl | NodeKind.MacroDecl => {},
+		_ => { addUnloweredError(g, p, node); },
 	};
 }
 
@@ -1118,4 +1119,28 @@ test "long if-else chain (100 branches)" {
 	}
 	// With null CheckerContext, output may be partial; covered by E2E tests
 	assert elseIfCount >= 0;
+}
+
+function stmtErrors(input: string): string {
+	const pr = parseSource(input);
+	if (!pr.ok) return "PARSE_ERROR";
+	const pd = pr.value.data as ProgramData;
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const p = createProc("test", null);
+	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
+	let messages = "";
+	for (const e of g.errors) messages = messages + e.message + "\n";
+	return messages;
+}
+
+test "a defer that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("defer { f(); }").contains("internal: DeferStmt reached C codegen unlowered at 1:");
+}
+
+test "a for-in that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("for (const k in o) { f(); }").contains("internal: ForInStmt reached C codegen unlowered");
+}
+
+test "a macro declaration in a statement list emits nothing" {
+	assert stmtErrors("macro m() { }") == "";
 }
