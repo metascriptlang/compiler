@@ -1,6 +1,6 @@
 // @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
-// @stdout: destroyed t b4 s5 | r3 r2 r1
+// @stdout: destroyed g7 t b4 s5 | r3 r2 r1
 import { Res, res, resDestroyed } from "./res";
 
 let trail = "";
@@ -29,6 +29,15 @@ function onDestroy<T>(this self: Bag<T>): void {
 	trail = trail + " b" + self.h.toString();
 }
 
+interface Tag<T> {
+	v: T;
+	h: int32;
+}
+
+function onDestroy(this self: Tag<string>): void {
+	trail = trail + " g" + self.h.toString();
+}
+
 class Tally<T> {
 	seen: T[];
 	onDestroy(): void { trail = trail + " t"; }
@@ -49,7 +58,9 @@ function run(): void {
 	const o: Outer<string> = { inner: slot<string>("x".repeat(2), 5), tag: "o" };
 	const g = new Bag<float64>(0.5, 4);
 	const t = new Tally<string>();
-	console.log(a.v + " " + b.v.toString() + " " + w.toString() + " " + o.inner.item + o.tag + " " + g.h.toString());
+	const k: Tag<string> = { v: "k".repeat(2), h: 7 };
+	const n: Tag<int32> = { v: 8, h: 8 };
+	console.log(a.v + " " + b.v.toString() + " " + w.toString() + " " + o.inner.item + o.tag + " " + g.h.toString() + " " + k.v + n.v.toString());
 }
 
 run();
