@@ -1998,7 +1998,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
 	if (innerBase.kind == TypeKind.Distinct || innerBase.kind == TypeKind.Error || isUnresolvedType(innerBase)) return;
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
-	const paramNames = splitTopLevel(declaredParams, ",");
+	const paramNames = splitTopLevel(genericParamNamesOf(declaredParams), ",");
 	if (paramNames.length == 0 || paramNames.length > gi.typeChildren.length) return;
 	const names: string[] = [];
 	const args: Type[] = [];
