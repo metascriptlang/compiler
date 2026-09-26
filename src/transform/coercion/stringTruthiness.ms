@@ -10,7 +10,7 @@
 // Conservative syntactic heuristic — no type info needed.
 
 import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType } from "../../checker/types";
+import { isStructType, isMaybeType, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary } from "../util";
@@ -73,9 +73,11 @@ function wrapTruthiness(cond: Node): Node {
 	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Array) {
 		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);
 	}
-	// Ref types (class/interface values) → null-sentinel check; without this arm
-	// a ref-typed identifier fell into the string byteLength fallback below.
-	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Ref) {
+	// Ref values and nullable-pointer unions (Ref/Ptr/unknown | null — the Maybe
+	// split leaves pointers unwrapped) → null-sentinel check; without this arm
+	// both shapes fell into the string byteLength fallback below.
+	if (cond.nodeType != null && (cond.nodeType.kind == TypeKind.Ref
+			|| unwrapRefNullUnion(cond.nodeType) != null)) {
 		return makeBinary(cond, "!==", makeNull(cond.location), cond.location);
 	}
 	if (isAlreadyBoolean(cond)) return cond;
