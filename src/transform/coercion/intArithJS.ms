@@ -28,7 +28,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -47,21 +47,68 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
 	if (base != "") return compoundAsInteger(node, d, base, ctx);
-	if (d.operator == "/") return divideAsInteger(node);
+	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
 }
 
-function divideAsInteger(node: Node): Node {
-	const t = node.nodeType;
+function divideAsInteger(node: Node, d: BinaryExprData): Node {
+	const t = peelToRepr(node.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return node;
+	if (d.operator == "**" || !cannotRaise(d.right, t)) return checkedIntOp(d.operator, d.left, d.right, t, node.nodeType, node.location);
+	if (d.operator != "/") return node;
 	// BigInt division already truncates; Math.trunc on a BigInt throws.
-	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
+	if (is64(t.kind)) return node;
 	const narrow = subIntKind(t);
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	return truncateTo(node, t.kind, node.location);
+}
+
+// The same helpers as C (runtime/core/checkedArith.h), declared for JS in
+// std/core/system/index.jms: a zero divisor, MIN / -1 and an overflowing power raise.
+function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: Type | null, loc: SourceLocation): Node {
+	const prefix = match (op) {
+		"/" => "msDiv",
+		"%" => "msMod",
+		_ => "msPow",
+	};
+	const hk = is64(t.kind) ? t.kind : (isSignedKind(t.kind) ? TypeKind.Int32 : TypeKind.Uint32);
+	const suffix = match (hk) {
+		TypeKind.Int32 => "I32",
+		TypeKind.Int64 => "I64",
+		TypeKind.Uint32 => "U32",
+		_ => "U64",
+	};
+	const call = makeCall(runtimeRef(prefix + suffix, loc), [left, right], loc);
+	call.nodeType = createPrimitive(hk);
+	const narrow = subIntKind(t);
+	if (narrow != TypeKind.Unknown) return wrapTo(call, narrow, loc);
+	if (resultType != null) call.nodeType = resultType;
+	return call;
+}
+
+function is64(kind: TypeKind): boolean {
+	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
+}
+
+function isSignedKind(kind: TypeKind): boolean {
+	return kind == TypeKind.Int8 || kind == TypeKind.Int16 || kind == TypeKind.Int32 || kind == TypeKind.Int64;
+}
+
+// A literal divisor other than 0 and -1 can neither be zero nor overflow MIN / -1.
+function cannotRaise(divisor: Node, t: Type): boolean {
+	let n = divisor;
+	while (n.kind == NodeKind.HiddenStdConv) n = (n.data as HiddenStdConvData).convExpr;
+	if (n.kind == NodeKind.BigIntLiteral) {
+		const text = (n.data as BigIntLiteralData).bigintValue;
+		return text != "0n" && text != "-1n" && text.charAt(0) != "-";
+	}
+	if (n.kind != NodeKind.NumberLiteral) return false;
+	const lit = n.data as NumberLiteralData;
+	if (lit.isFloat || lit.intVal == 0) return false;
+	return !(isSignedKind(t.kind) && lit.intVal == -1);
 }
 
 function subIntKind(t: Type | null): TypeKind {
@@ -152,6 +199,7 @@ function exactMul(left: Node, right: Node, loc: SourceLocation): Node {
 function compoundBaseOf(op: string): string {
 	return match (op) {
 		"/=" => "/",
+		"%=" => "%",
 		"+=" => "+",
 		"-=" => "-",
 		"*=" => "*",
@@ -167,10 +215,13 @@ function compoundBaseOf(op: string): string {
 function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return node;
-	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
+	const checked = (base == "/" || base == "%") && !cannotRaise(d.right, t);
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
-	if (base != "/" && !unsigned && narrow == TypeKind.Unknown) return node;
+	if (!checked) {
+		if (base == "%" || is64(t.kind)) return node;
+		if (base != "/" && !unsigned && narrow == TypeKind.Unknown) return node;
+	}
 	const readBack = cloneIfPure(d.left);
 	if (readBack == null) {
 		if (ctx.checkerCtx != null) {
@@ -178,6 +229,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		}
 		return node;
 	}
+	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location), node.location);
 	// makeBinary carries the left operand's type onto the result, which is what
 	// keeps this synthesized node visible to the width table above.
 	const widened = base == "*" && unsigned
