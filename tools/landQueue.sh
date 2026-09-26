@@ -28,7 +28,8 @@ while :; do
     mv "$item" "$item.dropped"
     continue
   fi
-  while busy; do sleep 60; done
+  waited=0
+  while busy; do waited=$((waited + 60)); [ "$waited" -lt 7200 ] || { log "$name: machine busy 2h, gating anyway"; break; }; sleep 60; done
   old=$(git -C "$worktree" rev-parse --verify main 2>/dev/null || true)
   log "$name: gate --base ${old:-?}"
   if (cd "$worktree" && tools/gate.sh --base "$old") >>"$Q/$name.gate.log" 2>&1; then
