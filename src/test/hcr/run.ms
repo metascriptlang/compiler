@@ -22,7 +22,7 @@ function resolveMsc(): string {
 const MSC = resolveMsc();
 env.set("NO_COLOR", "1");
 const FIXTURES = `${ROOT}/src/test/hcr/fixtures`;
-const STD_HOST = `${ROOT}/std/hcr/host.ms`;
+const STD_HOST = `${ROOT}/std/hcr/host.cms`;
 const TMP = `${ROOT}/out/hcr`;
 
 function lines(text: string): string[] {
@@ -490,7 +490,7 @@ function engine(): void {
 	const tag = "hcrEngine";
 	const dir = freshDir(`${TMP}/engine`);
 	for (const f of ["app.ms", "handlerMisuse.ms"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
-	copy(STD_HOST, `${dir}/host.ms`);
+	copy(STD_HOST, `${dir}/host.cms`);
 	const misuse = msc(dir, ["build", "handlerMisuse.ms", "--hcr", "--emit=c"]);
 	need(tag, !succeeded(misuse), "misused reload handlers were accepted");
 	for (const diagnostic of [
@@ -515,7 +515,7 @@ function engine(): void {
 		copy(`${FIXTURES}/engine/${g[1]}`, `${dir}/lifecycle.ms`);
 		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[2]}/module${ext}`], `HCR build of ${g[0]} + ${g[1]} failed`);
 	}
-	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
 	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module.lifecycle${ext}`, `module${ext}.hcrabi`]) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
@@ -569,14 +569,14 @@ function asyncLoop(): void {
 	const tag = "hcrAsyncLoop";
 	const dir = freshDir(`${TMP}/asyncLoop`);
 	copy(`${FIXTURES}/asyncLoop/app.ms`, `${dir}/app.ms`);
-	copy(STD_HOST, `${dir}/host.ms`);
+	copy(STD_HOST, `${dir}/host.cms`);
 	const ext = sharedLibraryExt();
 	const exe = platform == "windows" ? "host.exe" : "host";
 	for (const g of [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"]]) {
 		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
 		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module${ext}`], `HCR build of ${g[0]} failed`);
 	}
-	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
 	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
@@ -605,11 +605,11 @@ function liftNames(): void {
 	const tag = "hcrLiftNames";
 	const dir = freshDir(`${TMP}/liftNames`);
 	for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/liftNames/${f}`, `${dir}/${f}`);
-	copy(STD_HOST, `${dir}/host.ms`);
+	copy(STD_HOST, `${dir}/host.cms`);
 	const ext = sharedLibraryExt();
 	const exe = platform == "windows" ? "host.exe" : "host";
 	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=run/module${ext}`], "lifted module variables named with '$' did not build");
-	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	if (!succeeded(ran) || !both(ran).contains("HCR-LIFT hits 3 no change")) {
 		console.log(both(ran));
@@ -622,14 +622,14 @@ function liftKinds(): void {
 	const tag = "hcrLiftKinds";
 	const dir = freshDir(`${TMP}/liftKinds`);
 	copy(`${FIXTURES}/liftKinds/app.ms`, `${dir}/app.ms`);
-	copy(STD_HOST, `${dir}/host.ms`);
+	copy(STD_HOST, `${dir}/host.cms`);
 	const ext = sharedLibraryExt();
 	const exe = platform == "windows" ? "host.exe" : "host";
 	for (const g of [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"]]) {
 		copy(`${FIXTURES}/liftKinds/${g[0]}`, `${dir}/logic.ms`);
 		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module${ext}`], `HCR build of liftKinds/${g[0]} failed`);
 	}
-	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
 	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);

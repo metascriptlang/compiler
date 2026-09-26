@@ -2156,7 +2156,7 @@ struct HostExit {
 }
 
 function buildHcrHost(dir: string): string {
-	const source = `${resolveRuntimeDir()}/std/hcr/host.ms`;
+	const source = `${resolveRuntimeDir()}/std/hcr/host.cms`;
 	const host = `${dir}/host${exeSuffix()}`;
 	const built = execFileCapture(resolveArgv0(argv[0]), ["build", source, `--output=${host}`]);
 	if (!built.ok) {
