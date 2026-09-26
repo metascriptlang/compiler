@@ -17,17 +17,17 @@
 //           hoists and which codegen lifts to a top-level C function), skipping
 //           block-local const/let.
 
-test "bug048: sibling test block reuses local const name (block A)" {
+test "test block scope: first const binding" {
 	const r = 1 + 1;
 	assert r == 2;
 }
 
-test "bug048: sibling test block reuses local const name (block B)" {
+test "test block scope: sibling const binding" {
 	const r = 3 + 4;
 	assert r == 7;
 }
 
-test "bug048: same again with let" {
+test "test block scope: mutable binding" {
 	let r = 10;
 	r = r + 1;
 	assert r == 11;

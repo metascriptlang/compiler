@@ -41,7 +41,7 @@ compiling the test binary (~21s warm) is now the larger half. The entry-by-entry
 cost table that followed from this (full battery cheaper than a single-module
 entry) was dropped on 2026-09-19: `msc test src/test/fixedbugs/bug048.ms` took
 12 s wall at load 18 that day, and the full suite was not timed beside it, so the
-comparison is open. Cache and load traps: [`TESTING.md`](TESTING.md).
+comparison is open. The scope regression now lives in [`src/test/lang/testBlockScope.ms`](../src/test/lang/testBlockScope.ms); the timing above remains historical. Cache and load traps: [`TESTING.md`](TESTING.md).
 
 Root cause was not codegen or clang: `checkProgram()` — the convenience
 wrapper every inline test uses — called `buildPreludeContext()` on

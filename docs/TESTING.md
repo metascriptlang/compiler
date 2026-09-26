@@ -2,7 +2,7 @@
 
 The rules an agent needs while writing a test are in [`src/test/CLAUDE.md`](../src/test/CLAUDE.md). This file holds the detail behind them: one example per tier, the corpus authoring contract, which compiler a runner exercises, and the emit-diff recipe `tools/gate.sh` runs.
 
-Moved here from `src/test/CLAUDE.md` on 2026-09-19. Re-checked that day: every directive below is read by `src/test/corpus/run.ms`; `msc test src/test/fixedbugs/bug048.ms` took 12 s wall at load 18. NOT re-measured: every other timing and count in the emit-diff section keeps the date it was taken on, and the tier examples were not recompiled.
+Moved here from `src/test/CLAUDE.md` on 2026-09-19. Re-checked that day: every directive below is read by `src/test/corpus/run.ms`; `msc test src/test/fixedbugs/bug048.ms` took 12 s wall at load 18 (historical path; the scope regression now lives in [`src/test/lang/testBlockScope.ms`](../src/test/lang/testBlockScope.ms)). NOT re-measured: every other timing and count in the emit-diff section keeps the date it was taken on, and the tier examples were not recompiled.
 
 ## Tiers
 

@@ -1,8 +1,3 @@
-// Aggregate for the lang/ tier — one entry per file, so a lane can run the tier
-// with a single `msc test`. NOT wired into the gate's `tests` lane yet: the tier
-// type-checks clean, but `lang/syntax.ms` does not build
-// (~/metascript/.inbox/compiler/2026-09-21-optional-chain-into-string-local-in-a-test-block.md).
-
 import "./basics";
 import "./strings";
 import "./types";
@@ -20,5 +15,6 @@ import "./recursion";
 import "./advanced";
 import "./async";
 import "./syntax";
+import "./testBlockScope";
 import "./whenStmt";
 import "./multimod/main";
