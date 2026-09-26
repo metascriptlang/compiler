@@ -221,6 +221,52 @@ static inline int memcmp(const void* a, const void* b, size_t n) {
     while (n--) { if (*pa != *pb) return *pa - *pb; pa++; pb++; }
     return 0;
 }
+static inline void* memmove(void* dst, const void* src, size_t n) {
+    unsigned char* d = (unsigned char*)dst;
+    const unsigned char* s = (const unsigned char*)src;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else if (d > s) {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+    return dst;
+}
+static inline void* memchr(const void* p, int c, size_t n) {
+    const unsigned char* s = (const unsigned char*)p;
+    while (n--) {
+        if (*s == (unsigned char)c) return (void*)s;
+        s++;
+    }
+    return (void*)0;
+}
+static inline void msFreestandingSwap(unsigned char* a, unsigned char* b, size_t size) {
+    while (size--) {
+        unsigned char t = *a;
+        *a++ = *b;
+        *b++ = t;
+    }
+}
+static inline void msFreestandingSiftDown(unsigned char* base, size_t root, size_t end, size_t size,
+                                          int (*cmp)(const void*, const void*)) {
+    while (2 * root + 1 < end) {
+        size_t child = 2 * root + 1;
+        if (child + 1 < end && cmp(base + child * size, base + (child + 1) * size) < 0) child++;
+        if (cmp(base + root * size, base + child * size) >= 0) return;
+        msFreestandingSwap(base + root * size, base + child * size, size);
+        root = child;
+    }
+}
+static inline void qsort(void* base, size_t count, size_t size, int (*cmp)(const void*, const void*)) {
+    unsigned char* b = (unsigned char*)base;
+    if (count < 2) return;
+    for (size_t i = count / 2; i-- > 0;) msFreestandingSiftDown(b, i, count, size, cmp);
+    for (size_t end = count - 1; end > 0; end--) {
+        msFreestandingSwap(b, b + end * size, size);
+        msFreestandingSiftDown(b, 0, end, size, cmp);
+    }
+}
 
 /* Redirect libc allocator to arena */
 static inline void* _ms_manual_realloc(void* old, size_t new_size) {
