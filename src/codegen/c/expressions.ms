@@ -245,7 +245,8 @@ function isNullExpr(node: Readonly<Node>): boolean {
 function isRefArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
-	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess");
+	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess")
+		|| isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccessUnchecked");
 }
 
 // Shared ABI shim for call arguments — reference parity: genArg
@@ -302,7 +303,9 @@ function isArrayAccessCall(node: Readonly<Node>): boolean {
 	const sym = callee.resolvedSym;
 	return isRuntimeProcSym(sym, "msArrayAccess") || isRuntimeProcSym(sym, "msStringArrayAccess")
 		|| isRuntimeProcSym(sym, "msNumberArrayAccess") || isRuntimeProcSym(sym, "msRefArrayAccess")
-		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess");
+		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess")
+		|| isRuntimeProcSym(sym, "msArrayAccessUnchecked") || isRuntimeProcSym(sym, "msRefArrayAccessUnchecked")
+		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked");
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).

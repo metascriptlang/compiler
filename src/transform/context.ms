@@ -18,7 +18,8 @@ export class TransformContext {
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;
-	rangeChecks: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
+	rangeChecks: boolean;
+	boundChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
 	pendingStructEqs: string[];  // struct/interface == uses to lift Eq for on-demand
@@ -28,7 +29,7 @@ export class TransformContext {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet() };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet() };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
