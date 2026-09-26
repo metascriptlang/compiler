@@ -105,3 +105,58 @@ test "throw new Error — propagates through finally" {
 	}
 	assert log == "finally,caught";
 }
+
+function raiseAbove(n: int32, limit: int32): int32 {
+	if (n > limit) throw new Error("above");
+	return n;
+}
+
+function returnCall(n: int32): int32 {
+	try { return raiseAbove(n, 1); } catch (e) { }
+	return -1;
+}
+
+function returnOperand(n: int32): int32 {
+	try { return raiseAbove(n, 1) + 10; } catch (e) { }
+	return -1;
+}
+
+function textAbove(n: int32, limit: int32): string {
+	if (n > limit) throw new Error("above");
+	return "n=" + n.toString();
+}
+
+function returnText(n: int32): string {
+	try { return textAbove(n, 1); } catch (e) { }
+	return "caught";
+}
+
+let finallyRuns = 0;
+function countFinally(): void { finallyRuns += 1; }
+
+function returnThroughFinally(n: int32): int32 {
+	try { return raiseAbove(n, 1); } finally { countFinally(); }
+}
+
+test "a raise in a return value inside try reaches the catch" {
+	assert returnCall(1) == 1;
+	assert returnCall(2) == -1;
+}
+
+test "a raise in a return operand inside try reaches the catch" {
+	assert returnOperand(1) == 11;
+	assert returnOperand(2) == -1;
+}
+
+test "a raise in a returned string inside try reaches the catch" {
+	assert returnText(1) == "n=1";
+	assert returnText(2) == "caught";
+}
+
+test "a raise in a return value runs the finally once" {
+	finallyRuns = 0;
+	let caught = false;
+	try { returnThroughFinally(2); } catch (e) { caught = true; }
+	assert caught;
+	assert finallyRuns == 1;
+}
