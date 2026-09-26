@@ -32,4 +32,7 @@ function arrays(xs: number[]): string {
 	return new GBox<number[]>([1, 2, 3]).v.length.toString() + " " + new Pair(xs, "q").xs.length.toString();
 }
 
-console.log(unionIntoString("a", 1, new Holder()) + "|" + stringIntoUnion("b") + "|" + generic("b") + "|" + arrays([4, 5]));
+function run(): string {
+	return unionIntoString("a", 1, new Holder()) + "|" + stringIntoUnion("b") + "|" + generic("b") + "|" + arrays([4, 5]);
+}
+console.log(run());
