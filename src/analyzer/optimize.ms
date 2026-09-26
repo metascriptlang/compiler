@@ -16,7 +16,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
+import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
 import { testLoc } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
@@ -31,24 +31,11 @@ function symListIntersect(a: Symbol[], b: Symbol[]): Symbol[] {
 
 // ===== Moved-var tracking for branch-aware optimization =====
 
-// Scan a block's top-level statements for wasMoved calls
 function collectBlockMoved(block: Node): Symbol[] {
 	const result: Symbol[] = [];
 	if (block == null) return result;
 	if (block.kind != NodeKind.BlockStmt) return result;
-	const bd = block.data as BlockStmtData;
-	for (const stmt of bd.statements) {
-		const wm = opCallTarget(stmt, SymbolFlag.WasMovedOp);
-		if (wm != null) {
-			symListAdd(result, wm);
-		}
-		// Also collect from nested if/else branches
-		if (stmt.kind == NodeKind.IfStmt) {
-			for (const v of collectIfMoved(stmt)) {
-				symListAdd(result, v);
-			}
-		}
-	}
+	scanBlock((block.data as BlockStmtData).statements, result);
 	return result;
 }
 
@@ -83,13 +70,39 @@ function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
 	return cd.arguments[0].resolvedSym;
 }
 
+function isPairOpCall(node: Node): boolean {
+	if (node.kind != NodeKind.CallExpr) return false;
+	const callee = (node.data as CallExprData).callee;
+	if (callee == null || callee.resolvedSym == null) return false;
+	return hasFlag(callee.resolvedSym, SymbolFlag.WasMovedOp) || hasFlag(callee.resolvedSym, SymbolFlag.DestroyOp);
+}
+
+function mentionsSym(node: Node, sym: Symbol): boolean {
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym == sym;
+	if (isPairOpCall(node)) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found && mentionsSym(child, sym)) found = true; });
+	return found;
+}
+
+function invalidateMentioned(moved: Symbol[], stmt: Node): void {
+	let i = 0;
+	while (i < moved.length) {
+		if (mentionsSym(stmt, moved[i])) moved.splice(i, 1);
+		else i += 1;
+	}
+}
+
 // ===== Block Optimization =====
 // Tracks wasMoved vars across the block (not just adjacent pairs).
 // Also collects definitely-moved vars from exhaustive if/else branches.
 
 function optimizeBlock(stmts: Node[]): Node[] {
+	return scanBlock(stmts, []);
+}
+
+function scanBlock(stmts: Node[], moved: Symbol[]): Node[] {
 	const result: Node[] = [];
-	const moved: Symbol[] = [];
 
 	let i = 0;
 	while (i < stmts.length) {
@@ -114,6 +127,8 @@ function optimizeBlock(stmts: Node[]): Node[] {
 			i += 1;  // skip destroy — var was already zeroed by wasMoved
 			continue;
 		}
+
+		invalidateMentioned(moved, stmt);
 
 		// Collect moved vars from exhaustive if/else branches
 		if (stmt.kind == NodeKind.IfStmt) {
@@ -285,6 +300,60 @@ test "if without else → preserve destroy" {
 	const loc = testLoc();
 	const x = testVarSym("x");
 	const result = optimizeBlock([makeIfElse([makeWmCall(x)], null, loc), makeDestroyCallForTest(x)]);
+	assert result.length == 2;
+}
+
+function makeAssignStmt(target: Symbol): Node {
+	const loc = testLoc();
+	return makeExprStmt(makeAssign(makeIdentResolved(target, loc), makeIdent("fresh", loc), loc), loc);
+}
+
+test "an assignment between wasMoved and destroy keeps the destroy" {
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeAssignStmt(x), makeDestroyCallForTest(x)]);
+	assert result.length == 3;
+}
+
+test "an assignment nested in a block between wasMoved and destroy keeps the destroy" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeBlock([makeAssignStmt(x)], loc), makeDestroyCallForTest(x)]);
+	assert result.length == 3;
+}
+
+test "a read between wasMoved and destroy keeps the destroy" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const read = makeExprStmt(makeCall(makeIdent("use", loc), [makeIdentResolved(x, loc)], loc), loc);
+	const result = optimizeBlock([makeWmCall(x), read, makeDestroyCallForTest(x)]);
+	assert result.length == 3;
+}
+
+test "a use of another variable keeps the pair" {
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeAssignStmt(testVarSym("y")), makeDestroyCallForTest(x)]);
+	assert result.length == 2;
+}
+
+test "a wasMoved after the assignment pairs again" {
+	const x = testVarSym("x");
+	const result = optimizeBlock([makeWmCall(x), makeAssignStmt(x), makeWmCall(x), makeDestroyCallForTest(x)]);
+	assert result.length == 3;
+}
+
+test "if/else that both move then reassign keeps the destroy" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const ifNode = makeIfElse([makeWmCall(x), makeAssignStmt(x)], [makeWmCall(x), makeAssignStmt(x)], loc);
+	const result = optimizeBlock([ifNode, makeDestroyCallForTest(x)]);
+	assert result.length == 2;
+}
+
+test "an if/else whose branches end moved pairs after a reassignment in one branch" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const ifNode = makeIfElse([makeAssignStmt(x), makeWmCall(x)], [makeWmCall(x)], loc);
+	const result = optimizeBlock([makeWmCall(x), ifNode, makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }
 
