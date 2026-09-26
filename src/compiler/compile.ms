@@ -1115,16 +1115,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code != 0) {
-			// Freestanding targets carry no libc/socket layer, so a prelude @compile
-			// naming a platform engine (std/net -> runtime/io/engineSelect.c) cannot
-			// build there. The module itself is dead code on these targets; dropping
-			// the object is the same call already made for BPF.
-			if (targetOs == "solana" || targetOs == "bare") {
-				const why = targetOs == "solana" ? "BPF unsupported" : "freestanding: no libc";
-				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim(`(${why})`)}`);
-				ci = ci + 1;
-				continue;
-			}
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
@@ -2499,7 +2489,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
-	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
 	const hcrImages = opts.isHcr && !opts.emitC;
 	const coreFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_CORE") : allFlags;
 	const imageFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_MODULE") : allFlags;
@@ -2722,7 +2711,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
-	const skippableRoot = opts.targetOs == "solana" ? resolveRuntimeDir() : "";
 	let cji = 0;
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
@@ -2735,12 +2723,8 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			throw new Error(BUILD_STOPPED);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
-				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
-			} else {
-				printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
-				moduleCompileFailed = true;
-			}
+			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			moduleCompileFailed = true;
 		}
 		cji = cji + 1;
 	}
