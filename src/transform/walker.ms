@@ -616,6 +616,19 @@ function replaceCaseStmts(node: Node, expander: StmtExpander, ctx: TransformCont
 	node.data = { caseTests: cd.caseTests, caseStmts: expandAndRecurseHooked(cd.caseStmts, expander, ctx, onFnEntry, onFnExit), isDefault: cd.isDefault };
 }
 
+let expandTryDepth = 0;
+
+export function expandingInsideTry(): boolean {
+	return expandTryDepth > 0;
+}
+
+function walkFnBodyHooked(body: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const outerTryDepth = expandTryDepth;
+	expandTryDepth = 0;
+	walkExpandBlocksHooked(body, expander, ctx, onFnEntry, onFnExit);
+	expandTryDepth = outerTryDepth;
+}
+
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
@@ -632,30 +645,30 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			walkExpandBlocksHooked(d.ctorBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.ctorBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -663,7 +676,7 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		},
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
-			walkExpandBlocksHooked(d.testBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.testBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.AssertStmt => {},
 		NodeKind.IfStmt => {
@@ -685,9 +698,11 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
+			expandTryDepth += 1;
 			walkExpandBlocksHooked(d.tryBody, expander, ctx, onFnEntry, onFnExit);
 			walkExpandBlocksHooked(d.catchBody, expander, ctx, onFnEntry, onFnExit);
 			walkExpandBlocksHooked(d.finallyBody, expander, ctx, onFnEntry, onFnExit);
+			expandTryDepth -= 1;
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;

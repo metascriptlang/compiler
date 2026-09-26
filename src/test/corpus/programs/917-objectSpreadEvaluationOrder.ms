@@ -1,7 +1,5 @@
 // @stdout: ternary:  0 0
 // @xfail(raiser): Raiser keeps the eager spread lowering (no conditional-expression pass), so a spread operand runs first
-// @xfail(js): the JS emitter writes a spread property as `...: ...expr`, so a spread whose operand cannot run first stays hoisted on JS
-// @xfail(esm): the JS emitter writes a spread property as `...: ...expr`, so a spread whose operand cannot run first stays hoisted on JS
 let log = "";
 function one(): int32 { log = log + "o"; return 9; }
 interface P { x: int32; y: int32; }

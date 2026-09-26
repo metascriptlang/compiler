@@ -12,6 +12,7 @@ import { findExtension, requestEnumToString } from "../../checker/context";
 import { makeIdent, makeIdentResolved, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringNameFor, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { makeSymbol } from "../../checker/symbol";
+import { charToString } from "./stringOpLower";
 import { SymbolKind } from "../../ast/node";
 
 // Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
@@ -30,6 +31,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const t = peelTransparentInstance(arg.nodeType);
 	// String: as-is
 	if (t.kind == TypeKind.String || arg.kind == NodeKind.StringLiteral) return arg;
+	if (t.kind == TypeKind.Char) return charToString(arg, loc);
 	// Number/int → msNumberToString; 64-bit integers need the exact formatter
 	if (isWideInteger(t)) {
 		const fn = t.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";

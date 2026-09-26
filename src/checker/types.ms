@@ -695,10 +695,16 @@ export function duVariantRegistry(): Type[] {
 // Returns the variant index, or -1 if no variant matches.
 export function findUnionVariant(unionType: Type | null, fieldNames: string[], fieldTypes: Type[]): int32 {
 	if (unionType == null || unionType.typeChildren == null || fieldNames.length == 0) return -1;
+	const exact = variantHoldingFields(unionType, fieldNames, fieldTypes, true);
+	return exact >= 0 ? exact : variantHoldingFields(unionType, fieldNames, fieldTypes, false);
+}
+
+function variantHoldingFields(unionType: Type, fieldNames: string[], fieldTypes: Type[], exact: boolean): int32 {
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		const variant = peelToStruct(unionType.typeChildren[vi]);
-		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
+		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length
+				&& (!exact || variant.typeNames.length == fieldNames.length)) {
 			let allFound = true;
 			let ti = 0;
 			while (ti < fieldNames.length) {
@@ -946,9 +952,6 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 	if (byIdentity >= 0) return byIdentity;
 	const names = exprType.typeNames;
 	if (names == null || names.length == 0) return -1;
-	// EXACT field-set match only. findUnionVariant accepts a superset, which
-	// picks the wrong slot when one variant's fields contain another's
-	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
 	// Candidates that survive the type comparison are the same structural type;
 	// they share a layout only when their storage matches, else refuse.
 	const types = exprType.typeChildren;

@@ -25,7 +25,8 @@
 //     block around B, so it still reaches the test)
 //
 // Codegen checks msErr only after a statement's top-level call, so a call that
-// can raise in a condition or a literal element becomes its own statement here.
+// can raise in a condition, a literal element or a return value inside a try
+// becomes its own statement here.
 //
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
@@ -35,7 +36,7 @@ import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { walkExpandBlocks, mapExprChildren, mapChildren, hasEffect } from "../walker";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 import { nodeHasPositionalNew } from "./newExprLower";
@@ -335,6 +336,12 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as ReturnStmtData;
 			if (d.argument != null && d.argument.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInReturn(stmt, ctx);
+			}
+			if (d.argument != null && expandingInsideTry()) {
+				const pre: Node[] = [];
+				d.argument = hoistRaisingCalls(d.argument, pre, ctx);
+				pre.push(stmt);
+				return pre;
 			}
 		},
 		NodeKind.ExprStmt => {

@@ -132,6 +132,14 @@ extern function msMsgCompletePtr(fut: unknown, sink val: unknown): void from "ms
 @compilerFunc
 extern function msMsgCompleteString(fut: unknown, sink val: string): void from "msMsgCompleteString";
 
+extern function codePointString(cp: int64): string from "msStringFromCodePoint";
+
+@compilerFunc
+export function msCharToString(c: char): string {
+	const b = c as uint8;
+	return codePointString(b < 0x80 ? b as int64 : 0xFFFD);
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
