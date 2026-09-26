@@ -721,9 +721,6 @@ function emitErrorGoto(p: CProc): void {
 
 function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ThrowStmtData;
-	// `throw new Error(msg)` is sugar over the string-based exception runtime
-	// (msThrow(msString)); the std `Error` class is a checker-only aid and
-	// erases to its message argument at runtime.
 	if (d.throwArg.kind == NodeKind.NewExpr) {
 		const ne = d.throwArg.data as NewExprData;
 		const callee = ne.newCallee;
@@ -737,9 +734,6 @@ function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			return;
 		}
 	}
-	// A thrown string mints an exception via msThrow; anything else is already an
-	// exception object (a rethrown `catch(e){ throw e }` or `throw $excCaught`) and
-	// is stored directly as the current exception, then unwound.
 	const argType = d.throwArg.nodeType;
 	if (argType != null && argType.kind == TypeKind.String) {
 		emitStmtsLine(p, "msThrow(" + genExpr(g, p, d.throwArg) + ");");

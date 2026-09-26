@@ -11,6 +11,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
+import { writeRefusal } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -114,8 +115,12 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 		return;
 	}
 	const ro = readonlyPrefixType(target);
-	if (ro == null) return;
-	reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
+	if (ro != null) {
+		reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
+		return;
+	}
+	const refusal = writeRefusal(target, false);
+	if (refusal != "") addError(ctx, refusal, target.location.line, target.location.column);
 }
 
 function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
@@ -2207,6 +2212,8 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturn = inferredType();
 	const savedReturnStmts = ctx.inferredReturnStmts;
 	ctx.inferredReturnStmts = [];
+	const savedReturnTries = ctx.inferredReturnTries;
+	ctx.inferredReturnTries = [];
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.matchExprDepth = 0;
 
@@ -2335,8 +2342,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		const rsd = rs.data as ReturnStmtData;
 		if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, inferredRet);
 	}
+	for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, ctx.inferredReturn.kind == TypeKind.Inferred ? voidType() : inferredRet, name);
 	ctx.inferredReturn = savedReturn;
 	ctx.inferredReturnStmts = savedReturnStmts;
+	ctx.inferredReturnTries = savedReturnTries;
 
 	const types: Type[] = [];
 	let ti = 0;
@@ -2600,7 +2609,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 import { callCheckFunctionBody } from "./checkerCallbacks";
 import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { getIdentId } from "./idents";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix } from "./callResolve";
+import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
 
 // Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
 // re-check its body, and queue it for the next instantiation drain. Returns the

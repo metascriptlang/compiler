@@ -56,7 +56,7 @@ struct Pt { x: int32; y: int32; }
 interface Holder { pos: Pt; }
 function podCopyWrite(): int32 {
 	const h: Holder = { pos: { x: 1, y: 2 } };
-	const f = spawn(() => { const p = h.pos; p.x = 5; return p.x; });
+	const f = spawn(() => { let p = h.pos; p.x = 5; return p.x; });
 	return await f;
 }
 

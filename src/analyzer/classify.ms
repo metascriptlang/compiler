@@ -145,6 +145,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			const n = arrayCTypeName(t);
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
+		if (isAtomicRef(elem)) {
+			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);
+		}
 		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 	}
 	// Closure element (function type) — msClosureArray stores msClosure structs
@@ -318,6 +321,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
 				if (isUnresolvedType(refInner)) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
+				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
 					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
 				}

@@ -58,7 +58,7 @@ function main(): void {
 	expect("inline annotation", lit.a, 8);
 
 	const s1: S = { a: 1, s: "z" };
-	const s2 = s1;
+	let s2 = s1;
 	s2.a = 2;
 	expect("struct stays value", s1.a, 1);
 }

@@ -105,3 +105,38 @@ test "throw new Error — propagates through finally" {
 	}
 	assert log == "finally,caught";
 }
+
+function label(n: number): string {
+	return `label ${n}`;
+}
+
+test "a thrown string reaches catch as an Error carrying it" {
+	let msg = "";
+	let isError = false;
+	try {
+		throw "bare 7";
+	} catch (e) {
+		msg = e.message;
+		isError = e instanceof Error;
+	}
+	assert msg == "bare 7";
+	assert isError;
+}
+
+test "a thrown string variable and template reach catch as Errors" {
+	const s = label(3);
+	let log = "";
+	try { throw s; } catch (e) { log = e.message; }
+	try { throw `${s}!`; } catch (e) { log = log + "," + e.message; }
+	assert log == "label 3,label 3!";
+}
+
+test "a thrown string rethrown keeps its message" {
+	let msg = "";
+	try {
+		try { mayThrow(-1); } catch (e) { throw e; }
+	} catch (e2) {
+		msg = e2.message;
+	}
+	assert msg == "negative";
+}

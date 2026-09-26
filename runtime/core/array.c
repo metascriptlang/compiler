@@ -657,6 +657,27 @@ void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen) {
 	arr->len = newLen;
 }
 
+/* Atomic-rc elements (Locked<T>, Arc<T>): eviction releases atomically. A cell
+ * is born at MS_RC_INCREMENT, so a plain msDecref never reaches last. Growth
+ * fills with NULL and takes no share, so it reuses msRefArrayGrow. */
+void msAtomicRefArrayShrink(msRefArray* arr, int64_t newLen) {
+	if (newLen < 0) newLen = 0;
+	if (newLen >= arr->len) return;
+	for (int64_t i = newLen; i < arr->len; i++) {
+		msAtomicDecref(arr->p->data[i]);
+		arr->p->data[i] = NULL;
+	}
+	arr->len = newLen;
+}
+
+void msAtomicRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	if (newLen < arr->len) {
+		msAtomicRefArrayShrink(arr, newLen);
+	} else if (newLen > arr->len) {
+		msRefArrayGrow(arr, newLen, NULL);
+	}
+}
+
 /* ===== Splice — remove deleteCount elements starting at index ===== */
 
 void msNumberArraySplice(msNumberArray* arr, int64_t start, int64_t deleteCount) {
@@ -694,6 +715,17 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	arr->len -= deleteCount;
 }
 
+/* Atomic-rc elements (Locked<T>, Arc<T>) — same walk, atomic ops. A cell is
+ * born at MS_RC_INCREMENT, so a plain msDecref never reaches last and leaks. */
+void msAtomicRefArrayDestroy(msRefArray* arr) {
+	if (arr->p != NULL) {
+		for (int64_t i = 0; i < arr->len; i++) msAtomicDecref(arr->p->data[i]);
+		free(arr->p);
+		arr->p = NULL;
+	}
+	arr->len = 0;
+}
+
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
@@ -716,6 +748,42 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
 	}
 	if (item != NULL) msIncref(item);
+	arr->p->data[start] = item;
+	arr->len += 1;
+}
+
+void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
+	if (arr->p == NULL || start < 0 || start >= arr->len) return;
+	if (deleteCount <= 0) return;
+	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	for (int64_t i = start; i < start + deleteCount; i++) msAtomicDecref(arr->p->data[i]);
+	int64_t remaining = arr->len - start - deleteCount;
+	if (remaining > 0) {
+		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+	}
+	arr->len -= deleteCount;
+}
+
+void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (start < 0) start = 0;
+	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
+		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+		for (int64_t i = start; i < start + deleteCount; i++) msAtomicDecref(arr->p->data[i]);
+		int64_t remaining = arr->len - start - deleteCount;
+		if (remaining > 0) {
+			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+		}
+		arr->len -= deleteCount;
+	}
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
+	}
+	if (start > arr->len) start = arr->len;
+	int64_t tail = arr->len - start;
+	if (tail > 0) {
+		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
+	}
+	if (item != NULL) msAtomicIncref(item);
 	arr->p->data[start] = item;
 	arr->len += 1;
 }
