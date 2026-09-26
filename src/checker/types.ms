@@ -3542,6 +3542,9 @@ function typeDisplayNameInner(t: Type | null): string {
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
+	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayName(t.typeReturn) + " | null";
+	const shape = namelessObjectShape(t);
+	if (shape != "") return shape;
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an
@@ -3575,11 +3578,25 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Inferred => "<inferring>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName != "" ? t.typeName : "<T>",
-		// Anonymous struct (object literal type) — typeName is "" so typeNameOf
-		// returns empty. Diagnostics historically display these as "object".
-		TypeKind.Struct => "object",
 		_ => "<kind:" + t.kind.toString() + ">",
 	};
+}
+
+let _shapeDepth: int32 = 0;
+function namelessObjectShape(t: Type): string {
+	const obj = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (obj.kind != TypeKind.Struct) return "";
+	if (obj.typeName != "" && !obj.typeName.startsWith("__anon")) return "";
+	if (obj.typeNames.length == 0) return "{}";
+	if (_shapeDepth >= 3) return "{ ... }";
+	_shapeDepth = _shapeDepth + 1;
+	let out = "{ ";
+	for (let i = 0; i < obj.typeNames.length; i += 1) {
+		const field = i < obj.typeChildren.length ? typeDisplayName(obj.typeChildren[i]) : "unknown";
+		out = out + obj.typeNames[i] + ": " + field + "; ";
+	}
+	_shapeDepth = _shapeDepth - 1;
+	return out + "}";
 }
 
 // getBuiltinKind — read the @builtin("...") tag from a type's underlying class Symbol.

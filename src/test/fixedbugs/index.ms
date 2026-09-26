@@ -241,6 +241,7 @@ import "./bug533NamedFunctionIntoClosureSlotRelated";
 import "./bug535ObjectTypeLayoutAtEverySlot";
 import "./bug536ConstrainedAliasInstantiatesItsBody";
 import "./bug534NullableSlotRelatesItsPayload";
+import "./bug537ObjectTypeDisplaysItsShape";
 import "./bug539HookReceiverByReference";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
