@@ -728,7 +728,7 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 		const stmt = stmts[i];
 		if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (nameSetContains(liftedNames, vd.declName) && vd.initializer != null) {
+			if (nameSetContains(liftedNames, vd.declName)) {
 				// Convert: const/let x = init → x = init (assignment)
 				// Preserve the VarDecl's resolvedSym on the LHS Identifier so downstream
 				// passes (lambdaLifting capture resolution, codegen) identify this as the
@@ -737,7 +737,12 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 				const lhs = (stmt.resolvedSym != null)
 					? makeIdentResolved(stmt.resolvedSym, loc)
 					: makeIdent(vd.declName, loc);
-				stmts[i] = makeExprStmt(makeAssign(lhs, vd.initializer, loc), loc);
+				let init = vd.initializer;
+				if (init == null) {
+					init = makeNull(loc);
+					init.nodeType = stmt.nodeType;
+				}
+				stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
 			}
 		}
 	}
