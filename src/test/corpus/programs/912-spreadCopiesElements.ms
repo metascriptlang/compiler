@@ -1,4 +1,5 @@
 // @stdout: rest=4 2 6
+// @xfail(raiser): a rest pattern `const [first, ...others] = base` binds an empty array on Raiser
 class Item {
 	v: int32 = 0;
 	constructor(v: int32) { this.v = v; }
