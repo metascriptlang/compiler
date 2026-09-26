@@ -380,7 +380,7 @@ export function convertPPInt(tok: CToken): boolean {
 		}
 	}
 
-	let val: number = 0;
+	let val: uint64 = 0;
 	const digitStart = p;
 	while (p < len) {
 		const ch = s.byteAt(p);
@@ -395,7 +395,7 @@ export function convertPPInt(tok: CToken): boolean {
 			if (ch >= "0".code && ch <= "9".code) digit = ch - "0".code;
 		}
 		if (digit < 0) break;
-		val = val * base + digit;
+		val = val * (base as uint64) + (digit as uint64);
 		p = p + 1;
 	}
 	if (p == digitStart && base != 8) return false;
@@ -734,6 +734,21 @@ test "convertPPInt decimal" {
 	assert convertPPInt(tok) == true;
 	assert tok.intVal == 42 as int64;
 	assert tok.litKind == LitKind.Int;
+}
+
+test "convertPPInt keeps every digit of a 64-bit literal" {
+	const longMax = makeEofToken("t");
+	longMax.kind = CTokenKind.PPNum;
+	longMax.stringVal = "9223372036854775807L";
+	assert convertPPInt(longMax) == true;
+	assert longMax.intVal == 9223372036854775807 as int64;
+	assert longMax.litKind == LitKind.Long;
+	const ullMax = makeEofToken("t");
+	ullMax.kind = CTokenKind.PPNum;
+	ullMax.stringVal = "0xFFFFFFFFFFFFFFFFULL";
+	assert convertPPInt(ullMax) == true;
+	assert ullMax.intVal == -1 as int64;
+	assert ullMax.litKind == LitKind.ULongLong;
 }
 
 test "convertPPInt hex" {
