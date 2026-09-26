@@ -241,6 +241,7 @@ import "./bug493ThrownStringIsErrorJS";
 import "./bug492EnumDiscriminantFromTagC";
 import "./bug494PlatformMacrosUndefinedC";
 import "./bug495StaticFieldByOwnerC";
+import "./bug496IntDivisionChecksC";
 import "./bug497SubIntArithWrapsC";
 import "./bug498FloatToInt64RangeCheckC";
 import "./bug330ArrayFieldCycleTraced";
