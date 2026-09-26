@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
@@ -531,13 +531,35 @@ function sinkClassify(t: Type | null, dctx: DrcContext): RcInfo {
 // Pattern: genWasMoved(tmp) → =copy(tmp, src) → use tmp → wasMoved(tmp) after consumption.
 // For simple refcounted types (String, Ref, Closure): shallow copy + incref is sufficient.
 // For Named types (structs with managed fields): null-init + 2-arg copy avoids aliased-field destruction.
+function moveSourceText(n: Node): string {
+	match (n.kind) {
+		NodeKind.Identifier => {
+			const name = (n.data as IdentifierData).name;
+			return name.startsWith("$") ? "…" : name;
+		},
+		NodeKind.NumberLiteral => { return String((n.data as NumberLiteralData).intVal); },
+		NodeKind.MemberExpr => {
+			const md = n.data as MemberExprData;
+			return moveSourceText(md.object) + "." + md.property;
+		},
+		NodeKind.ArrayAccess => {
+			const ad = n.data as ArrayAccessData;
+			return moveSourceText(ad.array) + "[" + moveSourceText(ad.index) + "]";
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return moveSourceText((n.data as HiddenDerefData).expr); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { return moveSourceText((n.data as HiddenStdConvData).convExpr); },
+		NodeKind.TypeAssertion => { return moveSourceText((n.data as TypeAssertionData).asExpr); },
+		_ => { return "…"; },
+	};
+}
+
 function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
 	if (dctx.inEnsureMove == 0 || dctx.ctx.checkerCtx == null) return;
-	if (srcExpr.kind != NodeKind.Identifier) return;
-	const srcName = (srcExpr.data as IdentifierData).name;
+	const message = srcExpr.kind == NodeKind.Identifier
+		? "cannot move '" + moveSourceText(srcExpr) + "': variable is still used after this point"
+		: "cannot move '" + moveSourceText(srcExpr) + "', which introduces an implicit copy";
 	dctx.ctx.checkerCtx.errors.push({
-		message: "cannot move '" + srcName + "': variable is still used after this point",
-		line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
 	});
 }
 
