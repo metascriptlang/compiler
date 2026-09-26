@@ -108,6 +108,9 @@ function lowerRest(node: Node): Node {
 		}
 	}
 	if (sym == null) return node;
+	if (d.resolvedOverloadIdx > 0 && sym.overloads != null && d.resolvedOverloadIdx - 1 < sym.overloads.length) {
+		sym = sym.overloads[d.resolvedOverloadIdx - 1];
+	}
 	if (sym.builtinKind != "") return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
