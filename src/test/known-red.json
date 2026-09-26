@@ -28,6 +28,7 @@
   "hcr": {},
   "san": {
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
+    "711-jsxParseNative [san]": {"since":"0e6d4fed","note":"DRC ledger slack drift: msRefArrayRefCell alloc=70005 destroy=70000 against @ledger-slack 6; the same on a control built from main 0845d6e6; ASan clean, stdout right; 711 [san] passed at 90d7a875, cause not bisected (_listEndComments unchanged); measured 2026-09-26 — 2026-09-19-known-red-behind-main.md"},
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "781-httpServerHeaders [san]": {"since":"e5f0ec68","note":"DRC ledger leak: msStringArrayRefCell alloc=5 destroy=2; reproduced on a control built from main 8be46044 and at 28c4843d; measured 2026-09-23"},
     "783-asProtocolRefAliasReceiver [san]": {"since":"e5f0ec68","note":"DRC ledger leak: JsonValueData alloc=8 destroy=2; reproduced on a control built from main 8be46044 and at 28c4843d; measured 2026-09-23"},
