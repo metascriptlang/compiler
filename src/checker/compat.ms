@@ -628,7 +628,26 @@ export function needsStdConv(source: Type, target: Type): boolean {
 
 export function convertsImplicitly(source: Type, target: Type): boolean {
 	if (source.kind == TypeKind.Struct && target.kind == TypeKind.Union) return promotesToNullablePtr(source, target);
+	if (refusesIntConv(source, target)) return false;
 	return needsStdConv(source, target);
+}
+
+export function isUnsignedIntegerType(t: Type): boolean {
+	return t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64;
+}
+
+function integerWidth(t: Type): int32 {
+	return match (t.kind) {
+		TypeKind.Int8 | TypeKind.Uint8 => 8,
+		TypeKind.Int16 | TypeKind.Uint16 => 16,
+		TypeKind.Int32 | TypeKind.Uint32 => 32,
+		_ => 64,
+	};
+}
+
+export function refusesIntConv(source: Type, target: Type): boolean {
+	if (!isIntegerType(source) || !isIntegerType(target) || source.kind == target.kind) return false;
+	return isUnsignedIntegerType(source) != isUnsignedIntegerType(target) || integerWidth(source) > integerWidth(target);
 }
 
 // Repr comparison for ONE slot (param or return) of a function signature.
@@ -1095,9 +1114,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (isNumeric(actual) && formal.kind == TypeKind.Number) {
 		return TypeRelation.IntConv;
 	}
-	// Int-to-int widening: smaller int → larger int (e.g., int32 → int64)
-	// Safe widening (rank increases) and same-rank conversions (e.g., int32 → uint32).
-	// Narrowing (rank decreases) requires explicit cast.
+	if (refusesIntConv(actual, formal)) return TypeRelation.None;
 	if (isNumeric(actual) && isNumeric(formal) && actual.kind != formal.kind
 		&& integerRank(actual) <= integerRank(formal)) {
 		return TypeRelation.IntConv;
