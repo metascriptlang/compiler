@@ -1407,7 +1407,7 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 	const types: Type[] = [recvType];
 	for (const a of d.arguments) args.push(a);
 	for (const t of argTypes) types.push(t);
-	relateArgs(ctx, node, fullType, args, types, isActorMethodCall);
+	relateArgs(ctx, node, fullType, args, types, isActorMethodCall, true);
 	me.object = args[0];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) d.arguments[ai] = args[ai + 1];
 	for (let ti = 0; ti < argTypes.length; ti += 1) argTypes[ti] = types[ti + 1];
@@ -1419,7 +1419,17 @@ function sharesArrayReceiver(recvFormal: Type): boolean {
 	return inner.kind == TypeKind.Array || inner.kind == TypeKind.SizedArray || inner.kind == TypeKind.Span;
 }
 
-function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Node[], argTypes: Type[], isActorMethodCall: boolean): void {
+function argLabel(pi: int32, hasReceiver: boolean): string {
+	if (!hasReceiver) return "arg " + String(pi);
+	return pi == 0 ? "receiver" : "arg " + String(pi - 1);
+}
+
+function argLabelCap(pi: int32, hasReceiver: boolean): string {
+	if (hasReceiver && pi == 0) return "Receiver";
+	return "Argument " + String(hasReceiver ? pi - 1 : pi);
+}
+
+function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Node[], argTypes: Type[], isActorMethodCall: boolean, hasReceiver: boolean = false): void {
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo") return;
 	const d = node.data as CallExprData;
 	const lastCT = calleeType.typeChildren.length > 0
@@ -1451,12 +1461,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const argCastOk = argProbe != args[pi] && argSrcT != null
 				&& (isIntegerType(argSrcT) || argSrcT.kind == TypeKind.Boolean || argSrcT.kind == TypeKind.Char || argSrcT.kind == TypeKind.Enum);
 			if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
-				addError(ctx, "Argument " + String(pi) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+				addError(ctx, argLabelCap(pi, hasReceiver) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
 			}
 		} else if (isUnknownType(argTypes[pi]) && formal.kind != TypeKind.Unknown && !isUnresolvedType(formal) && formal.kind != TypeKind.GenericParam) {
 			const collapsedParam = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 			if (collapsedParam == null || (collapsedParam.kind != TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
-				addError(ctx, "Argument " + String(pi) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
+				addError(ctx, argLabelCap(pi, hasReceiver) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
 			}
 		}
 		const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
@@ -1510,7 +1520,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				&& hasGenericParams(paramType);
 			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
 				if (promotesToNullablePtr(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
-					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
+					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
 						+ " — a struct value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
 						node.location.line, node.location.column);
 				} else if (needsStdConv(argTypes[pi], paramType)) {
@@ -1521,7 +1531,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						&& !isIntegralNumberLiteral(args[pi])) {
 						const calleeName = getCalleeName(d.callee);
 						addError(ctx, "implicit " + typeDisplayName(argTypes[pi]) + " → " + typeDisplayName(paramType)
-							+ " narrowing in '" + calleeName + "' arg " + String(pi)
+							+ " narrowing in '" + calleeName + "' " + argLabel(pi, hasReceiver)
 							+ " drops the fractional part — write an explicit 'as " + typeDisplayName(paramType) + "'",
 							node.location.line, node.location.column);
 					}
@@ -1538,7 +1548,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							argTypes[pi] = args[pi].nodeType!;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -1550,7 +1560,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				const argKind = lvArg.kind;
 				if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess) {
 					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
 					const refusal = writeRefusal(lvArg, true);
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
