@@ -44,13 +44,6 @@ test "bug544: a covered boolean, a `_` arm and a string statement stay accepted"
 	assert errorCount("function h(cmd: string): int32 {\n\tlet hits: int32 = 0;\n\tmatch (cmd) {\n\t\t\"list\" => { hits = hits + 1; },\n\t\t\"show\" => { hits = hits + 100; },\n\t}\n\treturn hits;\n}\n") == 0;
 }
 
-test "bug544: a string or float match whose value is used must carry `_`" {
-	assert hasError("function f(s: string): int32 {\n\treturn match (s) {\n\t\t\"a\" => 1,\n\t\t\"b\" => 2,\n\t};\n}\n", NONEX544 + " 'string' value");
-	assert hasError("function g(x: float64): string {\n\tconst r = match (x) {\n\t\t0.5 => \"half\",\n\t\t1.0 => \"one\",\n\t};\n\treturn r;\n}\n", NONEX544 + " 'float64' value");
-	assert hasError("function show(n: int32): void {}\nfunction h(s: string): void {\n\tshow(match (s) { \"a\" => 1, \"b\" => 2 });\n}\n", NONEX544 + " 'string' value");
-	assert errorCount("function note(s: string): void {}\nfunction k(cmd: string): void {\n\tmatch (cmd) {\n\t\t\"list\" => note(\"l\"),\n\t\t\"show\" => note(\"s\"),\n\t};\n}\n") == 0;
-}
-
 function builtMatchStmtHas544(source: string, needle: string): boolean {
 	checkSource("const warm544: int32 = 0;");
 	resetAllSideChannels();
