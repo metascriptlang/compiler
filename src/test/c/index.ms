@@ -34,3 +34,4 @@ import "./sizeofFold";
 import "./numericNarrowing";
 import "./voidValue";
 import "./promiseThenTyped";
+import "./buildIsolation";
