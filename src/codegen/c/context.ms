@@ -262,7 +262,7 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 	let i = 0;
 	while (i < p.sigConflicts.length) {
 		if (p.sigConflicts[i] == mangledName) {
-			counter = parseInt(p.sigConflicts[i + 1]);
+			counter = parseInt(p.sigConflicts[i + 1]) as int32;
 			counter = counter + 1;
 			p.sigConflicts[i + 1] = counter.toString();
 			found = true;

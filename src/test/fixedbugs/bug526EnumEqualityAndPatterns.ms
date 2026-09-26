@@ -9,7 +9,7 @@
 //             without relating the pattern to the discriminant.
 //
 // Fix:        `==` relates two enums only when they are the same enum (the reference's
-//             `==`[Enum: enum](x, y: Enum)), an enum and a number stay comparable, two structs only
+//             `==`[Enum: enum](x, y: Enum)), two structs only
 //             when one is assignable to the other; each match value pattern is checked against the
 //             discriminant (the reference's semCaseBranch fitNode) and only a fitting one covers a
 //             member.

@@ -1025,12 +1025,12 @@ function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean
 // to write `kind: 0` instead of `kind: NodeKind.NumberLiteral`. This pass
 // rewrites recognized patterns at preparation time:
 //
-//   NodeKind.X      →  <integer ordinal>     (for all NodeKind variants)
-//   DeclKind.X      →  <integer ordinal>
+//   NodeKind.X      →  <integer ordinal> as NodeKind     (for all NodeKind variants)
+//   DeclKind.X      →  <integer ordinal> as DeclKind
 //
 // The rewrite is in-place, so the macro body in the registry is mutated once
 // and reused on subsequent invocations. Mutation is idempotent — re-running on
-// already-rewritten code is a no-op (NumberLiteral stays NumberLiteral).
+// already-rewritten code is a no-op (the cast literal stays a cast literal).
 //
 // Limitations (acceptable for v1, document them):
 //   - `NodeKind` cannot be used as a value: `const k = NodeKind.X` won't work.
@@ -1161,7 +1161,7 @@ function macroEnumOrdinal(enumName: string, memberName: string): number {
 	};
 }
 
-// Try to rewrite a known enum-member access to its integer ordinal.
+// Try to rewrite a known enum-member access to its integer ordinal cast to the enum.
 // Returns the new node if rewritten, or the original node unchanged.
 //
 // Two surface forms must be handled — they look identical in source but the
@@ -1184,17 +1184,22 @@ function tryRewriteEnumMember(node: Node): Node {
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
 		if (d.object == null || d.object.kind != NodeKind.Identifier) return node;
-		const ord = macroEnumOrdinal((d.object.data as IdentifierData).name, d.property);
-		return ord >= 0 ? mkNumber(ord, node.location) : node;
+		const enumName = (d.object.data as IdentifierData).name;
+		const ord = macroEnumOrdinal(enumName, d.property);
+		return ord >= 0 ? enumOrdinalAs(enumName, ord, node.location) : node;
 	}
 	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
 		const sym = node.resolvedSym;
 		if (sym.symbolKind == SymbolKind.EnumMember && sym.symbolType != null) {
 			const ord = macroEnumOrdinal(sym.symbolType.typeName, sym.name);
-			if (ord >= 0) return mkNumber(ord, node.location);
+			if (ord >= 0) return enumOrdinalAs(sym.symbolType.typeName, ord, node.location);
 		}
 	}
 	return node;
+}
+
+function enumOrdinalAs(enumName: string, ord: number, loc: SourceLocation): Node {
+	return createNode(NodeKind.TypeAssertion, { asExpr: mkNumber(ord, loc), asType: enumName }, synthToken(loc));
 }
 
 // Rewrite a `createNodeAt(K, D, L)` call into the equivalent ObjectLiteral.
@@ -2186,15 +2191,15 @@ test "declKindOrdinal returns correct ordinals" {
 	assert declKindOrdinal("Other") == -1;
 }
 
-test "tryRewriteEnumMember rewrites NodeKind.X to NumberLiteral" {
+test "tryRewriteEnumMember rewrites NodeKind.X to its ordinal cast to NodeKind" {
 	const loc = makeLoc(1, 0);
 	const obj = createNode(NodeKind.Identifier, { name: "NodeKind" }, synthToken(loc));
 	const member = createNode(NodeKind.MemberExpr, {
 		object: obj, property: "NumberLiteral", isOptional: false,
 	}, synthToken(loc));
 	const result = tryRewriteEnumMember(member);
-	assert result.kind == NodeKind.NumberLiteral;
-	assert (result.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
+	assert result.kind == NodeKind.TypeAssertion && (result.data as TypeAssertionData).asType == "NodeKind";
+	assert ((result.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
 }
 
 test "tryRewriteEnumMember leaves non-enum member unchanged" {
@@ -2219,8 +2224,8 @@ test "preprocessMacroBody rewrites NodeKind in nested ReturnStmt" {
 	preprocessMacroBody(body);
 	const stmts = (body.data as BlockStmtData).statements;
 	const retData = stmts[0].data as ReturnStmtData;
-	assert retData.argument.kind == NodeKind.NumberLiteral;
-	assert (retData.argument.data as NumberLiteralData).value == (NodeKind.BinaryExpr as number);
+	assert retData.argument.kind == NodeKind.TypeAssertion;
+	assert ((retData.argument.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.BinaryExpr as number);
 }
 
 test "tryRewriteCreateNodeAt converts call to ObjectLiteral" {
@@ -2511,11 +2516,11 @@ test "preprocessNode rewrites NodeKind.X inside ForOfStmt body" {
 	preprocessMacroBody(forOf);
 
 	// After preprocessing, the inner VariableDecl's initializer should be a
-	// NumberLiteral with value === NodeKind.NumberLiteral ordinal (=0), not a
+	// cast of the NodeKind.NumberLiteral ordinal (=0) to NodeKind, not a
 	// MemberExpr. If preprocessNode still skipped ForOfStmt body, this would
 	// remain a MemberExpr and the assertion fails.
 	const rewrittenInit = (innerDecl.data as VariableDeclData).initializer;
-	assert rewrittenInit.kind == NodeKind.NumberLiteral;
-	assert (rewrittenInit.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
+	assert rewrittenInit.kind == NodeKind.TypeAssertion;
+	assert ((rewrittenInit.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
 }
 

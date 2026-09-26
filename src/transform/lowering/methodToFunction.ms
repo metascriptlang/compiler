@@ -192,10 +192,9 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 			NodeKind.DecoratedDecl => {
 				const dd = member.data as DecoratedDeclData;
 				const inner = dd.decoratedNode;
-				const innerKind = inner != null ? inner.kind : -1;
-				if (innerKind == NodeKind.MethodDecl) {
+				if (inner != null && inner.kind == NodeKind.MethodDecl) {
 					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner)));
-				} else if (innerKind == NodeKind.ConstructorDecl) {
+				} else if (inner != null && inner.kind == NodeKind.ConstructorDecl) {
 					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner)));
 				} else {
 					newBody.push(member);

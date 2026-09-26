@@ -553,7 +553,7 @@ function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
 function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	const start = args.length > 2 ? args[2].intVal : 0;
-	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start));
+	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start as int32));
 }
 
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {

@@ -2,9 +2,9 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { convertsImplicitly, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
@@ -466,7 +466,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
 	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
 	if (aEnum && bEnum) return a.typeName == b.typeName;
-	if (aEnum || bEnum) return isNumeric(aEnum ? b : a) || (aEnum ? b : a).kind == TypeKind.Void;
+	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
@@ -613,6 +613,19 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 		TypeKind.Uint64 => !negated || mag == 0,
 		_ => false,
 	};
+}
+
+export function isFittingIntLiteral(expr: Node, target: Type): boolean {
+	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
+	if (expr.kind != NodeKind.UnaryExpr) return false;
+	const u = expr.data as UnaryExprData;
+	return u.unaryOp == "-" && isNodeIntLit(u.operand) && literalFitsInType(u.operand, target, true);
+}
+
+export function reportIntConv(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
+	const what = isUnsignedIntegerType(from) != isUnsignedIntegerType(to) ? "changes signedness" : "narrows";
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion" + site + " " + what
+		+ " — write an explicit 'as " + typeDisplayName(to) + "'", expr.location.line, expr.location.column);
 }
 
 // The parser decides this on the digits: at the boundary the double in `value`
@@ -1146,6 +1159,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
 			return expr;
 		}
+		if (exprType.kind != TypeKind.Null && slotRefuses(exprType, formal.typeReturn)) {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'" + explainStructuralPrefix(exprType, formal.typeReturn), expr.location.line, expr.location.column);
+			return expr;
+		}
 		return synthMaybeWrap(expr, formal, exprType);
 	}
 	if (isMaybeType(formal) && isMaybeType(exprType)) {
@@ -1164,10 +1181,6 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
-	}
-	if (formal.kind == TypeKind.Enum && isIntegerType(exprType) && isNodeIntLit(expr)) {
-		expr.nodeType = formal;
-		return expr;
 	}
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
@@ -1200,8 +1213,12 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			expr.location.line, expr.location.column);
 		return expr;
 	}
+	if (refusesIntConv(exprType, formal) && !isFittingIntLiteral(expr, formal)) {
+		reportIntConv(ctx, expr, exprType, formal, "");
+		return expr;
+	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
-	if (isNarrowingIntConv(exprType, formal)) {
+	if (isNarrowingIntConv(exprType, formal) || refusesIntConv(exprType, formal)) {
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;

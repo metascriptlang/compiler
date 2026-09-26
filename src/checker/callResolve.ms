@@ -8,9 +8,9 @@ import { monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, convertsImplicitly, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation } from "./compat";
+import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam } from "./context";
-import { checkSwitchCase, fitJoinedBranch, fitNode, widensToBase, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf } from "./fit";
+import { checkSwitchCase, fitJoinedBranch, fitNode, widensToBase, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1445,6 +1445,10 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' arg " + String(pi) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
 						+ " — a value is not a pointer, and its address is taken implicitly only for an extern C function; declare the parameter 'ref x: " + typeDisplayName(argTypes[pi]) + "' or 'x: " + typeDisplayName(argTypes[pi]) + "'",
 						node.location.line, node.location.column);
+				} else if (refusesIntConv(argTypes[pi], paramType)) {
+					if (!isFittingIntLiteral(d.arguments[pi], paramType)) {
+						reportIntConv(ctx, node, argTypes[pi], paramType, " in '" + getCalleeName(d.callee) + "' arg " + String(pi));
+					}
 				} else if (convertsImplicitly(argTypes[pi], paramType)) {
 					// float/number → integer: the fractional part would be cut
 					// with no annotation beside the value to warn the reader —

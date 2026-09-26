@@ -6,8 +6,7 @@
 //
 // Root cause: isAssignable carried an Integer → Enum arm, so every slot took an integer as an enum.
 //
-// Fix:        the arm is gone, as in the reference's typeRel tyEnum (only the same enum relates). An
-//             integer LITERAL still fits an enum slot at a declaration, assignment or field.
+// Fix:        the arm is gone, as in the reference's typeRel tyEnum (only the same enum relates).
 
 import { hasError } from "../handoff/helpers";
 import { compileToC } from "../helpers";
@@ -26,7 +25,7 @@ test "bug523: an int64 value is refused by an enum field" {
 	assert hasError(COLOR523 + "interface H523 { c: Color; }\nconst n: int64 = 1;\nconst h: H523 = { c: n };\n", "is not assignable to type 'Color'");
 }
 
-test "bug523: an enum member and an integer literal field stay accepted" {
-	const r = compileToC(COLOR523 + "interface H523 { c: Color; }\nconst c: Color = Color.Green;\nconst h: H523 = { c: 0 };\nconst s = name(c);\n");
+test "bug523: an enum member stays accepted" {
+	const r = compileToC(COLOR523 + "interface H523 { c: Color; }\nconst c: Color = Color.Green;\nconst h: H523 = { c: Color.Red };\nconst s = name(c);\n");
 	assert r.ok, r.error;
 }

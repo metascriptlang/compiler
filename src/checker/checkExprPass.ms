@@ -20,11 +20,11 @@ import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import {
-	markInitialized, isInitialized, getDeclBlock,
+	markInitialized, isInitialized, getDeclBlock, requiresInit,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
-import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
+import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
 import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
@@ -331,10 +331,28 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 }
 
 
+function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): boolean {
+	const nameId = getIdentId(ctx.table.identCache, name);
+	let scope = ctx.table.current;
+	while (scope != null) {
+		if (scope.symbols.get(nameId) == sym) return true;
+		if (scope.scopeKind == ScopeKind.Function) return false;
+		scope = scope.parent;
+	}
+	return false;
+}
+
+function typeLiteralAgainstPayload(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
+	if (expectedType == null || !isMaybeType(expectedType) || expectedType.typeReturn == null) return false;
+	checkExprInner(ctx, node, expectedType.typeReturn);
+	return true;
+}
+
 // Internal: compute type for node. All match arms and sub-functions return Type.
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			reportLiteralRange(ctx, node);
 			if (expectedType != null && isIntegerType(expectedType)) {
 				if (literalFitsInType(node, expectedType, false)) {
@@ -379,6 +397,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			return;
 		},
 		NodeKind.StringLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			// TypeScript parity: string literals get StringLiteral type when expectedType demands it
 			if (expectedType != null) {
 				const sd = node.data as StringLiteralData;
@@ -405,6 +424,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.nodeType = stringType(); return;
 		},
 		NodeKind.BooleanLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
 			// Required for discriminated union narrowing on `ok: true | false` discriminants.
 			if (expectedType != null) {
@@ -558,11 +578,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
 			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
-			if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0 &&
-				ctx.strictDefs && ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null) {
-				if (!isInitialized(ctx.initTracker, d.name)) {
+			if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
+				&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
+				&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
+				if (requiresInit(sym.symbolType)) {
+					addError(ctx, "'" + d.name + "' may be read before it is assigned: type '" + typeDisplayName(sym.symbolType) + "' has no default value", node.location.line, node.location.column);
+					markInitialized(ctx.initTracker, d.name);
+				} else if (ctx.strictDefs) {
 					addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
-					// Suppress repeated warnings (ref: a.init.add s.id)
 					markInitialized(ctx.initTracker, d.name);
 				}
 			}
@@ -2264,6 +2287,29 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 
 // ===== Anonymous Functions =====
 
+function producesSequence(t: Type): boolean {
+	const n = t.typeName;
+	return n == "Generator" || n == "AsyncGenerator" || n == "Iterator" || n == "AsyncIterator" || n == "Iterable" || n == "IterableIterator";
+}
+
+export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Node, declared: Type | null, isAsync: boolean, isGenerator: boolean, at: SourceLocation): void {
+	if (isGenerator || declared == null || body.kind != NodeKind.BlockStmt || isUnresolvedType(declared) || producesSequence(declared)) return;
+	let ret: Type | null = declared;
+	if (isAsync) ret = awaitedType(declared);
+	if (ret == null || ret.kind == TypeKind.Void || isUnknownType(ret) || isUnresolvedType(ret)) return;
+	if (ret.kind == TypeKind.Union) {
+		for (const m of ret.typeChildren) {
+			if (m != null && m.kind == TypeKind.Void) return;
+		}
+	}
+	if (breaksBlock(body) == BreakState.BsNoReturn || !isEndOfBodyReachable(body)) return;
+	if (ret.kind == TypeKind.Never) {
+		addError(ctx, "'" + name + "' returns 'never' but can reach the end of its body", at.line, at.column);
+		return;
+	}
+	addError(ctx, "'" + name + "' lacks an ending return statement: its return type '" + typeDisplayName(ret) + "' needs a value on every path", at.line, at.column);
+}
+
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
 	const isAsync = fnFlags == "async" || fnFlags == "async_generator" || (fnFlags != "" && fnFlags.indexOf("async") >= 0);
 	if (params.length > 0 && params[0] == "this") {
@@ -2380,6 +2426,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	fnNode.paramSyms = paramSyms;
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
+		if (explicitReturnType != null) {
+			refuseFallingOffEnd(ctx, name, body, explicitReturnType, isAsync, fnFlags.indexOf("generator") >= 0, fnNode.location);
+		}
 	} else {
 		let bodyExpected = explicitReturnType;
 		if (isAsync && bodyExpected != null) {
@@ -2398,6 +2447,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = closureStorageType(ctx.inferredReturn);
+	if (body.kind == NodeKind.BlockStmt && explicitReturnType == null && returnTypeAnnotation == "" && !isUnresolvedType(inferredRet)) {
+		refuseFallingOffEnd(ctx, name, body, inferredRet, false, fnFlags.indexOf("generator") >= 0, fnNode.location);
+	}
 	for (const rs of ctx.inferredReturnStmts) {
 		const rsd = rs.data as ReturnStmtData;
 		if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, inferredRet);

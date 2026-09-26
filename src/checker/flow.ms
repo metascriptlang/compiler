@@ -15,7 +15,7 @@ import {
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 	UpdateExprData, NewExprData, OutExprData, HiddenDerefData,
-	ArrayLiteralData, ObjectLiteralData, SpreadExprData,
+	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 } from "../ast/node";
 import {
 	createUnion, inferredType, nullType, neverType,
@@ -1285,6 +1285,40 @@ function calleeParams(callee: Node | null): Type[] {
 	}
 	if (fnType == null || fnType.kind != TypeKind.Function) return null as unknown as Type[];
 	return fnType.typeChildren;
+}
+
+function callNeverReturns(call: Node | null): boolean {
+	if (call == null || call.kind != NodeKind.CallExpr) return false;
+	const callee = (call.data as CallExprData).callee;
+	if (callee == null) return false;
+	const sym = callee.resolvedSym;
+	if (sym != null && sym.symFlags.has(SymbolFlag.NoReturn)) return true;
+	let fnType = callee.nodeType;
+	if ((fnType == null || fnType.kind != TypeKind.Function) && sym != null) fnType = sym.symbolType;
+	return fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Never;
+}
+
+export function isEndOfBodyReachable(body: Node): boolean {
+	if (body.flowNode == null) return false;
+	const seen = new HashSet<FlowNode>();
+	const todo: FlowNode[] = [body.flowNode];
+	while (todo.length > 0) {
+		const flow = todo.pop();
+		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
+		seen.add(flow);
+		if (flow.flags.has(FlowFlag.Start)) return true;
+		if (flow.flags.has(FlowFlag.Call) && callNeverReturns(flow.node)) continue;
+		if (flow.flags.has(FlowFlag.LoopLabel) || flow.flags.has(FlowFlag.BranchLabel)) {
+			let list: FlowList | null = flow.antecedents;
+			while (list != null) {
+				todo.push(list.flow);
+				list = list.next;
+			}
+			continue;
+		}
+		if (flow.antecedent != null) todo.push(flow.antecedent);
+	}
+	return false;
 }
 
 function callWritesInto(call: Node | null, refNode: Node): boolean {
