@@ -885,6 +885,7 @@ module.exports = grammar({
       $.generic_call_expression,
       $.member_expression,
       $.subscript_expression,
+      $.deref_expression,
       $.new_expression,
       $.array,
       $.object,
@@ -919,7 +920,7 @@ module.exports = grammar({
     ),
 
     assignment_expression: $ => prec.right(1, seq(
-      field('left', choice($.identifier, $.member_expression, $.subscript_expression)),
+      field('left', choice($.identifier, $.member_expression, $.subscript_expression, $.deref_expression)),
       choice('=', '+=', '-=', '*=', '/='),
       field('right', $._expression),
     )),
@@ -1093,6 +1094,12 @@ module.exports = grammar({
       field('object', $._expression),
       '[',
       field('index', $._expression),
+      ']',
+    )),
+
+    deref_expression: $ => prec(18, seq(
+      field('operand', $._expression),
+      '[',
       ']',
     )),
 
