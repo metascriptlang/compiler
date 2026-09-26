@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+export LC_ALL=C
 
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 FLOOR_EXEMPT='^tools/'
@@ -284,6 +285,11 @@ CASES
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
   want="src/test/c/json.ms > parses numbers|src/test/fixedbugs/index.ms > no result"
   [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf ' FAIL  %s/src/test/c/json.ms\n  × parses numbers\n\342\234[LSP-OPEN] /a.ms parse=1ms\n\223 %s/src/test/c/ok.ms\n FAIL  %s/src/test/c/bigint.ms\n  × unary plus\n' \
+    "$TOP" "$TOP" "$TOP" >"$log"
+  got=$(reds_of tests "$log" 1 | paste -sd'|' -)
+  want="src/test/c/bigint.ms > unary plus|src/test/c/json.ms > parses numbers"
+  [ "$got" = "$want" ] || { printf 'FAIL reds tests across a split character: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' "FAIL  when branch after a -d: value change  expected=two actual=other" \
     "boundary: setup step failed: source baseline (root C:/tmp/msc-native-boundary-1)" "pass  argv  expected=1 actual=1" >"$log"
   got=$(reds_of boundary "$log" 1 | paste -sd'|' -)
