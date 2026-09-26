@@ -282,6 +282,12 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 	} else {
 		result = `${mangledName}_${counter}_`;
 	}
+	while (result != mangledName && conflictCount(p, result) > 0) {
+		scopeMangledParam(p, mangledName);
+		counter = counter + 1;
+		result = isTemp ? `${mangledName}_${counter}` : `${mangledName}_${counter}_`;
+	}
+	if (result != mangledName) scopeMangledParam(p, result);
 	// Record mapping so DRC-generated identifiers (without resolvedSym) can resolve the name
 	if (result != mangledName) {
 		p.localNameMap.push(mangledName);
@@ -317,6 +323,13 @@ export function scopeMangledParam(p: CProc, mangledName: string): void {
 	}
 	p.sigConflicts.push(mangledName);
 	p.sigConflicts.push("1");
+}
+
+function conflictCount(p: CProc, name: string): int32 {
+	for (let i = 0; i < p.sigConflicts.length; i += 2) {
+		if (p.sigConflicts[i] == name) return parseInt(p.sigConflicts[i + 1]) as int32;
+	}
+	return 0;
 }
 
 // Current block — top of the block stack (Implementation parity)
