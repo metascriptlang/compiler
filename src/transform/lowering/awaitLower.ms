@@ -32,7 +32,8 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
+import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, replaceInExpr, walkNode } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
@@ -48,6 +49,57 @@ import { Symbol } from "../../ast/node";
 // heap-allocated msFuture. Cleared at function boundaries.
 struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; }
 let _spawnSlotMap: HashMap<string, SpawnSlotEntry> = new HashMap<string, SpawnSlotEntry>();
+let _awaitOnlyHandles: NameSet = createNameSet();
+interface SpawnSlotFrame { slots: HashMap<string, SpawnSlotEntry>; handles: NameSet; }
+let _spawnSlotFrames: SpawnSlotFrame[] = [];
+
+function isBuiltinSpawnCall(init: Node): boolean {
+	const si = getSpawnInfo(init);
+	const initSym = init.resolvedSym != null ? init.resolvedSym
+		: (init.kind == NodeKind.CallExpr ? (init.data as CallExprData).callee.resolvedSym : null);
+	return si.closure != null && si.timeout == null && initSym != null && initSym.builtinKind == "PromiseSpawn";
+}
+
+function scanHandleUses(n: Node | null, nested: boolean, decls: NameSet, others: NameSet): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		nameSetAdd(others, (n.data as IdentifierData).name);
+		return;
+	}
+	if (!nested && n.kind == NodeKind.AwaitExpr) {
+		const arg = (n.data as AwaitExprData).awaitArg;
+		if (arg != null && arg.kind == NodeKind.Identifier) return;
+	}
+	if (!nested && n.kind == NodeKind.VariableDecl) {
+		const d = n.data as VariableDeclData;
+		if (d.declKind == DeclKind.Const && d.initializer != null && isBuiltinSpawnCall(d.initializer)) nameSetAdd(decls, d.declName);
+	}
+	const inner = nested || n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ArrowFunction;
+	forEachChild(n, (c: Node): void => { scanHandleUses(c, inner, decls, others); });
+}
+
+function awaitOnlyHandles(fn: Node): NameSet {
+	const decls = createNameSet();
+	const others = createNameSet();
+	forEachChild(fn, (c: Node): void => { scanHandleUses(c, false, decls, others); });
+	const out = createNameSet();
+	for (const name of decls.items) {
+		if (!nameSetContains(others, name)) nameSetAdd(out, name);
+	}
+	return out;
+}
+
+function enterSpawnSlotFrame(fn: Node): void {
+	_spawnSlotFrames.push({ slots: _spawnSlotMap, handles: _awaitOnlyHandles });
+	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
+	_awaitOnlyHandles = awaitOnlyHandles(fn);
+}
+
+function exitSpawnSlotFrame(_fn: Node): void {
+	const frame = _spawnSlotFrames.pop();
+	_spawnSlotMap = frame.slots;
+	_awaitOnlyHandles = frame.handles;
+}
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
 export const VOID_PTR_TYPE: Type = createPtr(createPrimitive(TypeKind.Void));
@@ -363,13 +415,10 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			// Scoped deferred detection: `const h = spawn(fn);` with no timeout
 			// → rewrite to msAwaitSlotCreate + msSpawnSlotSubmit, register for later await.
 			// Only matches builtin spawn() (builtinKind=PromiseSpawn), not raw msSpawn FFI.
-			// spawn() handles are affine Promises used exclusively with await, safe to eliminate.
 			if (d.declKind == DeclKind.Const && d.initializer != null) {
 				const si = getSpawnInfo(d.initializer);
-				const initSym = d.initializer.resolvedSym != null ? d.initializer.resolvedSym
-					: (d.initializer.kind == NodeKind.CallExpr ? (d.initializer.data as CallExprData).callee.resolvedSym : null);
-				if (si.closure != null && si.timeout == null
-					&& initSym != null && initSym.builtinKind == "PromiseSpawn"
+				if (si.closure != null && isBuiltinSpawnCall(d.initializer)
+					&& nameSetContains(_awaitOnlyHandles, d.declName)
 					&& !_spawnSlotMap.has(d.declName)) {
 					const innerType = getAwaitInnerType(d.initializer);
 					const stmts: Node[] = [];
@@ -515,8 +564,8 @@ function blockifyAwaitingArrows(program: Node): void {
 export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	blockifyAwaitingArrows(program);
 	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
-	walkExpandBlocksHooked(program, expandStmt, ctx,
-		(_fn: Node): void => { _spawnSlotMap = new HashMap<string, SpawnSlotEntry>(); },
-		(_fn: Node): void => { _spawnSlotMap = new HashMap<string, SpawnSlotEntry>(); });
+	_awaitOnlyHandles = awaitOnlyHandles(program);
+	_spawnSlotFrames = [];
+	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);
 	return program;
 }
