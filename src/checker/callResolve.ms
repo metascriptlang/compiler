@@ -718,9 +718,9 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	}
 	if (argType != null && isResult(argType) && getResultOkType(argType) != null) {
 		const okT = getResultOkType(argType);
-		if (d.hasCatch && d.catchVal != null && okT != null && d.catchVal.nodeType != null) {
+		if (d.hasCatch && d.catchVal != null && okT != null && okT.kind != TypeKind.Void && d.catchVal.nodeType != null) {
 			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
-			if (!isUnresolvedType(joined) && isNullableWideningOf(joined, okT)) {
+			if (!isUnresolvedType(joined)) {
 				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
 				node.nodeType = joined;
 				return joined;
@@ -772,15 +772,6 @@ export function checkPropagatedErrorAgainst(ctx: CheckerContext, node: Node, ret
 	addError(ctx, "'try' propagates error type '" + typeDisplayName(fromErr) + "' but '" + fnName + "' returns error type '"
 		+ typeDisplayName(toErr) + "' — declare a converter from '" + typeDisplayName(fromErr) + "' to '" + typeDisplayName(toErr)
 		+ "' or handle the error", node.location.line, node.location.column);
-}
-
-function isNullableWideningOf(joined: Type | null, okT: Type | null): boolean {
-	if (joined == null || okT == null) return false;
-	if (sameType(joined, okT)) return true;
-	if (isMaybeType(joined) && joined.typeReturn != null && sameType(joined.typeReturn, okT)) return true;
-	const ptrMember = unwrapRefNullUnion(joined);
-	if (ptrMember != null && sameType(ptrMember, okT)) return true;
-	return false;
 }
 
 let _cceCount: float64 = 0;
