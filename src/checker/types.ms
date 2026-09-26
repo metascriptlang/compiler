@@ -324,7 +324,7 @@ export function createPromise(innerType: Type | null): Type {
 	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Affine, scope-bound `Promise<T>` produced by `spawn(...)`. Surface type is
@@ -344,7 +344,7 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
 	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
@@ -1470,7 +1470,7 @@ export function lockedCellName(payload: Type | null): string {
 export function createLockedCell(payload: Type | null): Type {
 	return createStruct(lockedCellName(payload),
 		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload], true);
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true);
 }
 
 export function createLocked(payload: Type | null): Type {

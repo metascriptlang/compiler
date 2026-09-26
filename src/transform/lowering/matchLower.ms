@@ -399,7 +399,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 			const newGroupIdx = patternKeys.length;
 			patternKeys.push(setKey);
 			patternTests.push(caseData.casePatterns);
-			armGuards.push([caseData.caseGuard]);
+			armGuards.push([caseData.caseGuard!]);
 			armBodies.push([armBody]);
 			for (const pat of caseData.casePatterns) {
 				labelOwners.push(patternKey(pat, i));

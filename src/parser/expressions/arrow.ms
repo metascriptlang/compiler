@@ -137,7 +137,7 @@ export function parseArrowFunction(
 	const arrowDefaults: Node[] = [];
 	let di = 0;
 	while (di < arrowParams.length) {
-		arrowDefaults.push(di < rawDefaults.length ? rawDefaults[di] : null);
+		arrowDefaults.push(di < rawDefaults.length ? rawDefaults[di] : null as unknown as Node);
 		di = di + 1;
 	}
 
@@ -210,10 +210,10 @@ export function parseBareIdentArrow(
 			arrowBody: blockBody,
 			arrowFlags: flags,
 			arrowReturnType: "",
-			arrowDefaults: [null],
+			arrowDefaults: [null as unknown as Node],
 		}, identToken);
 		blockNode.typeExpr = null;
-		blockNode.typeExprs = [null];
+		blockNode.typeExprs = [null as unknown as Node];
 		blockNode.paramLocations = [makeLoc(identToken.line, identToken.column)];
 		return Result.ok(blockNode);
 	}
@@ -225,10 +225,10 @@ export function parseBareIdentArrow(
 		arrowBody: exprBody,
 		arrowFlags: flags,
 		arrowReturnType: "",
-		arrowDefaults: [null],
+		arrowDefaults: [null as unknown as Node],
 	}, identToken);
 	exprNode.typeExpr = null;
-	exprNode.typeExprs = [null];
+	exprNode.typeExprs = [null as unknown as Node];
 	exprNode.paramLocations = [makeLoc(identToken.line, identToken.column)];
 	return Result.ok(exprNode);
 }

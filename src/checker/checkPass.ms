@@ -773,7 +773,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		addError(ctx, `Duplicate symbol '${d.declName}'`, d.nameLocation.line, d.nameLocation.column);
 	}
 	if (existing != null) {
-		existing.symbolType = varType;
+		existing.symbolType = varType!;
 		if (d.declKind != DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
