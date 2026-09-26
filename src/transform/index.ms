@@ -141,6 +141,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
+	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
+	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerAwait(result, ctx); }
 	if (!jsBackend) { result = lowerCtorInit(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }
