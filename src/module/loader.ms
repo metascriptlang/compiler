@@ -19,7 +19,7 @@ import {
 	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
 	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ModuleError, ErrorSeverity,
 } from "./graph";
-import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
+import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig, Backend } from "./resolver";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -731,7 +731,7 @@ export function loadModuleGraph(entryPath: string, provider: SourceProvider): Mo
 	const graph = createModuleGraph();
 	// Dummy config — not used in bare mode (useConfig=0)
 	const dummyExts: string[] = [];
-	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
+	const dummyCfg: ResolverConfig = { backend: Backend.C, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
 	const _r = loadModule(graph, entryPath, provider, dummyCfg, 0);
 	return graph;
 }
