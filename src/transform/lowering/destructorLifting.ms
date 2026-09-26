@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess, runtimeRef } from "../util";
+import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
@@ -935,6 +935,44 @@ function hasAnyUserHook(typeName: string, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(typeName, "trace", lctx);
 }
 
+function baseHookOwner(typeName: string, hook: string, lctx: LiftCtx): string {
+	let a = getBaseClass(typeName, lctx);
+	while (a != "") {
+		const own = hasUserDefinedHook(a, hook, lctx);
+		const takes = hook == "destroy" || hook == "wasMoved"
+			? own
+			: own || hasUserDefinedHook(a, "destroy", lctx);
+		if (takes) {
+			if (hook != "trace") return a;
+			const sym = lookupSymbol(lctx.checkerCtx.table, a);
+			if (sym != null && isCyclicType(unwrapRef(sym.symbolType), lctx, createNameSet())) return a;
+			return "";
+		}
+		a = getBaseClass(a, lctx);
+	}
+	return "";
+}
+
+function classFieldCount(className: string, lctx: LiftCtx): number {
+	const sym = lookupSymbol(lctx.checkerCtx.table, className);
+	if (sym == null || sym.symbolType == null) return 0;
+	return unwrapRef(sym.symbolType).typeNames.length;
+}
+
+function callBaseHook(owner: string, hook: string, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	ensureHooksByName(owner, lctx, loc, null);
+	const ownerRef = lookupSymbol(lctx.checkerCtx.table, owner).symbolType;
+	const a1 = makeHiddenSubConv(makeIdentResolved(s1, loc), ownerRef, loc);
+	const args: Node[] = [a1];
+	if (hook == "trace") {
+		args.push(makeIdentResolved(s2, loc));
+	} else if (hook == "copy" || hook == "sink") {
+		args.push(makeHiddenSubConv(makeIdentResolved(s2, loc), ownerRef, loc));
+	}
+	const name = hookCName(owner, null, lctx) + hookSuffix(hook);
+	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(name, attachedOpOf(hook)), null, loc), args, loc), loc));
+}
+
 // ===== Union variant arm generation (if/else chain on _tag) =====
 
 // Emit `dest._tag = src._tag` (variant discriminator copy). Used by sink and
@@ -1246,12 +1284,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const x1 = hookParamDeref(s1, loc);
 		const x2 = isTrace ? makeIdentResolved(s2, loc) : hookParamDeref(s2, loc);
 
-		// Phase 4: when child class has flattened parent fields (HasInheritedFields
-		// flag set in resolveClass), suppress parent hook genCall — fields are
-		// walked inline by the per-field loops below, so calling parent destroy
-		// would double-free. ensureHooksByName above is preserved (parent type
-		// still needs hooks emitted for cross-module references).
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
+		const owner = fieldsFlattened ? baseHookOwner(typeName, hook, lctx) : "";
+		const firstOwn = owner != "" ? classFieldCount(owner, lctx) : 0;
 		if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
@@ -1260,19 +1295,23 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		} else if (hook == "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
-			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
+			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
+			if (owner != "") {
+				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
 				genCall(baseCName + "Destroy", hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
-			if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
+			if (owner != "") {
+				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
 				genCall(baseCName + hookSuffix(hook), hook, x1, x2, buf, loc);
 			}
-			for (let i = 0; i < objType.typeNames.length; i += 1) {
+			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
