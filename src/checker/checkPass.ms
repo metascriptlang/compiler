@@ -21,7 +21,7 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch, nonNullMemberOfNullable } from "./compat";
-import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom } from "./instantiate";
@@ -592,7 +592,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 					}
 				}
 			}
-			checkExpr(ctx, d.throwArg, null);
+			checkThrowArg(ctx, node);
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
 		NodeKind.SwitchStmt => checkSwitchStmt(ctx, node),
@@ -1775,6 +1775,34 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		const expected = formatTypeBrief(returnExpected);
 		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got + explainStructuralPrefix(finalRetType, returnExpected), node.location.line, node.location.column);
 	}
+}
+
+function checkThrowArg(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ThrowStmtData;
+	checkExpr(ctx, d.throwArg, null);
+	const argType = d.throwArg.nodeType;
+	if (argType == null || argType.kind == TypeKind.Error || isUnresolvedType(argType) || hasGenericParams(argType)) return;
+	const errSym = lookupSymbol(ctx.table, "Error");
+	if (errSym == null || errSym.symbolType == null) {
+		addError(ctx, "throw needs the std 'Error' class in scope", d.throwArg.location.line, d.throwArg.location.column);
+		return;
+	}
+	const opaque = isUnknownType(argType);
+	if (!opaque && isAssignable(argType, errSym.symbolType)) return;
+	if (opaque || !isAssignable(argType, stringType())) {
+		addError(ctx, "only an 'Error' or a 'string' can be thrown, got '" + typeDisplayName(argType) + "'", d.throwArg.location.line, d.throwArg.location.column);
+		return;
+	}
+	const loc = d.throwArg.location;
+	const callee = createNodeAt(NodeKind.Identifier, { name: "Error" }, loc);
+	ensureShaped(errSym, ctx);
+	markUsedIn(ctx, errSym);
+	callee.resolvedSym = errSym;
+	callee.nodeType = errSym.symbolType;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym).incl(NodeFlag.Sem);
+	const boxed = createNodeAt(NodeKind.NewExpr, { newCallee: callee, newArguments: [d.throwArg] }, loc);
+	checkExpr(ctx, boxed, null);
+	d.throwArg = boxed;
 }
 
 function checkTryCatch(ctx: CheckerContext, node: Node): void {
