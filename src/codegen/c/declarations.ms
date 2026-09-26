@@ -15,7 +15,7 @@ import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
-import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
+import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
@@ -435,8 +435,8 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
-					const nv = (pd.propInitializer.data as NumberLiteralData).value;
-					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
+					const nd = pd.propInitializer.data as NumberLiteralData;
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
 				},
 				NodeKind.StringLiteral => {
 					const sv = (pd.propInitializer.data as StringLiteralData).value;
