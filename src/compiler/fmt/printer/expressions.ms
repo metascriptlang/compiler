@@ -199,7 +199,6 @@ export function printUpdateExpr(node: Node, options: FormatOptions): Doc {
 
 export function printDerefExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as HiddenDerefData;
-	if (!node.flags.has(NodeFlag.ExplicitDeref)) return callPrintNode(d.expr, options);
 	return docGroup([printAtom(d.expr, options), docText("[]")]);
 }
 
