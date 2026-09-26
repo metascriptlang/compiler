@@ -10,7 +10,7 @@ import {
 	ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
-	AwaitExprData, YieldExprData,
+	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
@@ -347,6 +347,25 @@ function hasNativePattern(s: string): boolean {
 	return false;
 }
 
+function emittedNode(node: Node): Node {
+	return match (node.kind) {
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => emittedNode((node.data as HiddenDerefData).expr),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => emittedNode((node.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => emittedNode((node.data as TypeAssertionData).asExpr),
+		NodeKind.MoveExpr => emittedNode((node.data as MoveExprData).moveArg),
+		_ => node,
+	};
+}
+
+function emitPostfixBase(gen: JSGenerator, node: Node): void {
+	const k = emittedNode(node).kind;
+	const wrap = k == NodeKind.NumberLiteral || k == NodeKind.AwaitExpr || k == NodeKind.YieldExpr
+		|| k == NodeKind.UnaryExpr || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr;
+	if (wrap) emit(gen, "(");
+	emitNode(gen, node);
+	if (wrap) emit(gen, ")");
+}
+
 function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string): void {
 	let argIdx = 0;
 	let i = 0;
@@ -354,7 +373,12 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 		const ch = pattern.charAt(i);
 		if (ch == "#") {
 			if (argIdx < args.length) {
-				emitNode(gen, args[argIdx]);
+				const next = i + 1 < pattern.length ? pattern.charAt(i + 1) : "";
+				if (next == "." || next == "[" || next == "(") {
+					emitPostfixBase(gen, args[argIdx]);
+				} else {
+					emitNode(gen, args[argIdx]);
+				}
 				argIdx = argIdx + 1;
 			}
 			i = i + 1;
@@ -453,7 +477,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			&& memberOverloadSym.declNode != null
 			&& memberOverloadSym.declNode.kind == NodeKind.MethodDecl) {
 		const mem = d.callee.data as MemberExprData;
-		emitNode(gen, mem.object);
+		emitPostfixBase(gen, mem.object);
 		emit(gen, mem.isOptional ? "?." : ".");
 		emit(gen, jsMethodMemberName(mem.property, memberOverloadSym));
 		emit(gen, "(");
@@ -462,15 +486,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// Wrap a function-expression callee: (() => 5)()
-	const wrapCallee = d.callee.kind == NodeKind.ArrowFunction || d.callee.kind == NodeKind.FunctionExpr;
-	if (wrapCallee) {
-		emit(gen, "(");
-		emitNode(gen, d.callee);
-		emit(gen, ")");
-	} else {
-		emitNode(gen, d.callee);
-	}
+	emitPostfixBase(gen, d.callee);
 	emit(gen, "(");
 	emitJoinedNodes(gen, d.arguments, ", ");
 	emit(gen, ")");
@@ -490,14 +506,7 @@ export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
 		return;
 	}
-	// Wrap number literals: (42).toString()
-	if (d.object.kind == NodeKind.NumberLiteral) {
-		emit(gen, "(");
-		emitNode(gen, d.object);
-		emit(gen, ")");
-	} else {
-		emitNode(gen, d.object);
-	}
+	emitPostfixBase(gen, d.object);
 	if (d.isOptional) {
 		emit(gen, "?.");
 	} else {
@@ -510,7 +519,7 @@ export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 
 export function emitArrayAccess(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayAccessData;
-	emitNode(gen, d.array);
+	emitPostfixBase(gen, d.array);
 	emit(gen, "[");
 	emitNode(gen, d.index);
 	emit(gen, "]");
