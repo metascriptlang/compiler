@@ -635,7 +635,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
 				g.preparationFacts.skippedTypeInfos.add(skipBase);
-				const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
+				const skipCBase = typeInfoCBase(g, d, skipBase);
 				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
 			}
 			return;
@@ -790,15 +790,22 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 
 // ===== TypeInfo Variable (from destructorLifting) =====
 // Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
-// The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
+
+function typeInfoCBase(g: CGen, d: Readonly<VariableDeclData>, baseName: string): string {
+	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
+		const od = d.initializer.data as ObjectLiteralData;
+		for (let i = 0; i < od.keys.length; i += 1) {
+			const v = od.properties[i];
+			if (od.keys[i] == "cname" && v.kind == NodeKind.StringLiteral) return mangle((v.data as StringLiteralData).value);
+		}
+	}
+	return typeCacheGet(g.typeCache, "cname:" + baseName);
+}
 
 function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
 	// Extract base type name: strip "TypeInfo" suffix (8 chars)
 	const baseName = d.declName.slice(0, d.declName.length - 8);
-	// The emitted symbol must match what consumers derive from the Type
-	// (qualified C name via mangledTypeName) — the decl arm registered it
-	// in typeCache before destructorLifting's TypeInfo var reaches codegen.
-	const cBase = typeCacheGet(g.typeCache, "cname:" + baseName);
+	const cBase = typeInfoCBase(g, d, baseName);
 	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
@@ -820,7 +827,9 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
-			if (key == "name") {
+			if (key == "cname") {
+				continue;
+			} else if (key == "name") {
 				// name field: emit C string literal (const char*), not msString
 				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
 			} else if (key == "destroyFn") {

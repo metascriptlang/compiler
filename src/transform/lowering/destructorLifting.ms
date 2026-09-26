@@ -1414,9 +1414,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 
 // Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
 // `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
-function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
+function emitMinimalTypeInfo(cName: string, typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
+	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1430,8 +1430,8 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
 function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const traceFn = hasCycles ? makeTypedIdentResolved(attachedOpSym(cName + "Trace", AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
-	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
+	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1557,7 +1557,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
 			if (shouldEmitTypeInfo) {
-				emitMinimalTypeInfo(typeName, lctx, loc);
+				emitMinimalTypeInfo(cName, typeName, lctx, loc);
 				claimGlobalTypeInfo(cName);
 			}
 			nameSetAdd(lctx.trivial, cName);
