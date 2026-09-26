@@ -1011,12 +1011,32 @@ void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	}
 }
 
+static int msWriteUint64Decimal(uint64_t value, char* out) {
+	char reversed[20];
+	int n = 0;
+	do {
+		reversed[n++] = (char)('0' + value % 10);
+		value /= 10;
+	} while (value != 0);
+	for (int i = 0; i < n; i++) out[i] = reversed[n - 1 - i];
+	return n;
+}
+
+static int msWriteInt64Decimal(int64_t value, char* out) {
+	if (value < 0) {
+		out[0] = '-';
+		return 1 + msWriteUint64Decimal((uint64_t)0 - (uint64_t)value, out + 1);
+	}
+	return msWriteUint64Decimal((uint64_t)value, out);
+}
+
 msString msIntToString(int64_t value) {
 	char buf[32];
-	int len = snprintf(buf, sizeof(buf), "%lld", (long long)value);
+	int len = msWriteInt64Decimal(value, buf);
 	return msStringNew(buf, len);
 }
 
+#ifndef MSOS_SOLANA
 static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
 	char sci[64];
 	int prec = 0;
@@ -1044,7 +1064,7 @@ msString msNumberToString(double value) {
 	if (value == 0.0) return msStringNew("0", 1);
 	if (isinf(value)) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
 	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
-		int len = snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
+		int len = msWriteInt64Decimal((int64_t)value, buf);
 		return msStringNew(buf, len);
 	}
 
@@ -1082,16 +1102,17 @@ msString msNumberToString(double value) {
 		}
 		*p++ = 'e';
 		*p++ = n > 0 ? '+' : '-';
-		p += snprintf(p, 8, "%d", n > 0 ? n - 1 : -(n - 1));
+		p += msWriteInt64Decimal(n > 0 ? n - 1 : -(n - 1), p);
 	}
 	return msStringNew(buf, (int)(p - buf));
 }
+#endif
 
 /* Unsigned counterpart of msIntToString: values above INT64_MAX print as a
    negative through the signed formatter. */
 msString msUint64ToString(uint64_t value) {
 	char buf[24];
-	int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)value);
+	int len = msWriteUint64Decimal(value, buf);
 	return msStringNew(buf, len);
 }
 
@@ -1207,15 +1228,36 @@ msString msStringJoin(msStringArray arr, msString sep) {
 
 /* ===== Parsing ===== */
 
+#ifndef MSOS_SOLANA
 double msStringParseFloat(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0.0;
 	/* Ensure null-terminated (it should be, but be safe) */
 	return strtod(s.p->data, NULL);
 }
+#endif
 
 int64_t msStringParseInt(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0;
-	return strtoll(s.p->data, NULL, 10);
+	const char* p = s.p->data;
+	while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
+	bool negative = false;
+	if (*p == '+' || *p == '-') {
+		negative = *p == '-';
+		p++;
+	}
+	uint64_t limit = negative ? (uint64_t)INT64_MAX + 1 : (uint64_t)INT64_MAX;
+	uint64_t value = 0;
+	bool overflow = false;
+	for (; *p >= '0' && *p <= '9'; p++) {
+		uint64_t digit = (uint64_t)(*p - '0');
+		if (overflow || value > (limit - digit) / 10) {
+			overflow = true;
+			continue;
+		}
+		value = value * 10 + digit;
+	}
+	if (overflow) return negative ? INT64_MIN : INT64_MAX;
+	return negative ? (int64_t)((uint64_t)0 - value) : (int64_t)value;
 }
 
 /* ===== Capacity ===== */

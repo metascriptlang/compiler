@@ -92,6 +92,7 @@ msNumberArray msNumberArrayNew(int64_t cap) {
 	return arr;
 }
 
+#ifndef MSOS_SOLANA
 msNumberArray msNumberArrayFrom(int64_t count, ...) {
 	if (count <= 0) return MS_EMPTY_NUMBER_ARRAY;
 	msNumberArray arr = msNumberArrayNew(count);
@@ -104,6 +105,7 @@ msNumberArray msNumberArrayFrom(int64_t count, ...) {
 	arr.len = count;
 	return arr;
 }
+#endif
 
 void msNumberArrayDestroy(msNumberArray* arr) {
 	if (arr->p != NULL) {
