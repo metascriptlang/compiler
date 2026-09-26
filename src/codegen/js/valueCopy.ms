@@ -10,8 +10,7 @@ import { Node, NodeKind, NodeFlag, Type, TypeKind, TypeFlag } from "../../ast/no
 import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
-import { Symbol, SymbolKind } from "../../ast/node";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { isViewBinding } from "../../checker/symbol";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
 let ownerGen: JSGenerator | null = null;
@@ -268,11 +267,6 @@ function isSimpleLvalue(n: Node): boolean {
 // A value parameter or a for-of binding is a view of the caller's value: an
 // assignment to it rebinds to its own copy (C gives it an owned shadow,
 // CK-18/CK-30), it never writes through into the value it views.
-function isViewBinding(sym: Symbol | null): boolean {
-	if (sym == null) return false;
-	return sym.symbolKind == SymbolKind.Parameter || hasFlag(sym, SymbolFlag.ForVar);
-}
-
 function storeFnName(gen: JSGenerator, t: Type): string {
 	registryFor(gen);
 	const key = "store:" + typeKey(t);
