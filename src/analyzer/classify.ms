@@ -197,9 +197,14 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 // Structural-hash view of the DU-variant registry (checker/types stampInlineDuVariants).
 // The flag alone misses structurally-equal COPIES (eager per-module imports,
 // exploratory literal types) that never pass through createUnion — the hash is
-// copy-immune. Lazily ingests new registrations; registry only grows.
+// copy-immune. Lazily ingests new registrations; the registry only grows within a build.
 let _duHashes: NameSet = null as unknown as NameSet;
 let _duHashCursor: number = 0;
+
+export function resetDuHashes(): void {
+	_duHashes = null as unknown as NameSet;
+	_duHashCursor = 0;
+}
 function isDuVariantHashName(name: string): boolean {
 	if (_duHashes == null) _duHashes = createNameSet();
 	const reg = duVariantRegistry();

@@ -97,9 +97,9 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): Ch
 // ===== Constructor Default Registry =====
 // Cross-module registry for constructor function types + defaults.
 // Each module has its own symbol table, so constructor symbols can't be shared
-// via scope. This registry is module-level (shared across all checker invocations)
-// and provides the concrete param types needed for default-fill in checkNewExpr.
-interface CtorEntry {
+// via scope. This registry is shared by every check of one build and provides the
+// concrete param types needed for default-fill in checkNewExpr.
+export interface CtorEntry {
 	name: string;
 	fnType: Type;
 	defaults: Node[];
@@ -111,6 +111,22 @@ export function registerCtorDefaults(name: string, fnType: Type, defaults: Node[
 		if (e.name == name) return; // already registered
 	}
 	_ctorRegistry.push({ name, fnType, defaults });
+}
+
+export function ctorDefaultsMark(): int32 {
+	return _ctorRegistry.length;
+}
+
+export function ctorDefaultsFrom(mark: int32): CtorEntry[] {
+	const entries: CtorEntry[] = [];
+	for (let i = mark; i < _ctorRegistry.length; i += 1) entries.push(_ctorRegistry[i]);
+	return entries;
+}
+
+export function resetInstantiationState(): void {
+	_moduleCtxMap = new HashMap<string, CheckerContext>();
+	_moduleProgramMap = new HashMap<string, Node>();
+	_ctorRegistry = [];
 }
 
 export function lookupCtorDefaults(ctorFnName: string): CtorEntry {

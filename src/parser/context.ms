@@ -448,7 +448,6 @@ export function resetGenericTypeInsts(): void {
 	_genericTypeInstStore = createGenericTypeInstStore();
 }
 
-// Centralized reset for all side-channel stores (prevents stale data across test runs)
 export function resetAllSideChannels(): void {
 	resetGenericTypeInsts();
 }

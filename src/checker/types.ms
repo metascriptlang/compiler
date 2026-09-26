@@ -689,6 +689,26 @@ export function duVariantRegistry(): Type[] {
 	return _duVariantRegistry.items;
 }
 
+export function resetDuVariantRegistry(): void {
+	_duVariantRegistry = { items: [] };
+}
+
+export function duVariantMark(): int32 {
+	return _duVariantRegistry.items.length;
+}
+
+export function duVariantsFrom(mark: int32): Type[] {
+	const items: Type[] = [];
+	for (let i = mark; i < _duVariantRegistry.items.length; i += 1) items.push(_duVariantRegistry.items[i]);
+	return items;
+}
+
+export function replayDuVariants(items: Type[]): void {
+	for (const v of items) {
+		if (!_duVariantRegistry.items.includes(v)) duRegAdd(_duVariantRegistry, v);
+	}
+}
+
 // Find which union variant contains ALL the given field names (and optionally types).
 // When fieldTypes is non-empty, also checks type kind to disambiguate variants with
 // same field names but different types (e.g., { value: number } vs { value: string }).

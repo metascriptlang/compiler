@@ -731,12 +731,47 @@ let _dispParent: HashMap<string, string> = new HashMap<string, string>();
 let _dispEntries: DispMethodEntry[] = [];
 let _dispByLifted: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
+export interface DispatchRecords {
+	parentClasses: string[];
+	parentBases: string[];
+	methodClasses: string[];
+	methodNames: string[];
+	methodSyms: Symbol[];
+}
+let _dispCapture: DispatchRecords | null = null;
+
+export function startDispatchCapture(): DispatchRecords | null {
+	const outer = _dispCapture;
+	_dispCapture = { parentClasses: [], parentBases: [], methodClasses: [], methodNames: [], methodSyms: [] };
+	return outer;
+}
+
+export function endDispatchCapture(outer: DispatchRecords | null): DispatchRecords {
+	const captured = _dispCapture;
+	_dispCapture = outer;
+	return captured!;
+}
+
+export function replayDispatchRecords(records: DispatchRecords): void {
+	for (let i = 0; i < records.parentClasses.length; i += 1) dispatchRecordParent(records.parentClasses[i], records.parentBases[i]);
+	for (let i = 0; i < records.methodSyms.length; i += 1) dispatchRecordMethod(records.methodClasses[i], records.methodNames[i], records.methodSyms[i]);
+}
+
 export function dispatchRecordParent(className: string, baseName: string): void {
 	if (className == "" || baseName == "") return;
+	if (_dispCapture != null) {
+		_dispCapture.parentClasses.push(className);
+		_dispCapture.parentBases.push(baseName);
+	}
 	_dispParent.set(className, baseName);
 }
 
 export function dispatchRecordMethod(className: string, methodName: string, sym: Symbol): void {
+	if (_dispCapture != null) {
+		_dispCapture.methodClasses.push(className);
+		_dispCapture.methodNames.push(methodName);
+		_dispCapture.methodSyms.push(sym);
+	}
 	const lifted = sym.name;
 	const prev = _dispByLifted.get(lifted);
 	if (prev != null) {
@@ -753,6 +788,10 @@ export function dispatchRecordMethod(className: string, methodName: string, sym:
 	const e: DispMethodEntry = { className: className, methodName: methodName, sym: sym, overloaded: false };
 	_dispEntries.push(e);
 	_dispByLifted.set(lifted, e);
+}
+
+export function dispatchEntryCount(): int32 {
+	return _dispEntries.length;
 }
 
 export function resetDispatchRegistry(): void {
