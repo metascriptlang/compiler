@@ -243,3 +243,4 @@ import "./bug220GenericCtorThisBindsTypeParams";
 import "./bug221ThrowNonError";
 import "./bug221AwaitInExpression";
 import "./bug222AsyncUninitializedLocal";
+import "./bug230SpawnRulesOnJs";
