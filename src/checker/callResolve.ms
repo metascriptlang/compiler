@@ -1580,7 +1580,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				let lvArg = args[pi];
 				if (lvArg.kind == NodeKind.OutExpr) { lvArg = (lvArg.data as OutExprData).outArg; }
 				const argKind = lvArg.kind;
-				if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess) {
+				if (argKind != NodeKind.Identifier && argKind != NodeKind.MemberExpr && argKind != NodeKind.ArrayAccess && argKind != NodeKind.HiddenDeref) {
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {

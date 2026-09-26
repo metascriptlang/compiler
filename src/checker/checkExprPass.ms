@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget } from "./types";
+import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createRef, createArc, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createStruct, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, withoutReadonlyView } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
@@ -287,6 +287,36 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 
 
 // Internal: compute type for node. All match arms and sub-functions return Type.
+function checkExplicitDeref(ctx: CheckerContext, node: Node, target: Node): void {
+	const written = target.nodeType;
+	const ptr = written == null ? null : withoutReadonlyView(written);
+	const pointee = ptr != null && (ptr.kind == TypeKind.Ptr || ptr.kind == TypeKind.Ref) ? ptr.typeReturn : null;
+	if (pointee == null || !derefablePointee(ptr!, pointee)) {
+		addError(ctx, explicitDerefRefusal(ptr, pointee), node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return;
+	}
+	node.nodeType = isReadonlyView(written) ? propagateReadonlyView(pointee) : pointee;
+}
+
+function explicitDerefRefusal(ptr: Type | null, pointee: Type | null): string {
+	if (ptr == null) return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand has no type";
+	if (ptr.kind == TypeKind.Ptr) return "'x[]' cannot dereference Ptr<void>; cast it to a Ptr<T> first";
+	if (pointee == null) return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand is " + typeDisplayName(ptr) + ", a value";
+	const shown = ptr.sym != null ? ptr.sym.name : pointee.sym != null ? pointee.sym.name : typeDisplayName(ptr);
+	return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand is " + shown + ", which is already a reference: use it without '[]'";
+}
+
+function derefablePointee(ptr: Type, pointee: Type): boolean {
+	if (pointee.kind == TypeKind.Void) return false;
+	if (ptr.kind == TypeKind.Ptr) return true;
+	if (pointee.kind == TypeKind.Struct || pointee.kind == TypeKind.GenericInstance) {
+		const decl = pointee.kind == TypeKind.GenericInstance && pointee.typeExtra != null ? pointee.typeExtra : pointee;
+		return decl.sym != null && decl.sym.symbolKind == SymbolKind.Struct;
+	}
+	return pointee.kind != TypeKind.Array && pointee.kind != TypeKind.Function;
+}
+
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
@@ -1999,6 +2029,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.HiddenDeref => {
 			const d = node.data as HiddenDerefData;
 			checkExpr(ctx, d.expr, null);
+			if (node.flags.has(NodeFlag.ExplicitDeref)) {
+				checkExplicitDeref(ctx, node, d.expr);
+				return;
+			}
 			if (node.nodeType == null) {
 				const inner = d.expr.nodeType;
 				node.nodeType = (inner != null && inner.kind == TypeKind.Ref && inner.typeReturn != null)
