@@ -40,6 +40,15 @@ export class Error {
 	}
 }
 
+@builtin("compilerFunc")
+export extern function compilerFunc(): void;
+
+@compilerFunc
+function msFieldError(head: string, actual: number): never {
+	@emit(`throw new Error(${head} + ${actual} + "'");`);
+	unreachable;
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;

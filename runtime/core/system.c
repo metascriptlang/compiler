@@ -143,6 +143,21 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	exit(1);
 }
 
+_Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
+	const char* text = labels.p != NULL ? labels.p->data : "";
+	int64_t start = 0;
+	int64_t seen = 0;
+	for (int64_t i = 0; i < labels.len && seen < tag; i += 1) {
+		if (text[i] == '|') { seen += 1; start = i + 1; }
+	}
+	int64_t end = start;
+	while (end < labels.len && text[end] != '|') end += 1;
+	if (seen < tag || tag < 0) end = start;
+	fprintf(stderr, "Error: %.*s%.*s'\n", (int)head.len, head.p != NULL ? head.p->data : "",
+		(int)(end - start), text + start);
+	exit(1);
+}
+
 _Noreturn void msMapFatal(msString msg) {
 	fprintf(stderr, "fatal error: %.*s\n",
 		(int)msg.len, (msg.p != NULL) ? msg.p->data : "");

@@ -468,6 +468,12 @@ _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t 
 
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
+#define msVariantAccess(u, slot, head, labels) (*({ \
+    __typeof__(u)* __vu = &(u); \
+    if ((int64_t)__vu->_tag != (int64_t)(slot)) __builtin_trap(); \
+    __vu; \
+}))
+
 /* ===== Range-Checked Integer Casts ===== */
 static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (int8_t)iv; }
 static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (uint8_t)iv; }

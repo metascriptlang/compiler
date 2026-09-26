@@ -17,12 +17,12 @@ import { Node, NodeKind, DeclKind, ObjectLiteralData, SpreadExprData, SourceLoca
 import { peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocks } from "../walker";
+import { walkNode, walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import { makeVarDecl, makeIdentResolved, makeMember } from "../util";
 import { forEachChild } from "../../ast/visitor";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
-function spreadStructOf(t: Type | null): Type | null {
+export function spreadStructOf(t: Type | null): Type | null {
 	if (t == null) return null;
 	const peeled = peelThrough(unwrapRef(t), PEEL_ALL);
 	const s = peeled == null ? unwrapRef(t) : peeled;
@@ -42,12 +42,12 @@ function structHasField(t: Type, name: string): boolean {
 
 // ===== Stage 1: hoist non-identifier spread operands to peer temps =====
 
-function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[]): void {
+function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[], safe: Node[] | null): void {
 	const d = lit.data as ObjectLiteralData;
 	if (spreadStructOf(lit.nodeType) == null) return;
 	let i = 0;
 	while (i < d.keys.length) {
-		if (d.keys[i] == "..." && d.properties[i].kind == NodeKind.SpreadExpr) {
+		if (d.keys[i] == "..." && d.properties[i].kind == NodeKind.SpreadExpr && (safe == null || safe.includes(d.properties[i]))) {
 			const sd = d.properties[i].data as SpreadExprData;
 			const arg = sd.spreadArg;
 			if (arg.kind != NodeKind.Identifier && spreadStructOf(arg.nodeType) != null) {
@@ -70,7 +70,7 @@ function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[]): vo
 // visit) and at nested blocks (walkExpandBlocks descends into them itself).
 function scanForSpreads(node: Node, ctx: TransformContext, decls: Node[]): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.ObjectLiteral) maybeHoistOperands(node, ctx, decls);
+	if (node.kind == NodeKind.ObjectLiteral) maybeHoistOperands(node, ctx, decls, null);
 	forEachChild(node, (c: Node): void => {
 		if (c == null) return;
 		const k = c.kind;
@@ -81,9 +81,24 @@ function scanForSpreads(node: Node, ctx: TransformContext, decls: Node[]): void 
 	});
 }
 
+function hoistLeadingSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
+	const decls: Node[] = [];
+	const safe: Node[] = [];
+	const st: OnceEvalState = { effectSeen: false };
+	walkOnceEvaluated(stmt, st, (n: Node, effectBefore: boolean): void => {
+		if (n.kind == NodeKind.SpreadExpr && !effectBefore) safe.push(n);
+		if (n.kind == NodeKind.ObjectLiteral) maybeHoistOperands(n, ctx, decls, safe);
+	});
+	return prependDecls(stmt, decls);
+}
+
 function hoistSpreadStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const decls: Node[] = [];
 	scanForSpreads(stmt, ctx, decls);
+	return prependDecls(stmt, decls);
+}
+
+function prependDecls(stmt: Node, decls: Node[]): Node[] {
 	if (decls.length == 0) return [stmt];
 	const out: Node[] = [];
 	for (const dcl of decls) out.push(dcl);
@@ -107,7 +122,7 @@ function providedLater(d: ObjectLiteralData, idx: int32, name: string): boolean 
 	return false;
 }
 
-function expandLiteral(node: Node): Node {
+export function expandObjectSpread(node: Node): Node {
 	if (node.kind != NodeKind.ObjectLiteral) return node;
 	const d = node.data as ObjectLiteralData;
 	let hasSpread = false;
@@ -174,8 +189,13 @@ function expandLiteral(node: Node): Node {
 // ===== Entry Point =====
 
 export function lowerObjectSpread(program: Node, ctx: TransformContext): Node {
+	walkExpandBlocks(program, ctx.jsBackend ? hoistSpreadStmt : hoistLeadingSpreadStmt, ctx);
+	return walkNode(program, expandObjectSpread);
+}
+
+export function lowerObjectSpreadEager(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, hoistSpreadStmt, ctx);
-	return walkNode(program, expandLiteral);
+	return walkNode(program, expandObjectSpread);
 }
 
 // ===== Tests =====

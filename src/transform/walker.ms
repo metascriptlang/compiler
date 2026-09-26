@@ -25,6 +25,7 @@ import {
 	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 import { TransformContext } from "./context";
+import { forEachChild } from "../ast/visitor";
 
 // Visitor function: takes a node, returns replacement (or same node if unchanged)
 type Visitor = (node: Node) => Node;
@@ -500,6 +501,71 @@ export function isFuncBoundary(node: Node): boolean {
 	return node.kind == NodeKind.FunctionDecl ||
 		node.kind == NodeKind.ArrowFunction ||
 		node.kind == NodeKind.FunctionExpr;
+}
+
+function isEffectNode(n: Node): boolean {
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr || n.kind == NodeKind.UpdateExpr
+		|| n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr || n.kind == NodeKind.OutExpr) return true;
+	return n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator);
+}
+
+function isAssignOp(op: string): boolean {
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+}
+
+export function hasEffect(n: Node): boolean {
+	if (n == null || isFuncBoundary(n)) return false;
+	if (isEffectNode(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && hasEffect(c)) { found = true; }
+	});
+	return found;
+}
+
+export interface OnceEvalState {
+	effectSeen: boolean;
+}
+
+export type OnceEvalVisitor = (node: Node, effectBefore: boolean) => void;
+
+export function walkOnceEvaluated(node: Node, st: OnceEvalState, visit: OnceEvalVisitor): void {
+	if (node == null || isFuncBoundary(node)) return;
+	const k = node.kind;
+	if (k == NodeKind.BlockStmt || k == NodeKind.MethodDecl || k == NodeKind.ClassDecl || k == NodeKind.ActorDecl
+		|| k == NodeKind.SwitchCase || k == NodeKind.MatchCase
+		|| k == NodeKind.WhileStmt || k == NodeKind.DoWhileStmt) return;
+	if (k == NodeKind.ForStmt) {
+		walkOnceEvaluated((node.data as ForStmtData).forInit, st, visit);
+		return;
+	}
+	if (k == NodeKind.IfStmt) {
+		walkOnceEvaluated((node.data as IfStmtData).condition, st, visit);
+		return;
+	}
+	if (k == NodeKind.ConditionalExpr) {
+		const cd = node.data as ConditionalExprData;
+		walkOnceEvaluated(cd.ternaryCondition, st, visit);
+		if (hasEffect(cd.ternaryConsequent) || hasEffect(cd.ternaryAlternate)) st.effectSeen = true;
+		return;
+	}
+	if (k == NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.operator == "&&" || bd.operator == "||") {
+			walkOnceEvaluated(bd.left, st, visit);
+			if (hasEffect(bd.right)) st.effectSeen = true;
+			return;
+		}
+		if (bd.operator == "=" && (bd.left.kind == NodeKind.ArrayLiteral || bd.left.kind == NodeKind.ObjectLiteral)) {
+			walkOnceEvaluated(bd.right, st, visit);
+			st.effectSeen = true;
+			return;
+		}
+	}
+	const effectBefore = st.effectSeen;
+	forEachChild(node, (c: Node): void => walkOnceEvaluated(c, st, visit));
+	visit(node, effectBefore);
+	if (isEffectNode(node)) st.effectSeen = true;
 }
 
 // ===== 1:N Block Expansion =====
