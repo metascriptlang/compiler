@@ -280,6 +280,13 @@ export function captureGenericParams(state: ParserState): string {
 	return names;
 }
 
+function angleCloserWidth(kind: TokenKind): int32 {
+	if (kind == TokenKind.Gt) return 1;
+	if (kind == TokenKind.GtGt) return 2;
+	if (kind == TokenKind.GtGtGt) return 3;
+	return 0;
+}
+
 // Lookahead: is this '<' the start of generic type args followed by '('?
 // Scans ahead for balanced <...> then checks for '(' immediately after.
 // Does NOT consume tokens — only peeks.
@@ -302,11 +309,9 @@ export function isGenericCallAhead(state: ParserState): boolean {
 		// Only count angle brackets at top level (not inside {} [] ())
 		if (braceDepth == 0 && bracketDepth == 0 && parenDepth == 0) {
 			if (tok.kind == TokenKind.Lt) { angleDepth += 1; }
-			if (tok.kind == TokenKind.Gt) { angleDepth -= 1; }
-			if (tok.kind == TokenKind.GtGt) { angleDepth -= 2; }
-			if (tok.kind == TokenKind.GtGtGt) { angleDepth -= 3; }
-			if (angleDepth <= 0) {
-				// Found matching '>' — check if next token is '('
+			angleDepth -= angleCloserWidth(tok.kind);
+			if (angleDepth < 0) return false;
+			if (angleDepth == 0) {
 				const next = peek(state, pos + 1);
 				return next.kind == TokenKind.LParen;
 			}
@@ -331,13 +336,18 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
 		const tok = current(state);
-		if (tok.kind == TokenKind.Lt) { depth += 1; }
-		else if (tok.kind == TokenKind.Gt) { depth -= 1; }
-		else if (tok.kind == TokenKind.GtGt) { depth -= 2; }
-		else if (tok.kind == TokenKind.GtGtGt) { depth -= 3; }
-		if (depth > 0) {
+		const closers = angleCloserWidth(tok.kind);
+		if (closers == 0) {
+			if (tok.kind == TokenKind.Lt) { depth += 1; }
 			tokens.push(tok.value);
 			depths.push(depth);
+		}
+		for (let c = 0; c < closers && depth > 0; c += 1) {
+			depth -= 1;
+			if (depth > 0) {
+				tokens.push(">");
+				depths.push(depth);
+			}
 		}
 		advance(state);
 	}
