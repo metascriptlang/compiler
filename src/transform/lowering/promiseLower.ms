@@ -241,6 +241,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 //   const promiseRewrite = tryLowerPromiseBuiltin(node, builtinKind, ctx);
 //   if (promiseRewrite !== null) return promiseRewrite;
 export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: TransformContext): Node {
+	if (ctx.jsBackend) return null as unknown as Node;
 	const loc = node.location;
 	if (builtinKind == "PromiseThen" || builtinKind == "PromiseCatch" || builtinKind == "PromiseFinally") {
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
