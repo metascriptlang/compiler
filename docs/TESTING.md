@@ -275,12 +275,15 @@ saw the same checker output as before.
 corpus or SAN lane. Control = the compiler at the merge base (`git archive src`
 built into `out/gate/ctl-<key>/msc`, `<key>` hashing the merge base's `src/` minus
 `src/test` plus `std/`, the three newest kept). A select on a clean tree files its
-candidate and emits under the candidate's key, so after a land the next gate
-finds its control built and every unchanged program's emit reused. A program
-whose C emit fails on either side counts as changed. Both binaries sit under
-`out/gate/`, so they resolve the same `std/` and `runtime/`, and every program
-emits from its own cwd at one path (`out/gate/emit/work/<name>`, moved to
-`emit/ctl` and `emit/cand` afterwards for diffing). The signature per program
+candidate and its per-program signatures under the candidate's key, so after a
+land the next gate finds its control built and reuses the control signature of
+every program whose git object is unchanged; a signature whose C emit failed is
+emitted again. A program whose C emit fails on either side counts as changed.
+Both binaries sit under `out/gate/`, so they resolve the same `std/` and
+`runtime/`. Both sides emit at the same shallow depth, `out/gate/emit/ctrl/<n>`
+and `out/gate/emit/cand/<n>` with `<n>` the program's line in the list: emitted
+C file names embed the absolute path, and a side emitting one level deeper
+crossed Windows MAX_PATH on multi-module programs while the other did not. The signature per program
 is the C of `--gc=drc` plus `--gc=drc --danger` and the JS bundle; the differing
 set goes to the runner as `MSCORPUS_ONLY=<exact names>` (SAN: the C set only),
 a JS-only set adds `MSCORPUS_LANES=c,drc,js,esm`, and `known-red.json` is read
