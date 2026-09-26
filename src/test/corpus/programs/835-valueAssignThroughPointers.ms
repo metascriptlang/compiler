@@ -20,7 +20,7 @@ function main(): int32 {
 	arr[0] = { hunger: 30, name: "cc" };
 	const elem = acc.hunger;
 
-	const holder: Pair = { a: { v: 1 }, b: { v: 2 } };
+	let holder: Pair = { a: { v: 1 }, b: { v: 2 } };
 	const fieldPtr = holder.a as Ptr<In>;
 	holder.a = { v: 5 };
 
