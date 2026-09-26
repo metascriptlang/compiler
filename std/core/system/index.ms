@@ -69,6 +69,9 @@ extern function msAbortThrow(): void from "msAbortThrow";
 @compilerFunc
 extern function msFutureCompleteT(fut: unknown, sink value: unknown): void from "msFutureCompleteT";
 
+@compilerFunc
+extern function msGenericArrayPush(arr: unknown, sink value: unknown): void from "msGenericArrayPush";
+
 @compilerFunc @builtin("SpawnInto")
 extern function msSpawnInto(sink fut: unknown, fn: unknown): unknown;
 
