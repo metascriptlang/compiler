@@ -28,7 +28,7 @@
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
 import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocks, mapExprChildren, mapChildren } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts } from "../util";
@@ -287,7 +287,7 @@ function expandDoWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	const cond = hoistTernaries(wd.doCondition, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	if (bodyHasLoopContinue(wd.doBody)) {
-		ctx.errors.push("do-while: a condition that lowers to statements (ternary / '&&' / '||') combined with 'continue' in the loop body is not supported on the C backend yet");
+		reportTransformError(ctx, "do-while: a condition that lowers to statements (ternary / '&&' / '||') combined with 'continue' in the loop body is not supported on the C backend yet", stmt.location);
 		return [stmt];
 	}
 	const loc = stmt.location;

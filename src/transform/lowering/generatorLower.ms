@@ -28,9 +28,8 @@ import {
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { addError } from "../../checker/context";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
-import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetContains, reportTransformError } from "../context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
@@ -1019,8 +1018,7 @@ function walkCheckFuncExpr(node: Node): void {
 export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 	walkGenerators(program);
 	for (const d of pendingSplitDiags) {
-		if (ctx.checkerCtx != null) addError(ctx.checkerCtx, d.message, d.loc.line, d.loc.column);
-		else ctx.errors.push(d.message);
+		reportTransformError(ctx, d.message, d.loc);
 	}
 	pendingSplitDiags = [];
 	return program;

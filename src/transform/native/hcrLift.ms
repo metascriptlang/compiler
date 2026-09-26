@@ -17,7 +17,7 @@ import {
 	Node, NodeKind, SourceLocation, createNode,
 	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, Type, TypeKind } from "../../ast/node";
 import { createStruct, createPtr } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, reportTransformError } from "../context";
 import { djb2 } from "std/hash";
 import { walkNode } from "../walker";
 import { makeIdentResolved, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
@@ -162,7 +162,7 @@ function varDeclToGlobal(node: Node, ctx: TransformContext): HcrGlobal {
 	}
 	const sym = node.resolvedSym;
 	if (sym == null) {
-		ctx.errors.push(`internal: HCR state lifting met module variable '${d.declName}' without a symbol`);
+		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a symbol`, node.location);
 		return null as unknown as HcrGlobal;
 	}
 	const t = node.nodeType != null ? node.nodeType : null as unknown as Type;

@@ -14,7 +14,7 @@
 // Binding patterns (identifier) → const name = $m; prepended to body
 
 import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, BinaryExprData, ConditionalExprData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
@@ -384,7 +384,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 					if (labelOwners[li] == lk) { owner = labelOwnerGroup[li]; break; }
 				}
 				if (owner >= 0) {
-					ctx.errors.push("match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms");
+					reportTransformError(ctx, "match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms", pat.location);
 				}
 			}
 		}

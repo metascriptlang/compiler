@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext } from "../checker/context";
-import { Type, Symbol, SymbolKind } from "../ast/node";
+import { CheckerContext, addError } from "../checker/context";
+import { Type, Symbol, SymbolKind, SourceLocation } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
@@ -35,6 +35,11 @@ export function createTransformContextWithChecker(cc: CheckerContext): Transform
 	const ctx = createTransformContext();
 	ctx.checkerCtx = cc;
 	return ctx;
+}
+
+export function reportTransformError(ctx: TransformContext, msg: string, loc: SourceLocation): void {
+	if (ctx.checkerCtx != null) addError(ctx.checkerCtx, msg, loc.line, loc.column);
+	else ctx.errors.push(msg);
 }
 
 

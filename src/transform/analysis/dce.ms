@@ -16,7 +16,7 @@
 // BooleanLiteral nodes from constant folding at step 2.
 
 import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind } from "../../ast/node";
-import { TransformContext, createTransformContextWithChecker } from "../context";
+import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
 import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
@@ -141,7 +141,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 			continue;
 		}
 		if (stmt.resolvedSym == null) {
-			ctx.errors.push(`internal: dead-declaration sweep met '${getDeclName(stmt)}' without a symbol`);
+			reportTransformError(ctx, `internal: dead-declaration sweep met '${getDeclName(stmt)}' without a symbol`, stmt.location);
 			return;
 		}
 		declSyms.push(stmt.resolvedSym);
