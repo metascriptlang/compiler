@@ -467,7 +467,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				loc
 			);
 			const destroyBuf = newBuf();
-			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", "destroy", clonePath(xf, loc), yf, destroyBuf, loc);
+			arrayOp("destroy", elem, clonePath(xf, loc), clonePath(xf, loc), lctx, destroyBuf, loc);
 			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
 			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 		},
