@@ -247,3 +247,22 @@ test "int8 unsigned shift reads the byte unsigned" {
 	assert result.ok;
 	assert result.value.contains("& 255");
 }
+
+test "uint8 postfix increment wraps and reads back the value before it" {
+	const result = compileToJS("function f(a: uint8): uint8 { let x = a; const b = x++; return b + x; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
+	assert !result.value.contains("x++");
+}
+
+test "uint32 prefix decrement wraps" {
+	const result = compileToJS("function f(a: uint32): uint32 { let x = a; --x; return x; }");
+	assert result.ok;
+	assert result.value.contains(">>> 0");
+}
+
+test "int32 increment is left alone" {
+	const result = compileToJS("function f(a: int32): int32 { let x = a; x++; return x; }");
+	assert result.ok;
+	assert result.value.contains("x++");
+}

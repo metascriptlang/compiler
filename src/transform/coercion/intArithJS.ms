@@ -28,7 +28,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -43,6 +43,7 @@ export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
 
 function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.UnaryExpr) return unaryAsUnsigned(node);
+	if (node.kind == NodeKind.UpdateExpr) return updateAtWidth(node, ctx);
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
@@ -177,6 +178,32 @@ function unaryAsUnsigned(node: Node): Node {
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	if (t.kind != TypeKind.Uint32) return node;
 	return truncateTo(node, t.kind, node.location);
+}
+
+// A postfix step reads back the value before the step: on a wrapping width that
+// is the wrapped new value stepped back, so no temporary is needed.
+function updateAtWidth(node: Node, ctx: TransformContext): Node {
+	const d = node.data as UpdateExprData;
+	const t = peelToRepr(d.updateArg.nodeType);
+	if (t == null) return node;
+	if (subIntKind(t) == TypeKind.Unknown && t.kind != TypeKind.Uint32) return node;
+	const readBack = cloneIfPure(d.updateArg);
+	if (readBack == null) {
+		if (ctx.checkerCtx != null) {
+			addError(ctx.checkerCtx, "integer '" + d.updateOp + "' needs an operand that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		}
+		return node;
+	}
+	const loc = node.location;
+	const step = d.updateOp == "++" ? "+" : "-";
+	const stored = makeBinary(d.updateArg, "=", atWidth(makeBinary(readBack, step, makeNumber(1, loc), loc), t, loc), loc);
+	if (d.isPrefix) return stored;
+	return atWidth(makeBinary(stored, d.updateOp == "++" ? "-" : "+", makeNumber(1, loc), loc), t, loc);
+}
+
+function atWidth(inner: Node, t: Type, loc: SourceLocation): Node {
+	const narrow = subIntKind(t);
+	return narrow != TypeKind.Unknown ? wrapTo(inner, narrow, loc) : truncateTo(inner, t.kind, loc);
 }
 
 // `%` is absent on purpose: a remainder is bounded by its operands, so it never
