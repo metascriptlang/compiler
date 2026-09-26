@@ -33,7 +33,7 @@ import {
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
-import { walkExpandBlocksHooked, containsExprKind, replaceInExpr, walkNode } from "../walker";
+import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
 import { makeIdent, makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
@@ -333,9 +333,9 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 
 // ===== Statement Expander (1:N) =====
 
-// Shared expansion logic for any statement whose "expression slot" may contain
-// an AwaitExpr (directly or nested). Returns expanded stmts + replacement node,
-// or null if no await was found. Caller sets the replacement back on the stmt's
+// Shared expansion logic for any statement whose "expression slot" is an
+// AwaitExpr. Returns expanded stmts + replacement node, or null if the slot
+// holds no await. Caller sets the replacement back on the stmt's
 // data field and appends the stmt. (P9 DRY — 3 match arms share this pattern.)
 function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext): { stmts: Node[], replacement: Node } {
 	const noResult: { stmts: Node[], replacement: Node } = { stmts: null as unknown as Node[], replacement: null as unknown as Node };
@@ -346,10 +346,8 @@ function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext
 		const expansion = expandSingleAwait(ad.awaitArg, stmt.location, ctx);
 		return { stmts: expansion.stmts, replacement: expansion.resultIdent };
 	}
-	// Nested: expr CONTAINS an AwaitExpr (e.g. f(await g()), x + await y)
 	if (containsExprKind(expr, NodeKind.AwaitExpr)) {
-		const hoisted = hoistNestedAwait(expr, stmt.location, ctx);
-		return hoisted != null ? hoisted : noResult;
+		ctx.errors.push(`internal: an await nested in a ${expr.kind.toString()} expression reached awaitLower; awaitSpill leaves every await as a whole initializer or statement`);
 	}
 	return noResult;
 }
@@ -459,46 +457,9 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-// ===== Nested Await Hoisting =====
-
-// For expressions like `f(await g())`, `x + await f()`, `(await f()).prop`,
-// extract the first AwaitExpr into a preceding variable declaration and replace
-// the await site with the temp identifier. Uses replaceInExpr for generic
-// coverage across all expression kinds (CallExpr, BinaryExpr, MemberExpr, etc.).
-// Deeply nested multiple awaits are handled by repeated passes — walkExpandBlocks
-// re-enters after expansion and catches the next one.
-//
-// Returns null if no AwaitExpr was found.
-let _hoistStmts: Node[] = [];
-let _hoistCtx: TransformContext = null as unknown as TransformContext;
-let _hoistLoc: SourceLocation = null as unknown as SourceLocation;
-
-function hoistNestedAwait(expr: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], replacement: Node } | null {
-	if (expr == null) return null;
-	if (expr.kind == NodeKind.AwaitExpr) return null;
-
-	_hoistStmts = [];
-	_hoistCtx = ctx;
-	_hoistLoc = loc;
-
-	const replaced = replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind != NodeKind.AwaitExpr) return node;
-		// Extract every AwaitExpr into preceding statements + replace with result ident.
-		// replaceInExpr is bottom-up (left subtrees first), so evaluation order is preserved:
-		// `await a + await b` → expand(a) stmts, expand(b) stmts, then $aw0 + $aw1.
-		const ad = node.data as AwaitExprData;
-		const expansion = expandSingleAwait(ad.awaitArg, _hoistLoc, _hoistCtx);
-		for (const s of expansion.stmts) { _hoistStmts.push(s); }
-		return expansion.resultIdent;
-	});
-
-	if (_hoistStmts.length == 0) return null;
-	return { stmts: _hoistStmts, replacement: replaced };
-}
-
 // ===== Entry Point =====
 
-function blockifyAwaitingArrows(program: Node): void {
+export function blockifyAwaitingArrows(program: Node): void {
 	walkNode(program, (n: Node): Node => {
 		if (n.kind == NodeKind.ArrowFunction) {
 			const d = n.data as ArrowFunctionData;
