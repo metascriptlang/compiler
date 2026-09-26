@@ -244,6 +244,7 @@ import "./bug495StaticFieldByOwnerC";
 import "./bug496IntDivisionChecksC";
 import "./bug497SubIntArithWrapsC";
 import "./bug498FloatToInt64RangeCheckC";
+import "./bug499CharIsUnsignedC";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
