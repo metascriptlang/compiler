@@ -482,6 +482,9 @@ static inline int32_t  msCheckRangeI32(double v, int64_t lo, int64_t hi) { if(!(
 static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint32_t)v; }
 static inline int64_t  msCheckRangeI64(double v) { if(!(v>=-9223372036854775808.0&&v<9223372036854775808.0)) msRaiseRangeErrorF(v,INT64_MIN,INT64_MAX); return (int64_t)v; }
 
+_Noreturn static inline void msRaiseDivByZero(void) { __builtin_trap(); }
+_Noreturn static inline void msRaiseOverflow(void) { __builtin_trap(); }
+#include "runtime/core/checkedArith.h"
 
 /* ===== Boxing ===== */
 static inline void* msBoxString(msString v) {

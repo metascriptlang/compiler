@@ -542,4 +542,8 @@ static inline int64_t msCheckRangeI64(double v) {
 	return (int64_t)v;
 }
 
+_Noreturn void msRaiseDivByZero(void);
+_Noreturn void msRaiseOverflow(void);
+#include "runtime/core/checkedArith.h"
+
 #endif /* SYSTEM_H */

@@ -130,6 +130,16 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	exit(1);
 }
 
+_Noreturn void msRaiseDivByZero(void) {
+	fprintf(stderr, "Error: division by zero\n");
+	exit(1);
+}
+
+_Noreturn void msRaiseOverflow(void) {
+	fprintf(stderr, "Error: over- or underflow\n");
+	exit(1);
+}
+
 /* Parity: standard reference range error handling */
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
