@@ -20,7 +20,7 @@ import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import {
-	markInitialized, isInitialized, getDeclBlock,
+	markInitialized, isInitialized, getDeclBlock, requiresInit,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
@@ -281,6 +281,17 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 }
 
 
+function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): boolean {
+	const nameId = getIdentId(ctx.table.identCache, name);
+	let scope = ctx.table.current;
+	while (scope != null) {
+		if (scope.symbols.get(nameId) == sym) return true;
+		if (scope.scopeKind == ScopeKind.Function) return false;
+		scope = scope.parent;
+	}
+	return false;
+}
+
 function typeLiteralAgainstPayload(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
 	if (expectedType == null || !isMaybeType(expectedType) || expectedType.typeReturn == null) return false;
 	checkExprInner(ctx, node, expectedType.typeReturn);
@@ -517,11 +528,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
 			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
-			if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0 &&
-				ctx.strictDefs && ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null) {
-				if (!isInitialized(ctx.initTracker, d.name)) {
+			if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
+				&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
+				&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
+				if (requiresInit(sym.symbolType)) {
+					addError(ctx, "'" + d.name + "' may be read before it is assigned: type '" + typeDisplayName(sym.symbolType) + "' has no default value", node.location.line, node.location.column);
+					markInitialized(ctx.initTracker, d.name);
+				} else if (ctx.strictDefs) {
 					addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
-					// Suppress repeated warnings (ref: a.init.add s.id)
 					markInitialized(ctx.initTracker, d.name);
 				}
 			}
