@@ -243,6 +243,13 @@ export function captureGenericParams(state: ParserState): string {
 	let names = "";
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
+		if (current(state).kind == TokenKind.Const && depth == 1) {
+			const constTok = current(state);
+			addError(state, `const generic parameter '${peek(state, 1).value}' is not supported: a generic parameter is a type, pass the value as an argument at line ${constTok.line}`);
+			advance(state);
+			skipGenericParamRest(state);
+			continue;
+		}
 		if (isIdentLikeToken(current(state)) && depth == 1) {
 			if (names != "") { names = `${names},`; }
 			names = `${names}${current(state).value}`;
@@ -258,16 +265,7 @@ export function captureGenericParams(state: ParserState): string {
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign && depth == 1) {
 				advance(state);
-				let defaultDepth = 0;
-				while (!isAtEnd(state)) {
-					const k = current(state).kind;
-					if (k == TokenKind.Comma && defaultDepth == 0) break;
-					if (k == TokenKind.Gt) { if (defaultDepth < 1) break; defaultDepth -= 1; }
-					else if (k == TokenKind.GtGt) { if (defaultDepth < 2) break; defaultDepth -= 2; }
-					else if (k == TokenKind.GtGtGt) { if (defaultDepth < 3) break; defaultDepth -= 3; }
-					else if (k == TokenKind.Lt) defaultDepth += 1;
-					advance(state);
-				}
+				skipGenericParamRest(state);
 			}
 			continue;
 		}
@@ -285,6 +283,20 @@ function angleCloserWidth(kind: TokenKind): int32 {
 	if (kind == TokenKind.GtGt) return 2;
 	if (kind == TokenKind.GtGtGt) return 3;
 	return 0;
+}
+
+// Skip the rest of one generic parameter: up to its `,` or the `>` that closes the list.
+function skipGenericParamRest(state: ParserState): void {
+	let inner = 0;
+	while (!isAtEnd(state)) {
+		const kind = current(state).kind;
+		if (kind == TokenKind.Comma && inner == 0) return;
+		const closers = angleCloserWidth(kind);
+		if (closers > inner) return;
+		if (kind == TokenKind.Lt) inner += 1;
+		inner -= closers;
+		advance(state);
+	}
 }
 
 // Lookahead: is this '<' the start of generic type args followed by '('?
