@@ -571,7 +571,7 @@ await main();
 The template form `` console.log(`a${await f()}b`) `` inside `main` measures the same, and both
 forms at top level print `axb` on C drc, C orc and JS (the baseline already did at top level).
 Pinned by `src/test/corpus/programs/423-awaitInExpression.ms` (concat in an async return and at
-top level, every lane including Raiser and SAN) and `src/test/fixedbugs/bug221AwaitInExpression.ms`.
+top level, every lane including Raiser and SAN) and `src/test/fixedbugs/bug228AwaitInExpression.ms`.
 Not measured: the exact L35 program on Raiser and `--danger` (423 covers both shapes there).
 
 ## L36. A method of a function-body class cannot read the enclosing function's locals on C (LIVE, measured 2026-09-19)
