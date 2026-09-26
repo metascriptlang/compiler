@@ -10,10 +10,10 @@ import {
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
 } from "./context";
-import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
+import { genExpr, refArrayDestroyFn, refArrayCellLabel } from "./expressions";
 import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -47,7 +47,7 @@ function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 	if (name.length > 0 && name.slice(0, 1) == "$") return true;
 	const sym = node.resolvedSym;
 	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace");
 	if (isSeqHookSuffix) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
@@ -776,9 +776,9 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
-	const cellName = refArrayCellName(destroyFn, arrCType);
+	const cellName = refArrayCellName(arrT);
 	ensureDrcProto(g, destroyFn, null);
-	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+	ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, arrCType), destroyFn);
 	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
 	// symbol does not exist there - take the null slot like msBoxRefArray does.
 	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;

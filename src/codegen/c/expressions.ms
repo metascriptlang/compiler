@@ -15,7 +15,7 @@ import {
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, refArrayCellName, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -2664,9 +2664,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const cellCType = getTypeDesc(g, node.nodeType);
 		const elemT = cd.arguments[0].nodeType.typeReturn;
 		const destroyFn = refArrayDestroyFn(elemT, arrCType);
-		const cellName = refArrayCellName(destroyFn, arrCType);
+		const cellName = refArrayCellName(cd.arguments[0].nodeType);
 		ensureDrcProto(g, destroyFn, null);
-		ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+		ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, arrCType), destroyFn);
 		const tiArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
 		const valTmp = getTemp(p, arrCType);
 		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
@@ -3038,11 +3038,7 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 	};
 }
 
-// Free-only msRefArray cells (unknown / actor elements) get their OWN weak TypeInfo
-// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
-// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
-// counted and inert element families scrambled the shared cell's destroyer.
-export function refArrayCellName(destroyFn: string, arrCType: string): string {
+export function refArrayCellLabel(destroyFn: string, arrCType: string): string {
 	return (destroyFn == "msNumberArrayDestroy" && arrCType == "msRefArray")
 		? "msPtrArrayRefCell"
 		: arrCType + "RefCell";
