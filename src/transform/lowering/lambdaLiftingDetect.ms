@@ -14,10 +14,11 @@ import {
 	IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData,
 	BinaryExprData, UnaryExprData, CallExprData, SwitchStmtData,
 	SwitchCaseData, ExportDeclData, FunctionDeclData, MethodDeclData,
-	ConstructorDeclData, TestDeclData, SymbolKind, DeclKind, Symbol,
+	ConstructorDeclData, TestDeclData, SymbolKind, DeclKind, Symbol, BooleanLiteralData,
 } from "../../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
-import { mapChildren } from "../walker";
+import { mapChildren, isFuncBoundary } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
@@ -308,6 +309,30 @@ function detectAllWalk(node: Node | null): void {
 	}
 	// For remaining node kinds: use mapChildren as fallback
 	mapChildren(node, (child: Node): Node => { detectAllWalk(child); return child; });
+}
+
+export function isOnceLoop(n: Node): boolean {
+	if (n.kind != NodeKind.DoWhileStmt) return false;
+	const c = (n.data as DoWhileStmtData).doCondition;
+	return c != null && c.kind == NodeKind.BooleanLiteral && !(c.data as BooleanLiteralData).boolValue;
+}
+
+export function iterationBodyOf(n: Node): Node | null {
+	if (n.kind == NodeKind.WhileStmt) return (n.data as WhileStmtData).whileBody;
+	if (n.kind == NodeKind.DoWhileStmt && !isOnceLoop(n)) return (n.data as DoWhileStmtData).doBody;
+	return null;
+}
+
+export function collectIterationDecls(n: Node | null, out: Node[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.VariableDecl) {
+		const sym = n.resolvedSym;
+		if (sym == null || !hasFlag(sym, SymbolFlag.Global)) out.push(n);
+		return;
+	}
+	if (isFuncBoundary(n) || iterationBodyOf(n) != null) return;
+	if (n.kind == NodeKind.ForStmt || n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt) return;
+	forEachChild(n, (c: Node): void => { collectIterationDecls(c, out); });
 }
 
 // ===== detectPass: Top-level Pass 1 entry =====

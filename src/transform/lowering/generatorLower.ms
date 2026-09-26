@@ -29,7 +29,7 @@ import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
-import { TransformContext, NameSet, createNameSet, nameSetContains, reportTransformError } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, reportTransformError } from "../context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
@@ -41,6 +41,7 @@ import {
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
+import { isOnceLoop, collectIterationDecls } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
 // ===== Data Structures =====
@@ -93,11 +94,20 @@ interface SplitDiag {
 }
 
 let pendingSplitDiags: SplitDiag[] = [];
+let pendingSplitLoopLocals: Symbol[] = [];
 
 const YIELD_IN_EXPR = "a yield or await inside an expression is not supported on the C backend yet; bind it to a variable first (`const v = await p;`)";
 
 function reportUnsplit(node: Node, message: string): void {
 	pendingSplitDiags.push({ message, loc: node.location });
+}
+
+function noteSplitLoopLocals(stmts: Node[]): void {
+	const decls: Node[] = [];
+	for (const s of stmts) collectIterationDecls(s, decls);
+	for (const d of decls) {
+		if (d.resolvedSym != null) pendingSplitLoopLocals.push(d.resolvedSym);
+	}
 }
 
 
@@ -515,6 +525,7 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 	);
 
 	const bodyStmts = extractBodyStmts(wd.whileBody);
+	noteSplitLoopLocals(bodyStmts);
 	sc.loopStack.push({ breakState: exitState, continueState: condState, label: wd.whileLabel, isLoop: true });
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 	sc.loopStack.pop();
@@ -527,7 +538,9 @@ function splitDoWhile(node: Node, sc: StateCollector, currentState: number, exit
 	const condState = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(bodyStart, loc, sc.stateSym));
 	sc.loopStack.push({ breakState: exitState, continueState: condState, label: dd.dwLabel, isLoop: !dd.dwSwitchWrapper });
-	splitStmts(extractBodyStmts(dd.doBody), sc, bodyStart, condState, loc, resultType);
+	const bodyStmts = extractBodyStmts(dd.doBody);
+	if (!isOnceLoop(node)) noteSplitLoopLocals(bodyStmts);
+	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 	sc.loopStack.pop();
 	sc.items[condState].stmts.push(
 		makeIf(
@@ -806,6 +819,51 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 	}
 }
 
+function touchLocals(n: Node | null, nc: NameSet, touched: NameSet, declared: string[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		const name = (n.data as IdentifierData).name;
+		if (nameSetContains(nc, name)) nameSetAdd(touched, name);
+		return;
+	}
+	if (n.kind == NodeKind.VariableDecl) {
+		const name = (n.data as VariableDeclData).declName;
+		if (nameSetContains(nc, name)) {
+			nameSetAdd(touched, name);
+			declared.push(name);
+		}
+	}
+	forEachChild(n, (c: Node): void => { touchLocals(c, nc, touched, declared); });
+}
+
+export function localsSpanningStates(sc: StateCollector, nc: NameSet): NameSet {
+	const touched: NameSet[] = [];
+	const declared: string[] = [];
+	for (const st of sc.items) {
+		const t = createNameSet();
+		for (const s of st.stmts) touchLocals(s, nc, t, declared);
+		touched.push(t);
+	}
+	for (const st of sc.items) {
+		if (st.isYield && st.yieldVarName != "" && st.nextState >= 0 && st.nextState < touched.length) {
+			nameSetAdd(touched[st.nextState], st.yieldVarName);
+		}
+	}
+	const lifted = createNameSet();
+	for (const name of nc.items) {
+		let states = 0;
+		for (const t of touched) {
+			if (nameSetContains(t, name)) states += 1;
+		}
+		let decls = 0;
+		for (const d of declared) {
+			if (d == name) decls += 1;
+		}
+		if (states != 1 || decls != 1) nameSetAdd(lifted, name);
+	}
+	return lifted;
+}
+
 // ===== Variable Declaration → Assignment =====
 // Convert lifted variable declarations to assignments in state bodies.
 // Variables are hoisted to function scope, so decls become assignments.
@@ -878,9 +936,10 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
 
-	// 5. Convert variable declarations to assignments in all state bodies
+	// 5. Convert the declarations of the locals that outlive a state to assignments
+	const lifted = localsSpanningStates(sc, nc);
 	for (const st of sc.items) {
-		convertDeclsToAssigns(st.stmts, nc, loc);
+		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
 
 	// 6. Build the state dispatch (if-else chain)
@@ -927,7 +986,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	stateDecl.resolvedSym = stateSym;
 	newBodyStmts.push(stateDecl);
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
-	for (const localName of nc.items) {
+	for (const localName of lifted.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
 		const dtIdx = lookupDeclIdx(dtNames, localName);
@@ -1021,6 +1080,8 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 		reportTransformError(ctx, d.message, d.loc);
 	}
 	pendingSplitDiags = [];
+	for (const s of pendingSplitLoopLocals) ctx.splitLoopLocals.push(s);
+	pendingSplitLoopLocals = [];
 	return program;
 }
 
