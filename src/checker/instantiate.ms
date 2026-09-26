@@ -151,9 +151,10 @@ function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string
 	}
 }
 
-function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, instType: Type, ctx: CheckerContext, loc: SourceLocation): void {
+function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
 	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
-	if (registry == null) return;
+	if (registry == null) return true;
+	let settled = true;
 	for (const hookName of USER_HOOK_NAMES) {
 		const key = instanceName + "." + hookName;
 		if (_instanceHooks.has(key) || !hasExtensionByName(registry, hookName)) continue;
@@ -161,11 +162,23 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 			const hookSym = m.sym;
 			if (m.isStatic || hookSym == null || m.receiverTypeName != genericSym.name || hookSym.modulePath != genericSym.modulePath) continue;
 			if (hookSym.declNode == null || hookSym.declNode.kind != NodeKind.FunctionDecl) continue;
+			if (hookSym.state == SymbolState.Shaping) {
+				settled = false;
+				continue;
+			}
 			ensureShaped(hookSym, ctx);
 			const fnType = hookSym.symbolType;
-			if (fnType == null || fnType.typeChildren.length == 0) continue;
+			if (fnType == null || fnType.typeChildren.length == 0) {
+				settled = false;
+				continue;
+			}
 			let formal = fnType.typeChildren[0];
 			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
+			if (!hasGenericParams(formal)) {
+				if (formal.kind != TypeKind.GenericInstance || monoInstanceName(formal) != instanceName) continue;
+				_instanceHooks.set(key, hookSym);
+				break;
+			}
 			const bindings = createUnifyBindings();
 			unifyType(formal, instType, bindings);
 			if (bindings.names.length == 0) continue;
@@ -174,6 +187,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 			break;
 		}
 	}
+	return settled;
 }
 
 function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: SourceLocation, depth: int32): void {
@@ -195,14 +209,16 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	if (_hookScannedInstances.has(name)) return;
 	_hookScannedInstances.add(name);
 	for (const arg of t.typeChildren) instantiateHooksInType(arg, ctx, loc, depth + 1);
-	instantiateExtensionHooks(owner, name, t, ctx, loc);
+	const settled = instantiateExtensionHooks(owner, name, t, ctx, loc);
 	if (t.typeReturn == null) {
 		const params = genericParamsOf(t);
 		if (params != "") instantiateGenericBody(t, params);
 	}
 	const body = t.typeReturn != null ? unwrapRef(t.typeReturn) : null;
-	if (body == null || body.kind != TypeKind.Struct) return;
-	for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
+	if (body != null && body.kind == TypeKind.Struct) {
+		for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
+	}
+	if (!settled) _hookScannedInstances.delete(name);
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
