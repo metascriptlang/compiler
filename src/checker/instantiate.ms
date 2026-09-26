@@ -17,6 +17,7 @@ import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, regi
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
+import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
@@ -124,7 +125,7 @@ function pendingInstanceKey(node: Node, name: string): string {
 	return owner + "::" + name;
 }
 
-function pendingInstanceKeyOf(node: Node): string {
+export function pendingInstanceKeyOf(node: Node): string {
 	if (node.kind == NodeKind.FunctionDecl) return pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
 	if (node.kind == NodeKind.ClassDecl) return pendingInstanceKey(node, (node.data as ClassDeclData).className);
 	return "";
@@ -149,6 +150,13 @@ export function discardPendingInstancesFrom(mark: int32): void {
 		const key = pendingInstanceKeyOf(node);
 		if (key != "") _pendingNames.delete(key);
 	}
+}
+
+export function takePendingInstancesFrom(mark: int32): Node[] {
+	const taken: Node[] = [];
+	for (let i = mark; i < _pendingInstances.length; i += 1) taken.push(_pendingInstances[i]);
+	while (_pendingInstances.length > mark) _pendingInstances.pop();
+	return taken;
 }
 
 export function drainPendingInstances(): Node[] {
@@ -641,7 +649,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturn = instType.typeReturn != null ? instType.typeReturn : inferredType();
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
+		const outerGensym = beginGensymUnit();
 		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		rewindTemplateGensym(outerGensym);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -853,7 +863,9 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
 		ctorSym.state = SymbolState.Checked;
+		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		rewindTemplateGensym(outerGensym);
 		bodyCtx.modulePath = savedModulePath;
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		truncateCallerExtensions(bodyCtx, extPreCount);

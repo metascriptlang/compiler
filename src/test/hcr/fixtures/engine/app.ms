@@ -1,8 +1,15 @@
 import { copyFile, readFile, writeFile } from "std/fs";
-import { exit } from "std/process";
+import { exit, platform } from "std/process";
 import { reload, reloadKindName } from "std/hcr";
 import { tick, value } from "./logic";
 import { Probe, makeProbe, version } from "./lifecycle";
+
+const EXT = platform == "windows" ? ".dll" : platform == "darwin" ? ".dylib" : ".so";
+const BUNDLE = `module${EXT}.hcrabi`;
+
+function image(moduleId: string): string {
+	return `module.${moduleId}${EXT}`;
+}
 
 function place(generation: string, name: string): void {
 	if (!copyFile(`${generation}/${name}`, `run/${name}`).ok) {
@@ -40,47 +47,47 @@ let probe: Probe | null = makeProbe(7);
 show("start");
 report("unchanged");
 
-place("g2", "module.logic.dll");
-place("g2", "module.dll.hcrabi");
+place("g2", image("logic"));
+place("g2", BUNDLE);
 report("body edit");
 show("after body edit");
 
-truncate("g1", "module.logic.dll");
-place("g1", "module.dll.hcrabi");
+truncate("g1", image("logic"));
+place("g1", BUNDLE);
 report("truncated image");
 report("same truncated image");
-place("g1", "module.logic.dll");
+place("g1", image("logic"));
 report("complete image");
 show("after complete image");
 
-place("g2", "module.lifecycle.dll");
-place("g2", "module.dll.hcrabi");
+place("g2", image("lifecycle"));
+place("g2", BUNDLE);
 report("lifecycle rebuilt");
 inspect("probe from the first generation");
 
-place("g5", "module.lifecycle.dll");
-place("g5", "module.dll.hcrabi");
+place("g5", image("lifecycle"));
+place("g5", BUNDLE);
 report("after-reload handler throws");
 show("after rollback");
 inspect("probe after rollback");
 probe = null;
 
-place("g3", "module.logic.dll");
-place("g3", "module.dll.hcrabi");
+place("g3", image("logic"));
+place("g3", BUNDLE);
 report("added export, app not rebuilt");
 show("after rejection");
 
-place("g4", "module.logic.dll");
-place("g4", "module.dll.hcrabi");
+place("g4", image("logic"));
+place("g4", BUNDLE);
 report("state layout changed");
 show("after layout rejection");
 
-place("g1", "module.logic.dll");
-place("g6", "module.lifecycle.dll");
-place("g6", "module.dll.hcrabi");
+place("g1", image("logic"));
+place("g6", image("lifecycle"));
+place("g6", BUNDLE);
 report("class layout changed");
 show("after class layout rejection");
 
-place("g2", "module.core.dll");
-place("g2", "module.dll.hcrabi");
+place("g2", image("core"));
+place("g2", BUNDLE);
 report("core changed");

@@ -81,6 +81,9 @@ extern function msFutureCreateInline(): unknown;
 @compilerFunc @builtin("WaitForStruct")
 extern function msWaitForStruct(fut: unknown): unknown;
 
+@compilerFunc @builtin("FutureThenBoxed")
+extern function msFutureThenBoxed(input: unknown, onFulfilled: unknown): unknown;
+
 @compilerFunc @builtin("BoxStruct")
 extern function msBoxStruct(val: unknown): unknown;
 

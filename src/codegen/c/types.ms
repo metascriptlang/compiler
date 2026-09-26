@@ -89,6 +89,7 @@ import { useHeader } from "./context";
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _hookSymOrder: Symbol[] = [];
 let _hookSymsSealed = false;
 
 export function sealHookSyms(sealed: boolean): void {
@@ -97,6 +98,25 @@ export function sealHookSyms(sealed: boolean): void {
 
 export function resetHookSyms(): void {
 	_hookSyms = new HashMap<string, Symbol>();
+	_hookSymOrder = [];
+}
+
+export function hookSymMark(): int32 {
+	return _hookSymOrder.length as int32;
+}
+
+export function hookSymsFrom(mark: int32): Symbol[] {
+	const taken: Symbol[] = [];
+	for (let i = mark; i < _hookSymOrder.length; i += 1) taken.push(_hookSymOrder[i]);
+	return taken;
+}
+
+export function replayHookSyms(syms: Symbol[]): void {
+	for (const sym of syms) {
+		if (_hookSyms.get(sym.name) != null) continue;
+		_hookSyms.set(sym.name, sym);
+		_hookSymOrder.push(sym);
+	}
 }
 
 export function lookupHookSym(name: string): Symbol | null {
@@ -110,6 +130,7 @@ export function hookPrototype(name: string, fnType: Type | null): Symbol {
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
 	_hookSyms.set(name, sym);
+	_hookSymOrder.push(sym);
 	return sym;
 }
 
@@ -1757,6 +1778,32 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ");");
 	addLine(b, "#endif");
 	addNewline(b);
+}
+
+// Emit the MS_DEFINE_FUTURE_THEN_BOXED instance for a boxed value type and return its
+// name. The drop is the type's destructor hook, found the way ensureTypeInfoDef finds it.
+export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: boolean): string {
+	const innerDesc = getTypeDesc(g, innerType);
+	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
+	let drop = "MS_NO_DROP";
+	if (hasAsgnFlag(innerType)) {
+		const destroySym = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
+		const hookName = destroySym != null ? destroySym.name : innerDesc + "Destroy";
+		const hook = destroySym != null ? destroySym : lookupHookSym(hookName);
+		if (hook != null) {
+			drop = mangle(hookName);
+			ensureDrcProto(g, drop, hook);
+		}
+	}
+	const b = sec(g, CSection.GlobalVars);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
+	const argType = byRef ? innerDesc + "*" : innerDesc;
+	const pass = byRef ? "MS_PASS_REF" : "MS_PASS_VALUE";
+	addLine(b, "MS_DEFINE_FUTURE_THEN_BOXED(" + name + ", " + innerDesc + ", " + argType + ", " + pass + ", " + drop + ")");
+	addLine(b, "#endif");
+	addNewline(b);
+	return name;
 }
 
 export function genFutureType(g: CGen, t: Type): string {
