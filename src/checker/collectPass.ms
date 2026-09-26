@@ -347,7 +347,7 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath == "") {
 		sym.modulePath = ctx.modulePath;
-		if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		if (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Variable) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
 	}
 }
 
