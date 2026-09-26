@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, platform, cwd } from "std/process";
+import { exit, exec, execFile, execFileCapture, argv, platform, cwd } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
@@ -68,7 +68,7 @@ import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
 import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
@@ -2008,9 +2008,12 @@ function changedSources(changes: FsChanges): string[] {
 	return sources;
 }
 
-function waitForSourceChange(feed: WatchFeed): boolean {
+function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 	while (true) {
-		while (feed.batches.length == 0) pumpFeed(feed, 50);
+		while (feed.batches.length == 0) {
+			if (stopped()) return false;
+			pumpFeed(feed, 50);
+		}
 		const queued = feed.batches;
 		feed.batches = [];
 		let rescan = false;
@@ -2062,7 +2065,17 @@ function copyForReplay(from: string, to: string): void {
 	}
 }
 
-export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+interface WatchRun {
+	entryPath: string;
+	opts: CliOptions;
+	resolveSection: ResolveSection;
+	session: BuildSession;
+	feed: WatchFeed | null;
+	replay: string[][];
+	step: int32;
+}
+
+function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
 	if (!opts.isHcr) {
 		printDiag(`${error("error")}: --watch needs --hcr: only per-module HCR images keep a module's lowering independent of the others`);
 		exit(1);
@@ -2080,47 +2093,103 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 		console.log(`watch: watching ${root}`);
 	}
 	setRecoverableBuild(true);
-	let session = createBuildSession(true);
-	let step = 0;
-	while (true) {
-		if (opts.emitC) opts.emitSubdir = `watch${step}`;
-		const t0 = performance.now();
-		let status = BuildStatus.Built;
-		let stopped = false;
-		let internal = "";
+	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0 };
+}
+
+function watchBuild(run: WatchRun): boolean {
+	const opts = run.opts;
+	if (opts.emitC) opts.emitSubdir = `watch${run.step}`;
+	const t0 = performance.now();
+	let status = BuildStatus.Built;
+	let stopped = false;
+	let internal = "";
+	try {
+		status = buildC(run.entryPath, opts, run.resolveSection, run.session);
+	} catch (e) {
+		if (e.message == BUILD_STOPPED) stopped = true;
+		else internal = e.message;
+	}
+	let label = status == BuildStatus.UpToDate ? "up-to-date" : "built";
+	if (!stopped && internal == "" && status == BuildStatus.Stale) {
+		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
+		run.session = createBuildSession(true);
 		try {
-			status = buildC(entryPath, opts, resolveSection, session);
+			status = buildC(run.entryPath, opts, run.resolveSection, run.session);
 		} catch (e) {
 			if (e.message == BUILD_STOPPED) stopped = true;
 			else internal = e.message;
 		}
-		let label = status == BuildStatus.UpToDate ? "up-to-date" : "built";
-		if (!stopped && internal == "" && status == BuildStatus.Stale) {
-			console.log(`watch: rebuilding from scratch: ${session.staleReason}`);
-			session = createBuildSession(true);
-			try {
-				status = buildC(entryPath, opts, resolveSection, session);
-			} catch (e) {
-				if (e.message == BUILD_STOPPED) stopped = true;
-				else internal = e.message;
-			}
-			label = "rebuilt";
-		}
-		if (stopped) label = "failed";
-		if (internal != "") {
-			printDiag(`${error("error")}: internal: the build threw '${internal}'`);
-			session = createBuildSession(true);
-			label = "failed";
-		}
-		console.log(`watch: build ${step} ${label} in ${Math.round(performance.now() - t0)} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
-		step = step + 1;
-		if (feed == null) {
-			if (step > replay.length) return;
-			copyForReplay(replay[step - 1][0], replay[step - 1][1]);
-			continue;
-		}
-		if (!waitForSourceChange(feed!)) return;
+		label = "rebuilt";
 	}
+	if (stopped) label = "failed";
+	if (internal != "") {
+		printDiag(`${error("error")}: internal: the build threw '${internal}'`);
+		run.session = createBuildSession(true);
+		label = "failed";
+	}
+	const session = run.session;
+	console.log(`watch: build ${run.step} ${label} in ${Math.round(performance.now() - t0)} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
+	run.step = run.step + 1;
+	return label != "failed";
+}
+
+function watchNext(run: WatchRun, stopped: () => boolean): boolean {
+	if (run.feed == null) {
+		if (run.step > run.replay.length) return false;
+		copyForReplay(run.replay[run.step - 1][0], run.replay[run.step - 1][1]);
+		return true;
+	}
+	return waitForSourceChange(run.feed!, stopped);
+}
+
+export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	const run = openWatch(entryPath, opts, resolveSection);
+	while (true) {
+		watchBuild(run);
+		if (!watchNext(run, (): boolean => false)) return;
+	}
+}
+
+struct HostExit {
+	code: int32;
+	done: boolean;
+}
+
+function buildHcrHost(dir: string): string {
+	const source = `${resolveRuntimeDir()}/std/hcr/host.ms`;
+	const host = `${dir}/host${exeSuffix()}`;
+	const built = execFileCapture(resolveArgv0(argv[0]), ["build", source, `--output=${host}`]);
+	if (!built.ok) {
+		printDiag(`${error("error")}: cannot build the HCR host from ${source}`);
+		printDiag(built.error.errorOutput != "" ? built.error.errorOutput : built.error.message);
+		exit(1);
+	}
+	return host;
+}
+
+export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	if (opts.watchReplay != "") {
+		printDiag(`${error("error")}: msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
+		exit(1);
+	}
+	const dir = "out/hcr";
+	const stem = replaceExt(basename(entryPath), "");
+	ensureDir(dir);
+	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
+	const host = buildHcrHost(dir);
+	const run = openWatch(entryPath, opts, resolveSection);
+	while (!watchBuild(run)) {
+		if (!watchNext(run, (): boolean => false)) exit(1);
+	}
+	const exited: Locked<HostExit> = new Locked({ code: 0, done: false });
+	const running = spawn((): int32 => {
+		const code = execFile(host, [dir, stem]) as int32;
+		lockedUpdate(exited, (v: HostExit): HostExit => { return { code: code, done: true }; });
+		return code;
+	});
+	while (watchNext(run, (): boolean => lockedRead(exited, (v: HostExit): boolean => v.done))) watchBuild(run);
+	const code = await running;
+	exit(code);
 }
 
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
