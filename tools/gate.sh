@@ -66,7 +66,6 @@ answer either question. Putting one there needs a run that shows both outcomes.
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
-env:  GATE_TIER_DIFF 1 = run only the test tiers whose emitted C or JS differs from the merge-base control (needs the select pass's ctl, else whole); 2 = compute and report only
 USAGE
 }
 
@@ -77,37 +76,43 @@ ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
   ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_LEDGER"
 }
+build_ctl() {
+  local sha=$1 key ctl_dir ctl
+  key=$(tree_key "$sha")
+  [ -n "$key" ] || return 1
+  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
+  if [ ! -x "$ctl" ]; then
+    rm -rf "$ctl_dir" "$OUT/ctl-src"
+    mkdir -p "$ctl_dir" "$OUT/ctl-src"
+    git archive "$sha" src | tar -x -C "$OUT/ctl-src" || return 1
+    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
+    [ -x "$ctl" ] || return 1
+  fi
+  touch "$ctl_dir"
+  printf '%s' "$key"
+}
 tier_differ() { [ "$(printf '%s' "$1" | cut -f2-4)" != "$(printf '%s' "$2" | cut -f2-4)" ]; }
 
 tier_select() {
-  local mode=$1 f sf sha key ctl t0=$SECONDS n=0 n_run=0 keep=""
+  local f sf sha key ctl t0=$SECONDS n=0
   sha=$(git merge-base "$base" HEAD) || { say "tier-select: no merge base, whole"; return 1; }
-  key=$(tree_key "$sha")
+  key=$(build_ctl "$sha") || { say "tier-select: no control compiler at $(printf '%s' "$sha" | cut -c1-8), whole"; return 1; }
   ctl="$OUT/ctl-$key/msc"
-  [ -x "$ctl" ] || { say "tier-select: no control compiler at $(printf '%s' "$sha" | cut -c1-8), whole"; return 1; }
   if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
     say "tier-select: blind paths in the diff, whole"; return 1
   fi
   rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
-  for f in $TIERS; do
-    sf=${f//\//__}
-    ( GATE_EMIT_DIR="$OUT/tier" bash "$0" --emit-one "$ctl" "c.$sf" "$f" "$TOP/$f" >"$OUT/tier/c.$sf.sig" 2>/dev/null ) &
-  done
-  wait
-  for f in $TIERS; do
-    sf=${f//\//__}
-    ( GATE_EMIT_DIR="$OUT/tier" bash "$0" --emit-one "$CAND" "k.$sf" "$f" "$TOP/$f" >"$OUT/tier/k.$sf.sig" 2>/dev/null ) &
-  done
-  wait
-  for f in $TIERS; do
-    sf=${f//\//__}
-    n=$((n + 1))
-    if tier_differ "$(tail -1 "$OUT/tier/c.$sf.sig" 2>/dev/null)" "$(tail -1 "$OUT/tier/k.$sf.sig" 2>/dev/null)"; then
-      keep="$keep$f\n"; n_run=$((n_run + 1))
-    fi
-  done
-  printf '%b' "$keep" >"$OUT/tier/keep"
-  say "tier-select: $n_run/$n tiers differ, $(fmt_secs $((SECONDS - t0)))$( [ "$mode" -eq 1 ] && printf ' · enforcing' || printf ' · shadow' )"
+  for f in $TIERS; do n=$((n + 1)); printf '%s %s\n' "${f//\//__}" "$TOP/$f"; done >"$OUT/tier/jobs"
+  emit_side "$ctl" "$OUT/tier/c" <"$OUT/tier/jobs" | sort >"$OUT/tier/ctl.sig"
+  emit_side "$CAND" "$OUT/tier/k" <"$OUT/tier/jobs" | sort >"$OUT/tier/cand.sig"
+  if [ "$(grep -c . "$OUT/tier/ctl.sig" | tr -d ' ')" -ne "$n" ] || [ "$(grep -c . "$OUT/tier/cand.sig" | tr -d ' ')" -ne "$n" ]; then
+    say "tier-select: an emit pass lost tiers, whole"; return 1
+  fi
+  join -t "$(printf '\t')" "$OUT/tier/ctl.sig" "$OUT/tier/cand.sig" \
+    | while IFS=$'\t' read -r sf c1 j1 r1 _ c2 j2 r2 __; do
+        if tier_differ "a	$c1	$j1	$r1	9" "a	$c2	$j2	$r2	9"; then printf '%s\n' "${sf//__/\/}"; fi
+      done >"$OUT/tier/keep"
+  say "tier-select: $(grep -c . "$OUT/tier/keep" | tr -d ' ')/$n tiers differ, $(fmt_secs $((SECONDS - t0)))"
   ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
   return 0
 }
@@ -543,10 +548,13 @@ run_test_lane() {
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     tests)
       jobs=$(test_jobs)
-      if [ "${GATE_TIER_DIFF:-0}" -ge 1 ] && tier_select "${GATE_TIER_DIFF:-0}" && [ "${GATE_TIER_DIFF:-0}" -eq 1 ]; then
+      if tier_select; then
         jobs=$(awk -v k="$OUT/tier/keep" 'BEGIN { while ((getline l < k) > 0) w[l] = 1 } w[$1] { print }' <<<"$jobs")
+      else
+        rm -f "$OUT/tier/keep"
       fi
       while read -r f shard; do
+        [ -n "$f" ] || continue
         if [ "$shard" = - ]; then
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
         else
@@ -556,6 +564,7 @@ run_test_lane() {
       wait ;;
   esac
   while read -r f shard; do
+    [ -n "$f" ] || continue
     if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
@@ -668,18 +677,9 @@ select_whole() { select=0; say "gate: select gave up, no narrowing for $select_l
 select_programs() {
   local sha key ctl_dir ctl t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  key=$(tree_key "$sha")
-  [ -n "$key" ] || { select_whole "cannot read the src and std trees at $sha"; return; }
-  ctl_dir="$OUT/ctl-$key" ctl="$OUT/ctl-$key/msc"
   rm -rf "$OUT/ctl"
-  if [ ! -x "$ctl" ]; then
-    rm -rf "$ctl_dir" "$OUT/ctl-src"
-    mkdir -p "$ctl_dir" "$OUT/ctl-src"
-    git archive "$sha" src | tar -x -C "$OUT/ctl-src" || { select_whole "cannot unpack src at $sha"; return; }
-    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
-    [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
-  fi
-  touch "$ctl_dir"
+  key=$(build_ctl "$sha") || { select_whole "no control compiler at $(printf '%s' "$sha" | cut -c1-8), log: $OUT/ctl.log"; return; }
+  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
   list_programs >"$EMIT/programs"
@@ -719,11 +719,18 @@ narrow_for() {
 }
 
 scope_known() {
-  awk -v only="$only_csv" -v lanes="$lanes_csv" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
+  local tierkeep=""
+  [ "$1" = tests ] && [ -f "$OUT/tier/keep" ] && tierkeep="$OUT/tier/keep"
+  awk -v only="$only_csv" -v lanes="$lanes_csv" -v tierkeep="$tierkeep" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
     BEGIN { n = split(only, a, ","); for (i = 1; i <= n; i++) keep[a[i]] = 1
-            m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1 }
+            m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1
+            scoped = 0
+            if (tierkeep != "") { while ((getline t < tierkeep) > 0) { tier[t] = 1; td[t] = t; if (sub(/\/index\.ms$/, "/", td[t])) dirscope[t] = td[t]; else dirscope[t] = "\001none" } scoped = 1 } }
     { prog = $0; sub(/ \[.*$/, "", prog); lane = $0; sub(/^.*\[/, "", lane); sub(/\].*$/, "", lane)
       if (drop_raiser == 1 && lane == "raiser") next
+      if (scoped == 1) { file = $0; sub(/ > .*$/, "", file); hit = 0
+        for (t in tier) { if (file == t) { hit = 1; break } if (dirscope[t] != "\001none" && index(file, dirscope[t]) == 1) { hit = 1; break } }
+        if (hit == 0) next }
       if (n > 0 && !(prog in keep)) next
       if (m > 0 && lane != "parity" && !(lane in lane_kept)) next
       print }'
@@ -869,7 +876,7 @@ for phase in "${PHASES[@]}"; do
     log="$OUT/$lane.log"
     : >"$OUT/$lane.scope"
     case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
-    case "$lane" in corpus|san)
+    case "$lane" in corpus|san|tests)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""
