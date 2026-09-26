@@ -7,10 +7,9 @@
 //   type says which is meant. C truncates; JS kept the fraction, and a digit
 //   loop `n = n / 10` decayed through denormals instead of reaching 0.
 //
-//   uint32 — C wraps mod 2^32, while every JS operator hands back either an
-//   int32 (bitwise, shifts) or an unbounded double (+ - *). uint8/uint16 are
-//   NOT in this pass: MS follows C's integer promotion, so `uint8 200+100` is
-//   300 on both backends already. uint32 is the only width MS actually wraps.
+//   uint32 and the 8/16-bit widths — C wraps them (the 8/16-bit results are
+//   cast back to their own width), while every JS operator hands back either an
+//   int32 (bitwise, shifts) or an unbounded double (+ - *).
 //
 // Reference parity is deliberate and partial. The reference emits, for uint32,
 // `(a OP b) >>> 0` for the bitwise trio, `~(a) >>> 0`, and — the trick worth
@@ -29,9 +28,9 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, SourceLocation, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
-import { peelToRepr } from "../../checker/types";
+import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
@@ -49,6 +48,9 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	const base = compoundBaseOf(d.operator);
 	if (base != "") return compoundAsInteger(node, d, base, ctx);
 	if (d.operator == "/") return divideAsInteger(node);
+	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
+	const narrow = subIntKind(node.nodeType);
+	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
 }
 
@@ -57,7 +59,53 @@ function divideAsInteger(node: Node): Node {
 	if (t == null || !isIntConvKind(t.kind)) return node;
 	// BigInt division already truncates; Math.trunc on a BigInt throws.
 	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
+	const narrow = subIntKind(t);
+	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	return truncateTo(node, t.kind, node.location);
+}
+
+function subIntKind(t: Type | null): TypeKind {
+	const r = peelToRepr(t);
+	if (r == null) return TypeKind.Unknown;
+	return match (r.kind) {
+		TypeKind.Int8 | TypeKind.Uint8 | TypeKind.Int16 | TypeKind.Uint16 => r.kind,
+		_ => TypeKind.Unknown,
+	};
+}
+
+function subIntBits(kind: TypeKind): number {
+	return kind == TypeKind.Int8 || kind == TypeKind.Uint8 ? 8 : 16;
+}
+
+function wrapsAtWidth(op: string): boolean {
+	return op == "+" || op == "-" || op == "*";
+}
+
+function isShiftOp(op: string): boolean {
+	return op == "<<" || op == ">>" || op == ">>>";
+}
+
+function wrapTo(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
+	if (kind == TypeKind.Uint8 || kind == TypeKind.Uint16) return truncateTo(inner, kind, loc);
+	const up = 32 - subIntBits(kind);
+	const result = makeBinary(makeBinary(inner, "<<", makeNumber(up, loc), loc), ">>", makeNumber(up, loc), loc);
+	result.nodeType = createPrimitive(kind);
+	return result;
+}
+
+// The count is masked to the left operand's width and the result wraps there,
+// before it widens to the node's type, as C computes it.
+function shiftAtLeftWidth(node: Node, d: BinaryExprData): Node {
+	const kind = subIntKind(d.left.nodeType);
+	const bits = subIntBits(kind);
+	const loc = node.location;
+	const count = makeBinary(d.right, "&", makeNumber(bits - 1, loc), loc);
+	const unsigned = kind == TypeKind.Uint8 || kind == TypeKind.Uint16;
+	if (d.operator == "<<") return wrapTo(makeBinary(d.left, "<<", count, loc), kind, loc);
+	if (d.operator == ">>") return makeBinary(d.left, unsigned ? ">>>" : ">>", count, loc);
+	if (unsigned) return makeBinary(d.left, ">>>", count, loc);
+	const asUnsigned = makeBinary(d.left, "&", makeNumber(bits == 8 ? 255 : 65535, loc), loc);
+	return wrapTo(makeBinary(asUnsigned, ">>>", count, loc), kind, loc);
 }
 
 function binaryAsUnsigned(node: Node): Node {
@@ -75,9 +123,12 @@ function binaryAsUnsigned(node: Node): Node {
 
 function unaryAsUnsigned(node: Node): Node {
 	const t = peelToRepr(node.nodeType);
-	if (t == null || t.kind != TypeKind.Uint32) return node;
+	if (t == null) return node;
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
+	const narrow = subIntKind(t);
+	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
+	if (t.kind != TypeKind.Uint32) return node;
 	return truncateTo(node, t.kind, node.location);
 }
 
@@ -118,7 +169,8 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 	if (t == null || !isIntConvKind(t.kind)) return node;
 	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return node;
 	const unsigned = t.kind == TypeKind.Uint32;
-	if (base != "/" && !unsigned) return node;
+	const narrow = subIntKind(t);
+	if (base != "/" && !unsigned && narrow == TypeKind.Unknown) return node;
 	const readBack = cloneIfPure(d.left);
 	if (readBack == null) {
 		if (ctx.checkerCtx != null) {
@@ -131,7 +183,8 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 	const widened = base == "*" && unsigned
 		? exactMul(readBack, d.right, node.location)
 		: makeBinary(readBack, base, d.right, node.location);
-	return makeBinary(d.left, "=", truncateTo(widened, t.kind, node.location), node.location);
+	const stored = narrow != TypeKind.Unknown ? wrapTo(widened, narrow, node.location) : truncateTo(widened, t.kind, node.location);
+	return makeBinary(d.left, "=", stored, node.location);
 }
 
 // A second read of the lvalue is only safe when re-evaluating it cannot call

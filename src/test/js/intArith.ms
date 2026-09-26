@@ -97,9 +97,8 @@ test "compound add on a signed call-indexed left side stays untouched" {
 
 // ===== uint32 wrap =====
 //
-// C wraps mod 2^32 at this width and nowhere else — uint8/uint16 follow C's
-// integer promotion on both backends already, and signed overflow traps on
-// C-debug rather than producing a value. So every test here is uint32.
+// Signed 32- and 64-bit overflow traps on C-debug rather than producing a value;
+// uint32 wraps mod 2^32 and the 8/16-bit widths wrap at their own width.
 
 test "uint32 addition wraps" {
 	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a + b; }");
@@ -183,8 +182,32 @@ test "int32 addition is left alone" {
 	assert !result.value.contains("| 0");
 }
 
-test "uint8 addition is left alone because C promotes it" {
+test "uint8 addition wraps at a byte" {
 	const result = compileToJS("function f(a: uint8, b: uint8): uint8 { return a + b; }");
 	assert result.ok;
-	assert !result.value.contains(">>> 0");
+	assert result.value.contains("& 255");
+}
+
+test "int8 addition wraps with a sign extension" {
+	const result = compileToJS("function f(a: int8, b: int8): int8 { return a + b; }");
+	assert result.ok;
+	assert result.value.contains("<< 24");
+}
+
+test "int16 negation wraps with a sign extension" {
+	const result = compileToJS("function f(a: int16): int16 { return -a; }");
+	assert result.ok;
+	assert result.value.contains("<< 16");
+}
+
+test "uint8 shift masks its count to the byte width" {
+	const result = compileToJS("function f(a: uint8, n: uint8): uint8 { return a << n; }");
+	assert result.ok;
+	assert result.value.contains("& 7");
+}
+
+test "int8 unsigned shift reads the byte unsigned" {
+	const result = compileToJS("function f(a: int8, n: int8): int8 { return a >>> n; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
 }
