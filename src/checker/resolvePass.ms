@@ -268,6 +268,7 @@ function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName
 	const isRef = body.kind == TypeKind.Ref && body.typeReturn != null;
 	const inner = isRef ? body.typeReturn : body;
 	const namesDeclared = body.kind == TypeKind.Alias || (inner.kind == TypeKind.Struct && declaredByAnotherSymbol(inner, alias));
+	if (namesDeclared && genericParamsOf(body.kind == TypeKind.Alias ? body.typeReturn : inner) != "") return null;
 	if (!namesDeclared && inner.kind != TypeKind.GenericInstance && inner.kind != TypeKind.GenericParam) return null;
 	checkTypeArgConstraints(ctx, baseName, genericParams, args, line, col);
 	if (namesDeclared) return body;
