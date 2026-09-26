@@ -241,6 +241,6 @@ import "./bug218GenericReadonlyViewSubstitution";
 import "./bug219GenericCtorThisIsItsInstance";
 import "./bug220GenericCtorThisBindsTypeParams";
 import "./bug221ThrowNonError";
-import "./bug221AwaitInExpression";
-import "./bug222AsyncUninitializedLocal";
+import "./bug228AwaitInExpression";
+import "./bug229AsyncUninitializedLocal";
 import "./bug230SpawnRulesOnJs";
