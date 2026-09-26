@@ -88,6 +88,7 @@ class LiftCtx {
 	checkerCtx: CheckerContext;  // borrowed — do NOT store full TransformContext (causes double-free)
 	tempCounter: number;
 	generated: NameSet;    // fully generated types (dedup)
+	trivial: NameSet;
 	generating: NameSet;   // currently generating (cycle guard)
 	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
@@ -706,6 +707,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					const unionCName = hookCName(fieldType.typeName, fieldType, lctx);
 					if (namedTypeHasHooks(unionCName, lctx)) {
 						namedObjOp(hook, unionCName, xf, yf, buf, loc);
+					} else {
+						defaultOp(hook, xf, yf, buf, loc);
 					}
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
@@ -1383,7 +1386,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
 	const cName = hookCName(typeName, objType, lctx);
-	if (nameSetContains(lctx.generated, cName)) return;
+	if (nameSetContains(lctx.generated, cName) || nameSetContains(lctx.trivial, cName)) return;
 	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
 	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
 	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
@@ -1462,8 +1465,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 				emitMinimalTypeInfo(typeName, lctx, loc);
 				claimGlobalTypeInfo(cName);
 			}
-			nameSetAdd(lctx.generated, cName);
-			if (shouldEmitHooks) claimGlobal(cName);
+			nameSetAdd(lctx.trivial, cName);
 			return;
 		}
 	}
@@ -2255,6 +2257,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		checkerCtx: ctx.checkerCtx,
 		tempCounter: ctx.tempCounter,
 		generated: createNameSet(),
+		trivial: createNameSet(),
 		generating: createNameSet(),
 		collector: [],
 		cyclicCache: createNameSet(),
