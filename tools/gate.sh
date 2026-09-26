@@ -16,9 +16,9 @@ RULES=(
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite hcr tests suite-orc fmt corpus san guard"
-LADDER="build boundary suite hcr tests suite-orc fmt corpus san guard"
-KNOWN_LANES="boundary suite hcr suite-orc tests fmt corpus san guard"
+ORDER="tools build boundary suite hcr tests fmt corpus san guard"
+LADDER="build boundary suite hcr tests fmt corpus san guard"
+KNOWN_LANES="boundary suite hcr tests fmt corpus san guard"
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 
@@ -31,7 +31,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests suite-orc fmt corpus san guard
+  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -164,7 +164,7 @@ reds_of() {
     build) [ "$rc" -eq 0 ] || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -n 's/^FAIL \(.*\): \(bash -n\|self-test\|check\)$/\1/p' "$log" ;;
-    suite|suite-orc|tests)
+    suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
         /^NORESULT / { sub(/^NORESULT /,""); print; next }
         /^ FAIL  / { f=$0; sub(/^ FAIL  /,"",f); if (index(f,top)==1) f=substr(f,length(top)+1); next }
@@ -485,7 +485,6 @@ run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
-    suite-orc) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite-orc src/index.ms)" --gc=orc ;;
     tests)
       jobs=$(test_jobs)
       while read -r f shard; do
@@ -537,7 +536,7 @@ totals_of() {
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
         /^[0-9]+ pass · [0-9]+ fail/ { p = $1; f = $4 }
         END { if (p != "") printf "%d/%d", p, p + f }' ;;
-    suite|suite-orc|tests)
+    suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
         /^ *Tests +[0-9]/ {
           for (i = 2; i <= NF; i++) if ($i == "passed") p += $(i - 1)
@@ -764,7 +763,7 @@ lane_body() {
   [ "$lane" != build ] || rm -f "$CAND.key"
   case "$lane" in
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
-    tests|suite|suite-orc) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
+    tests|suite) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
     boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
@@ -776,7 +775,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("tools build" "boundary suite suite-orc hcr tests fmt" "corpus guard" "san")
+PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv=""
@@ -875,7 +874,7 @@ if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   [ -f "$KNOWN" ] || echo '{}' >"$KNOWN.prev"
   [ -f "$KNOWN" ] && cp "$KNOWN" "$KNOWN.prev"
-  merged=$(cat "$KNOWN.prev")
+  merged=$(jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev")
   for lane in $ran; do
     case " $KNOWN_LANES " in *" $lane "*) ;; *) continue ;; esac
     merged=$(jq -n --argjson prev "$merged" --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '

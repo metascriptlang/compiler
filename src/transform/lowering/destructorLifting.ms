@@ -61,6 +61,20 @@ export function useHookOwners(owners: NameSet): void {
 	_globalHookOwners = owners;
 }
 
+export function typeInfoOwnerMark(): int32 {
+	return _globalTypeInfoOwners.items.length as int32;
+}
+
+export function typeInfoOwnersFrom(mark: int32): string[] {
+	const taken: string[] = [];
+	for (let i = mark; i < _globalTypeInfoOwners.items.length; i += 1) taken.push(_globalTypeInfoOwners.items[i]);
+	return taken;
+}
+
+export function replayTypeInfoOwners(names: string[]): void {
+	for (const name of names) nameSetAdd(_globalTypeInfoOwners, name);
+}
+
 function isGloballyOwned(typeName: string): boolean {
 	return nameSetContains(_globalHookOwners, typeName);
 }
