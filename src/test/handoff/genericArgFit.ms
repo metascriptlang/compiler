@@ -281,3 +281,16 @@ test "a union constraint is read whole" {
 	assert hasError(src + "const c = u(true);", "does not satisfy constraint");
 	assert strictErrorCount(src + "const c = u(\"s\");\nconst d = u(3);") == 0;
 }
+
+test "an extension's own constrained parameter is checked when its receiver binds it" {
+	const src = CLASSES + "function tagged<T extends Animal>(this xs: T[]): int32 { return xs.length; }\n";
+	assert hasError(src + "const c = [\"s\"].tagged();", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'tagged'");
+	assert strictErrorCount(src + "const d: Dog[] = [dog];\nconst c = d.tagged();") == 0;
+}
+
+test "a method's and a static method's own constraint is checked" {
+	const src = CLASSES + "class H { n: int32 = 0; pick<T extends Animal>(a: T): T { return a; } static take<T extends Animal>(a: T): T { return a; } }\n";
+	assert hasError(src + "const c = new H().pick(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'pick'");
+	assert hasError(src + "const c = H.take(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'take'");
+	assert strictErrorCount(src + "const c = new H().pick(dog);\nconst d = H.take(animal);") == 0;
+}
