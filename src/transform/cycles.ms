@@ -18,7 +18,7 @@
 
 import { Type, TypeKind, TypeFlag } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnresolvedType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnresolvedType, genericParamsOf, instantiateGenericBody } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -54,11 +54,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 				if (nameSetContains(marker, key)) return false;
 				nameSetAdd(marker, key);
 			}
-			if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
-			for (const child of t.typeChildren) {
-				if (cfaAux(child, origKey, withRef, marker)) return true;
-			}
-			return false;
+			return cfaStructFields(t, origKey, withRef, marker);
 		},
 		TypeKind.Union => {
 			const key = typeIdentity(t);
@@ -80,13 +76,17 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 		},
 		TypeKind.GenericInstance => {
 			if (isAwaitable(t)) return false;
+			if (t.typeReturn == null) {
+				const params = genericParamsOf(t);
+				if (params != "") instantiateGenericBody(t, params);
+			}
 			const key = typeIdentity(t);
 			if (withRef && key != "" && key == origKey) return true;
 			if (key != "") {
 				if (nameSetContains(marker, key)) return false;
 				nameSetAdd(marker, key);
 			}
-			return cfaAux(t.typeReturn, origKey, withRef, marker);
+			return cfaInstanceBody(t.typeReturn, origKey, withRef, marker);
 		},
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => {
 			const key = typeIdentity(t);
@@ -102,6 +102,33 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 		TypeKind.Distinct | TypeKind.Alias | TypeKind.Var | TypeKind.Sink | TypeKind.Lent | TypeKind.Result => cfaAux(t.typeReturn, origKey, withRef, marker),
 		_ => false,
 	};
+}
+
+function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
+	if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
+	for (const child of t.typeChildren) {
+		if (cfaAux(child, origKey, withRef, marker)) return true;
+	}
+	return false;
+}
+
+function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, marker: NameSet): boolean {
+	if (body == null) return false;
+	if (body.kind == TypeKind.Ref) {
+		if (body.typeReturn == null) return true;
+		return cfaInstanceBody(body.typeReturn, origKey, true, marker);
+	}
+	if (body.kind == TypeKind.Struct) {
+		if (body.typeFlags.has(TypeFlag.OpenClass)) return true;
+		return cfaStructFields(body, origKey, withRef, marker);
+	}
+	if (body.kind == TypeKind.Union) {
+		for (const variant of body.typeChildren) {
+			if (cfaAux(variant, origKey, withRef, marker)) return true;
+		}
+		return false;
+	}
+	return cfaAux(body, origKey, withRef, marker);
 }
 
 export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
