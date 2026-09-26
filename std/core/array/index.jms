@@ -4,7 +4,7 @@
 // types carry an empty typeName, so the class-method path is never taken); only
 // `this arr: T[]` extensions reach the checker. Keep this UFCS shape.
 
-export extern function push<T>(this arr: T[], value: T): void from "#.push(#)";
+export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
 export extern function pop<T>(this arr: T[]): T from "#.pop()";
 export extern function shift<T>(this arr: T[]): T from "#.shift()";
 export extern function at<T>(this arr: T[], idx: number): T from "#.at(#)";
@@ -17,11 +17,17 @@ export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // wrong for numbers.
 export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
 export extern function sort(this arr: string[]): void from "#.sort()";
-export extern function fill<T>(this arr: T[], value: T): void from "#.fill(#)";
+// Nim's system.fill: one assignment per slot, so a value struct gets its own
+// copy in every slot (native fill would store one object in all of them).
+export function fill<T>(this arr: T[], value: T): void {
+	for (let i = 0; i < arr.length; i += 1) {
+		arr[i] = value;
+	}
+}
 export extern function join<T>(this arr: T[], sep: string): string from "#.join(#)";
 export extern function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] from "#.map(#)";
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "#.splice(#, #, #)";
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number, sink item: T): void from "#.splice(#, #, #)";
 // Truncate/extend in place, mirroring index.cms. Native `length =` shrinks
 // identically; on the GROW path C zero-fills the new slots while JS leaves
 // holes that read as undefined, so callers that extend must write every new
