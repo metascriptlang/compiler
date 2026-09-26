@@ -21,6 +21,7 @@ import "./toStringResolve";
 import "./bitwiseCheck";
 import "./relationalCheck";
 import "./genericArgFit";
+import "./genericMethodOverride";
 import "./typeAliasStruct";
 import "./literalCoercion";
 import "./discriminatedUnion";

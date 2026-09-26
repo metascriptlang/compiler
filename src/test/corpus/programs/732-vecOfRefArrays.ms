@@ -20,7 +20,7 @@ function handleSharing(): boolean {
 
 function slotDetach(): boolean {
 	const a: Vec<uint8[]> = [[1, 2]];
-	const c: Vec<uint8[]> = a;
+	let c: Vec<uint8[]> = a;
 	c[0] = [7];
 	return a[0][0] == 1 && a[0].length == 2 && c[0][0] == 7 && c[0].length == 1;
 }

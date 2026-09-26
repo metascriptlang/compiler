@@ -20,12 +20,12 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
-import { booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
+import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
-	makeIdentResolved, makeVarDecl, makeBlock,
+	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
 	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral,
 } from "../util";
@@ -218,7 +218,7 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 		}
 
 		// if (!$result.ok) { return { ok: false, error: $result.error }; }
-		hoisted.push(makeErrorCheck(sym, resType!, loc, ctx));
+		hoisted.push(makeErrorCheck(sym, resType!, loc, ctx, node.resolvedSym));
 
 		// Replace TryExpr with $result.value. For `Result<void, E>` the v0
 		// variant has no `value` field — synthesize a void placeholder
@@ -282,16 +282,22 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 // Build: if (!$result.ok) { return { ok: false, error: $result.error }; }
 // Uses enclosingFnRetType for the return literal's type (not resType) so the error-path
 // return matches the function's signature (e.g. Result<void, string>, not Result<Person, string>).
-function makeErrorCheck(sym: Symbol, resType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+function makeErrorCheck(sym: Symbol, resType: Type, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
 	const okAccess = makeResultMember(sym, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
 
 	const errorAccess = makeResultMember(sym, resType, "error", loc);
 	// Use enclosing function's return type for the error literal, falling back to resType
-	const errRetType = (enclosingFnRetType != null && isResult(enclosingFnRetType))
+	let errRetType = (enclosingFnRetType != null && isResult(enclosingFnRetType))
 		? enclosingFnRetType : resType;
-	const resultErr = makeResultErr(errorAccess, errRetType, loc);
+	let errValue = errorAccess;
+	if (converter != null) {
+		errValue = makeCallResolved(makeIdentResolved(converter, loc), [errorAccess], converter, loc);
+		const awaited = awaitedType(enclosingFnRetType);
+		if (errRetType == resType && awaited != null && isResult(awaited)) errRetType = awaited;
+	}
+	const resultErr = makeResultErr(errValue, errRetType, loc);
 
 	const returnStmt = makeReturn(resultErr, loc);
 	const thenBlock = makeBlock([returnStmt], loc);

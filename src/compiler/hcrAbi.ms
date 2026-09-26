@@ -442,7 +442,7 @@ export function parseHcrAbiBundle(content: string): Result<HcrModuleAbi[], strin
 
 
 test "HCR ABI bundle round-trips in module order" {
-	const a = classifierTestManifest("windows-x64", "drc", "toolchain", ["logic"], []);
+	let a = classifierTestManifest("windows-x64", "drc", "toolchain", ["logic"], []);
 	const value = createHcrAbiExport("logic", "logic_value", "func():int32");
 	const logic = classifierTestManifest("windows-x64", "drc", "toolchain", [], [value]);
 	a.moduleId = "app";

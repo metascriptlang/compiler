@@ -233,6 +233,10 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			advance(state);
 			paramPrefix = `${paramPrefix}out:`;
 		}
+		if (params.length == 0 && current(state).kind == TokenKind.Ref && peek(state, 1).kind == TokenKind.This) {
+			addError(state, `A mutable receiver is written 'this ref name: T', not 'ref this' (parameters of '${fnName}' at line ${current(state).line})`);
+			advance(state);
+		}
 		// Ref parameter: ref name: Type → stored as "ref:name" (contextual, as above)
 		if (current(state).kind == TokenKind.Ref && isIdentLike(peek(state, 1))) {
 			advance(state);
@@ -265,7 +269,12 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
-			// Instance extension: this name: Type
+			// Instance extension: this name: Type, or `this ref name: T` for a `Var<T>` receiver
+			let receiverPrefix = "";
+			if (current(state).kind == TokenKind.Ref && isIdentLike(peek(state, 1))) {
+				advance(state);
+				receiverPrefix = "ref:";
+			}
 			const receiverName = current(state);
 			if (!isIdentLike(receiverName)) {
 				params.push("this");
@@ -275,7 +284,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
-			params.push(`this:${receiverName.value}`);
+			params.push(`this:${receiverPrefix}${receiverName.value}`);
 			_lastParamLocations.push(makeLoc(receiverName.line, receiverName.column));
 			advance(state);
 			params.push(captureOptionalType(state));

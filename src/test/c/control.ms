@@ -89,5 +89,5 @@ test "E2E C: throw statement" {
 	const src = "function f(): void { throw \"error\"; }\ntry { f(); } catch (e) { }\nconst x: number = 1;";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("msThrow");
+	assert c.value.contains("msCurrException = (msException*)(");
 }

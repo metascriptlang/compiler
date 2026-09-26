@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody } from "./types";
+import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -858,6 +858,12 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	return fields;
 }
 
+function canonicalInstance(base: Type, typeArgs: Type[], classSym: Symbol): Type {
+	const inst = createGenericInstance(base, typeArgs);
+	instantiateGenericBody(inst, symGenericParams(classSym));
+	return inst;
+}
+
 // ===== On-Demand Constructor Instantiation =====
 // Reference parity: on-demand proc instantiation (same pattern as standard generateInstance).
 // For classes with constructors, we generate a standalone FunctionDecl named ClassName_new.
@@ -902,7 +908,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
 	const concreteClassType = createRef(substStruct);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, ctorFnName, concreteClassType, ctx, loc));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, ctorFnName, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
@@ -943,7 +949,7 @@ function instanceStruct(structBase: Type, mangledClass: string, names: string[],
 	return substStruct;
 }
 
-function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], types: Type[], ctorFnName: string, concreteClassType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], types: Type[], ctorFnName: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -1003,7 +1009,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
-		const ctorChildren: Type[] = [concreteClassType];
+		const ctorChildren: Type[] = [thisType];
 		for (const pt of resolvedParamTypes) { ctorChildren.push(pt); }
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);

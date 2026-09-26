@@ -737,6 +737,13 @@ module.exports = grammar({
           ':',
           field('receiver_type', $.type),
         ),
+        // Mutable receiver: this ref name: Type
+        seq(
+          'ref',
+          field('name', $._identifier_or_keyword),
+          ':',
+          field('receiver_type', $.type),
+        ),
       ),
     ),
 

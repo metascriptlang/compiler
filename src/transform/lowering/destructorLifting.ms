@@ -737,7 +737,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
+					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(refInner), lctx, buf, loc);
 				}
 				return;
 			}

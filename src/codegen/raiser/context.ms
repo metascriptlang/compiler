@@ -482,7 +482,7 @@ export function isRoutineSym(sym: Symbol): boolean {
 }
 
 export function callRaiserOnDemand(sym: Symbol): int32 {
-	if (!isRoutineSym(sym)) return -1;
+	if (!isRoutineSym(sym) && sym.symbolKind != SymbolKind.Class) return -1;
 	return _raiserOnDemandFn(sym);
 }
 

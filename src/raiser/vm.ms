@@ -412,7 +412,7 @@ function unwindFrame(vm: RaiserVM): void {
 function unhandledException(vm: RaiserVM): void {
 	vm.unwinding = false;
 	vm.savedIp = -1;
-	const msg = raiserToString(vm.currentException);
+	const msg = vmExceptionText(vm, vm.currentException);
 	const s = vm.sched.strands.items[vm.current];
 	if (s.resultFuture >= 0) {
 		// A spawned strand dies into its future: a reader re-raises it, and a
@@ -483,10 +483,19 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 
 const MACRO_ERROR_PREFIX = "__MACRO_ERROR__:";
 
+function vmExceptionText(vm: RaiserVM, thrown: RaiserValue): string {
+	if (thrown.kind != RaiserValueKind.Object) return raiserToString(thrown);
+	if (thrown.intVal < 0 || thrown.intVal >= vm.objectHeap.objects.length) {
+		vmError(vm, `object handle out of bounds: ${thrown.intVal}`);
+		return "";
+	}
+	return raiserToString(heapObjectGetField(vm.objectHeap, thrown.intVal, "message"));
+}
+
 function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
-	if (thrown.kind != RaiserValueKind.String) return false;
-	if (!thrown.strVal.startsWith(MACRO_ERROR_PREFIX)) return false;
-	const payload = thrown.strVal.slice(MACRO_ERROR_PREFIX.length, thrown.strVal.length);
+	const text = vmExceptionText(vm, thrown);
+	if (!text.startsWith(MACRO_ERROR_PREFIX)) return false;
+	const payload = text.slice(MACRO_ERROR_PREFIX.length, text.length);
 	const parts = payload.split("\t");
 	vm.diagMessage = parts.length > 0 ? parts[0] : "compile error in macro";
 	vm.diagLine = parts.length > 1 ? parseIntStr(parts[1]) : 0;

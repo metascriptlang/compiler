@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, Type, TypeKind, Symbol, SymbolKind,
+	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	CallExprData, MemberExprData, ArrayAccessData,
 	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData,
 	createNodeAt,
@@ -33,6 +33,23 @@ function calleeFormals(d: CallExprData): Type[] | null {
 	return t.typeChildren;
 }
 
+function receiverFormal(node: Node): Type | null {
+	if (!node.flags.has(NodeFlag.ExtCall) || node.flags.has(NodeFlag.ExtStatic)) return null;
+	if ((node.data as CallExprData).callee.kind != NodeKind.MemberExpr) return null;
+	const t = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
+	if (t == null || t.kind != TypeKind.Function || t.typeChildren.length == 0) return null;
+	return t.typeChildren[0];
+}
+function noteBoxedArg(arg: Node): void {
+	const inner = unwrapAddr(arg);
+	if (inner.kind == NodeKind.Identifier && inner.resolvedSym != null) {
+		const s = inner.resolvedSym;
+		if (!isVarType(s.symbolType)) {
+			if (!isBoxed(s)) boxedSyms.push(s);
+			if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s);
+		}
+	}
+}
 function unwrapAddr(n: Node): Node {
 	if (n == null) return n;
 	if (n.kind == NodeKind.OutExpr) return unwrapAddr((n.data as OutExprData).outArg);
@@ -72,17 +89,10 @@ function sc(node: Node): Node {
 		const formals = calleeFormals(d);
 		if (formals != null) {
 			for (let i = 0; i < d.arguments.length && i < formals.length; i += 1) {
-				if (!isVarType(formals[i])) continue;
-				const inner = unwrapAddr(d.arguments[i]);
-				if (inner.kind == NodeKind.Identifier && inner.resolvedSym != null) {
-					const s = inner.resolvedSym;
-					if (!isVarType(s.symbolType)) {
-						if (!isBoxed(s)) boxedSyms.push(s);
-						if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s);
-					}
-				}
+				if (isVarType(formals[i])) noteBoxedArg(d.arguments[i]);
 			}
 		}
+		if (isVarType(receiverFormal(node))) noteBoxedArg((d.callee.data as MemberExprData).object);
 	}
 	mapChildren(node, sc);
 	return node;
@@ -143,7 +153,12 @@ function rw(node: Node): Node {
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		const formals = calleeFormals(d);
-		d.callee = rw(d.callee);
+		if (isVarType(receiverFormal(node))) {
+			const md = d.callee.data as MemberExprData;
+			md.object = pairize(md.object);
+		} else {
+			d.callee = rw(d.callee);
+		}
 		for (let i = 0; i < d.arguments.length; i += 1) {
 			let formal: Type | null = null;
 			if (formals != null && i < formals.length) formal = formals[i];

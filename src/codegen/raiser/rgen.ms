@@ -195,17 +195,19 @@ function compileClassConstructor(
 }
 
 // --- Incremental append into a shared image (comptime engine) ---
-// Compiles a program's FunctionDecls into an existing image + funcMap, assigning
+// Compiles a program's functions and classes into an existing image + funcMap, assigning
 // each an ABSOLUTE index (base + local position) so Call/closure funcIdx resolve
 // image-wide with no relocation. Enums fold into the shared enumMap. Returns the
 // absolute index assigned to `wantFn` (-1 if not present).
-interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; }
+interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; isMethod: boolean; }
+interface RaiserReservedCtor { idx: number; className: string; classBody: Node[]; ctorParams: string[]; ctorBody: Node | null; }
 
 export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): int32 {
 	const pd = program.data as ProgramData;
 	let wantIdx = -1;
 
 	const reserved: RaiserReservedSlot[] = [];
+	const ctors: RaiserReservedCtor[] = [];
 
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
@@ -216,7 +218,33 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			const entry: RaiserFuncEntry = { name: fd.fnName, index: idx };
 			funcMap.items.push(entry);
 			if (fd.fnName == wantFn) wantIdx = idx;
-			reserved.push({ idx, fnName: fd.fnName, params: fd.params, body: fd.fnBody, arity: fd.params.length });
+			reserved.push({ idx, fnName: fd.fnName, params: fd.params, body: fd.fnBody, arity: fd.params.length, isMethod: false });
+		}
+		const classNode = unwrapToClassDecl(pd.programStmts[i]);
+		if (classNode != null) {
+			const cd = classNode.data as ClassDeclData;
+			const ctorKey = cd.className + "_new";
+			const ctorIdx = image.functions.length;
+			image.functions.push(raiserPlaceholderFunc());
+			funcMap.items.push({ name: ctorKey, index: ctorIdx });
+			if (ctorKey == wantFn) wantIdx = ctorIdx;
+			let ctorParams: string[] = [];
+			let ctorBody: Node | null = null;
+			for (const member of cd.classBody) {
+				if (member.kind == NodeKind.MethodDecl) {
+					const md = member.data as MethodDeclData;
+					const methodKey = `${cd.className}_${md.methodName}`;
+					const idx = image.functions.length;
+					image.functions.push(raiserPlaceholderFunc());
+					funcMap.items.push({ name: methodKey, index: idx });
+					reserved.push({ idx, fnName: methodKey, params: md.methodParams, body: md.methodBody, arity: md.methodParams.length, isMethod: true });
+				} else if (member.kind == NodeKind.ConstructorDecl) {
+					const ctd = member.data as ConstructorDeclData;
+					ctorParams = ctd.ctorParams;
+					ctorBody = ctd.ctorBody;
+				}
+			}
+			ctors.push({ idx: ctorIdx, className: cd.className, classBody: cd.classBody, ctorParams, ctorBody });
 		}
 		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
 		if (enumNode != null) {
@@ -231,8 +259,11 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 
 	for (let i = 0; i < reserved.length; i += 1) {
 		const r = reserved[i];
-		const func = compileFuncBody(funcMap, enumMap, r.fnName, r.params, r.body, r.arity);
+		const func = compileFuncBody(funcMap, enumMap, r.fnName, r.params, r.body, r.arity, r.isMethod);
 		image.functions[r.idx] = func;
+	}
+	for (const c of ctors) {
+		image.functions[c.idx] = compileClassConstructor(funcMap, enumMap, c.className, c.classBody, c.ctorParams, c.ctorBody);
 	}
 	return wantIdx;
 }

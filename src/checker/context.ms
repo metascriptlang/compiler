@@ -784,6 +784,19 @@ export function classDescendsFrom(className: string, baseName: string): boolean 
 	return dispDepthBelow(className, baseName) > 0;
 }
 
+export function dispatchOverriddenEntry(className: string, methodName: string): DispMethodEntry | null {
+	let cur = _dispParent.get(className);
+	let d = 0;
+	while (cur != null && d < 64) {
+		for (const e of _dispEntries) {
+			if (e.className == cur && e.methodName == methodName) return e;
+		}
+		cur = _dispParent.get(cur);
+		d += 1;
+	}
+	return null;
+}
+
 export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
@@ -911,6 +924,15 @@ export function getExtTypeName(flags: string): string {
 // Parse "gen:T,U" from pipe-delimited fnFlags strings (shared by resolvePass + monomorphize)
 
 export function extractGenericNames(flags: string): string[] {
+	const result: string[] = [];
+	for (const decl of extractGenericParamDecls(flags)) {
+		const colonPos = findChar(decl, ":");
+		result.push(colonPos > 0 ? decl.slice(0, colonPos).trim() : decl);
+	}
+	return result;
+}
+
+export function extractGenericParamDecls(flags: string): string[] {
 	const result: string[] = [];
 	if (flags == "") return result;
 	const parts = splitTopLevel(flags, "|");
@@ -1123,6 +1145,7 @@ export class CheckerContext {
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	inferredReturnStmts: Node[];  // ReturnStmts pending refit once the joined inferred return is known
+	inferredReturnTries: Node[];
 	includeDirectives: string; // accumulated @include args, newline-separated
 	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
 	compileDirectives: string; // accumulated @compile args, newline-separated
@@ -1202,6 +1225,7 @@ export function createContext(): CheckerContext {
 		jsxMacroArgDepth: 0,
 		inferredReturn: inferredType(),
 		inferredReturnStmts: [],
+		inferredReturnTries: [],
 		includeDirectives: "",
 		jsImportRegistry: [],
 		compileDirectives: "",
@@ -1619,6 +1643,20 @@ test "extractGenericNames empty" {
 test "extractGenericNames no gen" {
 	const names = extractGenericNames("async");
 	assert names.length == 0;
+}
+
+test "extractGenericNames drops the constraint" {
+	const names = extractGenericNames("gen:T:Animal,U");
+	assert names.length == 2;
+	assert names[0] == "T";
+	assert names[1] == "U";
+}
+
+test "extractGenericParamDecls keeps the constraint" {
+	const decls = extractGenericParamDecls("gen:T:Animal,U");
+	assert decls.length == 2;
+	assert decls[0] == "T:Animal";
+	assert decls[1] == "U";
 }
 
 test "stripGenFlag simple" { assert stripGenFlag("gen:T") == ""; }

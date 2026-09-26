@@ -163,11 +163,12 @@ function stripFirstLoc(arr: SourceLocation[]): SourceLocation[] {
 function applyExtensionFlags(flags: string, params: string[], fnParamTypes: string[], genericNames: string): string {
 	// Instance extension: first param has "this:" prefix
 	if (params.length > 0 && params[0].length > 5 && params[0].slice(0, 5) == "this:") {
-		const receiverName = params[0].slice(5, params[0].length);
+		const receiverSlot = params[0].slice(5, params[0].length);
+		const receiverName = receiverSlot.startsWith("ref:") ? receiverSlot.slice(4, receiverSlot.length) : receiverSlot;
 		const receiverType = fnParamTypes[0];
 		if (flags == "") { flags = `ext:${receiverName}:${receiverType}`; }
 		else { flags = `${flags}|ext:${receiverName}:${receiverType}`; }
-		params[0] = receiverName;
+		params[0] = receiverSlot;
 	}
 	// Static extension: first param has "typeof:" prefix
 	const first = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) == "typeof:" ? 1 : 0;

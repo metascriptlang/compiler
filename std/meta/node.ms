@@ -208,6 +208,7 @@ export enum SymbolFlag {
 	BeforeReload,
 	AfterReload,
 	StateMachine,
+	ForVar, // for-of loop binding (reference: skForVar) — rebinding legal, value interior read-only
 }
 
 // ===== Symbol =====
