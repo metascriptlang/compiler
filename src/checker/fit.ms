@@ -1182,10 +1182,6 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}
-	if (formal.kind == TypeKind.Enum && isIntegerType(exprType) && isNodeIntLit(expr)) {
-		expr.nodeType = formal;
-		return expr;
-	}
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
 		return expr;
