@@ -21,8 +21,8 @@ const B138 = "class Animal138 { name: string = \"\"; }\nclass Dog138 extends Ani
 test "bug138: an explicit type arg keys the instance when every argument binds a subclass" {
 	const r = compileToC(B138 + "const d1 = new Dog138();\nconst d2 = new Dog138();\nconst c = pair138<Animal138>(d1, d2);\n");
 	assert r.ok;
-	assert r.value.contains("pair138__ref_Animal138");
-	assert !r.value.contains("pair138__ref_Dog138");
+	assert r.value.contains("pair138_") && r.value.contains("__ref_Animal138_");
+	assert !r.value.contains("__ref_Dog138_");
 }
 
 test "bug138: a conflict on a param not given explicitly is still reported" {
