@@ -564,7 +564,7 @@ function launchCell(c: Cell): void {
 	c.launchedAtMs = performance.now();
 	if (!IS_WIN) {
 		const inner = cellInner(c, posixQuote);
-		runCapture("( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 &");
+		c.pid = shellOut("set -m; ( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 & echo $!");
 		c.launched = true;
 		return;
 	}
@@ -914,9 +914,8 @@ function activeCount(running: Cell[]): int32 {
 // FAIL — not an eternally green-freeze of the whole run. The default is 100x
 // the slowest healthy cell (serial actor churn runs in seconds); the env knob
 // exists so a genuinely-slow program can be granted more without weakening
-// anyone else's bound. On Windows the timed-out cell's process tree is killed;
-// a POSIX `&` cell has no recorded pid, so it lingers as an orphan and the
-// verdict names it.
+// anyone else's bound. The timed-out cell's process tree is killed: on Windows
+// by taskkill, on POSIX as the process group `set -m` gave the cell at launch.
 const CELL_TIMEOUT_MS: float64 = envOr("MSCORPUS_CELL_TIMEOUT_MS", "300000").parseInt() as float64;
 
 function cellTimedOut(c: Cell): boolean {
@@ -932,7 +931,12 @@ function failCellTimeout(c: Cell, t: Tally): void {
 }
 
 function killCellTree(c: Cell): string {
-	if (!IS_WIN || c.pid == "") { return "orphan process left running"; }
+	if (c.pid == "") { return "no pid recorded, orphan process left running"; }
+	if (!IS_WIN) {
+		const k = runCapture("kill -KILL -- -" + c.pid);
+		if (k.exitCode != 0) { return "kill of process group " + c.pid + " failed: " + k.output.trim(); }
+		return "process group " + c.pid + " killed";
+	}
 	const r = runCapture("taskkill /T /F /PID " + c.pid);
 	if (r.exitCode != 0) { return "taskkill of pid " + c.pid + " failed: " + r.output.trim(); }
 	return "process tree " + c.pid + " killed";
