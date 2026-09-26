@@ -130,8 +130,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 	const instType = createGenericInstance(baseType, concreteTypes);
 	instantiateGenericBody(instType, genericParams);
-	// On-demand constructor instantiation: if class has constructor, generate ClassName_new()
-	if (hasFlag(baseSym, SymbolFlag.HasConstructor)) {
+	if (baseSym.symbolKind == SymbolKind.Class || hasFlag(baseSym, SymbolFlag.HasConstructor)) {
 		instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
 	}
 	return isRefBase ? createRef(instType) : instType;
