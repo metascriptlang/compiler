@@ -24,7 +24,7 @@ import {
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
-import { getFlowTypeOfReference, isDefinitelyNonNullAt, unionOfTypes } from "./flow";
+import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
 import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
@@ -2209,6 +2209,29 @@ function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, me
 
 // ===== Anonymous Functions =====
 
+function producesSequence(t: Type): boolean {
+	const n = t.typeName;
+	return n == "Generator" || n == "AsyncGenerator" || n == "Iterator" || n == "AsyncIterator" || n == "Iterable" || n == "IterableIterator";
+}
+
+export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Node, declared: Type | null, isAsync: boolean, isGenerator: boolean, at: SourceLocation): void {
+	if (isGenerator || declared == null || body.kind != NodeKind.BlockStmt || isUnresolvedType(declared) || producesSequence(declared)) return;
+	let ret: Type | null = declared;
+	if (isAsync) ret = awaitedType(declared);
+	if (ret == null || ret.kind == TypeKind.Void || isUnknownType(ret) || isUnresolvedType(ret)) return;
+	if (ret.kind == TypeKind.Union) {
+		for (const m of ret.typeChildren) {
+			if (m != null && m.kind == TypeKind.Void) return;
+		}
+	}
+	if (breaksBlock(body) == BreakState.BsNoReturn || !isEndOfBodyReachable(body)) return;
+	if (ret.kind == TypeKind.Never) {
+		addError(ctx, "'" + name + "' returns 'never' but can reach the end of its body", at.line, at.column);
+		return;
+	}
+	addError(ctx, "'" + name + "' lacks an ending return statement: its return type '" + typeDisplayName(ret) + "' needs a value on every path", at.line, at.column);
+}
+
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
 	const isAsync = fnFlags == "async" || fnFlags == "async_generator" || (fnFlags != "" && fnFlags.indexOf("async") >= 0);
 	if (params.length > 0 && params[0] == "this") {
@@ -2325,6 +2348,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	fnNode.paramSyms = paramSyms;
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
+		if (explicitReturnType != null) {
+			refuseFallingOffEnd(ctx, name, body, explicitReturnType, isAsync, fnFlags.indexOf("generator") >= 0, fnNode.location);
+		}
 	} else {
 		let bodyExpected = explicitReturnType;
 		if (isAsync && bodyExpected != null) {
@@ -2343,6 +2369,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = closureStorageType(ctx.inferredReturn);
+	if (body.kind == NodeKind.BlockStmt && explicitReturnType == null && returnTypeAnnotation == "" && !isUnresolvedType(inferredRet)) {
+		refuseFallingOffEnd(ctx, name, body, inferredRet, false, fnFlags.indexOf("generator") >= 0, fnNode.location);
+	}
 	for (const rs of ctx.inferredReturnStmts) {
 		const rsd = rs.data as ReturnStmtData;
 		if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, inferredRet);

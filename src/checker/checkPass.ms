@@ -33,7 +33,7 @@ import { getFlowTypeOfReference } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr } from "./checkExprPass";
+import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo } from "./callResolve";
 import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
@@ -2017,6 +2017,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	}
 	if (body.kind == NodeKind.BlockStmt) {
 		checkStmt(ctx, body);
+		refuseFallOffEndOf(ctx, sym, body);
 	} else {
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
@@ -2039,6 +2040,33 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym != null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
 	}
 	return paramSyms;
+}
+
+function refuseFallOffEndOf(ctx: CheckerContext, sym: Symbol, body: Node): void {
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function || hasFlag(sym, SymbolFlag.ImportC)) return;
+	let decl = sym.declNode;
+	while (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl)) return;
+	let flags = "";
+	let at = body.location;
+	let native = "";
+	let shown = sym.name;
+	if (decl != null && decl.kind == NodeKind.FunctionDecl) {
+		const fd = decl.data as FunctionDeclData;
+		shown = fd.fnName;
+		flags = fd.fnFlags;
+		native = fd.nativeName;
+		at = fd.nameLocation;
+	} else if (decl != null && decl.kind == NodeKind.MethodDecl) {
+		const md = decl.data as MethodDeclData;
+		shown = md.methodName;
+		flags = md.methodFlags;
+		native = md.nativeName;
+		at = md.nameLocation;
+	}
+	if ((native != null && native != "") || flags.indexOf("extern") >= 0 || flags.indexOf("overload") >= 0 || flags.indexOf("abstract") >= 0) return;
+	refuseFallingOffEnd(ctx, shown, body, sym.symbolType.typeReturn, hasFlag(sym, SymbolFlag.Async) || flags.indexOf("async") >= 0,
+		flags.indexOf("generator") >= 0, at);
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {

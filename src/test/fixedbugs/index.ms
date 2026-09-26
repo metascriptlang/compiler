@@ -246,5 +246,6 @@ import "./bug538EnumIsNotComparableToNumber";
 import "./bug539HookReceiverByReference";
 import "./bug540IntegerLiteralIsNotAnEnum";
 import "./bug541IntegerConversionKeepsSignedness";
+import "./bug542FallingOffNonVoidFunction";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
