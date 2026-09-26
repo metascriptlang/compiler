@@ -1,10 +1,11 @@
-import { Node, NodeKind, TypeKind, Type, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
+import { Node, NodeKind, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember } from "../../checker/fit";
-import { int32Type, booleanType } from "../../checker/types";
+import { isMaybeType, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType } from "../../checker/types";
+import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBool, makeMember, makeNumber } from "../util";
+import { makeBinary, makeBool, makeCall, makeConditional, makeMember, makeNumber, makeString, runtimeRef } from "../util";
 
 export function projectNarrowedUnions(program: Node, ctx: TransformContext): Node {
 	walkNode(program, projectNode);
@@ -74,4 +75,124 @@ function lowerUnionInstanceof(node: Node): Node {
 		anyMember = anyMember == null ? term : makeBinary(anyMember, "||", term, loc);
 	}
 	return anyMember == null ? makeBool(false, loc) : anyMember;
+}
+
+function checkedProjectionSource(n: Node): Type | null {
+	if (n == null || n.kind != NodeKind.HiddenSubConv || n.variantSlot <= 0) return null;
+	const d = n.data as HiddenStdConvData;
+	if (d.convType.kind == TypeKind.Union || isMaybeType(d.convType)) return null;
+	const ut = d.convExpr.nodeType;
+	if (ut == null || isMaybeType(ut) || !isSlotUnion(ut) || !isLocation(d.convExpr)) return null;
+	return ut;
+}
+
+function memberLabels(ut: Type): string[] {
+	const labels: string[] = [];
+	const du = isDiscriminatedUnion(ut);
+	for (let vi = 0; vi < ut.typeChildren.length; vi += 1) {
+		if (du && vi + 1 < ut.typeNames.length) {
+			const stored = ut.typeNames[vi + 1];
+			const dot = stored.lastIndexOf(".");
+			labels.push(getDiscriminantName(ut) + " = " + (dot >= 0 ? stored.slice(dot + 1, stored.length) : stored));
+		} else {
+			labels.push(memberDisplay(ut.typeChildren[vi]));
+		}
+	}
+	return labels;
+}
+
+function memberDisplay(t: Type): string {
+	return t.kind == TypeKind.Ref && t.typeReturn != null ? typeDisplayName(t.typeReturn) : typeDisplayName(t);
+}
+
+function unionDisplay(ut: Type): string {
+	if (ut.sym != null && ut.sym.name != "") return ut.sym.name;
+	const names: string[] = [];
+	for (const m of ut.typeChildren) names.push(memberDisplay(m));
+	return names.join(" | ");
+}
+
+function accessHead(field: string, projection: Node, ut: Type): string {
+	const what = field != "" ? `field '${field}'` : `member '${memberDisplay((projection.data as HiddenStdConvData).convType)}'`;
+	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
+}
+
+export function checkVariantReads(program: Node, ctx: TransformContext): Node {
+	if (!ctx.rangeChecks) return program;
+	guardReads(program, ctx);
+	return program;
+}
+
+function guardReads(node: Node, ctx: TransformContext): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.TypeAssertion) {
+		const cast = (node.data as TypeAssertionData).asExpr;
+		if (cast != null && cast.kind == NodeKind.HiddenSubConv) {
+			forEachChild(cast, (c: Node): void => guardReads(c, ctx));
+			return;
+		}
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		guardProjection(md.object, md.property, ctx);
+	}
+	guardProjection(node, "", ctx);
+	forEachChild(node, (c: Node): void => guardReads(c, ctx));
+}
+
+function guardProjection(p: Node, field: string, ctx: TransformContext): void {
+	const ut = checkedProjectionSource(p);
+	if (ut == null) return;
+	const d = p.data as HiddenStdConvData;
+	const loc = p.location;
+	const u = d.convExpr;
+	const labels = memberLabels(ut).join("|");
+	const access = makeCall(runtimeRef("msVariantAccess", loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
+	access.nodeType = ut;
+	d.convExpr = access;
+}
+
+export function checkVariantReadsJS(program: Node, ctx: TransformContext): Node {
+	guardReadsJS(program, ctx);
+	return program;
+}
+
+function guardReadsJS(node: Node, ctx: TransformContext): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		if (md.object.kind == NodeKind.Identifier) md.object = projectIdentifier(md.object);
+		guardProjectionJS(md.object, md.property, ctx);
+	}
+	forEachChild(node, (c: Node): void => guardReadsJS(c, ctx));
+}
+
+function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
+	const en = ut.typeExtra;
+	if (en == null || en.kind != TypeKind.Enum || slot + 1 >= ut.typeNames.length) return null;
+	const stored = ut.typeNames[slot + 1];
+	const dot = stored.lastIndexOf(".");
+	const bare = dot >= 0 ? stored.slice(dot + 1, stored.length) : stored;
+	for (let i = 0; i < en.typeNames.length; i += 1) {
+		if (en.typeNames[i] != bare) continue;
+		const v = i < en.typeChildren.length ? en.typeChildren[i].typeValue : i;
+		return makeNumber(v, loc);
+	}
+	return null;
+}
+
+function guardProjectionJS(p: Node, field: string, ctx: TransformContext): void {
+	const ut = checkedProjectionSource(p);
+	if (ut == null || !isDiscriminatedUnion(ut)) return;
+	const d = p.data as HiddenStdConvData;
+	const loc = p.location;
+	const u = d.convExpr;
+	const want = discriminantValue(ut, p.variantSlot - 1, loc);
+	if (want == null) return;
+	const disc = getDiscriminantName(ut);
+	const same = makeBinary(makeMember(cloneNodeKeepSem(u), disc, loc), "==", want, loc);
+	const fail = makeCall(runtimeRef("msFieldError", loc), [makeString(accessHead(field, p, ut) + disc + " = ", loc), makeMember(cloneNodeKeepSem(u), disc, loc)], loc);
+	const guarded = makeConditional(same, u, fail, loc);
+	guarded.nodeType = ut;
+	d.convExpr = guarded;
 }
