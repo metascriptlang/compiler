@@ -233,6 +233,7 @@ import "./bug484FinallyLeavesItsTryC";
 import "./bug485ExceptionInFlightAcrossFinallyC";
 import "./bug486UnionDiscriminantFromTagC";
 import "./bug490StaticIntLiteralExactC";
+import "./bug487AnonRecursiveTypeNameC";
 import "./bug330ArrayFieldCycleTraced";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
