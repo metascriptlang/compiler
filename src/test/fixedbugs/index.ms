@@ -256,3 +256,4 @@ import "./bug226EnumNameDiagnostics";
 import "./bug227StaticExtensionSameNameAcrossModules";
 import "./bug242GenericInstanceChecksInItsModule";
 import "./bug243SinkArgConvertsNumber";
+import "./bug244ArrayAssignResizesInPlace";
