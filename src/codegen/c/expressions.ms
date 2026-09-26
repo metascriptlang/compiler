@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase } from "../../checker/types";
 import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -52,8 +52,14 @@ function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
 function classHasInitFn(innerType: Type): boolean {
-	if (innerType == null || innerType.sym == null) return false;
-	const decl = innerType.sym.declNode;
+	if (innerType == null) return false;
+	let t: Type | null = innerType;
+	if (innerType.kind == TypeKind.GenericInstance) {
+		const base = innerType.typeExtra;
+		t = base != null ? unwrapRefBase(base) : null;
+	}
+	if (t == null || t.sym == null) return false;
+	const decl = t.sym.declNode;
 	return decl != null && decl.kind == NodeKind.ClassDecl;
 }
 
@@ -3433,4 +3439,34 @@ test "an unlowered kind nested in a lowered one is still an internal error" {
 
 test "unsigned right shift is a logical shift of the operand width with a masked count" {
 	assert exprSnippet("a >>> b;") == "((uint32_t)((uint32_t)(a) >> ((uint32_t)(b) & 31)))";
+}
+
+import { checkProgram } from "../../checker/checkPass";
+import { readProcStmts } from "./context";
+
+function lastNewRunsInit(input: string): boolean {
+	const pr = parseSource(input);
+	if (!pr.ok) return false;
+	const ctx = checkProgram(pr.value);
+	const stmts = (pr.value.data as ProgramData).programStmts;
+	const last = stmts[stmts.length - 1];
+	if (last.kind != NodeKind.ExprStmt) return false;
+	const newExpr = (last.data as ExprStmtData).expr;
+	if (newExpr.kind != NodeKind.NewExpr) return false;
+	const p = createProc("test", voidType());
+	const tmp = genExpr(createCGen(ctx, "owner.ms"), p, newExpr);
+	return readProcStmts(p).contains(`_init(${tmp});`);
+}
+
+test "a bare new of a generic class instance runs the instance class's _init" {
+	assert lastNewRunsInit("class Box<T> { tag: string = \"init\"; items: T[] = []; }\nnew Box<string>();");
+}
+
+test "a bare new of a two-parameter or nested generic class instance runs its _init" {
+	assert lastNewRunsInit("class Pair<A, B> { a: A[] = []; b: B[] = []; }\nnew Pair<string, int32>();");
+	assert lastNewRunsInit("class Box<T> { items: T[] = []; }\nnew Box<Box<string>>();");
+}
+
+test "a bare new of a plain class runs its _init" {
+	assert lastNewRunsInit("class Plain { tag: string = \"init\"; }\nnew Plain();");
 }
