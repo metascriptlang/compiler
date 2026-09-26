@@ -1241,7 +1241,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
-				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
+				&& node.resolvedSym.declNode != null && declTakesReceiver(node.resolvedSym.declNode)) {
 			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
 			if (extInst != null) {
 				calleeType = stripReceiverParam(extInst);
@@ -1987,6 +1987,11 @@ function bindingsCoverDecl(eb: UnifyBindings, declNode: Node): boolean {
 		if (findBindingIndex(eb, gn) == -1) return false;
 	}
 	return true;
+}
+
+function declTakesReceiver(declNode: Node): boolean {
+	if (declNode.kind == NodeKind.FunctionDecl) return true;
+	return declNode.kind == NodeKind.MethodDecl && !(declNode.data as MethodDeclData).methodIsStatic;
 }
 
 function getGenericDeclFlags(declNode: Node): string {
