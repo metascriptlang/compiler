@@ -3104,7 +3104,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access.
 	// Phase 4: uses the flow graph's isDefinitelyNonNullAt walker (replaced the
 	// fact-stack-based impliesNotNull).
-	if (ctx.strictNullChecks && objType.kind == TypeKind.Ref && d.object.kind == NodeKind.Identifier) {
+	if (ctx.strictNullChecks && unwrapRefNullUnion(objType) != null && d.object.kind == NodeKind.Identifier) {
 		if (!isDefinitelyNonNullAt(d.object)) {
 			const objName = (d.object.data as IdentifierData).name;
 			addWarning(ctx, "accessing member '" + d.property + "' on potentially null class '" + objName + "'",

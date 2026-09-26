@@ -253,4 +253,5 @@ import "./bug213ExternScalarTakesAddress";
 import "./bug543ForInIsRefused";
 import "./bug544MatchCoversEveryValue";
 import "./bug545SwitchCaseFallsThrough";
+import "./bug546StrictFlagsReachTheCheck";
 import "./bug548NullableIntoNonNullSlot";
