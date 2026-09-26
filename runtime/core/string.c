@@ -5,6 +5,7 @@
 
 #include "runtime/core/system.h"
 #include "runtime/core/array.h"
+#include "runtime/core/dragonbox.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1036,33 +1037,29 @@ msString msIntToString(int64_t value) {
 	return msStringNew(buf, len);
 }
 
-#ifndef MSOS_SOLANA
 static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
-	char sci[64];
-	int prec = 0;
-	for (; prec < 16; prec++) {
-		snprintf(sci, sizeof(sci), "%.*e", prec, value);
-		if (strtod(sci, NULL) == value) break;
+	uint64_t bits;
+	__builtin_memcpy(&bits, &value, sizeof bits);
+	msDragonboxDecimal decimal = msDragonboxToDecimal64(bits & (MS_DRAGONBOX_HIDDEN_BIT - 1), (bits >> 52) & 0x7FF);
+	uint64_t significand = decimal.significand;
+	int32_t exponent = decimal.exponent;
+	while (significand % 10 == 0) {
+		significand /= 10;
+		exponent++;
 	}
-	if (prec == 16) snprintf(sci, sizeof(sci), "%.16e", value);
-	const char* q = sci;
-	int k = 0;
-	digits[k++] = *q++;
-	if (*q == '.') {
-		q++;
-		while (*q != 'e' && *q != 'E') digits[k++] = *q++;
-	}
-	while (*q != 'e' && *q != 'E') q++;
-	*decExp = (int)strtol(q + 1, NULL, 10);
-	while (k > 1 && digits[k - 1] == '0') k--;
+	int k = msWriteUint64Decimal(significand, digits);
+	*decExp = exponent + k - 1;
 	return k;
 }
 
 msString msNumberToString(double value) {
 	char buf[64];
-	if (isnan(value)) return msStringNew("NaN", 3);
+	uint64_t bits;
+	__builtin_memcpy(&bits, &value, sizeof bits);
+	bool nonFinite = (bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL;
+	if (nonFinite && (bits & 0x000FFFFFFFFFFFFFULL) != 0) return msStringNew("NaN", 3);
 	if (value == 0.0) return msStringNew("0", 1);
-	if (isinf(value)) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
+	if (nonFinite) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
 	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
 		int len = msWriteInt64Decimal((int64_t)value, buf);
 		return msStringNew(buf, len);
@@ -1106,7 +1103,6 @@ msString msNumberToString(double value) {
 	}
 	return msStringNew(buf, (int)(p - buf));
 }
-#endif
 
 /* Unsigned counterpart of msIntToString: values above INT64_MAX print as a
    negative through the signed formatter. */
