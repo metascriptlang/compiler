@@ -466,7 +466,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
 	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
 	if (aEnum && bEnum) return a.typeName == b.typeName;
-	if (aEnum || bEnum) return isNumeric(aEnum ? b : a) || (aEnum ? b : a).kind == TypeKind.Void;
+	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
