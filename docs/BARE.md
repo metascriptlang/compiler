@@ -104,6 +104,45 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 
 **`--gc=manual` is not usable here yet**: it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default GC.
 
+## Stylus proof tooling — Arbitrum Sepolia
+
+The independent consumer is `examples/onchainCounter/arbitrumProof.mjs`; run it with
+`--help` after `npm ci --ignore-scripts` in that directory. Its Solidity consumer is
+`counterCaller.sol`, not a replacement implementation of the MetaScript counter.
+
+Browser-wallet signing uses `cast`, rather than handing key material to the deployment
+tool. Packaging follows the upstream
+[deployment prelude](https://github.com/OffchainLabs/cargo-stylus/blob/v0.6.3/main/src/deploy/mod.rs).
+`cargo stylus check --wasm-file` is necessary but not byte-for-byte deployment evidence:
+its [compression path](https://github.com/OffchainLabs/cargo-stylus/blob/v0.6.3/main/src/project.rs)
+normalizes WASM and strips custom sections. The consumer separately checks activation
+of the exact bytes it will deploy. Already-active code is a version observation, not an
+invented activation transaction.
+
+Measured 2026-09-27 in `wt/std-arbitrum`, with tooling additions over baseline tree
+`b32f9dd9267ebcf6665bfa99ed4f7a15218590c7`:
+
+```text
+node examples/onchainCounter/arbitrumProof.mjs doctor
+chainId: 421614; stylusVersion: 3
+solc: 0.8.30; callerCreationBytes: 3725
+cargo-stylus: 0.6.3; cast: 1.5.1-stable
+```
+
+Nine unsigned smoke checks passed: execution of the packaging prelude in local EVM
+with exact Brotli round-trip; Solidity constructor/immutable binding; rejection of a
+non-Sepolia RPC, invalid WASM, simulation-only/forged completion, a missing simulation,
+a changed artifact and a nonexistent receipt; and recognition of the real ArbWasm
+unactivated-code error. The local EVM checks executed no counter methods. Receipt and
+activation-status rejection checks used the public Sepolia RPC.
+
+**Not verified by these checks:** browser-wallet signing, execution of the MetaScript
+WASM, Nitro counter behavior, public deployment, cross-transaction persistence, or
+rollback. A simulation result is not a confirmed-transaction proof. The transaction
+verifier re-fetches receipts, checks deployed bytes and reads counter state at receipt
+blocks; successful L2 receipts do not establish L1 finality. Other target claims in
+this document were not re-audited by this tooling run.
+
 ## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
 
 DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.
