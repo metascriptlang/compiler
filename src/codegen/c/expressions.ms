@@ -64,6 +64,15 @@ function bareTypeName(g: CGen, cName: string): string {
 	return bare != "" ? bare : cName;
 }
 
+import { getArrayTypeName } from "./types";
+
+export function bareArrayTypeName(g: CGen, arrCType: string): string {
+	if (!arrCType.endsWith("Array")) return arrCType;
+	const elemCName = arrCType.slice(0, arrCType.length - 5);
+	const bare = bareTypeName(g, elemCName);
+	return bare == elemCName ? arrCType : getArrayTypeName(bare);
+}
+
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
 	const initName = classInitCName(cName);
 	const protoKey = "proto:" + initName;
@@ -2666,7 +2675,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const destroyFn = refArrayDestroyFn(elemT, arrCType);
 		const cellName = refArrayCellName(cd.arguments[0].nodeType);
 		ensureDrcProto(g, destroyFn, null);
-		ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, arrCType), destroyFn);
+		ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
 		const tiArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
 		const valTmp = getTemp(p, arrCType);
 		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
