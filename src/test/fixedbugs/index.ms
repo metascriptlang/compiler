@@ -261,3 +261,4 @@ import "./bug550ConstructorRestArgs";
 import "./bug551PhantomGenericBody";
 import "./bug552GenericAliasToNamedType";
 import "./bug553GenericAliasForwardsItsArguments";
+import "./bug554ErrorReportedIntoEarlierModule";
