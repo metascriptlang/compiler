@@ -4282,7 +4282,7 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 	}
 }
 
-function coversEveryLiteral(discType: Type | null, covered: string[]): boolean {
+export function coversEveryLiteral(discType: Type | null, covered: string[]): boolean {
 	if (discType == null) return false;
 	const t = peelThrough(discType, PEEL_ALL) ?? discType;
 	if (t.kind == TypeKind.Boolean) return covered.includes("true") && covered.includes("false");
@@ -4295,7 +4295,7 @@ function coversEveryLiteral(discType: Type | null, covered: string[]): boolean {
 	return true;
 }
 
-function mustCoverEveryValue(discType: Type | null): boolean {
+export function mustCoverEveryValue(discType: Type | null): boolean {
 	if (discType == null) return false;
 	const t = peelThrough(discType, PEEL_ALL) ?? discType;
 	if (isIntegerType(t) || t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral
@@ -4307,7 +4307,7 @@ function mustCoverEveryValue(discType: Type | null): boolean {
 	return true;
 }
 
-function reportUncoveredMatch(ctx: CheckerContext, discType: Type | null, node: Node, disc: Node): void {
+export function reportUncoveredMatch(ctx: CheckerContext, discType: Type | null, node: Node, disc: Node): void {
 	addErrorRange(ctx, `Non-exhaustive match: not every '${typeDisplayName(discType)}' value has an arm — add a '_' arm`,
 		node.location.line, node.location.column, estimateExprEndCol(disc) + 1);
 }
