@@ -189,7 +189,7 @@ export function expandObjectSpread(node: Node): Node {
 // ===== Entry Point =====
 
 export function lowerObjectSpread(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, ctx.jsBackend ? hoistSpreadStmt : hoistLeadingSpreadStmt, ctx);
+	walkExpandBlocks(program, hoistLeadingSpreadStmt, ctx);
 	return walkNode(program, expandObjectSpread);
 }
 
