@@ -5023,3 +5023,10 @@ test "an instance requested from inside a prelude generic body stays with the re
 	}
 	assert prelude.table.current.symbols.size == scopeSize;
 }
+
+test "promoting a module into the prelude every build shares is an internal error" {
+	const ctx = createContext();
+	promoteModuleIntoPrelude(preludeContextFor("", ".cms"), ctx);
+	assert hasErrors(ctx);
+	assert ctx.errors[0].message.startsWith("internal:");
+}

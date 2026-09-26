@@ -525,3 +525,19 @@ test "extra globalImports entry resolving to a module is not a graph error" {
 	assert graph.errors.length == 0;
 	assert findModule(graph, "/proj/src/converters.ms") != null;
 }
+
+function sharedPreludeShape(ctx: CheckerContext): string {
+	return `${ctx.table.current.symbols.size}|${ctx.extensionRegistry.methods.length}|${ctx.macroBodyRegistry.size}|${ctx.compilerFuncs.size}|${ctx.preludeExports.size}|${ctx.interf.length}|${ctx.converterTargetByName.size}`;
+}
+
+test "a graph check leaves the prelude every build shares as it found it" {
+	const shared = preludeContextFor("", ".cms");
+	const before = sharedPreludeShape(shared);
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "const m = new Map<string, int32>();\nm.set(\"k\", 1);\nconst s = new HashSet<string>([\"a\"]);\nconsole.log(m.get(\"k\"), s.size, [1, 2].map((x: int32): int32 => x * 2).length);\n" });
+	const graph = loadModuleGraph("/src/a.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	assert findModule(graph, "/src/a.ms")!.errors.length == 0;
+	assert getPreludeContext().table == shared.table;
+	assert sharedPreludeShape(shared) == before;
+}
