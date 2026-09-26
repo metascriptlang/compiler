@@ -171,7 +171,7 @@ reds_of() {
   case "$lane" in
     build) [ "$rc" -eq 0 ] || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
-    tools) sed -n 's/^FAIL \(.*\): \(bash -n\|self-test\|check\)$/\1/p' "$log" ;;
+    tools) sed -nE 's/^FAIL (.*): (bash -n|self-test|check)$/\1/p' "$log" ;;
     suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk -v top="$TOP/" '
         /^NORESULT / { sub(/^NORESULT /,""); print; next }
@@ -181,7 +181,7 @@ reds_of() {
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
     guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
-    fmt) sed -n 's/^\(LOSSY\|UNSTABLE\|NO-FMT\|UNREADABLE\) \(.*\.ms\).*$/\2/p' "$log" ;;
+    fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
 }
 
@@ -302,6 +302,15 @@ CASES
   got=$(reds_of boundary "$log" 1 | paste -sd'|' -)
   want="setup: source baseline|when branch after a -d: value change"
   [ "$got" = "$want" ] || { printf 'FAIL reds boundary: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' 'LOSSY src/test/fixedbugs/bug228.ms: fmt changes `await` at 84:10 into `(` at 81:11 of the output' \
+    'UNSTABLE src/test/lang/a.ms: second pass differs' '1648 files · 1 lossy · 1 unstable · 0 no-fmt' >"$log"
+  got=$(reds_of fmt "$log" 1 | paste -sd'|' -)
+  want="src/test/fixedbugs/bug228.ms|src/test/lang/a.ms"
+  [ "$got" = "$want" ] || { printf 'FAIL reds fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'ok   tools/x.sh: check' >"$log"
+  got=$(reds_of tools "$log" 1 | paste -sd'|' -)
+  want="tools/gate.sh|tools/wt.sh"
+  [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
   got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
     | cat - <(printf 'ref\t\tsrc/test/corpus/programs/%s\n' '630-escapes.ms:"../../../' '802-nested/app/direct.ms:"../' '802-nested/main.ms:"./' '803-up/main.ms:"../') \
