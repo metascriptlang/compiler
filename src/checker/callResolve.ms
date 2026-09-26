@@ -999,6 +999,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							if (recvP.kind == TypeKind.Ref && recvP.typeReturn != null && recvP.typeReturn.kind == TypeKind.Array) recvP = recvP.typeReturn;
 							if (objP != null && objP.kind == TypeKind.Ref && objP.typeReturn != null && objP.typeReturn.kind == TypeKind.Array) objP = objP.typeReturn;
 							unifyType(recvP, objP, eb);
+							if (winner.sym != null && winner.sym.declNode != null && winner.sym.declNode.kind == NodeKind.FunctionDecl) {
+								for (let ri = 0; ri < eb.names.length; ri += 1) reportUnmetConstraint(ctx, extType, ri, eb, me.property, node.location);
+							}
 							if (eb.names.length > 0) extType = instantiateGeneric(extType, eb.names, eb.types);
 							extRecvBindings = eb;
 						}
@@ -2299,7 +2302,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
-	if (reportUnmetConstraints(ctx, node, calleeType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
+	const declType = sym.symbolType != null ? sym.symbolType : calleeType;
+	if (reportUnmetConstraints(ctx, node, declType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
 
 	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx, node.location);
 	if (instSym == null) return null as unknown as Type;
@@ -2310,20 +2314,24 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	return instSym.symbolType;
 }
 
-function reportUnmetConstraints(ctx: CheckerContext, node: Node, calleeType: Type, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
+function reportUnmetConstraints(ctx: CheckerContext, node: Node, declType: Type, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
 	const cd = node.data as CallExprData;
 	let unmetAny = false;
 	for (let i = 0; i < eb.names.length; i += 1) {
 		if (receiverBindings != null && hasBindingName(receiverBindings, eb.names[i])) continue;
-		const unmet = unmetConstraint(calleeType, eb.names[i], eb.types[i], eb.names, eb.types);
-		if (unmet == null) continue;
-		unmetAny = true;
 		const from = i < ebFrom.length ? ebFrom[i] : -1;
 		const at = from >= 0 && from < cd.arguments.length ? cd.arguments[from].location : node.location;
-		addError(ctx, `Type '${typeDisplayName(eb.types[i])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${eb.names[i]}' in '${getCalleeName(cd.callee)}'`,
-			at.line, at.column);
+		if (reportUnmetConstraint(ctx, declType, i, eb, getCalleeName(cd.callee), at)) unmetAny = true;
 	}
 	return unmetAny;
+}
+
+function reportUnmetConstraint(ctx: CheckerContext, declType: Type, i: int32, eb: UnifyBindings, calleeName: string, at: SourceLocation): boolean {
+	const unmet = unmetConstraint(declType, eb.names[i], eb.types[i], eb.names, eb.types);
+	if (unmet == null) return false;
+	addError(ctx, `Type '${typeDisplayName(eb.types[i])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${eb.names[i]}' in '${calleeName}'`,
+		at.line, at.column);
+	return true;
 }
 
 // Tier 1: locate the implementation symbol in an overload set.
