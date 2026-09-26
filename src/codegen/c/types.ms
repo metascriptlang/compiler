@@ -246,34 +246,34 @@ function flushDeferredStructs(g: CGen): void {
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
 
-function anonFieldKey(t: Type | null): string {
+function anonFieldKey(t: Type | null, open: Type[]): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Struct => {
-			if (t.typeName.length == 0) return `anon(${anonStructuralKey(t)})`;
+			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
 			return t.typeName;
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
-		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
+		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKey(t.typeReturn);
+			return k + "):" + anonFieldKey(t.typeReturn, open);
 		},
-		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "varargs:empty",
+		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn, open),
+		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0], open) : "varargs:empty",
 		TypeKind.Union => {
 			if (t.typeName.length > 0) return "union:" + t.typeName;
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -283,7 +283,7 @@ function anonFieldKey(t: Type | null): string {
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -295,27 +295,43 @@ function anonFieldKey(t: Type | null): string {
 			const simple = getSimpleTypeDesc(t);
 			if (simple != "") return simple;
 			let k = "k" + (t.kind as number).toString() + ":" + t.typeName;
-			if (t.typeReturn != null) k = k + "<" + anonFieldKey(t.typeReturn) + ">";
-			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child);
+			if (t.typeReturn != null) k = k + "<" + anonFieldKey(t.typeReturn, open) + ">";
+			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child, open);
 			return k;
 		},
 	};
 }
 
-function anonStructuralKey(t: Type): string {
+function anonStructKeyIn(t: Type, open: Type[]): string {
+	let depth = open.length - 1;
+	while (depth >= 0) {
+		if (open[depth] == t) return `rec(${open.length - 1 - depth})`;
+		depth -= 1;
+	}
+	open.push(t);
+	const key = `anon(${anonFieldsKey(t, open)})`;
+	open.pop();
+	return key;
+}
+
+function anonFieldsKey(t: Type, open: Type[]): string {
 	let key = "";
 	let i = 0;
 	while (i < t.typeNames.length) {
 		if (i > 0) key = key + ",";
 		key = key + t.typeNames[i] + ":";
 		if (i < t.typeChildren.length && t.typeChildren[i] != null) {
-			key = key + anonFieldKey(t.typeChildren[i]);
+			key = key + anonFieldKey(t.typeChildren[i], open);
 		} else {
 			key = key + "void";
 		}
 		i += 1;
 	}
 	return key;
+}
+
+function anonStructuralKey(t: Type): string {
+	return anonFieldsKey(t, [t]);
 }
 
 // DJB2 hash → base-36 string for short C identifiers
