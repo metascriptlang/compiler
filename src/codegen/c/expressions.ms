@@ -1444,6 +1444,19 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			return;
 		}
 		const cOp = mapBinaryOp(g, d.operator);
+		const narrowC = subIntTypeDesc(g, node.nodeType);
+		if (narrowC != "" && isWrappingArithOp(d.operator)) {
+			ctx.results.push(`((${narrowC})((uint32_t)(${left}) ${cOp} (uint32_t)(${finalRight})))`);
+			return;
+		}
+		if (narrowC != "" && (d.operator == "/" || d.operator == "%")) {
+			ctx.results.push(`((${narrowC})(${left} ${cOp} ${finalRight}))`);
+			return;
+		}
+		if (subIntTypeDesc(g, d.left.nodeType) != "" && (d.operator == "+=" || d.operator == "-=" || d.operator == "*=")) {
+			ctx.results.push(`(${left} ${cOp} (uint32_t)(${finalRight}))`);
+			return;
+		}
 		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
 	}
@@ -1455,6 +1468,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const d = node.data as UnaryExprData;
 		if (d.unaryOp == "typeof") {
 			ctx.results.push(genTypeofExpr(g, d.operand, operand));
+			return;
+		}
+		const narrowUnary = subIntTypeDesc(g, node.nodeType);
+		if (narrowUnary != "" && (d.unaryOp == "-" || d.unaryOp == "~")) {
+			ctx.results.push(`((${narrowUnary})(${d.unaryOp}${operand}))`);
 			return;
 		}
 		ctx.results.push(`(${d.unaryOp}${operand})`);
@@ -3000,7 +3018,17 @@ function genLogicalShr(g: CGen, node: Readonly<Node>, leftType: Type | null, lef
 	const bits = shiftOperandBits(leftType);
 	const unsignedType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : unsignedType;
-	return `((${resultType})((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${unsignedType})(${left}) >> ((${unsignedType})(${right}) & ${bits - 1})))`;
+}
+
+// An 8- or 16-bit shift is computed in the promoted int, so it wraps at the
+// left operand's width before it widens to the result type.
+function atLeftWidth(g: CGen, leftType: Type | null, bits: int32, resultType: string): string {
+	if (bits >= 32) return "";
+	const lt = integerTypeOf(leftType);
+	if (lt == null) return "";
+	const leftC = getTypeDesc(g, lt);
+	return leftC == resultType ? "" : `(${leftC})`;
 }
 
 function integerTypeOf(t: Type | null): Type | null {
@@ -3019,16 +3047,24 @@ function isUnsignedInteger(t: Type): boolean {
 
 function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | null, left: string, right: string): string {
 	const bits = shiftOperandBits(leftType);
-	if (bits < 32) {
-		const promoted = op == "<<" ? `(uint32_t)(${left}) << ((uint32_t)(${right}) & 31)` : `(int32_t)(${left}) >> ((uint32_t)(${right}) & 31)`;
-		return `((int32_t)(${promoted}))`;
-	}
 	const lt = integerTypeOf(leftType);
 	if (op == ">>" && lt != null && isUnsignedInteger(lt)) return genLogicalShr(g, node, leftType, left, right);
 	const countType = `uint${bits}_t`;
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : `int${bits}_t`;
 	const operandType = op == "<<" ? countType : `int${bits}_t`;
-	return `((${resultType})((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
+	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
+}
+
+// The operands go unsigned so C's promotion to int cannot overflow (uint16 *
+// uint16), and the result wraps at its own width.
+function subIntTypeDesc(g: CGen, t: Type | null): string {
+	const it = integerTypeOf(t);
+	if (it == null || shiftOperandBits(it) >= 32) return "";
+	return getTypeDesc(g, t);
+}
+
+function isWrappingArithOp(op: string): boolean {
+	return op == "+" || op == "-" || op == "*";
 }
 
 // (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
