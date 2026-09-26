@@ -1413,13 +1413,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(genShift(g, node, d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
-		// C has no exponent operator; pow() is the call form, same shape as fmod
-		// above. An integer result type casts back — pow is double-valued.
 		if (d.operator == "**") {
 			const rt = node.nodeType;
 			if (rt != null && isIntegerType(rt)) {
-				ctx.results.push(`((${getTypeDesc(g, rt)})pow(${left}, ${finalRight}))`);
-				return;
+				addCGenError(g, `internal: integer '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
 			}
 			ctx.results.push(`pow(${left}, ${finalRight})`);
 			return;
