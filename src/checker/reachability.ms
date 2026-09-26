@@ -246,7 +246,7 @@ function walkBody(node: Node, modulePath: string): void {
 // isArraySeqHook in codegen/c/declarations.ms — keep in lock-step.
 function isArraySeqHookName(fn: string): boolean {
 	return fn.endsWith("ArrayDestroy") || fn.endsWith("ArrayCopy") ||
-		fn.endsWith("ArraySink") || fn.endsWith("ArrayWasMoved");
+		fn.endsWith("ArraySink") || fn.endsWith("ArrayWasMoved") || fn.endsWith("RefCellTrace");
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls by

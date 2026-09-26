@@ -10,10 +10,10 @@ import {
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
 } from "./context";
-import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
+import { genExpr, refArrayDestroyFn, refArrayCellLabel } from "./expressions";
 import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -47,7 +47,7 @@ function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 	if (name.length > 0 && name.slice(0, 1) == "$") return true;
 	const sym = node.resolvedSym;
 	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace");
 	if (isSeqHookSuffix) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
@@ -635,7 +635,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
 				g.preparationFacts.skippedTypeInfos.add(skipBase);
-				const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
+				const skipCBase = typeInfoCBase(g, d, skipBase);
 				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
 			}
 			return;
@@ -776,9 +776,9 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
-	const cellName = refArrayCellName(destroyFn, arrCType);
+	const cellName = refArrayCellName(arrT);
 	ensureDrcProto(g, destroyFn, null);
-	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+	ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, arrCType), destroyFn);
 	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
 	// symbol does not exist there - take the null slot like msBoxRefArray does.
 	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
@@ -790,15 +790,22 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 
 // ===== TypeInfo Variable (from destructorLifting) =====
 // Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
-// The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
+
+function typeInfoCBase(g: CGen, d: Readonly<VariableDeclData>, baseName: string): string {
+	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
+		const od = d.initializer.data as ObjectLiteralData;
+		for (let i = 0; i < od.keys.length; i += 1) {
+			const v = od.properties[i];
+			if (od.keys[i] == "cname" && v.kind == NodeKind.StringLiteral) return mangle((v.data as StringLiteralData).value);
+		}
+	}
+	return typeCacheGet(g.typeCache, "cname:" + baseName);
+}
 
 function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
 	// Extract base type name: strip "TypeInfo" suffix (8 chars)
 	const baseName = d.declName.slice(0, d.declName.length - 8);
-	// The emitted symbol must match what consumers derive from the Type
-	// (qualified C name via mangledTypeName) — the decl arm registered it
-	// in typeCache before destructorLifting's TypeInfo var reaches codegen.
-	const cBase = typeCacheGet(g.typeCache, "cname:" + baseName);
+	const cBase = typeInfoCBase(g, d, baseName);
 	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
@@ -820,7 +827,9 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
-			if (key == "name") {
+			if (key == "cname") {
+				continue;
+			} else if (key == "name") {
 				// name field: emit C string literal (const char*), not msString
 				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
 			} else if (key == "destroyFn") {

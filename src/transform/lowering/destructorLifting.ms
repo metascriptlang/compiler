@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -111,6 +111,7 @@ class LiftCtx {
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msStringArray", "msRefArray")
 	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
+	refCellTraces: SeqElemEntry[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	jsBackend: boolean;
@@ -441,15 +442,19 @@ function registerSeqElement(elem: Type, lctx: LiftCtx): void {
 	}
 }
 
+function elemNeedsLoop(elem: Type | null): boolean {
+	if (elem == null || isPrimitiveKind(elem.kind)) return false;
+	// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the array
+	// storage but never per-element decref, else the shared actors double-free.
+	return !((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr)
+		&& elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor);
+}
+
 // --- Standard sequence/array hook generator (reference parity: reference sequence op) ---
 // Primitive elements: runtime macros (no per-element cleanup).
 // Non-primitive elements: inline loops via genArrayLoop (reference loop pattern).
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the array
-	// storage but never per-element decref, else the shared actors double-free.
-	const isActorElem = elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr)
-		&& elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor;
-	const needsElemLoop = elem != null && !isPrimitiveKind(elem.kind) && !isActorElem;
+	const needsElemLoop = elemNeedsLoop(elem);
 	const isU8Elem = elem != null && elem.kind == TypeKind.Uint8;
 	// Unwrap GenericInstance element so it enters the Struct branch below.
 	// Mirrors codegen (types.ms:582-620): monomorphized struct is addressable by its
@@ -1411,9 +1416,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 
 // Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
 // `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
-function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
+function emitMinimalTypeInfo(cName: string, typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
+	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1427,8 +1432,8 @@ function emitMinimalTypeInfo(typeName: string, lctx: LiftCtx, loc: SourceLocatio
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
 function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const traceFn = hasCycles ? makeTypedIdentResolved(attachedOpSym(cName + "Trace", AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
-	const keys = ["name", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
+	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
+	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
 	const baseTypeName = getBaseClass(typeName, lctx);
 	if (baseTypeName != "") {
 		keys.push("base");
@@ -1554,7 +1559,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
 			if (shouldEmitTypeInfo) {
-				emitMinimalTypeInfo(typeName, lctx, loc);
+				emitMinimalTypeInfo(cName, typeName, lctx, loc);
 				claimGlobalTypeInfo(cName);
 			}
 			nameSetAdd(lctx.trivial, cName);
@@ -1999,9 +2004,11 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
+	const isTrace = hook == "trace";
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, arrayType, false);
+	const secondT = isTrace ? createPtr(voidType()) : arrayType;
+	const s1 = makeSymbol(isUnary || isTrace ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s2 = isUnary ? s1 : makeSymbol(isTrace ? "callback" : "src", SymbolKind.Variable, secondT, false);
 
 	if (hook == "destroy") {
 		const selfNode = makeIdentResolved(s1, loc);
@@ -2029,6 +2036,10 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 		);
 		buf.items.push(selfCheck);
 		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
+	} else if (isTrace) {
+		const d1 = makeHiddenDeref(makeIdentResolved(s1, loc), loc);
+		d1.nodeType = arrayType;
+		arrayOp(hook, elemType, d1, makeIdentResolved(s2, loc), lctx, buf, loc);
 	} else {
 		const destNode = makeHiddenDeref(makeIdentResolved(s1, loc), loc);
 		destNode.nodeType = arrayType;
@@ -2043,7 +2054,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 	if (isUnary) {
 		fnNode = makeFnDecl(seqName + suffix, [s1], [seqName], makeBlock(buf.items, loc), "", "void", loc);
 	} else {
-		fnNode = makeFnDecl(seqName + suffix, [s1, s2], [seqName, seqName], makeBlock(buf.items, loc), "", "void", loc);
+		fnNode = makeFnDecl(seqName + suffix, [s1, s2], [seqName, isTrace ? "void*" : seqName], makeBlock(buf.items, loc), "", "void", loc);
 	}
 
 	// Set param types based on hook kind.
@@ -2064,7 +2075,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 			// copy/sink: dest → Ptr<Array>, src stays arrayType
 			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
 			if (fnNode.nodeType.typeChildren.length > 1) {
-				fnNode.nodeType.typeChildren[1] = arrayType;
+				fnNode.nodeType.typeChildren[1] = secondT;
 			}
 		}
 	}
@@ -2083,7 +2094,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 			} else {
 				symType.typeChildren[0] = createPtr(arrayType);
 				if (symType.typeChildren.length > 1) {
-					symType.typeChildren[1] = arrayType;
+					symType.typeChildren[1] = secondT;
 				}
 			}
 		}
@@ -2113,6 +2124,15 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		generateArrayHook("wasMoved", "msRefArray", refElemType, refArrayType, lctx, loc);
 	}
 
+	for (const cell of lctx.refCellTraces) {
+		const traceName = cell.name + "Trace";
+		if (!nameSetContains(lctx.generated, traceName) && !isGloballyOwned(traceName)) {
+			nameSetAdd(lctx.generated, traceName);
+			claimGlobal(traceName);
+			generateArrayHook("trace", cell.name, cell.elemType, createArray(cell.elemType), lctx, loc);
+		}
+	}
+
 	// Per-type value struct element arrays (reference parity: each sequence gets its own hooks)
 	let wi = 0;
 	while (wi < lctx.seqElemTypes.length) {
@@ -2132,10 +2152,19 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 
 // ===== Scan for Array Types =====
 
+function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
+	const elem = arrT.typeReturn;
+	if (elem == null || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
+	lctx.refCellTraces.push({ name: refArrayCellName(arrT), elemType: elem });
+}
+
 function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 	if (t == null) return;
 	if (t.typeName != "" && nameSetContains(visited, t.typeName)) return;
 	if (t.typeName != "") nameSetAdd(visited, t.typeName);
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
+		registerRefCellTrace(t.typeReturn, lctx);
+	}
 	if (t.kind == TypeKind.Array) {
 		const elem = t.typeReturn;
 		if (elem != null && !isPrimitiveKind(elem.kind)) {
@@ -2414,6 +2443,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		nonCyclicCache: createNameSet(),
 		neededSeqHooks: createNameSet(),
 		seqElemTypes: [],
+		refCellTraces: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		jsBackend: jsBackend,

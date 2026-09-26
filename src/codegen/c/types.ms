@@ -941,14 +941,21 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 // Emit the TypeInfo for a reference-array heap cell (Ref<Array<T>>): a refcounted
 // cell whose destroyFn frees the boxed value-array's payload when rc hits 0. Weak
 // linkage — the same element type may be boxed in several modules; linker dedups.
-export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn: string): void {
+export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, label: string, destroyFn: string): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	const key = "refArrayCell:" + cellName;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, cellName);
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
-	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
+	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${label}";`);
 	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.destroyFn = (msDestroyProc)${destroyFn};`);
+	const traceSym = lookupHookSym(cellName + "Trace");
+	if (traceSym != null) {
+		const traceHook = mangle(traceSym.name);
+		ensureDrcProto(g, traceHook, traceSym);
+		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.isCyclic = MS_TRUE;`);
+		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	}
 }
 
 // ===== Full Type Description =====
@@ -1545,6 +1552,12 @@ export function arrayCTypeName(t: Type): string {
 	const elemIsClass = elem.sym != null && elem.sym.symbolKind == SymbolKind.Class;
 	if (!elemIsRefArray && (ecn == "void*" || ecn.endsWith("*") || elemIsClass || isPointerType(elem))) return "msRefArray";
 	return getArrayTypeName(ecn);
+}
+
+export function refArrayCellName(t: Type): string {
+	const arrCType = arrayCTypeName(t);
+	if (!arrCType.startsWith("msRefArray")) return arrCType + "RefCell";
+	return arrCType + "_" + hashToBase36(typeKey(t.typeReturn)) + "RefCell";
 }
 
 // Returns the array content/payload struct name for a given array type name.
