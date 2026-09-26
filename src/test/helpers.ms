@@ -7,11 +7,10 @@
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { resetAllSideChannels } from "../parser/context";
-import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
+import { checkModuleGraph } from "../checker/orchestrator";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
-import { hasErrors, CheckerError, CheckerContext, ExportRegistry } from "../checker/context";
+import { hasErrors, CheckerError, CheckerContext } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
@@ -29,7 +28,8 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node, ProgramData } from "../ast/node";
-import { drainPendingInstances } from "../checker/instantiate";
+import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
+import { platform } from "std/process";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
 // macros encountered in compileToC sources actually expand. Without this,
 // any macro invocation fails check with "evaluator unavailable".
@@ -50,7 +50,39 @@ function collectErrors(errors: CheckerError[], prefix: string): string {
 // ===== Single-source compilation (1-module graph) =====
 
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
-function setTarget(ctx: CheckerContext, target: TargetInfo): void { ctx.targetInfo = target; }
+interface CheckedUnit {
+	path: string;
+	program: Node;
+	ctx: CheckerContext;
+}
+
+function checkedUnit(path: string): CheckedUnit | null {
+	const program = lookupModuleProgram(path);
+	const ctx = lookupModuleCtx(path);
+	if (program == null || ctx == null) return null;
+	return { path, program, ctx };
+}
+
+function uncheckedError(mod: Module): string {
+	const pr = parseSource(mod.source);
+	return pr.ok ? `internal: ${mod.path} was not checked by the graph phase` : `parse: ${pr.error}`;
+}
+
+function placeOwnedInstances(units: CheckedUnit[]): void {
+	const ctxs: CheckerContext[] = [];
+	for (const u of units) ctxs.push(u.ctx);
+	for (const inst of drainPendingInstances(ctxs)) {
+		const sym = inst.resolvedSym;
+		if (sym == null || sym.modulePath == "") throw new Error("internal: a generic instance has no owning module");
+		if (inst.nodeType == null && sym.symbolType != null) inst.nodeType = sym.symbolType;
+		for (const u of units) {
+			if (u.path == sym.modulePath) {
+				(u.program.data as ProgramData).programStmts.push(inst);
+				break;
+			}
+		}
+	}
+}
 
 export function compileToC(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
 	resetAllSideChannels();
@@ -61,22 +93,18 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
-	const hostTarget = preludeCtx.targetInfo;
-	preludeCtx.targetInfo = target;
-	defer setTarget(preludeCtx, hostTarget);
+	checkModuleGraph(graph, "", ".cms", platform, target);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 
-	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
-
-	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit]);
 
-	const monoed = monomorphizeProgram(pr.value, checkerCtx);
+	const monoed = monomorphizeProgram(unit.program, checkerCtx);
 
 	validateTypedAST(checkerCtx, monoed);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "validate:"));
@@ -114,19 +142,18 @@ export function compileToCWithStd(source: string): CompileResult {
 	const config = createDefaultConfig(Backend.C, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
-	const registry = checkModuleGraph(graph, stdPath);
-	const preludeCtx = getPreludeContext();
+	checkModuleGraph(graph, stdPath);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 
-	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
-
-	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit]);
 
-	const monoed = monomorphizeProgram(pr.value, checkerCtx);
+	const monoed = monomorphizeProgram(unit.program, checkerCtx);
 
 	validateTypedAST(checkerCtx, monoed);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "validate:"));
@@ -154,22 +181,18 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(modPath, provider);
 
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
-	const hostTarget = preludeCtx.targetInfo;
-	preludeCtx.targetInfo = target;
-	defer setTarget(preludeCtx, hostTarget);
+	checkModuleGraph(graph, "", ".cms", platform, target);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 
-	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
-
-	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit]);
 
-	const transformed = transformProgram(pr.value, checkerCtx, true);
+	const transformed = transformProgram(unit.program, checkerCtx, true);
 	// Mirrors the drain compile.ms runs after the JS transform: a pass that
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
@@ -187,19 +210,18 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	const config = createDefaultConfig(Backend.JS, stdPath);
 	const graph = loadModuleGraphWithConfig(modPath, provider, config);
 
-	const registry = checkModuleGraph(graph, stdPath);
-	const preludeCtx = getPreludeContext();
+	checkModuleGraph(graph, stdPath);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 
-	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
-
-	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit]);
 
-	const transformed = transformProgram(pr.value, checkerCtx, true);
+	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], true, false);
 	return Result.ok(res.code);
@@ -232,22 +254,25 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		return msg;
 	}
 
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
+	checkModuleGraph(graph, "");
+
+	const units: CheckedUnit[] = [];
+	for (const modPath of graph.loadOrder) {
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		const unit = checkedUnit(modPath);
+		if (unit == null) return `ERROR: ${uncheckedError(mod)}`;
+		if (hasErrors(unit.ctx)) return checkErrorMessage(unit);
+		units.push(unit);
+	}
+	placeOwnedInstances(units);
 
 	// Compute global alive set for DCE (same as compile.ms:345)
 	const monoed_programs: Node[] = [];
 	const monoed_paths: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		const mod = findModule(graph, modPath);
-		if (mod == null) continue;
-		const pr = parseSource(mod.source);
-		if (!pr.ok) continue;
-		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-		ctx.errors = [];
-		const monoed = monomorphizeProgram(pr.value, ctx);
-		monoed_programs.push(monoed);
-		monoed_paths.push(modPath);
+	for (const unit of units) {
+		monoed_programs.push(monomorphizeProgram(unit.program, unit.ctx));
+		monoed_paths.push(unit.path);
 	}
 	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
@@ -257,23 +282,10 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		const mod = findModule(graph, modPath);
-		if (mod == null) continue;
-
-		const pr = parseSource(mod.source);
-		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
-
-		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-		if (hasErrors(ctx)) {
-			let msg = `ERROR: check [${modPath}]:`;
-			for (const err of ctx.errors) {
-				msg = `${msg} ${err.message}`;
-			}
-			return msg;
-		}
-
-		const monoed = monomorphizeProgram(pr.value, ctx);
+	for (let ui = 0; ui < units.length; ui += 1) {
+		const modPath = units[ui].path;
+		const ctx = units[ui].ctx;
+		const monoed = monoed_programs[ui];
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
 			ctx.errors = [];
@@ -300,6 +312,20 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 
 	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false, moduleOutputs);
 	return `${combined}\n${dispatcher}`;
+}
+
+function checkErrorMessage(unit: CheckedUnit): string {
+	let msg = `ERROR: check [${unit.path}]:`;
+	for (const err of unit.ctx.errors) {
+		msg = `${msg} ${err.message}`;
+	}
+	return msg;
+}
+
+function providerEntries(entries: MapEntry[]): MapEntry[] {
+	const copy: MapEntry[] = [];
+	for (const e of entries) copy.push(e);
+	return copy;
 }
 
 function isEntryPath(entries: MapEntry[], modPath: string): boolean {
@@ -329,16 +355,16 @@ export function checkProjectDiagnostics(entries: MapEntry[], entryPath: string):
 	const messages: string[] = [];
 	for (const e of graph.errors) messages.push(`${e}`);
 	if (messages.length > 0) return messages;
-	const registry = checkModuleGraph(graph, stdPath);
+	checkModuleGraph(graph, stdPath);
 	const mod = findModule(graph, entryPath);
 	if (mod == null) return messages;
-	const pr = parseSource(mod.source);
-	if (!pr.ok) {
-		messages.push(`${pr.error}`);
+	const unit = checkedUnit(entryPath);
+	if (unit == null) {
+		const pr = parseSource(mod.source);
+		messages.push(pr.ok ? `internal: ${entryPath} was not checked by the graph phase` : `${pr.error}`);
 		return messages;
 	}
-	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, getPreludeContext());
-	for (const err of ctx.errors) messages.push(err.message);
+	for (const err of unit.ctx.errors) messages.push(err.message);
 	return messages;
 }
 
@@ -349,7 +375,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
 	}
 	entryPath = canonicalModulePath(entryPath);
-	const provider = createMapProvider(canonEntries);
+	const provider = createMapProvider(providerEntries(canonEntries));
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
@@ -363,22 +389,25 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		return msg;
 	}
 
-	const registry = checkModuleGraph(graph, stdPath);
-	const preludeCtx = getPreludeContext();
+	checkModuleGraph(graph, stdPath);
 
-	const monoed_programs: Node[] = [];
-	const monoed_paths: string[] = [];
+	const units: CheckedUnit[] = [];
 	for (const modPath of graph.loadOrder) {
 		if (!isEntryPath(canonEntries, modPath)) continue;
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
-		const pr = parseSource(mod.source);
-		if (!pr.ok) continue;
-		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-		ctx.errors = [];
-		const monoed = monomorphizeProgram(pr.value, ctx);
-		monoed_programs.push(expandMacros(monoed, ctx));
-		monoed_paths.push(modPath);
+		const unit = checkedUnit(modPath);
+		if (unit == null) return `ERROR: ${uncheckedError(mod)}`;
+		if (hasErrors(unit.ctx)) return checkErrorMessage(unit);
+		units.push(unit);
+	}
+	placeOwnedInstances(units);
+
+	const monoed_programs: Node[] = [];
+	const monoed_paths: string[] = [];
+	for (const unit of units) {
+		monoed_programs.push(expandMacros(monomorphizeProgram(unit.program, unit.ctx), unit.ctx));
+		monoed_paths.push(unit.path);
 	}
 	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
@@ -387,25 +416,10 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		if (!isEntryPath(canonEntries, modPath)) continue;
-		const mod = findModule(graph, modPath);
-		if (mod == null) continue;
-
-		const pr = parseSource(mod.source);
-		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
-
-		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-		if (hasErrors(ctx)) {
-			let msg = `ERROR: check [${modPath}]:`;
-			for (const err of ctx.errors) {
-				msg = `${msg} ${err.message}`;
-			}
-			return msg;
-		}
-
-		const monoed = monomorphizeProgram(pr.value, ctx);
-		const macroExpanded = expandMacros(monoed, ctx);
+	for (let ui = 0; ui < units.length; ui += 1) {
+		const modPath = units[ui].path;
+		const ctx = units[ui].ctx;
+		const macroExpanded = monoed_programs[ui];
 		validateTypedAST(ctx, macroExpanded);
 		if (hasErrors(ctx)) {
 			ctx.errors = [];
@@ -453,9 +467,8 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 		return msg;
 	}
 
-	const registry = checkModuleGraph(graph, "");
-	const preludeCtx = getPreludeContext();
-	return emitJSTwoPhase(graph, registry, preludeCtx, null, canonEntries);
+	checkModuleGraph(graph, "");
+	return emitJSTwoPhase(graph, null, canonEntries);
 }
 
 // Two-phase JS emission shared by compileProjectToJS / compileProjectToJSWithStd.
@@ -465,7 +478,7 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 // interleaving hands the macro engine a backend-lowered body (gen-20 root 1).
 // Macro diagnostics are severity-Error but non-fatal (gen-20 root 2), so
 // hasErrors after expandMacros is the loud-failure check.
-function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx: CheckerContext, entryFilter: MapEntry[] | null, canonEntries: MapEntry[]): string {
+function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, canonEntries: MapEntry[]): string {
 	const unitPaths: string[] = [];
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
@@ -474,19 +487,12 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 
-		const pr = parseSource(mod.source);
-		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
+		const unit = checkedUnit(modPath);
+		if (unit == null) return `ERROR: ${uncheckedError(mod)}`;
+		const ctx = unit.ctx;
+		if (hasErrors(ctx)) return checkErrorMessage(unit);
 
-		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
-		if (hasErrors(ctx)) {
-			let msg = `ERROR: check [${modPath}]:`;
-			for (const err of ctx.errors) {
-				msg = `${msg} ${err.message}`;
-			}
-			return msg;
-		}
-
-		const expanded = expandMacros(pr.value, ctx);
+		const expanded = expandMacros(unit.program, ctx);
 		if (hasErrors(ctx)) {
 			let msg = `ERROR: expand [${modPath}]:`;
 			for (const err of ctx.errors) {
@@ -547,7 +553,7 @@ export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string
 		canonEntries.push({ entryPath: canonicalModulePath(e.entryPath), entrySource: e.entrySource });
 	}
 	entryPath = canonicalModulePath(entryPath);
-	const provider = createMapProvider(canonEntries);
+	const provider = createMapProvider(providerEntries(canonEntries));
 	provider.useFileSystem = true;
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
@@ -561,9 +567,8 @@ export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string
 		return msg;
 	}
 
-	const registry = checkModuleGraph(graph, stdPath, ".jms");
-	const preludeCtx = getPreludeContext();
-	return emitJSTwoPhase(graph, registry, preludeCtx, canonEntries, canonEntries);
+	checkModuleGraph(graph, stdPath, ".jms");
+	return emitJSTwoPhase(graph, canonEntries, canonEntries);
 }
 
 test "contains basic" {
