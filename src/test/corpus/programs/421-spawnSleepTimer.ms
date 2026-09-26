@@ -1,8 +1,5 @@
 // @xfail(raiser): raiser runtime error: Unknown host function: msSleepAsync
-// @skip-js: spawn has no working js lowering - the emitted
-//   _std/core/promise/index.js dies at "TypeError: Promise.resolve is not a
-//   function" before any user code runs (measured 2026-09-07, tree mode, after
-//   this file moved off waitFor onto await). Same class as 405/406/414/415.
+// @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: spawn-timer done 100
 // @serial
 

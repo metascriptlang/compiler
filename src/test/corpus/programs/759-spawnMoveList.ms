@@ -1,6 +1,5 @@
 // @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
-// @skip-js: spawn has no js lowering (421/422 family); { move } rides the same
-//   C-only lowering, so there is no js spelling of this shape yet.
+// @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: moved v=9 cfg=8
 // @stdout: timeout v=6
 // @stdout: rebound v=12
