@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode } from "./context";
+import { markUsedIn, CheckerContext, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -1087,6 +1087,17 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checked;
 }
 
+function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string): void {
+	const base = dispatchOverriddenEntry(className, d.methodName);
+	if (base == null) return;
+	let baseDecl = base.sym.declNode;
+	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
+	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
+	if (!baseGeneric && !isGenericFn(d.methodFlags)) return;
+	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.className}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+		d.nameLocation.line, d.nameLocation.column);
+}
+
 function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node == null) return;
@@ -1120,6 +1131,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
+			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {

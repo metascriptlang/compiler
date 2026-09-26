@@ -783,6 +783,19 @@ export function classDescendsFrom(className: string, baseName: string): boolean 
 	return dispDepthBelow(className, baseName) > 0;
 }
 
+export function dispatchOverriddenEntry(className: string, methodName: string): DispMethodEntry | null {
+	let cur = _dispParent.get(className);
+	let d = 0;
+	while (cur != null && d < 64) {
+		for (const e of _dispEntries) {
+			if (e.className == cur && e.methodName == methodName) return e;
+		}
+		cur = _dispParent.get(cur);
+		d += 1;
+	}
+	return null;
+}
+
 export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
