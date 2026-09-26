@@ -17,7 +17,7 @@ function errorFor(body: string): string {
 test "difference is the word masked by the complement" {
 	const c = cFor("const d = s.difference(t); console.log(d.has(E.A));");
 	assert c != "";
-	assert c.contains("& (~");
+	assert c.contains("& ((uint8_t)(~");
 	assert !c.contains("difference__");
 }
 

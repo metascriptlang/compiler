@@ -48,5 +48,5 @@ test "a narrow set still lowers to bare bit operations" {
 	const c = cFor("function f(s: BitSet<Three>): boolean { return s.has(Three.B); }");
 	assert c != "";
 	assert !c.contains("BitSet_has");
-	assert c.contains("& (1 << Three_");
+	assert c.contains("(1) << ((uint8_t)(Three_");
 }
