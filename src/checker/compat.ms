@@ -562,7 +562,7 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
-	if (target.kind == TypeKind.Var && target.typeReturn != null) {
+	if ((target.kind == TypeKind.Var || target.kind == TypeKind.Sink) && target.typeReturn != null) {
 		return needsStdConv(source, target.typeReturn);
 	}
 	if (source.kind == target.kind) return false;

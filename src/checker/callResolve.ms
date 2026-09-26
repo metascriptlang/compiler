@@ -1594,9 +1594,10 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			}
 			if (needsStdConv(argTypes[pi], paramType) || addressAtC) {
 				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
+				const convType = paramType.kind == TypeKind.Sink && paramType.typeReturn != null ? paramType.typeReturn : paramType;
 				const convTok = createToken(TokenKind.Ident, "", args[pi].location.line);
-				const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: args[pi], convType: paramType }, convTok);
-				convNode.nodeType = paramType;
+				const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: args[pi], convType: convType }, convTok);
+				convNode.nodeType = convType;
 				convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 				args[pi] = convNode;
 			}
@@ -2621,12 +2622,13 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 				d.arguments[wi] = synthCStringConv(d.arguments[wi], wpt);
 				argTypes[wi] = wpt;
 			} else if (needsStdConv(wat, wpt)) {
+				const wConvType = wpt.kind == TypeKind.Sink && wpt.typeReturn != null ? wpt.typeReturn : wpt;
 				const wTok = createToken(TokenKind.Ident, "", d.arguments[wi].location.line);
-				const wConv = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[wi], convType: wpt }, wTok);
-				wConv.nodeType = wpt;
+				const wConv = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[wi], convType: wConvType }, wTok);
+				wConv.nodeType = wConvType;
 				wConv.flags = wConv.flags.incl(NodeFlag.Sem);
 				d.arguments[wi] = wConv;
-				argTypes[wi] = wpt;
+				argTypes[wi] = wConvType;
 			}
 		}
 	}
