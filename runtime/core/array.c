@@ -122,7 +122,7 @@ void msNumberArrayPush(msNumberArray* arr, double value) {
 }
 
 double msNumberArrayPop(msNumberArray* arr) {
-	if (arr->len <= 0) return 0.0;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
 }
@@ -136,9 +136,9 @@ double msNumberArrayShift(msNumberArray* arr) {
 }
 
 double msNumberArrayAt(msNumberArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len) return 0.0;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 int64_t msNumberArrayIndexOf(msNumberArray* arr, double value) {
@@ -361,15 +361,15 @@ void msStringArrayPush(msStringArray* arr, msString value) {
 }
 
 msString msStringArrayPop(msStringArray* arr) {
-	if (arr->len <= 0) return MS_EMPTY_STRING;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
 }
 
 msString msStringArrayAt(msStringArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return MS_EMPTY_STRING;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
@@ -562,9 +562,9 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 }
 
 uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return 0;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 /* Copying exit kernel (cstrToNimstr shape): the result OWNS a fresh payload,
@@ -601,15 +601,15 @@ void msRefArrayPush(msRefArray* arr, void* value) {
 }
 
 void* msRefArrayPop(msRefArray* arr) {
-	if (arr->len <= 0) return NULL;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
 }
 
 void* msRefArrayAt(msRefArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return NULL;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {

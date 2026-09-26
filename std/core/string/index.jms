@@ -124,7 +124,7 @@ export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): 
 	unreachable;
 }
 
-export function slice(this s: string, start: int32, end: int32): string {
+export function slice(this s: string, start: int32, end: int32 = 2147483647): string {
 	@emit(`return ${s}.slice(${start}, ${end});`);
 	unreachable;
 }

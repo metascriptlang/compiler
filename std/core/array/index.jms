@@ -5,12 +5,21 @@
 // `this arr: T[]` extensions reach the checker. Keep this UFCS shape.
 
 export extern function push<T>(this arr: T[], value: T): void from "#.push(#)";
-export extern function pop<T>(this arr: T[]): T from "#.pop()";
+export function pop<T>(this arr: T[]): T {
+	@emit(`if (${arr}.length === 0) throw new Error("index -1 out of bounds (length 0)");
+	return ${arr}.pop();`);
+	unreachable;
+}
 export extern function shift<T>(this arr: T[]): T from "#.shift()";
-export extern function at<T>(this arr: T[], idx: number): T from "#.at(#)";
+export function at<T>(this arr: T[], idx: number): T {
+	@emit(`var n = ${arr}.length, x = Math.trunc(${idx}), i = x < 0 ? n + x : x;
+	if (!(i >= 0 && i < n)) throw new Error("index " + x + " out of bounds (length " + n + ")");
+	return ${arr}[i];`);
+	unreachable;
+}
 export extern function indexOf<T>(this arr: T[], value: T): number from "#.indexOf(#)";
 export extern function includes<T>(this arr: T[], value: T): boolean from "#.includes(#)";
-export extern function slice<T>(this arr: T[], start: number, end: number): T[] from "#.slice(#, #)";
+export extern function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] from "#.slice(#, #)";
 export extern function concat<T>(this arr: T[], other: T[]): T[] from "#.concat(#)";
 export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // Typed overloads mirroring index.cms — bare native sort() is LEXICOGRAPHIC,
