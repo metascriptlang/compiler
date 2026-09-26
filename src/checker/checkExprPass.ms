@@ -281,10 +281,17 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 }
 
 
+function typeLiteralAgainstPayload(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
+	if (expectedType == null || !isMaybeType(expectedType) || expectedType.typeReturn == null) return false;
+	checkExprInner(ctx, node, expectedType.typeReturn);
+	return true;
+}
+
 // Internal: compute type for node. All match arms and sub-functions return Type.
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			reportLiteralRange(ctx, node);
 			if (expectedType != null && isIntegerType(expectedType)) {
 				if (literalFitsInType(node, expectedType, false)) {
@@ -329,6 +336,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			return;
 		},
 		NodeKind.StringLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			// TypeScript parity: string literals get StringLiteral type when expectedType demands it
 			if (expectedType != null) {
 				const sd = node.data as StringLiteralData;
@@ -355,6 +363,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.nodeType = stringType(); return;
 		},
 		NodeKind.BooleanLiteral => {
+			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 			// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
 			// Required for discriminated union narrowing on `ok: true | false` discriminants.
 			if (expectedType != null) {

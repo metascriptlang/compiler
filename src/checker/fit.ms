@@ -1146,6 +1146,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
 			return expr;
 		}
+		if (exprType.kind != TypeKind.Null && slotRefuses(exprType, formal.typeReturn)) {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'" + explainStructuralPrefix(exprType, formal.typeReturn), expr.location.line, expr.location.column);
+			return expr;
+		}
 		return synthMaybeWrap(expr, formal, exprType);
 	}
 	if (isMaybeType(formal) && isMaybeType(exprType)) {
