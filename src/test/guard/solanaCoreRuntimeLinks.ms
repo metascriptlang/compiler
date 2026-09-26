@@ -1,6 +1,6 @@
 // GUARD-OS solana
 // The string and array runtime compile under --os=solana, so a program that
-// formats an integer, joins strings and sorts them links against them.
+// formats an integer and a float, joins strings and sorts them links against them.
 import { logU64 } from "std/solana";
 function main(): void {
 	const count: int64 = -42;
@@ -9,5 +9,7 @@ function main(): void {
 	const joined = words.join(",");
 	logU64(joined.length as uint64);
 	logU64(parseInt("  -17") as uint64);
+	const ratio: number = 0.1 + 0.2;
+	logU64(ratio.toString().length as uint64);
 }
 main();
