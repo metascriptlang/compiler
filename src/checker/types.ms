@@ -1955,7 +1955,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const args: Type[] = [];
 	let pi = 0;
 	while (pi < paramNames.length) {
-		names.push(paramNames[pi].trim());
+		names.push(splitTopLevel(paramNames[pi], ":")[0].trim());
 		args.push(gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
