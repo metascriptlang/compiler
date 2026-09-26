@@ -290,6 +290,7 @@ function watchWarm(): void {
 		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
 		{ file: "viewShift.ms", target: "view.ms", warm: true, fails: false },
 		{ file: "logicError.ms", target: "logic.ms", warm: false, fails: true },
+		{ file: "logicEmpty.ms", target: "logic.ms", warm: false, fails: true },
 		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
 		{ file: "logicMap.ms", target: "logic.ms", warm: false, fails: false },
 		{ file: "shapesBody.ms", target: "shapes.ms", warm: true, fails: false },
