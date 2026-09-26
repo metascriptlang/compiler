@@ -1,6 +1,4 @@
 // GUARD-OS solana
-// The string and array runtime compile under --os=solana, so a program that
-// formats an integer and a float, joins strings and sorts them links against them.
 import { logU64 } from "std/solana";
 function main(): void {
 	const count: int64 = -42;
