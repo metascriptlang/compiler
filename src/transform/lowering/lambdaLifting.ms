@@ -22,7 +22,7 @@
 //   }
 
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
-import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, reportTransformError } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
@@ -138,6 +138,18 @@ interface LiftState {
 	// FunctionDecl path instead of running detection inline).
 	detection: DetectionState;
 	pendingRoutine: Symbol | null;
+	routineNames: NameSet;
+	routineSyms: Symbol[];
+	routineInfos: RoutineInfo[];
+	pendingLiftedName: string;
+	liftOwnLocals: NameSet;
+	ctx: TransformContext;
+}
+
+interface RoutineInfo {
+	sym: Symbol;
+	liftedName: string;
+	envStructType: Type | null;
 }
 
 function registerVarType(state: LiftState, name: string, typeStr: string): void {
@@ -268,6 +280,12 @@ function createLiftState(): LiftState {
 		splitLoopLocals: [],
 		detection: createDetectionState(),
 		pendingRoutine: null,
+		routineNames: createNameSet(),
+		routineSyms: [],
+		routineInfos: [],
+		pendingLiftedName: "",
+		liftOwnLocals: createNameSet(),
+		ctx: null as unknown as TransformContext,
 	};
 	return state;
 }
@@ -689,12 +707,14 @@ function collectClosureReads(n: Node | null, inClosure: boolean, names: NameSet,
 	forEachChild(n, (c: Node): void => { collectClosureReads(c, inner, names, out); });
 }
 
-function iterationCaptures(body: Node): Node[] {
+function iterationCaptures(body: Node, state: LiftState): Node[] {
 	const decls: Node[] = [];
 	collectIterationDecls(body, decls);
 	if (decls.length == 0) return decls;
 	const declNames = createNameSet();
-	for (const d of decls) nameSetAdd(declNames, (d.data as VariableDeclData).declName);
+	for (const d of decls) {
+		if (!isRoutineSym(state, d.resolvedSym)) nameSetAdd(declNames, (d.data as VariableDeclData).declName);
+	}
 	const read = createNameSet();
 	collectClosureReads(body, false, declNames, read);
 	const out: Node[] = [];
@@ -704,18 +724,18 @@ function iterationCaptures(body: Node): Node[] {
 	return out;
 }
 
-function collectLoopCaptured(n: Node | null, out: NameSet): void {
+function collectLoopCaptured(n: Node | null, out: NameSet, state: LiftState): void {
 	if (n == null || isFuncBoundary(n)) return;
 	const body = iterationBodyOf(n);
 	if (body != null) {
-		for (const d of iterationCaptures(body)) nameSetAdd(out, (d.data as VariableDeclData).declName);
+		for (const d of iterationCaptures(body, state)) nameSetAdd(out, (d.data as VariableDeclData).declName);
 	}
-	forEachChild(n, (c: Node): void => { collectLoopCaptured(c, out); });
+	forEachChild(n, (c: Node): void => { collectLoopCaptured(c, out, state); });
 }
 
-function frameLoopNames(body: Node): NameSet {
+function frameLoopNames(body: Node, state: LiftState): NameSet {
 	const out = createNameSet();
-	forEachChild(body, (c: Node): void => { collectLoopCaptured(c, out); });
+	forEachChild(body, (c: Node): void => { collectLoopCaptured(c, out, state); });
 	return out;
 }
 
@@ -789,7 +809,7 @@ function loopsHoldAll(loops: LoopEnv[], top: number, names: NameSet): boolean {
 
 function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
 	if (!state.sharedEnvActive && state.sharedEnvName != "") return body;
-	const decls = iterationCaptures(body);
+	const decls = iterationCaptures(body, state);
 	if (decls.length == 0) return body;
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
@@ -889,12 +909,150 @@ function ownEnvDecl(selfEnvSym: Symbol, envParamSym: Symbol, envName: string, en
 	return decl;
 }
 
+function isFrameNode(n: Node): boolean {
+	return isFuncBoundary(n) || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
+}
+
+function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
+	if (n == null || syms.length == 0) return false;
+	if (n.kind == NodeKind.Identifier) {
+		for (const s of syms) {
+			if (n.resolvedSym == s) return true;
+		}
+		return false;
+	}
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && refsAnySym(c, syms)) found = true;
+	});
+	return found;
+}
+
+function symIn(syms: Symbol[], sym: Symbol): boolean {
+	for (const s of syms) {
+		if (s == sym) return true;
+	}
+	return false;
+}
+
+function collectRoutineCandidates(n: Node | null, depth: number, state: LiftState, out: Symbol[]): void {
+	if (n == null) return;
+	if (depth > 0 && n.kind == NodeKind.VariableDecl) {
+		const sym = routineBindingSym(n);
+		if (sym != null && !refsAnySym((n.data as VariableDeclData).initializer, state.splitLoopLocals)) out.push(sym);
+	}
+	const inner = isFrameNode(n) ? depth + 1 : depth;
+	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, state, out); });
+}
+
+function collectForwardRefs(n: Node | null, candidates: NameSet, candidateSyms: Symbol[], declared: Symbol[], forward: Symbol[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		if (sym != null && nameSetContains(candidates, sym.name) && symIn(candidateSyms, sym) && !symIn(declared, sym) && !symIn(forward, sym)) forward.push(sym);
+		return;
+	}
+	if (n.kind == NodeKind.VariableDecl && n.resolvedSym != null && nameSetContains(candidates, n.resolvedSym.name) && symIn(candidateSyms, n.resolvedSym)) {
+		declared.push(n.resolvedSym);
+	}
+	forEachChild(n, (c: Node): void => { collectForwardRefs(c, candidates, candidateSyms, declared, forward); });
+}
+
+function collectRoutines(program: Node, state: LiftState): void {
+	const candidates: Symbol[] = [];
+	collectRoutineCandidates(program, 0, state, candidates);
+	if (candidates.length == 0) return;
+	const names = createNameSet();
+	for (const s of candidates) nameSetAdd(names, s.name);
+	const forward: Symbol[] = [];
+	collectForwardRefs(program, names, candidates, [], forward);
+	for (const s of candidates) {
+		if (symIn(forward, s)) continue;
+		nameSetAdd(state.routineNames, s.name);
+		state.routineSyms.push(s);
+	}
+}
+
+function isRoutineSym(state: LiftState, sym: Symbol | null): boolean {
+	if (sym == null || !nameSetContains(state.routineNames, sym.name)) return false;
+	return symIn(state.routineSyms, sym);
+}
+
+function routineInfoOf(state: LiftState, sym: Symbol | null): RoutineInfo | null {
+	if (sym == null) return null;
+	for (const info of state.routineInfos) {
+		if (info.sym == sym) return info;
+	}
+	return null;
+}
+
+function envPointerTo(target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
+	const own = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParamSym, null, loc), asType: envName }, syntheticToken(loc));
+	if (envType == target) {
+		own.nodeType = createRef(envType);
+		return own;
+	}
+	own.nodeType = createPtr(envType);
+	let access: Node = makeHiddenDeref(own, loc);
+	access.nodeType = envType;
+	for (let k = 0; k < chainTypes.length; k += 1) {
+		const up = makeMember(access, UP_FIELD, loc);
+		up.nodeType = createPtr(voidType());
+		const next = createNode(NodeKind.TypeAssertion, { asExpr: up, asType: chainNames[k] }, syntheticToken(loc));
+		if (chainTypes[k] == target) {
+			next.nodeType = createRef(chainTypes[k]);
+			return next;
+		}
+		next.nodeType = createPtr(chainTypes[k]);
+		access = makeHiddenDeref(next, loc);
+		access.nodeType = chainTypes[k];
+	}
+	return null;
+}
+
+function rewriteRoutineRefs(node: Node, state: LiftState, own: Symbol | null, closureOf: (ref: Node, info: RoutineInfo) => Node): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		if (sym == null || sym == own || !isRoutineSym(state, sym)) return node;
+		if (nameSetContains(state.liftOwnLocals, (node.data as IdentifierData).name)) return node;
+		const info = routineInfoOf(state, sym);
+		if (info == null) {
+			reportTransformError(state.ctx, `internal: no closure recorded for the routine '${sym.name}' at this use`, node.location);
+			return node;
+		}
+		return closureOf(node, info);
+	}
+	if (isFuncBoundary(node)) return node;
+	mapChildren(node, (child: Node): Node => rewriteRoutineRefs(child, state, own, closureOf));
+	return node;
+}
+
+function withoutRoutines(names: NameSet, idents: Node[], state: LiftState): NameSet {
+	if (state.routineSyms.length == 0) return names;
+	const out = createNameSet();
+	for (const name of names.items) {
+		const ident = findCapturedIdent(name, idents);
+		if (ident == null || !isRoutineSym(state, ident.resolvedSym)) nameSetAdd(out, name);
+	}
+	return out;
+}
+
+function routineClosure(liftedName: string, env: Node, ref: Node): Node {
+	const pair = makeObjectLiteral(["fn", "env"], [makeIdent(liftedName, ref.location), env], ref.location);
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	pair.nodeType = ref.nodeType;
+	return pair;
+}
+
 // Shared logic for lifting arrow functions and function expressions
 // originalNodeType: resolved Type from checker (preserved through lifting)
 function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation, originalNodeType: Type, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null, carrierIdx: number): Node {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
-	const liftedName = `$lifted_${state.currentFnName}_${counter}`;
+	const liftedName = state.pendingLiftedName != "" ? state.pendingLiftedName : `$lifted_${state.currentFnName}_${counter}`;
+	state.pendingLiftedName = "";
+	captures = withoutRoutines(captures, state.capturedIdents, state);
 
 	let envName: string;
 	let envVarSym: Symbol;
@@ -987,11 +1145,44 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		selfEnvDecl = ownEnvDecl(selfEnvSym, envParamSym, envName, envStructType, loc);
 		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => ownEnvClosure(liftedName, selfEnvSym, selfEnvType, ref));
 	}
+	const reachDecls: Node[] = [];
+	if (state.routineSyms.length > 0) {
+		const reachTypes: Type[] = [];
+		const reachSyms: Symbol[] = [];
+		body = rewriteRoutineRefs(body, state, routine, (ref: Node, info: RoutineInfo): Node => {
+			const target = info.envStructType;
+			if (target == null) return routineClosure(info.liftedName, makeNull(ref.location), ref);
+			let idx = -1;
+			for (let k = 0; k < reachTypes.length; k += 1) {
+				if (reachTypes[k] == target) idx = k;
+			}
+			if (idx < 0) {
+				const pointer = envPointerTo(target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, loc);
+				if (pointer == null) {
+					reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
+					return ref;
+				}
+				const reachSym = freshEnvVarSym(`_reach${counter}_${reachTypes.length}_`, target);
+				const decl = makeVarDecl(reachSym.name, pointer, DeclKind.Const, loc);
+				decl.resolvedSym = reachSym;
+				decl.nodeType = createRef(target);
+				reachDecls.push(decl);
+				reachTypes.push(target);
+				reachSyms.push(reachSym);
+				idx = reachTypes.length - 1;
+			}
+			return routineClosure(info.liftedName, envVarRef(reachSyms[idx], target, ref.location), ref);
+		});
+	}
 	let rewrittenBody = rewriteNode(body, rewriteCaptures, envName, envStructType, rwChainNames, rwChainTypes, envParamSym);
 	if (rewrittenBody == null) {
 		rewrittenBody = makeBlock([], loc);
 	} else if (rewrittenBody.kind != NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
+	}
+	if (reachDecls.length > 0) {
+		const bd = rewrittenBody.data as BlockStmtData;
+		bd.statements = prependHoistedEnvDecls(reachDecls, bd.statements);
 	}
 	if (selfEnvDecl != null) {
 		const bd = rewrittenBody.data as BlockStmtData;
@@ -1062,7 +1253,8 @@ function liftFuncExpr(node: Node, captures: NameSet, state: LiftState, preEnv: P
 // originalNodeType: resolved Type from checker (symbol type preserved)
 function liftNonCapturing(body: Node, paramSyms: Symbol[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation, originalNodeType: Type, routine: Symbol | null): Node {
 	state.closureCounter += 1;
-	const liftedName = `$fn_${state.currentFnName}_${state.closureCounter}`;
+	const liftedName = state.pendingLiftedName != "" ? state.pendingLiftedName : `$fn_${state.currentFnName}_${state.closureCounter}`;
+	state.pendingLiftedName = "";
 	if (routine != null) {
 		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => {
 			const selfFn = makeIdent(liftedName, ref.location);
@@ -1242,7 +1434,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 	const outerEnvName = entryChainNames.length > 0 ? entryChainNames[0] : "";
 	const outerEnvStructType = entryChainTypes.length > 0 ? entryChainTypes[0] : (null as unknown as Type);
 	const frameCaptures = createNameSet();
-	for (const name of allCaptures.items) {
+	for (const name of withoutRoutines(allCaptures, allCapturedIdents, state).items) {
 		if (!nameSetContains(loopNames, name)) nameSetAdd(frameCaptures, name);
 	}
 	allCaptures = frameCaptures;
@@ -1617,7 +1809,7 @@ function walkLift(node: Node, state: LiftState): void {
 			// reference it).
 			const fnLoc = node.location;
 			const fnChain = frameChain(state);
-			const fnLoopNames = frameLoopNames(d.fnBody);
+			const fnLoopNames = frameLoopNames(d.fnBody, state);
 			walkLiftBody(d.fnBody, state, () => {
 				if (allCaptures.items.length > 0) {
 					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null as unknown as NameSet, fnLoopNames);
@@ -1784,7 +1976,7 @@ function walkLift(node: Node, state: LiftState): void {
 			}
 			const testLoc = node.location;
 			const testChain = frameChain(state);
-			const testLoopNames = frameLoopNames(d.testBody);
+			const testLoopNames = frameLoopNames(d.testBody, state);
 			walkLiftBody(d.testBody, state, () => {
 				if (allCaptures.items.length > 0) {
 					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null as unknown as NameSet, testLoopNames);
@@ -2047,9 +2239,9 @@ function liftCapturingClosureBody(
 		const direct = detectCaptures(body, cloneScopeStack(state.ss), directIdents, routine);
 		const fullSet = createNameSet();
 		const fullIdents: Node[] = [];
-		for (const dn of direct.items) { nameSetAdd(fullSet, dn); }
+		for (const dn of withoutRoutines(direct, directIdents, state).items) { nameSetAdd(fullSet, dn); }
 		for (const di of directIdents) { fullIdents.push(di); }
-		for (const on of ownCaptures.items) {
+		for (const on of withoutRoutines(ownCaptures, ownCapturedIdents, state).items) {
 			if (nameSetContains(ownLocals, on)) continue;
 			if (!nameSetContains(fullSet, on)) {
 				nameSetAdd(fullSet, on);
@@ -2058,6 +2250,20 @@ function liftCapturingClosureBody(
 			}
 		}
 		carrierIdx = innermostLoopHolding(enclosingLoops, fullSet);
+		for (const ri of directIdents) {
+			const info = routineInfoOf(state, ri.resolvedSym);
+			if (info == null || info.envStructType == null) continue;
+			for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
+				if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
+			}
+		}
+		for (const ri of ownCapturedIdents) {
+			const info = routineInfoOf(state, ri.resolvedSym);
+			if (info == null || info.envStructType == null) continue;
+			for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
+				if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
+			}
+		}
 		if (!savedShared.active) {
 			if (carrierIdx >= 0 && !loopsHoldAll(enclosingLoops, carrierIdx, fullSet)) carrierIdx = -1;
 			if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
@@ -2079,6 +2285,21 @@ function liftCapturingClosureBody(
 		for (const t of entryChain.types) types.push(t);
 		entryChain = { names, types };
 	}
+	let routineName = "";
+	let routineCaptures = false;
+	if (routine != null && isRoutineSym(state, routine)) {
+		const pre = detectCaptures(body, cloneScopeStack(state.ss), [], routine);
+		routineCaptures = pre.items.length > 0 || ownCaptures.items.length > 0;
+		state.closureCounter += 1;
+		routineName = `${routineCaptures ? "$lifted" : "$fn"}_${savedFnName}_${state.closureCounter}`;
+		if (!routineCaptures) {
+			state.routineInfos.push({ sym: routine, liftedName: routineName, envStructType: null });
+		} else if (preEnv == null && carrierIdx >= 0) {
+			state.routineInfos.push({ sym: routine, liftedName: routineName, envStructType: enclosingLoops[carrierIdx].envStructType });
+		} else if (preEnv == null && savedShared.active) {
+			state.routineInfos.push({ sym: routine, liftedName: routineName, envStructType: savedShared.structType });
+		}
+	}
 	if (ownCaptures.items.length > 0) {
 		state.closureCounter += 1;
 		state.currentFnName = `${savedFnName}_${suffix}${state.closureCounter}`;
@@ -2087,7 +2308,7 @@ function liftCapturingClosureBody(
 		preRegisterVarTypes(body, state);
 	}
 	const loc = node.location;
-	const bodyLoopNames = frameLoopNames(body);
+	const bodyLoopNames = frameLoopNames(body, state);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
 			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopNames);
@@ -2108,7 +2329,13 @@ function liftCapturingClosureBody(
 	// `captures` is empty post-walk — fall back to ownCaptures to keep the
 	// closure-pair carrying its outer env, which the body now needs to copy
 	// ancestor captures from at entry.
-	if (captures.items.length > 0 || ownCaptures.items.length > 0) {
+	const capturing = captures.items.length > 0 || ownCaptures.items.length > 0;
+	if (routineName != "" && capturing != routineCaptures) {
+		reportTransformError(state.ctx, `internal: '${routine!.name}' was promised to lift ${routineCaptures ? "with" : "without"} an env`, loc);
+	}
+	state.pendingLiftedName = routineName;
+	state.liftOwnLocals = ownLocals;
+	if (capturing) {
 		computeLastUseCapturesForState(captures, state);
 		return lifter(node, captures, state, preEnv, ownEnvParamSym, routine, carrierIdx);
 	}
@@ -2166,6 +2393,8 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
 	state.splitLoopLocals = ctx.splitLoopLocals;
+	state.ctx = ctx;
+	collectRoutines(program, state);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);
 
