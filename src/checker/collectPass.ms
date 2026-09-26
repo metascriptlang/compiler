@@ -726,7 +726,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	// Link node → symbol for resolvePass + LSP go-to-definition
 	methodSym.location = member.location;
 	methodSym.modulePath = ctx.modulePath;
-	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, md.methodName);
+	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, mangledName);
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
