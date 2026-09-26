@@ -21,13 +21,14 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, MemberExprData, HiddenDerefData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import {
 	makeIdent, makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
-	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
+	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
@@ -36,11 +37,12 @@ import { checkProgram } from "../../checker/checkPass";
 import {
 	DetectionState, createDetectionState, detectPass,
 	detectionGetCaptures, detectionGetCapturedIdents, routineBindingSym,
+	isOnceLoop, iterationBodyOf, collectIterationDecls,
 } from "./lambdaLiftingDetect";
 import { renameRepeatedBindings } from "./lambdaLiftingRename";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary,
-	pushLoopBoundary, popLoopBoundary, isLoopLocalVar,
+	pushLoopBoundary, popLoopBoundary,
 	defineVar, isLocalVar, isOuterVar, isModuleLevelVar, isDirectParentVar,
 	isBuiltinName,
 } from "./lambdaLiftingScope";
@@ -94,22 +96,14 @@ interface PendingEnvRewrite {
 	chainNames: string[];       // ancestor env names ($up walk when a ref isn't a field here)
 	chainTypes: Type[];         // parallel ancestor env struct types
 	envVarDecl: Node;           // the VarDecl node to insert before the closure
-	// Snapshot envs (created inside a loop for an escaping closure) only emit
-	// their init statement; they do NOT activate an outer-ref rewrite, because
-	// code in the outer function must continue to read/write the shared env,
-	// not the per-closure snapshot. Default false = classic behavior.
-	snapshotOnly: boolean;
-	// A variable declared inside the loop body has no home outside the
-	// iteration, so the snapshot env IS its home and the enclosing code must
-	// read it there. That rewrite has to run before the function-wide shared-env
-	// rewrite, which would otherwise consume the bare ident first.
-	takesPrecedence: boolean;
-	// Enclosing shared-env var whose field reads this rewrite reclaims. The
-	// statement carrying the closure is rewritten as one subtree at the OUTER
-	// list level, so by activation time the shared-env rewrite has already
-	// turned the loop body's remaining `x` into `_env_fn_->x` — matching bare
-	// idents alone would find nothing left. Empty = no reclaim.
-	redirectFromSym: Symbol | null;
+	snapshotOnly: boolean;      // a per-closure snapshot: emits its init, never becomes the home of a binding
+}
+
+interface LoopEnv {
+	envName: string;
+	envVarSym: Symbol;
+	envStructType: Type;
+	names: NameSet;
 }
 
 interface LiftState {
@@ -138,6 +132,8 @@ interface LiftState {
 	sharedEnvCapturedIdents: Node[];    // captured ident nodes from detection pre-pass
 	sharedEnvChainNames: string[];      // enclosing shared-env names, immediate-parent first ($up walk)
 	sharedEnvChainTypes: Type[];        // parallel: enclosing shared-env struct types
+	loopEnvs: LoopEnv[];                // per-iteration envs open in the current frame, innermost last
+	splitLoopLocals: Symbol[];          // TransformContext.splitLoopLocals: captured by value (snapshot)
 	// Pass 1 result: pre-computed per-FunctionDecl captures (consumed by lift's
 	// FunctionDecl path instead of running detection inline).
 	detection: DetectionState;
@@ -268,6 +264,8 @@ function createLiftState(): LiftState {
 		sharedEnvCapturedIdents: [],
 		sharedEnvChainNames: [],
 		sharedEnvChainTypes: [],
+		loopEnvs: [],
+		splitLoopLocals: [],
 		detection: createDetectionState(),
 		pendingRoutine: null,
 	};
@@ -630,19 +628,6 @@ function rewriteNode(
 
 function rewriteOuterRef(node: Node, rewrite: PendingEnvRewrite): Node | null {
 	if (node == null) return null;
-	if (rewrite.redirectFromSym != null && rewrite.envVarSym != null && node.kind == NodeKind.MemberExpr) {
-		const md = node.data as MemberExprData;
-		const obj = (md.object != null && md.object.kind == NodeKind.HiddenDeref) ? (md.object.data as HiddenDerefData).expr : md.object;
-		if (obj != null && obj.kind == NodeKind.Identifier && nameSetContains(rewrite.capturedNames, md.property)) {
-			if (obj.resolvedSym == rewrite.redirectFromSym) {
-				const envIdent = envVarDeref(rewrite.envVarSym, rewrite.envStructType, node.location);
-				const redirected = makeMember(envIdent, md.property, node.location);
-				const ft = envFieldType(rewrite.envStructType, md.property);
-				redirected.nodeType = ft != null ? ft : node.nodeType;
-				return redirected;
-			}
-		}
-	}
 	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		// Skip function captures — module-level functions are always accessible in C,
@@ -693,12 +678,173 @@ function applyActiveRewrites(node: Node, rewrites: PendingEnvRewrite[]): Node {
 	return result;
 }
 
-function loopLocalSubset(captures: NameSet, state: LiftState): NameSet {
-	const out = createNameSet();
-	for (const name of captures.items) {
-		if (isLoopLocalVar(state.ss, name)) nameSetAdd(out, name);
+function collectClosureReads(n: Node | null, inClosure: boolean, names: NameSet, out: NameSet): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		const name = (n.data as IdentifierData).name;
+		if (inClosure && nameSetContains(names, name)) nameSetAdd(out, name);
+		return;
+	}
+	const inner = inClosure || isFuncBoundary(n);
+	forEachChild(n, (c: Node): void => { collectClosureReads(c, inner, names, out); });
+}
+
+function iterationCaptures(body: Node): Node[] {
+	const decls: Node[] = [];
+	collectIterationDecls(body, decls);
+	if (decls.length == 0) return decls;
+	const declNames = createNameSet();
+	for (const d of decls) nameSetAdd(declNames, (d.data as VariableDeclData).declName);
+	const read = createNameSet();
+	collectClosureReads(body, false, declNames, read);
+	const out: Node[] = [];
+	for (const d of decls) {
+		if (nameSetContains(read, (d.data as VariableDeclData).declName)) out.push(d);
 	}
 	return out;
+}
+
+function collectLoopCaptured(n: Node | null, out: NameSet): void {
+	if (n == null || isFuncBoundary(n)) return;
+	const body = iterationBodyOf(n);
+	if (body != null) {
+		for (const d of iterationCaptures(body)) nameSetAdd(out, (d.data as VariableDeclData).declName);
+	}
+	forEachChild(n, (c: Node): void => { collectLoopCaptured(c, out); });
+}
+
+function frameLoopNames(body: Node): NameSet {
+	const out = createNameSet();
+	forEachChild(body, (c: Node): void => { collectLoopCaptured(c, out); });
+	return out;
+}
+
+function loopEnvOf(state: LiftState, name: string): LoopEnv | null {
+	for (let i = state.loopEnvs.length - 1; i >= 0; i -= 1) {
+		if (nameSetContains(state.loopEnvs[i].names, name)) return state.loopEnvs[i];
+	}
+	return null;
+}
+
+function envChainFrom(loops: LoopEnv[], top: number, frameEnvName: string, frameEnvType: Type, frameChainNames: string[], frameChainTypes: Type[]): { names: string[], types: Type[] } {
+	const names: string[] = [];
+	const types: Type[] = [];
+	for (let i = top; i >= 0; i -= 1) {
+		names.push(loops[i].envName);
+		types.push(loops[i].envStructType);
+	}
+	if (frameEnvName != "" && frameEnvType != null) {
+		names.push(frameEnvName);
+		types.push(frameEnvType);
+		for (const n of frameChainNames) names.push(n);
+		for (const t of frameChainTypes) types.push(t);
+	}
+	return { names, types };
+}
+
+function frameChain(state: LiftState): { names: string[], types: Type[] } {
+	return envChainFrom([], -1, state.sharedEnvName, state.sharedEnvStructType, state.sharedEnvChainNames, state.sharedEnvChainTypes);
+}
+
+function innermostLoopHolding(loops: LoopEnv[], names: NameSet): number {
+	for (let i = loops.length - 1; i >= 0; i -= 1) {
+		for (const n of names.items) {
+			if (nameSetContains(loops[i].names, n)) return i;
+		}
+	}
+	return -1;
+}
+
+function splitLoopCaptures(fullSet: NameSet, idents: Node[], loops: LoopEnv[], splitLocals: Symbol[]): { names: NameSet, idents: Node[] } {
+	const names = createNameSet();
+	const held: Node[] = [];
+	if (splitLocals.length == 0) return { names, idents: held };
+	for (const name of fullSet.items) {
+		let inLoopEnv = false;
+		for (const l of loops) {
+			if (nameSetContains(l.names, name)) inLoopEnv = true;
+		}
+		if (inLoopEnv) continue;
+		const ident = findCapturedIdent(name, idents);
+		if (ident == null || ident.resolvedSym == null) continue;
+		for (const s of splitLocals) {
+			if (s == ident.resolvedSym) {
+				nameSetAdd(names, name);
+				held.push(ident);
+				break;
+			}
+		}
+	}
+	return { names, idents: held };
+}
+
+function loopsHoldAll(loops: LoopEnv[], top: number, names: NameSet): boolean {
+	for (const n of names.items) {
+		let held = false;
+		for (let i = top; i >= 0 && !held; i -= 1) held = nameSetContains(loops[i].names, n);
+		if (!held) return false;
+	}
+	return true;
+}
+
+function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
+	if (!state.sharedEnvActive && state.sharedEnvName != "") return body;
+	const decls = iterationCaptures(body);
+	if (decls.length == 0) return body;
+	state.closureCounter += 1;
+	const counter = state.closureCounter;
+	const envName = `$Env_${state.currentFnName}_loop${counter}`;
+	let parentSym: Symbol | null = null;
+	let parentType: Type = null as unknown as Type;
+	if (state.loopEnvs.length > 0) {
+		const outer = state.loopEnvs[state.loopEnvs.length - 1];
+		parentSym = outer.envVarSym;
+		parentType = outer.envStructType;
+	} else if (state.sharedEnvActive) {
+		parentSym = state.sharedEnvVarSym;
+		parentType = state.sharedEnvStructType;
+	}
+	const fields: string[] = [UP_FIELD];
+	const fieldTypes: string[] = [parentSym != null ? "" : "unknown"];
+	const resolved: Type[] = [parentSym != null ? createRef(parentType) : createPtr(voidType())];
+	const names = createNameSet();
+	for (const d of decls) {
+		const vd = d.data as VariableDeclData;
+		if (nameSetContains(names, vd.declName)) continue;
+		nameSetAdd(names, vd.declName);
+		const t = d.nodeType != null ? d.nodeType : resolveSimpleTypeStr(vd.declType);
+		fields.push(vd.declName);
+		fieldTypes.push(vd.declType != "" ? vd.declType : typeToEnvStr(t));
+		resolved.push(t);
+	}
+	const envDecl = makeInterfaceDeclFromTypes(envName, fields, fieldTypes, resolved, loc);
+	state.envStructs.push(envDecl);
+	const structType = envDecl.nodeType!;
+	const envVarSym = freshEnvVarSym(`_envl${counter}_`, structType);
+	const hoisted = makeVarDecl(envVarSym.name, makeNull(loc), DeclKind.Let, loc);
+	hoisted.resolvedSym = envVarSym;
+	hoisted.nodeType = createRef(structType);
+	state.hoistedEnvDecls.push(hoisted);
+
+	const stmts: Node[] = [];
+	const fresh = makeObjectLiteral([], [], loc);
+	fresh.nodeType = createRef(structType);
+	stmts.push(makeExprStmt(makeAssign(envVarRef(envVarSym, structType, loc), fresh, loc), loc));
+	if (parentSym != null) {
+		const upLhs = makeMember(envVarDeref(envVarSym, structType, loc), UP_FIELD, loc);
+		upLhs.nodeType = createRef(parentType);
+		stmts.push(makeExprStmt(makeAssign(upLhs, envVarRef(parentSym, parentType, loc), loc), loc));
+	}
+	for (const s of extractBodyStmts(body)) stmts.push(s);
+
+	state.loopEnvs.push({ envName, envVarSym, envStructType: structType, names });
+	const rewrites: PendingEnvRewrite[] = [{
+		envVarSym, envStructType: structType, capturedNames: names,
+		chainNames: [] as string[], chainTypes: [] as Type[], envVarDecl: null as unknown as Node, snapshotOnly: false,
+	}];
+	for (const rw of state.activeEnvRewrites) rewrites.push(rw);
+	state.activeEnvRewrites = rewrites;
+	return makeBlock(stmts, loc);
 }
 
 // ===== Closure Lifting =====
@@ -745,7 +891,7 @@ function ownEnvDecl(selfEnvSym: Symbol, envParamSym: Symbol, envName: string, en
 
 // Shared logic for lifting arrow functions and function expressions
 // originalNodeType: resolved Type from checker (preserved through lifting)
-function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation, originalNodeType: Type, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null): Node {
+function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation, originalNodeType: Type, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null, carrierIdx: number): Node {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
 	const liftedName = `$lifted_${state.currentFnName}_${counter}`;
@@ -754,15 +900,14 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	let envVarSym: Symbol;
 	let envStructType: Type;
 
-	// Closures created inside a loop body must NOT use the function-scope shared
-	// env — the shared env has one slot per variable, overwritten each iteration.
-	// A closure stored past the iteration (spawn, .then, actor.send, array.push)
-	// would later read whatever the LAST iteration wrote, not its own. Fix: when
-	// inside a loop, allocate a per-closure env (snapshot of captures at creation
-	// site). Outside loops, shared env is safe and faster.
-	const useShared = state.sharedEnvActive && state.insideLoop == 0;
+	const carrier = (preEnv == null && carrierIdx >= 0) ? state.loopEnvs[carrierIdx] : null;
+	const useShared = carrier == null && preEnv == null && state.sharedEnvActive;
 
-	if (useShared) {
+	if (carrier != null) {
+		envName = carrier.envName;
+		envVarSym = carrier.envVarSym;
+		envStructType = carrier.envStructType;
+	} else if (useShared) {
 		// Shared env path (reference parity: ownerToType — all closures share one env)
 		envName = state.sharedEnvName;
 		envVarSym = state.sharedEnvVarSym!;
@@ -821,16 +966,19 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	// Ancestor chain for `$up` walk (immediate parent first). A shared-env closure
 	// walks the current shared env's own chain; a per-closure env prepends the
 	// enclosing shared env (its `$up` target) then that env's chain.
-	const rwChainNames: string[] = [];
-	const rwChainTypes: Type[] = [];
-	if (useShared) {
+	let rwChainNames: string[] = [];
+	let rwChainTypes: Type[] = [];
+	if (carrier != null) {
+		const chain = envChainFrom(state.loopEnvs, carrierIdx - 1, state.sharedEnvName, state.sharedEnvStructType, state.sharedEnvChainNames, state.sharedEnvChainTypes);
+		rwChainNames = chain.names;
+		rwChainTypes = chain.types;
+	} else if (useShared) {
 		for (const n of state.sharedEnvChainNames) rwChainNames.push(n);
 		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
-	} else if (hasEnclosingFnEnv(state)) {
-		rwChainNames.push(state.sharedEnvName);
-		rwChainTypes.push(state.sharedEnvStructType);
-		for (const n of state.sharedEnvChainNames) rwChainNames.push(n);
-		for (const t of state.sharedEnvChainTypes) rwChainTypes.push(t);
+	} else {
+		const chain = envChainFrom(state.loopEnvs, carrierIdx, state.sharedEnvName, state.sharedEnvStructType, state.sharedEnvChainNames, state.sharedEnvChainTypes);
+		rwChainNames = chain.names;
+		rwChainTypes = chain.types;
 	}
 	let selfEnvDecl: Node | null = null;
 	if (routine != null && refsRoutine(body, routine)) {
@@ -861,7 +1009,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	preserveResolvedTypes(fnNode, originalNodeType);
 	state.liftedFunctions.push(fnNode);
 
-	if (useShared) {
+	if (carrier != null || useShared) {
 		// Shared env: env initialized at function entry, all-refs rewrite already active.
 		// No pendingEnvRewrites needed — setupSharedEnv activated the rewrite.
 		const sharedPair = makeClosurePairOnly(liftedName, envVarSym, envStructType, loc);
@@ -872,30 +1020,24 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		return sharedPair;
 	} else {
 		// Per-closure env: each closure gets its own env declaration + init.
-		// If we're here BECAUSE of a loop escape (snapshot mode), outer function
-		// code must keep using the shared env, so mark this rewrite snapshot-only.
 		// Up-chain parent: per-closure env's `$up` points to enclosing fn's
 		// shared env. Use `currentEnvAccessSym` to pick the right access form
 		// for the surrounding scope (named var in fn body, `_envP` in nested
 		// closure body).
-		const parentEnvVarSym = currentEnvAccessSym(state);
-		const parentEnvStructType = hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type);
+		const parentLoop = carrierIdx >= 0 ? state.loopEnvs[carrierIdx] : null;
+		const parentEnvVarSym = parentLoop != null ? parentLoop.envVarSym : currentEnvAccessSym(state);
+		const parentEnvStructType = parentLoop != null ? parentLoop.envStructType : (hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type));
 		const initCaptures = preEnv != null ? preEnv.fields : captures;
 		const initIdents = preEnv != null ? preEnv.fieldIdents : state.capturedIdents;
-		const loopLocals = state.sharedEnvActive ? loopLocalSubset(initCaptures, state) : createNameSet();
-		const ownsIteration = loopLocals.items.length > 0;
-		const snapshotOnly = state.sharedEnvActive && !ownsIteration;
 		const envPair = makeEnvVarAndClosurePair(envVarSym, liftedName, envStructType, initCaptures, state.lastUseCaptures, initIdents, state.currentParams, state.ss, parentEnvVarSym, parentEnvStructType, loc, preEnv != null);
 		state.hoistedEnvDecls.push(envPair.envDeclHoisted);
 		state.pendingEnvRewrites.push({
 			envVarSym, envStructType,
-			capturedNames: ownsIteration ? loopLocals : initCaptures,
+			capturedNames: initCaptures,
 			chainNames: [] as string[],
 			chainTypes: [] as Type[],
 			envVarDecl: envPair.envInitStmt,
-			snapshotOnly,
-			takesPrecedence: ownsIteration,
-			redirectFromSym: ownsIteration ? state.sharedEnvVarSym : null,
+			snapshotOnly: preEnv != null,
 		});
 		// Load-bearing for DRC (see the shared-env branch): nodeType lets the analyzer classify +
 		// destroy the fresh closure-pair temporary so its captured env doesn't leak as a call arg.
@@ -904,14 +1046,14 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	}
 }
 
-function liftArrow(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null): Node {
+function liftArrow(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null, carrierIdx: number): Node {
 	const d = node.data as ArrowFunctionData;
-	return liftClosure(d.arrowBody, node.paramSyms!, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location, node.nodeType!, preEnv, envParamSym, routine);
+	return liftClosure(d.arrowBody, node.paramSyms!, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location, node.nodeType!, preEnv, envParamSym, routine, carrierIdx);
 }
 
-function liftFuncExpr(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null): Node {
+function liftFuncExpr(node: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null, carrierIdx: number): Node {
 	const d = node.data as FunctionExprData;
-	return liftClosure(d.funcExprBody, node.paramSyms!, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location, node.nodeType!, preEnv, envParamSym, routine);
+	return liftClosure(d.funcExprBody, node.paramSyms!, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location, node.nodeType!, preEnv, envParamSym, routine, carrierIdx);
 }
 
 // Non-capturing lift: module-level FunctionDecl + closure pair with env=null.
@@ -1053,11 +1195,8 @@ function makeEnvVarAndClosurePair(envVarSym: Symbol, liftedName: string, envStru
 	return { envDeclHoisted, envInitStmt, closurePair: pair };
 }
 
-// A per-closure snapshot env created BEFORE the body walk (loop sites only).
-// The pair env is the persistent home for every outer-frame capture; the
-// closure's own per-call shared env chains `$up` to it. Creating it pre-walk is
-// what lets `setupSharedEnv` wire `$up` with the correct cast — `_envP` at a
-// loop site IS this env, never the enclosing function's shared env.
+// Created before the body walk so `setupSharedEnv` casts `$up` to it: at the
+// creation site `_envP` IS this env.
 interface PreCreatedEnv {
 	envName: string;
 	envVarSym: Symbol;
@@ -1066,7 +1205,7 @@ interface PreCreatedEnv {
 	fieldIdents: Node[];
 }
 
-function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation): PreCreatedEnv {
+function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation, parentType: Type | null): PreCreatedEnv {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
 	const envName = `$Env_${state.currentFnName}_${counter}`;
@@ -1074,8 +1213,8 @@ function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state:
 	const envFieldTypes: string[] = [];
 	const envResolvedTypes: Type[] = [];
 	envFields.push(UP_FIELD);
-	envFieldTypes.push("unknown");
-	envResolvedTypes.push(createPtr(voidType()));
+	envFieldTypes.push(parentType != null ? "" : "unknown");
+	envResolvedTypes.push(parentType != null ? createRef(parentType) : createPtr(voidType()));
 	for (const name of captures.items) {
 		const orig = findCapturedIdent(name, capturedIdents);
 		envFields.push(name);
@@ -1099,38 +1238,23 @@ function createSnapshotPairEnv(captures: NameSet, capturedIdents: Node[], state:
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
-function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdents: Node[], loc: SourceLocation, pairEnv: PreCreatedEnv, ownLocalNames: NameSet): void {
-	// The env `_envP` will hold at body entry: the pre-created pair env at loop
-	// sites, else the enclosing shared env. `$up` wiring and the ancestor chain
-	// below must agree with that identity — a mismatch is an out-of-bounds cast.
-	// When outerEnvName === "" the closure has no enclosing env (top-level
-	// FunctionDecl), so no `$up` wiring applies.
-	const outerEnvName = pairEnv != null ? pairEnv.envName : state.sharedEnvName;
-	const outerEnvStructType = pairEnv != null ? pairEnv.envStructType : state.sharedEnvStructType;
+function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocalNames: NameSet, loopNames: NameSet): void {
+	const outerEnvName = entryChainNames.length > 0 ? entryChainNames[0] : "";
+	const outerEnvStructType = entryChainTypes.length > 0 ? entryChainTypes[0] : (null as unknown as Type);
+	const frameCaptures = createNameSet();
+	for (const name of allCaptures.items) {
+		if (!nameSetContains(loopNames, name)) nameSetAdd(frameCaptures, name);
+	}
+	allCaptures = frameCaptures;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
 	state.sharedEnvVarSym = freshEnvVarSym(`_env_${state.currentFnName}_`, null);
 	state.sharedEnvCapturedNames = allCaptures;
 	state.sharedEnvCapturedIdents = allCapturedIdents;
-
-	// Ancestor chain for the `$up` walk: [enclosing env] ++ its own ancestors,
-	// immediate-parent first. Empty when there is no enclosing env (top-level
-	// function). Nested closures reach ancestor-frame vars by walking this chain
-	// (Nim accessViaEnvParam), never by copying values down (that was bug D).
 	const parentChainNames: string[] = [];
 	const parentChainTypes: Type[] = [];
-	if (outerEnvName != "" && outerEnvStructType != null) {
-		parentChainNames.push(outerEnvName);
-		parentChainTypes.push(outerEnvStructType);
-		// pairEnv's own `$up` points at the enclosing fn's shared env — keep the
-		// chain truthful past the pair env.
-		if (pairEnv != null && state.sharedEnvName != "" && state.sharedEnvStructType != null) {
-			parentChainNames.push(state.sharedEnvName);
-			parentChainTypes.push(state.sharedEnvStructType);
-		}
-		for (const n of state.sharedEnvChainNames) parentChainNames.push(n);
-		for (const t of state.sharedEnvChainTypes) parentChainTypes.push(t);
-	}
+	for (const n of entryChainNames) parentChainNames.push(n);
+	for (const t of entryChainTypes) parentChainTypes.push(t);
 	state.sharedEnvChainNames = parentChainNames;
 	state.sharedEnvChainTypes = parentChainTypes;
 
@@ -1278,8 +1402,6 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, allCapturedIdent
 		chainTypes: state.sharedEnvChainTypes,
 		envVarDecl: null as unknown as Node,
 		snapshotOnly: false,
-		takesPrecedence: false,
-		redirectFromSym: null,
 	});
 }
 
@@ -1321,18 +1443,7 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 			}
 			result.push(decl);
 		}
-		// Snapshot envs (escaping closure inside a loop) only emit the init;
-		// they don't activate an outer-ref rewrite because the outer function
-		// must keep writing to the shared env, not the snapshot.
-		if (!rewrite.snapshotOnly) {
-			if (rewrite.takesPrecedence) {
-				const reordered: PendingEnvRewrite[] = [rewrite];
-				for (const rw of state.activeEnvRewrites) { reordered.push(rw); }
-				state.activeEnvRewrites = reordered;
-			} else {
-				state.activeEnvRewrites.push(rewrite);
-			}
-		}
+		if (!rewrite.snapshotOnly) state.activeEnvRewrites.push(rewrite);
 		pi += 1;
 	}
 	// Truncate processed entries
@@ -1362,6 +1473,19 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 		// Check if liftClosure queued new env rewrites
 		if (state.pendingEnvRewrites.length > pendingBefore) {
 			drainPendingRewrites(state, pendingBefore, result);
+		}
+		if (stmts[si].kind == NodeKind.VariableDecl) {
+			const vd = stmts[si].data as VariableDeclData;
+			const loopEnv = loopEnvOf(state, vd.declName);
+			if (loopEnv != null && vd.initializer == null) {
+				stmts[si] = makeBlock([], stmts[si].location);
+			} else if (loopEnv != null) {
+				const stmtLoc = stmts[si].location;
+				const lhs = makeMember(envVarDeref(loopEnv.envVarSym, loopEnv.envStructType, stmtLoc), vd.declName, stmtLoc);
+				const ft = envFieldType(loopEnv.envStructType, vd.declName);
+				lhs.nodeType = ft != null ? ft : stmts[si].nodeType;
+				stmts[si] = makeExprStmt(makeAssign(lhs, vd.initializer, stmtLoc), stmtLoc);
+			}
 		}
 		// Reference parity (accessViaEnvVar): replace captured VarDecl with env field assignment.
 		// Create a NEW node instead of mutating in-place (C union layout forbids kind change).
@@ -1492,9 +1616,11 @@ function walkLift(node: Node, state: LiftState): void {
 			// body walk (so the env name is in scope when closures inside
 			// reference it).
 			const fnLoc = node.location;
+			const fnChain = frameChain(state);
+			const fnLoopNames = frameLoopNames(d.fnBody);
 			walkLiftBody(d.fnBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, null as unknown as PreCreatedEnv, null as unknown as NameSet);
+					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null as unknown as NameSet, fnLoopNames);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1546,7 +1672,10 @@ function walkLift(node: Node, state: LiftState): void {
 			const whileBodyRewrites: PendingEnvRewrite[] = [];
 			for (const rw of savedWhileRewrites) whileBodyRewrites.push(rw);
 			state.activeEnvRewrites = whileBodyRewrites;
+			const openLoops = state.loopEnvs.length;
+			d.whileBody = openLoopEnv(d.whileBody, state, node.location);
 			walkLift(d.whileBody, state);
+			if (state.loopEnvs.length > openLoops) state.loopEnvs.pop();
 			state.activeEnvRewrites = savedWhileRewrites;
 			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
@@ -1559,7 +1688,10 @@ function walkLift(node: Node, state: LiftState): void {
 			const doBodyRewrites: PendingEnvRewrite[] = [];
 			for (const rw of savedDoRewrites) doBodyRewrites.push(rw);
 			state.activeEnvRewrites = doBodyRewrites;
+			const openLoops = state.loopEnvs.length;
+			if (!isOnceLoop(node)) d.doBody = openLoopEnv(d.doBody, state, node.location);
 			walkLift(d.doBody, state);
+			if (state.loopEnvs.length > openLoops) state.loopEnvs.pop();
 			state.activeEnvRewrites = savedDoRewrites;
 			popLoopBoundary(state.ss);
 			state.insideLoop -= 1;
@@ -1651,9 +1783,11 @@ function walkLift(node: Node, state: LiftState): void {
 				preRegisterVarTypes(d.testBody, state);
 			}
 			const testLoc = node.location;
+			const testChain = frameChain(state);
+			const testLoopNames = frameLoopNames(d.testBody);
 			walkLiftBody(d.testBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, null as unknown as PreCreatedEnv, null as unknown as NameSet);
+					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null as unknown as NameSet, testLoopNames);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1801,6 +1935,7 @@ interface SharedEnvSnapshot {
 	capturedIdents: Node[];
 	chainNames: string[];
 	chainTypes: Type[];
+	loopEnvs: LoopEnv[];
 }
 
 function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
@@ -1813,8 +1948,10 @@ function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
 		capturedIdents: state.sharedEnvCapturedIdents,
 		chainNames: state.sharedEnvChainNames,
 		chainTypes: state.sharedEnvChainTypes,
+		loopEnvs: state.loopEnvs,
 	};
 	state.sharedEnvActive = false;
+	state.loopEnvs = [];
 	return snap;
 }
 
@@ -1827,6 +1964,7 @@ function restoreSharedEnv(state: LiftState, snap: SharedEnvSnapshot): void {
 	state.sharedEnvCapturedIdents = snap.capturedIdents;
 	state.sharedEnvChainNames = snap.chainNames;
 	state.sharedEnvChainTypes = snap.chainTypes;
+	state.loopEnvs = snap.loopEnvs;
 }
 
 // Walk + lift one capturing closure (Arrow or FunctionExpr). Drives the
@@ -1877,7 +2015,7 @@ function liftCapturingClosureBody(
 	suffix: string,
 	savedActiveRewrites: PendingEnvRewrite[],
 	savedShared: SharedEnvSnapshot,
-	lifter: (n: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null) => Node,
+	lifter: (n: Node, captures: NameSet, state: LiftState, preEnv: PreCreatedEnv, envParamSym: Symbol, routine: Symbol | null, carrierIdx: number) => Node,
 ): Node {
 	const routine = state.pendingRoutine;
 	state.pendingRoutine = null;
@@ -1899,12 +2037,12 @@ function liftCapturingClosureBody(
 	collectOwnDeclNames(body, ownLocals);
 	const savedFnName = state.currentFnName;
 	const savedCurrentParams = state.currentParams;
-	// Loop-site closure: pre-create the snapshot pair env from the FULL capture
-	// set (direct refs + nested-closure refs) so both `setupSharedEnv` and
-	// `liftClosure` agree on the env `_envP` carries. Uses the outer fn name —
-	// must run before the currentFnName rename below.
+	// Decided before the body walk so `setupSharedEnv` and `liftClosure` agree on the
+	// env `_envP` carries; uses the outer fn name, so it runs before the rename below.
 	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
-	if (state.insideLoop > 0) {
+	let carrierIdx: number = -1;
+	const enclosingLoops = savedShared.loopEnvs;
+	if (enclosingLoops.length > 0 || state.insideLoop > 0) {
 		const directIdents: Node[] = [];
 		const direct = detectCaptures(body, cloneScopeStack(state.ss), directIdents, routine);
 		const fullSet = createNameSet();
@@ -1919,9 +2057,27 @@ function liftCapturingClosureBody(
 				if (oi != null) { fullIdents.push(oi); }
 			}
 		}
-		if (fullSet.items.length > 0) {
-			preEnv = createSnapshotPairEnv(fullSet, fullIdents, state, node.location);
+		carrierIdx = innermostLoopHolding(enclosingLoops, fullSet);
+		if (!savedShared.active) {
+			if (carrierIdx >= 0 && !loopsHoldAll(enclosingLoops, carrierIdx, fullSet)) carrierIdx = -1;
+			if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
+				preEnv = createSnapshotPairEnv(fullSet, fullIdents, state, node.location, null);
+			}
+		} else {
+			const snap = splitLoopCaptures(fullSet, fullIdents, enclosingLoops, state.splitLoopLocals);
+			if (snap.names.items.length > 0) {
+				const parentType = carrierIdx >= 0 ? enclosingLoops[carrierIdx].envStructType : savedShared.structType;
+				preEnv = createSnapshotPairEnv(snap.names, snap.idents, state, node.location, parentType);
+			}
 		}
+	}
+	let entryChain = envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
+	if (preEnv != null) {
+		const names: string[] = [preEnv.envName];
+		const types: Type[] = [preEnv.envStructType];
+		for (const n of entryChain.names) names.push(n);
+		for (const t of entryChain.types) types.push(t);
+		entryChain = { names, types };
 	}
 	if (ownCaptures.items.length > 0) {
 		state.closureCounter += 1;
@@ -1931,9 +2087,10 @@ function liftCapturingClosureBody(
 		preRegisterVarTypes(body, state);
 	}
 	const loc = node.location;
+	const bodyLoopNames = frameLoopNames(body);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, preEnv, ownLocals);
+			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopNames);
 		}
 	});
 	state.capturedIdents = [];
@@ -1953,7 +2110,7 @@ function liftCapturingClosureBody(
 	// ancestor captures from at entry.
 	if (captures.items.length > 0 || ownCaptures.items.length > 0) {
 		computeLastUseCapturesForState(captures, state);
-		return lifter(node, captures, state, preEnv, ownEnvParamSym, routine);
+		return lifter(node, captures, state, preEnv, ownEnvParamSym, routine, carrierIdx);
 	}
 	return liftNonCapturing(body, node.paramSyms!, paramTypes, flags, returnType, state, loc, node.nodeType!, routine);
 }
@@ -2008,6 +2165,7 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	renameRepeatedBindings(program);
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
+	state.splitLoopLocals = ctx.splitLoopLocals;
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);
 
