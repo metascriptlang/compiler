@@ -78,18 +78,20 @@ export function isDefined(t: DefineTable, name: string): boolean {
 // (condsyms.nim:34 then commands.nim:703). MetaScript parses argv in one pass, so
 // the seeding runs after it and skips any name the user already set — same
 // precedence, reached from the other side.
-export function initDefines(t: DefineTable, backendName: string, targetOs: string, gcMode: string, mode: number): void {
+export function initDefines(t: DefineTable, backendName: string, targetOs: string, cpu: string, gcMode: string, mode: number): void {
 	const os = targetOs == "darwin" ? "macos" : targetOs;
 	const modeName = mode == 2 ? "danger" : (mode == 1 ? "release" : "debug");
 
 	seed(t, "msc", "true");
 	seed(t, backendName, "true");
 	seed(t, os, "true");
+	seed(t, cpu, "true");
 	seed(t, gcMode, "true");
 	seed(t, modeName, "true");
 
 	seed(t, "backend", backendName);
 	seed(t, "os", os);
+	seed(t, "cpu", cpu);
 	seed(t, "gc", gcMode);
 	seed(t, "mode", modeName);
 }
@@ -173,15 +175,17 @@ test "define: undef removes" {
 	assert !isDefined(t, "gone");
 }
 
-test "initDefines seeds backend, os, gc and mode" {
+test "initDefines seeds backend, os, cpu, gc and mode" {
 	const t = createDefineTable();
-	initDefines(t, "js", "darwin", "orc", 0);
+	initDefines(t, "js", "darwin", "arm64", "orc", 0);
 	assert isDefined(t, "js");
 	assert isDefined(t, "macos");
 	assert isDefined(t, "orc");
 	assert isDefined(t, "debug");
 	assert definedValue(t, "backend") == "js";
 	assert definedValue(t, "os") == "macos";
+	assert isDefined(t, "arm64");
+	assert definedValue(t, "cpu") == "arm64";
 	assert definedValue(t, "gc") == "orc";
 	assert definedValue(t, "mode") == "debug";
 }
@@ -189,14 +193,14 @@ test "initDefines seeds backend, os, gc and mode" {
 test "initDefines never overwrites a user -d" {
 	const t = createDefineTable();
 	applyDefineSwitch(t, "-d:os=custom");
-	initDefines(t, "c", "linux", "drc", 1);
+	initDefines(t, "c", "linux", "amd64", "drc", 1);
 	assert definedValue(t, "os") == "custom";
 	assert isDefined(t, "linux");
 }
 
 test "isDefined answers computed os families" {
 	const t = createDefineTable();
-	initDefines(t, "c", "linux", "drc", 0);
+	initDefines(t, "c", "linux", "amd64", "drc", 0);
 	assert isDefined(t, "posix");
 	assert isDefined(t, "unix");
 	assert !isDefined(t, "bsd");
@@ -204,14 +208,14 @@ test "isDefined answers computed os families" {
 
 test "isDefined: windows is not posix" {
 	const t = createDefineTable();
-	initDefines(t, "c", "windows", "drc", 0);
+	initDefines(t, "c", "windows", "amd64", "drc", 0);
 	assert !isDefined(t, "posix");
 	assert isDefined(t, "windows");
 }
 
 test "formatDefines lists names with values" {
 	const t = createDefineTable();
-	initDefines(t, "c", "linux", "drc", 2);
+	initDefines(t, "c", "linux", "amd64", "drc", 2);
 	const listing = formatDefines(t);
 	assert listing.contains("  c\n");
 	assert listing.contains("  backend=c\n");

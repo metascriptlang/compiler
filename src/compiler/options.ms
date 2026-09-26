@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
-import { argv, exit, platform } from "std/process";
+import { argv, exit, platform, arch } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
@@ -89,6 +89,14 @@ function cpuPointerBytes(cpu: string): int32 {
 function cpuFloatBytes(cpu: string): int32 {
 	if (cpu == "avr" || cpu == "msp430") return 4;
 	return 8;
+}
+
+export function buildCpu(targetOs: string, cpuTarget: string): string {
+	if (cpuTarget != "") return cpuTarget;
+	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
+	if (targetOs == "solana") return "sbf";
+	if (targetOs == platform || targetOs == "bare") return arch;
+	return "amd64";
 }
 
 function targetCpuName(targetOs: string, cpuTarget: string): string {
@@ -355,7 +363,7 @@ export function parseArgs(): CliOptions {
 	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
 	// commands.nim:703).
 	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
-	initDefines(opts.defines, backendName, opts.targetOs, opts.gcMode, opts.mode);
+	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
 	if (opts.showDefines) {
 		console.log(formatDefines(opts.defines));
 		exit(0);
@@ -412,4 +420,21 @@ test "int64 alignment packs to 4 only on i386 outside windows" {
 	assert floatInt64Align(resolveTargetSizes("wasm", "")) == 8;
 	assert floatInt64Align(resolveTargetSizes("bare", "arm")) == 8;
 	assert floatInt64Align(resolveTargetSizes("macos", "")) == 8;
+}
+
+test "buildCpu: a host build and a bare build take the compiler's own cpu" {
+	assert buildCpu(platform, "") == arch;
+	assert buildCpu("bare", "") == arch;
+}
+
+test "buildCpu: a cross build without --cpu takes amd64, as the C compiler is told" {
+	assert buildCpu(platform == "linux" ? "windows" : "linux", "") == "amd64";
+}
+
+test "buildCpu: --cpu wins, wasm and emcc are wasm32, solana is sbf" {
+	assert buildCpu("linux", "arm64") == "arm64";
+	assert buildCpu(platform, "i386") == "i386";
+	assert buildCpu("wasm", "") == "wasm32";
+	assert buildCpu("emcc", "") == "wasm32";
+	assert buildCpu("solana", "") == "sbf";
 }
