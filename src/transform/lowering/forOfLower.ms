@@ -9,17 +9,17 @@
 //                      const item = arr[$idx]; $idx++; body } }
 
 import {
-	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
-	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData,
+	Node, NodeKind, NodeData, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
+	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type, charType, stringType, noneType, createArray, createSizedArray, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, isIterator, isMaybeType, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	makeIf, makeBreak, makeBool, makeString, runtimeRef, extractBodyStmts, boolToDeclKind,
+	makeIf, makeBreak, makeBool, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -112,11 +112,12 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const isString = iterType != null && iterType.kind == TypeKind.String;
 	const lengthCanChange = isString || (elemArrType != null && elemArrType.kind == TypeKind.Array);
 
-	// Re-read an lvalue iterable every iteration, as Nim's items reads a symbol argument
+	// Re-read a path of reads from a symbol every iteration, as Nim's items maps such an argument
 	// (transf.nim putArgInto, paDirectMapping): a snapshot temp ends its live range inside the
 	// loop and costs the element binding its cursor (+40-60% on a Box[] loop, 2026-09-26).
-	const isStableLvalue = d.forOfIterable.kind == NodeKind.Identifier
-		|| d.forOfIterable.kind == NodeKind.MemberExpr;
+	const iterable = d.forOfIterable;
+	const isStableLvalue = iterable.kind == NodeKind.Identifier
+		|| (iterable.kind == NodeKind.MemberExpr && isSymbolPath(iterable));
 
 	const preamble: Node[] = [];
 
@@ -234,8 +235,23 @@ function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node 
 	return call;
 }
 
-// Clone a simple expression node (Identifier or MemberExpr) for reuse in lowered code.
-// Avoids sharing a single AST node across multiple parents.
+function isSymbolPath(node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) return true;
+	if (node.kind == NodeKind.MemberExpr) return isSymbolPath((node.data as MemberExprData).object);
+	if (node.kind == NodeKind.HiddenDeref) return isSymbolPath((node.data as HiddenDerefData).expr);
+	if (node.kind == NodeKind.TypeAssertion) return isSymbolPath((node.data as TypeAssertionData).asExpr);
+	if (isVariantRead(node)) return isSymbolPath((node.data as HiddenStdConvData).convExpr);
+	return false;
+}
+
+function isVariantRead(node: Node): boolean {
+	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
+	const d = node.data as HiddenStdConvData;
+	const from = d.convExpr.nodeType;
+	return from != null && from.kind == TypeKind.Union
+		&& d.convType.kind != TypeKind.Union && !isMaybeType(d.convType);
+}
+
 function cloneExpr(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.Identifier) {
 		return cloneIdent(node, loc);
@@ -247,8 +263,27 @@ function cloneExpr(node: Node, loc: SourceLocation): Node {
 		clone.resolvedSym = node.resolvedSym;
 		return clone;
 	}
-	// Fallback: return as-is (temp ident from non-lvalue path)
-	return node;
+	if (node.kind == NodeKind.HiddenDeref) {
+		const clone = makeHiddenDeref(cloneExpr((node.data as HiddenDerefData).expr, loc), loc);
+		clone.nodeType = node.nodeType;
+		return clone;
+	}
+	if (node.kind == NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		const clone = createNodeAt(NodeKind.TypeAssertion, { asExpr: cloneExpr(d.asExpr, loc), asType: d.asType } as TypeAssertionData, loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
+		return clone;
+	}
+	if (isVariantRead(node)) {
+		const d = node.data as HiddenStdConvData;
+		const clone = createNodeAt(NodeKind.HiddenSubConv, { convExpr: cloneExpr(d.convExpr, loc), convType: d.convType } as NodeData, loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
+		clone.variantSlot = node.variantSlot;
+		return clone;
+	}
+	throw new Error(`internal: for-of re-reads an iterable that is not a symbol path (node kind ${node.kind})`);
 }
 
 // ===== Pattern Expansion Helper =====
@@ -265,14 +300,34 @@ test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const
 
 test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) == 3; }
 
-function loweredLoop(iterType: Type): Node {
-	const parsed = parseInput("for (const x of arr) { use(x); }");
+function loweredStmts(src: string, iterType: Type): Node[] {
+	const parsed = parseInput(src);
 	if (!parsed.ok) throw new Error(parsed.error);
 	const stmt = getStmts(parsed.value)[0];
 	(stmt.data as ForOfStmtData).forOfIterable.nodeType = iterType;
 	const block = getStmts(lowerForOf(parsed.value, makeCtx()))[0];
-	const stmts = (block.data as BlockStmtData).statements;
+	return (block.data as BlockStmtData).statements;
+}
+
+function loweredLoop(iterType: Type): Node {
+	const stmts = loweredStmts("for (const x of arr) { use(x); }", iterType);
 	return stmts[stmts.length - 1];
+}
+
+test "a call in the iterable path runs once, into a temp before the loop" {
+	const stmts = loweredStmts("for (const x of mk().inner.items) { use(x); }", createArray(stringType()));
+	assert stmts.length == 4;
+	const iter = (stmts[0].data as VariableDeclData).initializer;
+	assert iter.kind == NodeKind.MemberExpr;
+	const len = (stmts[2].data as VariableDeclData).initializer;
+	assert ((len.data as MemberExprData).object.kind == NodeKind.Identifier);
+}
+
+test "a field path from a symbol through a cast is read again at each element" {
+	const stmts = loweredStmts("for (const x of (n.data as D).items) { use(x); }", createArray(stringType()));
+	assert stmts.length == 3;
+	assert stmts[0].kind == NodeKind.VariableDecl;
+	assert stmts[2].kind == NodeKind.WhileStmt;
 }
 
 function loopBody(loop: Node): Node[] {
