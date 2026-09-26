@@ -258,3 +258,4 @@ import "./bug547MixedUnionDiscriminant";
 import "./bug548NullableIntoNonNullSlot";
 import "./bug549GenericConstraintAtCall";
 import "./bug550ConstructorRestArgs";
+import "./bug551PhantomGenericBody";
