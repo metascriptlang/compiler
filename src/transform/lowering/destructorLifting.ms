@@ -28,6 +28,7 @@ import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPr
 import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
@@ -948,7 +949,8 @@ function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): S
 		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
 		if (fallback == null) fallback = m.sym;
 	}
-	return fallback;
+	if (fallback != null) return fallback;
+	return lookupInstanceHook(typeName, methodName);
 }
 
 function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): boolean {

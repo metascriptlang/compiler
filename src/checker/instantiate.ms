@@ -6,8 +6,8 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
-import { resolveAnnotation } from "./resolvePass";
+import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type } from "./types";
+import { resolveAnnotation, ensureShaped } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -120,6 +120,35 @@ export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 	return null as unknown as CtorEntry;
 }
 
+let _instanceHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
+	const key = instanceName + "." + methodName;
+	if (!_instanceHooks.has(key)) return null;
+	return _instanceHooks.get(key);
+}
+
+function isUserHookName(name: string): boolean {
+	return name == "onDestroy" || name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onClone" || name == "onTrace";
+}
+
+function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
+	for (const raw of classData.classBody) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member == null || member.kind != NodeKind.MethodDecl) continue;
+		const md = member.data as MethodDeclDataLocal;
+		if (md.methodIsStatic || !isUserHookName(md.methodName)) continue;
+		const hookSym = member.resolvedSym;
+		if (hookSym == null) {
+			addError(ctx, "internal: hook '" + md.methodName + "' of generic class instance '" + instanceName + "' has no symbol", loc.line, loc.column);
+			continue;
+		}
+		ensureShaped(hookSym, ctx);
+		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
+		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, inst);
+	}
+}
+
 function pendingInstanceKey(node: Node, name: string): string {
 	const owner = node.resolvedSym != null ? node.resolvedSym.modulePath : "";
 	return owner + "::" + name;
@@ -204,14 +233,20 @@ function readonlyViewSuffix(types: Type[]): string {
 
 // Add a type symbol to scope if not already present. Returns true if injected.
 // Prefers caller's authoritative symbol type; falls back to provided type.
-function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
-	if (lookupSymbol(ctx.table, name) != null) return;
+function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): boolean {
+	if (lookupSymbol(ctx.table, name) != null) return false;
 	const callerSym = lookupSymbol(callerCtx.table, name);
 	const symType = callerSym != null ? callerSym.symbolType : fallbackType;
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
 	sym.nameId = getIdentId(ctx.table.identCache, name);
 	addSymbolToScope(ctx.table.current, sym);
 	injected.push(sym);
+	return true;
+}
+
+function injectFieldTypeSyms(struct: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
+	if (struct.typeChildren == null) return;
+	for (const field of struct.typeChildren) injectConcreteTypeSyms(field, ctx, callerCtx, injected);
 }
 
 // Inject concrete type symbols into scope so resolveAnnotation finds them during re-check.
@@ -227,7 +262,8 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	// flow-based narrowing exactly.
 	if (t.kind == TypeKind.Ref && tr != null) {
 		if (tr.kind == TypeKind.Struct && tr.typeName != "") {
-			tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected);
+			if (tryInjectTypeSym(tr.typeName, t, ctx, callerCtx, injected)) injectFieldTypeSyms(tr, ctx, callerCtx, injected);
+			return;
 		}
 		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
 		return;
@@ -248,8 +284,15 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	// T=Color emits the function signature mangled correctly but the body's
 	// `out` declared as untyped msRefArray, breaking the assignment site at
 	// C compile time.
-	if ((t.kind == TypeKind.Struct || t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct)
-			&& t.typeName != "") {
+	if (t.kind == TypeKind.Struct) {
+		if (t.typeName == "" || tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected)) injectFieldTypeSyms(t, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind == TypeKind.EnumLiteral && tr != null) {
+		injectConcreteTypeSyms(tr, ctx, callerCtx, injected);
+		return;
+	}
+	if ((t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct) && t.typeName != "") {
 		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
 		return;
 	}
@@ -889,6 +932,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = classSym;
 	addPendingInstance(classNode);
+	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
 }
 
 // Register callback at module load time
@@ -912,4 +956,35 @@ test "an instantiation at the depth limit is still attempted" {
 	instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
 	assert ctx.errors.length == 0;
 	assert ctx.genericInstDepth == 50;
+}
+
+function callerDeclaring(name: string, t: Type): CheckerContext {
+	const ctx = createContext();
+	const sym = makeSymbol(name, SymbolKind.Enum, t, false);
+	sym.nameId = getIdentId(ctx.table.identCache, name);
+	addSymbolToScope(ctx.table.current, sym);
+	return ctx;
+}
+
+test "a struct type argument makes its enum field type visible in the instance body" {
+	const color = createEnum("Color", ["Red", "Blue"], [0, 1]);
+	const caller = callerDeclaring("Color", color);
+	const body = createContext();
+	assert lookupSymbol(body.table, "Color") == null;
+	const injected: Symbol[] = [];
+	injectConcreteTypeSyms(createStruct("Pixel", ["c", "x"], [color, int32Type()], true), body, caller, injected);
+	assert lookupSymbol(body.table, "Color") != null;
+	removeInjectedSyms(body, injected);
+	assert lookupSymbol(body.table, "Color") == null;
+}
+
+test "a class type argument makes the enum of a member type one struct deeper visible" {
+	const kind = createEnum("EvKind", ["Click", "Key"], [0, 1]);
+	const caller = callerDeclaring("EvKind", kind);
+	const body = createContext();
+	const click = createStruct("ClickEv", ["kind", "x"], [createEnumLiteral(kind, "Click"), int32Type()], true);
+	const injected: Symbol[] = [];
+	injectConcreteTypeSyms(createRef(createStruct("Holder", ["ev"], [click], false)), body, caller, injected);
+	assert lookupSymbol(body.table, "EvKind") != null;
+	assert lookupSymbol(body.table, "ClickEv") != null;
 }
