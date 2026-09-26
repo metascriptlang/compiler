@@ -7,10 +7,12 @@
 // tinfl_decompress state machine. Exposes one-shot helpers and a streaming
 // handle-based API for large inputs.
 
+@include("runtime/compress/inflate.h");
+@compile("runtime/compress/inflate.c");
+@compile("vendor/miniz/miniz.c");
+@compile("vendor/miniz/miniz_tinfl.c");
+
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
-import { msInflateCtx } from "runtime/compress/inflate.h";
-import { mz_ulong } from "vendor/miniz/miniz.h";
-import { tinfl_decompressor } from "vendor/miniz/miniz_tinfl.h";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
 export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
