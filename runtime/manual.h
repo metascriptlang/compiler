@@ -278,6 +278,8 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 /* ===== Buffer runtime ===== */
 #include "runtime/core/buffer.h"
 
+#include "runtime/core/hashBits.h"
+
 /* ===== Type Aliases ===== */
 typedef bool MS_BOOL;
 #define MS_TRUE  true
