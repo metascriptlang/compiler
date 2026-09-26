@@ -203,6 +203,26 @@ const DANGER_PASSC = (IS_WIN && HAS_CLANG) ? " --passC=-Wno-error=incompatible-p
 // correct on the hosts where that combination is known to work.
 const SAN_CC = !SAN ? "" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
 
+const EXIT_SAN_HOST_BLOCKED = 77;
+
+function sanBuildCmd(entry: string, bin: string): string {
+	return MSC_CMD + " build " + entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
+}
+
+function asanLinkGap(): string {
+	const dir = OUT_DIR + "sanprobe/";
+	ensureDir(dir);
+	const src = dir + "p.ms";
+	const bin = dir + "p" + (IS_WIN ? ".exe" : "");
+	writeFile(src, "console.log(\"ok\");\n");
+	if (exists(bin)) { remove(bin); }
+	const r = runCapture(sanBuildCmd(src, bin));
+	if (r.exitCode == 0 && exists(bin)) { return ""; }
+	const undefinedAsan = firstLineContaining(r.output, "__asan_");
+	if (undefinedAsan != "") { return undefinedAsan; }
+	return firstLineContaining(r.output, "-lasan");
+}
+
 // The js lane runs its binary through `node`. Without node installed the cell
 // launches, fails to start, and reports a red that is about the HOST, not the
 // backend — worse than no lane at all, because it looks like a JS-backend bug.
@@ -805,8 +825,7 @@ function planJobs(specs: Spec[]): BuildJob[] {
 	for (const spec of specs) {
 		if (SAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".san";
-			const cmd = MSC_CMD + " build " + spec.entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
-			jobs.push({ spec, lane: "san", cmd, cell: makeCell(spec, "san", bin) });
+			jobs.push({ spec, lane: "san", cmd: sanBuildCmd(spec.entry, bin), cell: makeCell(spec, "san", bin) });
 			continue;
 		}
 		if (spec.maxRssMb >= 0.0) {
@@ -1001,6 +1020,14 @@ function main(): void {
 	}
 	if (!RAISER && !SAN) {
 		progress("  !! raiser lane off — no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on");
+	}
+
+	if (SAN) {
+		const gap = asanLinkGap();
+		if (gap != "") {
+			progress("  !! SAN BLOCKED — no C driver on this host links the ASan runtime: " + gap);
+			exit(EXIT_SAN_HOST_BLOCKED);
+		}
 	}
 
 	const stale = stalenessWarning();
