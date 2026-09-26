@@ -239,8 +239,8 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 			i += 1;
 		}
 	} else {
-		body = "if (d.length !== v.length) return " + copy + "(v); "
-			+ "if (ArrayBuffer.isView(d)) { d.set(v); return d; } "
+		body = "if (ArrayBuffer.isView(d)) { if (d.length !== v.length) return " + copy + "(v); d.set(v); return d; } "
+			+ "d.length = v.length; "
 			+ "for (let i = 0; i < v.length; i++) d[i] = " + assignExpr(gen, t.typeReturn, "d[i]", "v[i]") + "; ";
 	}
 	return "function " + name + "(d, v) { if (v === null || v === undefined) return v; "
