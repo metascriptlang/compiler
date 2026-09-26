@@ -247,6 +247,7 @@ import "./bug301JsonEnumMemberNames";
 import "./bug302AsBytesReadOnlyView";
 import "./bug532SameShapeObjectTypesRelateExactly";
 import "./bug333SeqElemWorklist";
+import "./bug462AwaitReadsOperandsFirst";
 import "./bug212Float32ConstFold";
 import "./bug480UnsignedShiftC";
 import "./bug481ShiftCountMaskC";

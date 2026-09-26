@@ -8,7 +8,7 @@
 // V1: No Promise wrapper (runtime/codegen concern, not AST transform).
 
 import {
-	Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, Symbol, SymbolKind, Type, TypeKind,
+	Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
 	BlockStmtData, FunctionDeclData, FunctionExprData,
 	ArrowFunctionData, MethodDeclData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
@@ -20,12 +20,14 @@ import {
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { makeSymbol } from "../../checker/symbol";
-import { booleanType } from "../../checker/types";
+import { booleanType, isStructType } from "../../checker/types";
 import { TransformContext } from "../context";
 import {
 	syntheticToken, makeVarDecl, makeReturn, makeTypedIdentResolved, makeExprStmt, makeAssign,
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
+	makeBinary, isValueLayoutType,
 } from "../util";
+import { cloneIfPure } from "../coercion/intArithJS";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
@@ -83,19 +85,96 @@ function tempRef(sym: Symbol, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(sym, sym.symbolType, loc);
 }
 
-function lowerOperands(ops: Node[], pre: Node[]): void {
-	let any = false;
-	for (const op of ops) {
-		if (hasAwait(op)) any = true;
+// A value aggregate stays in place: a temp copy would take the writes a call
+// or a store makes through it. JS reads before an await: NIM-REF TR-24.
+function snapshotsLikeJs(t: Type | null): boolean {
+	if (t == null) return false;
+	const k = t.kind;
+	if (k == TypeKind.Void || k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span
+		|| k == TypeKind.Tuple || k == TypeKind.Var || k == TypeKind.Lent || k == TypeKind.Sink
+		|| k == TypeKind.Borrow || k == TypeKind.Ptr || k == TypeKind.Varargs || k == TypeKind.CString
+		|| k == TypeKind.Null || k == TypeKind.Unknown || k == TypeKind.None || k == TypeKind.Pending) return false;
+	return !isStructType(t) && !isValueLayoutType(t);
+}
+
+function isStorageRead(e: Node): boolean {
+	if (e.kind == NodeKind.Identifier) {
+		const s = e.resolvedSym;
+		if (s == null || !s.symFlags.has(SymbolFlag.Mutable)) return false;
+		return s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Parameter;
 	}
-	if (!any) return;
+	if (e.kind == NodeKind.MemberExpr) {
+		const s = e.resolvedSym;
+		return s == null || s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Property;
+	}
+	return e.kind == NodeKind.ArrayAccess;
+}
+
+function readsBeforeAwait(e: Node): boolean {
+	return isStorageRead(e) && snapshotsLikeJs(e.nodeType);
+}
+
+function bindIfEarly(e: Node, pre: Node[]): Node {
+	if (!readsBeforeAwait(e) && !(isCallKind(e) && !isVoidType(e.nodeType))) return e;
+	return tempRef(bindTemp(e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
+}
+
+function lowerOperands(ops: Node[], pre: Node[], receivers: int32): void {
+	let last = -1;
+	for (let i = 0; i < ops.length; i += 1) {
+		if (hasAwait(ops[i])) last = i;
+	}
+	if (last < 0) return;
 	for (let i = 0; i < ops.length; i += 1) {
 		if (ops[i] == null) continue;
 		ops[i] = lowerAwaitExpr(ops[i], pre);
-		if (isCallKind(ops[i]) && !isVoidType(ops[i].nodeType)) {
+		if (i < last && i >= receivers && readsBeforeAwait(ops[i])) {
+			ops[i] = tempRef(bindTemp(ops[i], DeclKind.Const, ops[i].nodeType, pre, ops[i].location), ops[i].location);
+		} else if (isCallKind(ops[i]) && !isVoidType(ops[i].nodeType)) {
 			ops[i] = tempRef(bindTemp(ops[i], DeclKind.Const, ops[i].nodeType, pre, ops[i].location), ops[i].location);
 		}
 	}
+}
+
+function settleTarget(e: Node, pre: Node[]): Node {
+	if (e.kind == NodeKind.ArrayAccess) {
+		const d = e.data as ArrayAccessData;
+		d.array = settleTarget(d.array, pre);
+		d.index = bindIfEarly(lowerAwaitExpr(d.index, pre), pre);
+	} else if (e.kind == NodeKind.MemberExpr) {
+		const d = e.data as MemberExprData;
+		d.object = settleObject(lowerAwaitExpr(d.object, pre), pre);
+	}
+	return e;
+}
+
+function settleObject(obj: Node, pre: Node[]): Node {
+	if (obj.kind == NodeKind.HiddenDeref) {
+		const hd = obj.data as HiddenDerefData;
+		hd.expr = settleObject(hd.expr, pre);
+		return obj;
+	}
+	const bound = bindIfEarly(obj, pre);
+	return bound == obj ? settleTarget(obj, pre) : bound;
+}
+
+function lowerAssign(e: Node, pre: Node[]): Node {
+	const d = e.data as BinaryExprData;
+	if (!hasAwait(d.right)) {
+		d.left = lowerAwaitExpr(d.left, pre);
+		return e;
+	}
+	d.left = settleTarget(d.left, pre);
+	const readBack = d.operator == "=" ? null : cloneIfPure(d.left);
+	if (readBack == null) {
+		d.right = bindIfEarly(lowerAwaitExpr(d.right, pre), pre);
+		return e;
+	}
+	const before = tempRef(bindTemp(readBack, DeclKind.Const, d.left.nodeType, pre, e.location), e.location);
+	const value = lowerAwaitExpr(d.right, pre);
+	d.right = makeBinary(before, d.operator.slice(0, d.operator.length - 1), value, e.location);
+	d.operator = "=";
+	return e;
 }
 
 function lowerShortCircuit(e: Node, pre: Node[]): Node {
@@ -139,8 +218,9 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as BinaryExprData;
 		if (d.operator == "&&" || d.operator == "||") return lowerShortCircuit(e, pre);
 		if (d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") return e;
+		if (isAssignOp(d.operator)) return lowerAssign(e, pre);
 		const ops = [d.left, d.right];
-		lowerOperands(ops, pre);
+		lowerOperands(ops, pre, 0);
 		d.left = ops[0];
 		d.right = ops[1];
 	} else if (k == NodeKind.ConditionalExpr) {
@@ -151,22 +231,22 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const viaMember = d.callee.kind == NodeKind.MemberExpr;
 		const ops: Node[] = [viaMember ? (d.callee.data as MemberExprData).object : d.callee];
 		for (const a of d.arguments) ops.push(a);
-		lowerOperands(ops, pre);
+		lowerOperands(ops, pre, 1);
 		if (viaMember) (d.callee.data as MemberExprData).object = ops[0];
 		else d.callee = ops[0];
 		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = ops[i + 1];
 	} else if (k == NodeKind.NewExpr) {
-		lowerOperands((e.data as NewExprData).newArguments, pre);
+		lowerOperands((e.data as NewExprData).newArguments, pre, 0);
 	} else if (k == NodeKind.ArrayAccess) {
 		const d = e.data as ArrayAccessData;
 		const ops = [d.array, d.index];
-		lowerOperands(ops, pre);
+		lowerOperands(ops, pre, 0);
 		d.array = ops[0];
 		d.index = ops[1];
 	} else if (k == NodeKind.ArrayLiteral) {
-		lowerOperands((e.data as ArrayLiteralData).elements, pre);
+		lowerOperands((e.data as ArrayLiteralData).elements, pre, 0);
 	} else if (k == NodeKind.ObjectLiteral) {
-		lowerOperands((e.data as ObjectLiteralData).properties, pre);
+		lowerOperands((e.data as ObjectLiteralData).properties, pre, 0);
 	} else if (k == NodeKind.UnaryExpr) {
 		const d = e.data as UnaryExprData;
 		d.operand = lowerAwaitExpr(d.operand, pre);
