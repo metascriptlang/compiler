@@ -869,6 +869,14 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	if (destroyHook.length > 0) {
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
+	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
+	if (traceSym == null && sharedName) traceSym = lookupHookSym(className + "Trace");
+	if (traceSym != null) {
+		const traceHook = mangle(traceSym.name);
+		ensureDrcProto(g, traceHook, traceSym);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.isCyclic = MS_TRUE;`);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	}
 }
 
 // TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
