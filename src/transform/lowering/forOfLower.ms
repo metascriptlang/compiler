@@ -1,23 +1,25 @@
 // For-Of Lowering — transforms for-of loops into index-based while loops
 // Follows reference for_of_lower.zig
 //
-// Arrays/Strings (a string yields its UTF-8 bytes as char, as Nim's items does for string):
+// Arrays/Strings (a string yields its bytes as char; arrays and strings check
+// their length after each element, as Nim's items in lib/system/iterators.nim):
 //   for (const item of arr) { body }
-//   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
-//       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
+//   → { let $idx = 0; const $len = arr.length;
+//       while (true) { if (arr.length != $len) throw "..."; if (!($idx < $len)) break;
+//                      const item = arr[$idx]; $idx++; body } }
 
 import {
-	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol,
-	BlockStmtData, WhileStmtData, VariableDeclData, CallExprData,
+	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
+	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type, charType, stringType, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	runtimeRef, extractBodyStmts, boolToDeclKind,
+	makeIf, makeBreak, makeBool, makeString, runtimeRef, extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -108,11 +110,11 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 			&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array)
 		? iterType.typeReturn : iterType;
 	const isString = iterType != null && iterType.kind == TypeKind.String;
+	const lengthCanChange = isString || (elemArrType != null && elemArrType.kind == TypeKind.Array);
 
-	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
-	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
-	// if the loop body pushes to the original (reallocation invalidates the copy).
-	// For non-lvalue expressions (calls, etc.), still use a temp to evaluate once.
+	// Re-read an lvalue iterable every iteration, as Nim's items reads a symbol argument
+	// (transf.nim putArgInto, paDirectMapping): a snapshot temp ends its live range inside the
+	// loop and costs the element binding its cursor (+40-60% on a Box[] loop, 2026-09-26).
 	const isStableLvalue = d.forOfIterable.kind == NodeKind.Identifier
 		|| d.forOfIterable.kind == NodeKind.MemberExpr;
 
@@ -133,7 +135,6 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	idxDecl.resolvedSym = idxSym;
 	preamble.push(idxDecl);
 
-	// const $len = <iter>.length;  — captured once (new elements from push won't be visited)
 	const lenDecl = makeVarDecl(lenSym.name, lengthOf(iterExpr, isString, loc), DeclKind.Const, loc);
 	lenDecl.resolvedSym = lenSym;
 	preamble.push(lenDecl);
@@ -208,11 +209,21 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		bi += 1;
 	}
 
-	const whileCond = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
-	const whileBody = makeBlock(whileStmts, loc);
-	const whileNode = makeWhile(whileCond, whileBody, loc);
+	const inRange = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
+	if (!lengthCanChange) {
+		preamble.push(makeWhile(inRange, makeBlock(whileStmts, loc), loc));
+		return makeBlock(preamble, loc);
+	}
 
-	preamble.push(whileNode);
+	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
+	const message = `the length of the ${isString ? "string" : "array"} changed while iterating over it`;
+	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(message, loc) }, loc);
+	const guarded: Node[] = [
+		makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc),
+		makeIf(makeUnary("!", inRange, loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc),
+	];
+	for (const s of whileStmts) guarded.push(s);
+	preamble.push(makeWhile(makeBool(true, loc), makeBlock(guarded, loc), loc));
 	return makeBlock(preamble, loc);
 }
 
@@ -264,12 +275,31 @@ function loweredLoop(iterType: Type): Node {
 	return stmts[stmts.length - 1];
 }
 
+function loopBody(loop: Node): Node[] {
+	return ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+}
+
+test "an array for-of raises when the length changed before the next element" {
+	const loop = loweredLoop(createArray(int32Type()));
+	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BooleanLiteral;
+	const guard = loopBody(loop)[0];
+	assert guard.kind == NodeKind.IfStmt;
+	const raise = ((guard.data as IfStmtData).consequent.data as BlockStmtData).statements[0];
+	assert raise.kind == NodeKind.ThrowStmt;
+	assert ((raise.data as ThrowStmtData).throwArg.data as StringLiteralData).value.contains("array changed while iterating");
+}
+
 test "a string for-of binds each byte as a char" {
 	const loop = loweredLoop(stringType());
-	const item = ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements[0];
+	const item = loopBody(loop)[2];
 	assert item.kind == NodeKind.VariableDecl;
 	assert item.nodeType!.kind == TypeKind.Char;
 	const read = (item.data as VariableDeclData).initializer;
 	assert read.kind == NodeKind.CallExpr;
 	assert ((read.data as CallExprData).callee.data as IdentifierData).name == "msStringByteAt";
+}
+
+test "a sized array for-of keeps the bounded loop" {
+	const loop = loweredLoop(createSizedArray(int32Type(), 3));
+	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BinaryExpr;
 }
