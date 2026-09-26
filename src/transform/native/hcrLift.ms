@@ -6,21 +6,22 @@
 //   function increment(): void { count += 1; }
 //
 // After (HCR):
-//   @emit("/*TYPESECTION*/typedef struct { double count; } _GlobalState;")
-//   @emit("/*VARSECTION*/_GlobalState* _ms_gs;")
+//   struct _GlobalState { _struct_hash: uint64; count: number; }
+//   @emit("_GlobalState* _ms_gs;")
 //   function increment(): void { (*_ms_gs).count += 1; }
 //   @emit("void* _hcr_handover(void* old_state) { MS_HCR_HANDOVER(_GlobalState, ...) }")
 //
-// Codegen sees normal AST: MemberExpr, HiddenDeref, @emit. Zero HCR awareness needed.
+// Codegen sees normal AST: StructDecl, MemberExpr, HiddenDeref, @emit. Zero HCR awareness needed.
 
 import {
 	Node, NodeKind, SourceLocation, createNode,
 	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, Type, TypeKind } from "../../ast/node";
-import { createStruct, createPtr } from "../../checker/types";
+import { createStruct, createPtr, createPrimitive } from "../../checker/types";
 import { TransformContext } from "../context";
 import { djb2 } from "std/hash";
 import { walkNode } from "../walker";
 import { makeIdentResolved, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
+import { typeKey } from "../../codegen/c/types";
 
 // ===== Collected Global Info =====
 
@@ -64,9 +65,8 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 		return program;
 	}
 
-	// Build the GlobalState Object type (for MemberExpr type resolution)
-	const fieldNames: string[] = [];
-	const fieldTypes: Type[] = [];
+	const fieldNames: string[] = ["_struct_hash"];
+	const fieldTypes: Type[] = [createPrimitive(TypeKind.Uint64)];
 	for (let i = 0; i < globals.length; i += 1) {
 		fieldNames.push(globals[i].name);
 		fieldTypes.push(globals[i].declType);
@@ -83,17 +83,16 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 		kept[i] = rewriteGlobalRefs(kept[i], globalSyms, gsPtrType, loc);
 	}
 
-	// Pass 3: Synthesize HCR nodes via @emit
 	const emitNodes: Node[] = [];
-
-
-	// GlobalState struct typedef (with _struct_hash for reload safety)
-	let structDef = "/*TYPESECTION*/typedef struct { uint64_t _struct_hash;";
-	for (let i = 0; i < globals.length; i += 1) {
-		structDef = structDef + " " + typeToCStr(globals[i].declType) + " " + globals[i].name + ";";
-	}
-	structDef = structDef + " } _GlobalState;";
-	emitNodes.push(makeEmitStmt(structDef, loc));
+	const stateDecl = createNode(NodeKind.StructDecl, {
+		interfaceName: "_GlobalState",
+		interfaceFields: fieldNames,
+		interfaceFieldTypes: [],
+		interfaceExtends: [],
+		nameLocation: loc,
+	}, syntheticToken(loc));
+	stateDecl.nodeType = gsType;
+	emitNodes.push(stateDecl);
 
 	// Structural hash of GlobalState layout (djb2 over field names + types)
 	const structHash = computeStructHash(globals);
@@ -199,63 +198,13 @@ function makeEmitStmt(code: string, loc: SourceLocation): Node {
 	return createNode(NodeKind.ExprStmt, { expr: macroNode }, syntheticToken(loc));
 }
 
-// ===== Type to C String =====
-// Minimal mapping for GlobalState struct fields.
-
-function typeToCStr(t: Type): string {
-	if (t == null) return "void*";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 => "double",
-		TypeKind.String => "msString",
-		TypeKind.Boolean => "MS_BOOL",
-		TypeKind.Int8 => "int8_t",
-		TypeKind.Int16 => "int16_t",
-		TypeKind.Int32 => "int32_t",
-		TypeKind.Int64 => "int64_t",
-		TypeKind.Uint8 => "uint8_t",
-		TypeKind.Uint16 => "uint16_t",
-		TypeKind.Uint32 => "uint32_t",
-		TypeKind.Uint64 => "uint64_t",
-		TypeKind.Float32 => "float",
-		TypeKind.Struct => {
-			if (t.typeName != null && t.typeName.length > 0) {
-				return t.typeName;
-			} else {
-				return "void*";
-			}
-		},
-		TypeKind.Array => {
-			if (t.typeReturn != null) {
-				return match (t.typeReturn.kind) {
-					TypeKind.Number | TypeKind.Float64 => "msNumberArray",
-					TypeKind.String => "msStringArray",
-					TypeKind.Uint8 | TypeKind.Boolean => "msUint8Array",
-					_ => "msRefArray",
-				};
-			} else {
-				return "msRefArray";
-			}
-		},
-		TypeKind.Ref => {
-			if (t.typeName != null && t.typeName.length > 0) {
-				return t.typeName + "*";
-			} else {
-				return "void*";
-			}
-		},
-		TypeKind.Function => "msClosure",
-		TypeKind.Ptr => "void*",
-		_ => "void*",
-	};
-}
-
 // ===== Structural Hash =====
-// djb2 hash over field "name:ctype;" pairs. Detects layout changes at reload time.
+// djb2 hash over field "name:typeKey;" pairs. Detects layout changes at reload time.
 
 function computeStructHash(globals: HcrGlobal[]): int64 {
 	let key = "";
 	for (const g of globals) {
-		key = key + g.name + ":" + typeToCStr(g.declType) + ";";
+		key = key + g.name + ":" + typeKey(g.declType) + ";";
 	}
 	return djb2(key);
 }
