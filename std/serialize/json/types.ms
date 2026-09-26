@@ -82,11 +82,11 @@ export converter jsonToInt64(v: JsonValue): int64 { return v.asInt64(); }
 // ===== Tests =====
 
 test "JsonKind values" {
-	assert JsonKind.Null == 0;
-	assert JsonKind.Bool == 1;
-	assert JsonKind.Number == 2;
-	assert JsonKind.String == 3;
-	assert JsonKind.Array == 4;
-	assert JsonKind.Object == 5;
-	assert JsonKind.Int == 6;
+	assert (JsonKind.Null as int32) == 0;
+	assert (JsonKind.Bool as int32) == 1;
+	assert (JsonKind.Number as int32) == 2;
+	assert (JsonKind.String as int32) == 3;
+	assert (JsonKind.Array as int32) == 4;
+	assert (JsonKind.Object as int32) == 5;
+	assert (JsonKind.Int as int32) == 6;
 }

@@ -102,15 +102,15 @@ export converter cborToInt64(v: CborValue): int64 { return v.asInt64(); }
 test "CborKind enum values are stable" {
 	// Stable ordering is part of the API: external consumers may rely on
 	// numeric values for serialization/deserialization. Locking these in.
-	assert CborKind.Int       == 0;
-	assert CborKind.Bytes     == 1;
-	assert CborKind.Text      == 2;
-	assert CborKind.Array     == 3;
-	assert CborKind.Map       == 4;
-	assert CborKind.Tag       == 5;
-	assert CborKind.Bool      == 6;
-	assert CborKind.Null      == 7;
-	assert CborKind.Undefined == 8;
-	assert CborKind.Float     == 9;
-	assert CborKind.Simple    == 10;
+	assert (CborKind.Int as int32)       == 0;
+	assert (CborKind.Bytes as int32)     == 1;
+	assert (CborKind.Text as int32)      == 2;
+	assert (CborKind.Array as int32)     == 3;
+	assert (CborKind.Map as int32)       == 4;
+	assert (CborKind.Tag as int32)       == 5;
+	assert (CborKind.Bool as int32)      == 6;
+	assert (CborKind.Null as int32)      == 7;
+	assert (CborKind.Undefined as int32) == 8;
+	assert (CborKind.Float as int32)     == 9;
+	assert (CborKind.Simple as int32)    == 10;
 }
