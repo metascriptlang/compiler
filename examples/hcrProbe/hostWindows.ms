@@ -3,15 +3,15 @@ import { writeStderr } from "std/io";
 
 @include("runtime/hcr.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrWinOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrWinSymbol";
-extern function hcrClose(handle: unknown): int32 from "msHcrWinClose";
-extern function hcrLastError(): uint32 from "msHcrWinLastError";
-extern function hcrIsNull(value: unknown): int32 from "msHcrWinIsNull";
-extern function hcrAddress(value: unknown): uint64 from "msHcrWinAddress";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrWinCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrWinCallInit";
-extern function hcrCallProbe(raw: unknown): int32 from "msHcrWinCallProbe";
+extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
+extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
+extern function hcrClose(handle: unknown): int32 from "msHcrImageClose";
+extern function hcrLastError(): uint32 from "msHcrImageLastError";
+extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
+extern function hcrAddress(value: unknown): uint64 from "msHcrImageAddress";
+extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
+extern function hcrCallProbe(raw: unknown): int32 from "msHcrImageCallProbe";
 
 enum HcrFailureKind {
 	Load,
