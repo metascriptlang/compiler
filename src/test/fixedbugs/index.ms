@@ -243,7 +243,6 @@ import "./bug330ArrayFieldCycleTraced";
 import "./bug331NamedPodUnionFieldTrivial";
 import "./bug332LiftedHooksNoNullStatement";
 import "./bug212Float32ConstFold";
-import "./bug330ArrayFieldCycleTraced";
 import "./bug300VecRefSinkTakesPayload";
 import "./bug480UnsignedShiftC";
 import "./bug481ShiftCountMaskC";
