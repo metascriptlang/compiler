@@ -847,7 +847,7 @@ start=$SECONDS
 ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
-PAR=${GATE_PAR:-$(share_of_cores 10)}
+PAR=${GATE_PAR:-$(share_of_cores 5)}
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
 
