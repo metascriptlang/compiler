@@ -466,6 +466,7 @@ function indirect(): void {
 	}
 	console.log("ok   hcrIndirect");
 	engine();
+	asyncLoop();
 	if (platform == "windows") windowsReload();
 }
 
@@ -557,6 +558,42 @@ function engine(): void {
 		failWith(tag, "the engine did not produce the expected reload outcomes");
 	}
 	console.log("ok   hcrEngine");
+}
+
+function asyncLoop(): void {
+	const tag = "hcrAsyncLoop";
+	const dir = freshDir(`${TMP}/asyncLoop`);
+	copy(`${FIXTURES}/asyncLoop/app.ms`, `${dir}/app.ms`);
+	for (const f of ["host.ms", "hostCalls.h"]) copy(`${FIXTURES}/engine/${f}`, `${dir}/${f}`);
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	for (const g of [["logic.ms", "g1"], ["logicBodyEdit.ms", "g2"]]) {
+		copy(`${FIXTURES}/indirect/${g[0]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=${g[1]}/module${ext}`], `HCR build of ${g[0]} failed`);
+	}
+	mustBuild(tag, dir, ["build", "host.ms", `--output=${exe}`], "thin host build failed");
+	ensureDir(`${dir}/run`);
+	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	}
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-ASYNC ")) seen.push(line);
+	}
+	const want = [
+		"HCR-ASYNC frame 0: no change value 10",
+		"HCR-ASYNC frame 1: reloaded value 73",
+		"HCR-ASYNC frame 2: no change value 73",
+		"HCR-ASYNC done 3",
+	];
+	if (seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "an async frame loop did not run to its end under the host");
+	}
+	need(tag, ran.exitCode == 1 && both(ran).contains("Error: unhandled rejection: left unhandled"),
+		`an unhandled rejection left the host with exit ${ran.exitCode} and no report`);
+	console.log(`ok   ${tag}`);
 }
 
 function sharedVariable(): void {
