@@ -328,3 +328,5 @@ import "./bug220GenericCtorThisBindsTypeParams";
 import "./bug221ThrowNonError";
 import "./bug209ConstFoldIntegerTyped";
 import "./bug211EnumConstantExpression";
+import "./bug553GenericAliasForwardsItsArguments";
+import "./bug554ErrorReportedIntoEarlierModule";

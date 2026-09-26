@@ -133,6 +133,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const tFeed = performance.now() - _tf0;
 
 	const _tc0 = performance.now();
+	const checked: { mod: Module, ctx: CheckerContext }[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || mod.source == "") continue;
@@ -156,16 +157,10 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			continue;
 		}
 		if (isExtraGlobalImportModule(path)) promoteModuleIntoPrelude(baseCtx, ctx);
-		for (const err of ctx.errors) {
-			if (err.severity == Severity.Hint) continue;
-			const sev = match (err.severity) {
-				Severity.Warning => ErrorSeverity.Warning,
-				_ => ErrorSeverity.Error,
-			};
-			mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
-		}
+		checked.push({ mod, ctx });
 		for (const e of collectExports(ctx, path)) mod.exportNames.push(e.name);
 	}
+	for (const c of checked) mirrorModuleErrors(c.mod, c.ctx);
 	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {
 		console.log(`    prelude=${tPrelude}ms feed=${tFeed}ms check=${tCheck}ms`);
@@ -190,6 +185,17 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
 	}
 	return db.exportRegistry;
+}
+
+function mirrorModuleErrors(mod: Module, ctx: CheckerContext): void {
+	for (const err of ctx.errors) {
+		if (err.severity == Severity.Hint) continue;
+		const sev = match (err.severity) {
+			Severity.Warning => ErrorSeverity.Warning,
+			_ => ErrorSeverity.Error,
+		};
+		mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
+	}
 }
 
 function hasModuleError(mod: Module): boolean {
