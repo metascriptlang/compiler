@@ -330,3 +330,4 @@ import "./bug209ConstFoldIntegerTyped";
 import "./bug211EnumConstantExpression";
 import "./bug553GenericAliasForwardsItsArguments";
 import "./bug554ErrorReportedIntoEarlierModule";
+import "./bug556EnumDiscriminantOfMixedUnion";
