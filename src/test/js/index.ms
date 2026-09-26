@@ -5,3 +5,4 @@ import "./sizeof";
 import "./basic";
 import "./result";
 import "./int64Literal";
+import "./awaitOperand";
