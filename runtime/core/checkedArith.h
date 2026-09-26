@@ -1,11 +1,12 @@
 /*
- * Checked integer division, modulo and power. The includer declares
+ * Checked integer division, modulo and power, and ToInt32. The includer declares
  * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
  * (runtime/core/system.h, runtime/manual.h).
  */
 #ifndef MS_CHECKED_ARITH_H
 #define MS_CHECKED_ARITH_H
 
+#include <math.h>
 #include <stdint.h>
 
 static inline int32_t msDivI32(int32_t a, int32_t b) {
@@ -130,6 +131,14 @@ static inline int32_t msPowWrapI32(int32_t a, int32_t b) {
 
 static inline uint32_t msPowWrapU32(uint32_t a, uint32_t b) {
 	return (uint32_t)msPowWrapU64(a, b);
+}
+
+static inline int32_t msToInt32(double x) {
+	if (x > -2147483649.0 && x < 2147483648.0) return (int32_t)x;
+	if (!isfinite(x)) return 0;
+	double m = fmod(trunc(x), 4294967296.0);
+	if (m < 0) m += 4294967296.0;
+	return (int32_t)(uint32_t)m;
 }
 
 #endif /* MS_CHECKED_ARITH_H */
