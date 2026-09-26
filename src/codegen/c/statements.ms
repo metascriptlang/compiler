@@ -775,11 +775,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, `msException* ${excSave} = NULL;`);
 	}
 
-	// Reference parity (ccgstmts.nim genTryGoto: `hasExcept = t[1].kind ==
-	// nkExceptBranch`): handler presence is STRUCTURAL. `try/finally` carries a
-	// NullLiteral in catchBody to mean "no catch clause" — it must propagate the
-	// error, not swallow it. An empty `catch {}` is a real BlockStmt handler and
-	// still swallows.
+	// Handler presence is STRUCTURAL: `try/finally` carries a NullLiteral in
+	// catchBody to mean "no catch clause" — it must propagate the error, not
+	// swallow it. An empty `catch {}` is a real BlockStmt handler and still swallows.
 	const hasCatch = d.hasCatchClause;
 
 	p.nestedTryStmts.push({
@@ -817,10 +815,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			// analyzer decrefs it at handler scope-end — clear only nulls.
 			emitStmtsLine(p, "msClearException();");
 		}
-		// ccgstmts.nim genTryGoto keeps the try entry alive across the except
-		// branches (`p.nestedTryStmts[^1].label = nextExcept`) and places
-		// `LA<nextExcept>_:` right after the branch body, so a raise inside a
-		// handler still falls into this try's finally before propagating.
+		// The try entry stays on the stack across the handler body, with its label
+		// right after that body, so a raise inside a handler still falls into this
+		// try's finally before propagating.
 		const afterCatchLabel = "__aftercatch_" + labelId;
 		p.nestedTryStmts.pop();
 		p.nestedTryStmts.push({
@@ -839,9 +836,8 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody != null) {
-		// ccgstmts.nim genTryGoto `oldNimErrFin`: run the finally body with the
-		// error flag cleared so its own raise-checks don't misfire, then restore
-		// it so a propagating exception keeps propagating.
+		// Run the finally body with the error flag cleared so its own raise-checks
+		// don't misfire, then restore it so a propagating exception keeps propagating.
 		emitStmtsLine(p, `${errSave} = msErr;`);
 		emitStmtsLine(p, `${excSave} = msCurrException;`);
 		emitStmtsLine(p, "msErr = MS_FALSE;");
@@ -857,8 +853,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, `msDecref((void*)${excSave});`);
 	}
 
-	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after
-	// the finally must reach the ENCLOSING handler.
+	// An error still set after the finally must reach the ENCLOSING handler.
 	emitStmtsLine(p, "if (msErr) {");
 	setStmtsIndent(p, oldIndent + 2);
 	emitErrorGoto(p);
