@@ -131,6 +131,23 @@ tree_key() {
 }
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
+narrow_for() {
+  narrow="" only_csv="" lanes_csv=""
+  [ "$select" -eq 1 ] || return 0
+  [ "$1" != tests ] || return 0
+  only_csv=$(paste -sd, "$EMIT/only.$1")
+  [ -n "$only_csv" ] || return 0
+  narrow="MSCORPUS_ONLY=$only_csv "
+  if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
+    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
+    narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
+  fi
+}
+
+select_leaves_nothing() {
+  [ "$1" != tests ] && [ "$select" -eq 1 ] && [ -z "$only_csv" ]
+}
+
 control_todo() {
   awk -v dir="$1" -v keys="$2" '
     BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
@@ -378,6 +395,19 @@ CASES
   if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t9\t2\t0\t9')"; then printf 'FAIL tier differ: c digest\n'; bad=1; fi
   if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t9\t0\t9')"; then printf 'FAIL tier differ: js digest\n'; bad=1; fi
   if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t2\t1\t9')"; then printf 'FAIL tier differ: rc\n'; bad=1; fi
+  local keep_select=${select:-0} keep_emit=${EMIT:-} raiser_on=0 only_csv="" narrow="" lanes_csv=""
+  select=1 EMIT=$(mktemp -d)
+  narrow_for tests
+  [ -z "$only_csv" ] || { printf 'FAIL tests narrowed by program: got "%s"\n' "$only_csv"; bad=1; }
+  if select_leaves_nothing tests; then printf 'FAIL tests skipped when select keeps no program\n'; bad=1; fi
+  printf 'p1\np2\n' >"$EMIT/only.corpus"
+  narrow_for corpus
+  [ "$only_csv" = "p1,p2" ] || { printf 'FAIL corpus narrowed by program: want "p1,p2", got "%s"\n' "$only_csv"; bad=1; }
+  : >"$EMIT/only.san"
+  narrow_for san
+  if ! select_leaves_nothing san; then printf 'FAIL san runs when select keeps no program\n'; bad=1; fi
+  rm -rf "$EMIT"
+  select=$keep_select EMIT=$keep_emit
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -706,17 +736,6 @@ select_programs() {
   selected=1
 }
 
-narrow_for() {
-  narrow="" only_csv="" lanes_csv=""
-  [ "$select" -eq 1 ] || return 0
-  only_csv=$(paste -sd, "$EMIT/only.$1")
-  [ -n "$only_csv" ] || return 0
-  narrow="MSCORPUS_ONLY=$only_csv "
-  if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
-    narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
-  fi
-}
 
 scope_known() {
   local tierkeep=""
@@ -881,7 +900,7 @@ for phase in "${PHASES[@]}"; do
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""
       narrow_for "$lane"
-      if [ "$select" -eq 1 ] && [ -z "$only_csv" ]; then say "gate: $lane skipped, no program's emitted $([ "$lane" = san ] && printf 'C' || printf 'C or JS') differs"; continue; fi
+      if select_leaves_nothing "$lane"; then say "gate: $lane skipped, no program's emitted $([ "$lane" = san ] && printf 'C' || printf 'C or JS') differs"; continue; fi
       printf '%s\n%s\n' "$only_csv" "$lanes_csv" >"$OUT/$lane.scope" ;;
     esac
     launched="$launched $lane"
