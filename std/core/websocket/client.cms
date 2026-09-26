@@ -109,7 +109,7 @@ export function stringToBytes(s: string): uint8[] {
 	const n = s.byteLength;
 	let out: uint8[] = [];
 	for (let i: int64 = 0; i < n; i = i + 1) {
-		out.push(s.byteAt(i) as uint8);
+		out.push(s.byteAt(i as int32) as uint8);
 	}
 	return out;
 }
