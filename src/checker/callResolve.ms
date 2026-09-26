@@ -1193,8 +1193,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		ctx.pendingSpawnThunk = false;
 		if (lockedSection) ctx.readonlyBoundary = savedBoundary;
 		let argType = d.arguments[ai].nodeType;
+		const bindsTypeParam = _isGenericCall && _formal != null && hasGenericParams(_formal);
 		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
-		if (argType != null && argType.kind == TypeKind.Enum) {
+		if (!bindsTypeParam && argType != null && argType.kind == TypeKind.Enum) {
 			const argNode = d.arguments[ai];
 			if (argNode.resolvedSym != null
 					&& argNode.resolvedSym.symbolKind == SymbolKind.EnumMember
