@@ -1523,6 +1523,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForInStmtData;
+	addError(ctx, "'for...in' is not supported: no backend lowers it; iterate a collection with 'for...of'", node.location.line, node.location.column);
 	checkExpr(ctx, d.forInObject, null);
 	const oldInitState = saveInitState(ctx.initTracker);
 	const affineSnap = saveConsumeState(ctx.affineTracker);
