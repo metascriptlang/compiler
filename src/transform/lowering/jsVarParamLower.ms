@@ -145,6 +145,11 @@ function pairize(arg: Node): Node {
 		cont.nodeType = null;
 		return pairLit(cont, rw(ad.index), inner);
 	}
+	if (inner.kind == NodeKind.HiddenDeref) {
+		const cell = cellLit(rw((inner.data as HiddenDerefData).expr), inner);
+		cell.nodeType = null;
+		return pairLit(cell, makeNumber(0, inner.location), inner);
+	}
 	return arg;
 }
 
