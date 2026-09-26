@@ -3,13 +3,13 @@
 // Symptom:    for uint8 s = 200, t = 100, `console.log(s + t)` printed 300 on C while
 //             `const u = s + t` printed 44; JS printed 300 for both. uint16 65535 * 65535
 //             overflowed C's signed int (UBSan panic in debug), and `int8 -8 >>> 1` was
-//             2147483644 on JS.
+//             2147483644 on JS; a uint8 `x++` at 255 stored 256 on JS.
 // Root cause: C codegen emitted `(s + t)` and let integer promotion decide the width; JS had
 //             trimmers for uint32 only.
 // Fix:        an 8/16-bit `+ - *`, `-x`, `~x` and `/ %` result is converted back to its own
 //             type on C, computed unsigned at 32 bits; a shift masks its count to the left
 //             operand's width and wraps there. JS applies `& 0xff`/`& 0xffff` or the
-//             `<< 24 >> 24` sign extension to the same results.
+//             `<< 24 >> 24` sign extension to the same results and to a stored `++`/`--`.
 
 import { compileToC, compileToJS } from "../helpers";
 
@@ -49,4 +49,10 @@ test "bug497: int16 multiplication sign-extends from 16 bits on JS" {
 
 test "bug497: int8 >>> reads the byte unsigned on JS" {
 	assert jsOf("export function f(a: int8, n: int8): int8 { return a >>> n; }\n").contains("& 255) >>> (n & 7)");
+}
+
+test "bug497: a uint8 postfix increment wraps on JS" {
+	const js = jsOf("export function f(a: uint8): uint8 { let x = a; x++; return x; }\n");
+	assert js.contains("& 255");
+	assert !js.contains("x++");
 }
