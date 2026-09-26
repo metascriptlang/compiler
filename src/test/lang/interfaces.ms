@@ -224,3 +224,32 @@ test "builder pattern (SQL)" {
 	q.limit = 10;
 	assert buildQuery(q) == "SELECT * FROM users WHERE age > 18 AND active = true LIMIT 10";
 }
+
+interface SpXY { x: int32; y: int32; }
+interface SpXYZ { x: int32; y: int32; z: int32; }
+let spLog = "";
+function spOne(): int32 { spLog = spLog + "o"; return 9; }
+function spPoint(): SpXY { spLog = spLog + "P"; return { x: 1, y: 2 }; }
+function spSum(p: SpXYZ): int32 { return p.x * 100 + p.y * 10 + p.z; }
+
+test "an object spread runs after the properties before it" {
+	spLog = "";
+	const n = spSum({ z: spOne(), ...spPoint() });
+	assert spLog == "oP";
+	assert n == 129;
+}
+
+test "an object spread in an untaken branch never runs" {
+	spLog = "";
+	const flag = spLog.length > 0;
+	const q: SpXY = flag ? { ...spPoint(), y: 5 } : { x: 0, y: 0 };
+	assert spLog == "";
+	assert q.x == 0;
+}
+
+test "the fields an object spread provides keep their values" {
+	const q: SpXYZ = { z: 3, ...spPoint() };
+	assert q.x == 1;
+	assert q.y == 2;
+	assert q.z == 3;
+}
