@@ -45,6 +45,9 @@ after another, and compare every red against src/test/known-red.json.
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor. The tests lane compiles its tiers with the
 candidate, so a pin there tests the change rather than the previous compiler.
+It runs every tier when the compiler changed (a path under src/ outside
+src/test/, or one select cannot see), else only the tiers whose module graph
+holds a changed path.
 
 corpus and san run on the programs whose emitted C or JS the change alters
 (control = the compiler at the merge base, kept in out/gate/ctl); they run whole
@@ -91,28 +94,35 @@ build_ctl() {
   touch "$ctl_dir"
   printf '%s' "$key"
 }
-tier_differ() { [ "$(printf '%s' "$1" | cut -f2-4)" != "$(printf '%s' "$2" | cut -f2-4)" ]; }
+compiler_changed() { grep -E '^src/' | grep -vqE '^src/test/'; }
+
+tier_touched() {
+  awk -v deps="$1" -v top="$2" 'BEGIN { while ((getline d < deps) > 0) mods[d] = 1 }
+    (top "/" $0) in mods { hit = 1; exit }
+    END { exit !hit }'
+}
 
 tier_select() {
-  local f sf sha key ctl t0=$SECONDS n=0
-  sha=$(git merge-base "$base" HEAD) || { say "tier-select: no merge base, whole"; return 1; }
-  key=$(build_ctl "$sha") || { say "tier-select: no control compiler at $(printf '%s' "$sha" | cut -c1-8), whole"; return 1; }
-  ctl="$OUT/ctl-$key/msc"
+  local f dir deps emits="" t0=$SECONDS n=0
   if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
     say "tier-select: blind paths in the diff, whole"; return 1
   fi
-  rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
-  for f in $TIERS; do n=$((n + 1)); printf '%s %s\n' "${f//\//__}" "$TOP/$f"; done >"$OUT/tier/jobs"
-  emit_side "$ctl" "$OUT/tier/c" <"$OUT/tier/jobs" | sort >"$OUT/tier/ctl.sig"
-  emit_side "$CAND" "$OUT/tier/k" <"$OUT/tier/jobs" | sort >"$OUT/tier/cand.sig"
-  if [ "$(grep -c . "$OUT/tier/ctl.sig" | tr -d ' ')" -ne "$n" ] || [ "$(grep -c . "$OUT/tier/cand.sig" | tr -d ' ')" -ne "$n" ]; then
-    say "tier-select: an emit pass lost tiers, whole"; return 1
+  if awk -F'\t' '{ print $2 }' "$OUT/why" | compiler_changed; then
+    say "tier-select: the compiler changed, whole"; return 1
   fi
-  join -t "$(printf '\t')" "$OUT/tier/ctl.sig" "$OUT/tier/cand.sig" \
-    | while IFS=$'\t' read -r sf c1 j1 r1 _ c2 j2 r2 __; do
-        if tier_differ "a	$c1	$j1	$r1	9" "a	$c2	$j2	$r2	9"; then printf '%s\n' "${sf//__/\/}"; fi
-      done >"$OUT/tier/keep"
-  say "tier-select: $(grep -c . "$OUT/tier/keep" | tr -d ' ')/$n tiers differ, $(fmt_secs $((SECONDS - t0)))"
+  rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
+  for f in $TIERS; do
+    n=$((n + 1)); dir="$OUT/tier/$n"; mkdir -p "$dir"
+    (cd "$dir" && bounded env -u FORCE_COLOR NO_COLOR=1 "$CAND" build "$TOP/$f" --emit=c --gendeps >log 2>&1) &
+    emits="$emits $!"
+  done
+  wait $emits
+  n=0
+  for f in $TIERS; do
+    n=$((n + 1)); deps=$(ls "$OUT/tier/$n"/out/*/*.deps 2>/dev/null | head -1)
+    if [ -z "$deps" ] || [ ! -s "$deps" ] || awk -F'\t' '{ print $2 }' "$OUT/why" | tier_touched "$deps" "$TOP"; then printf '%s\n' "$f"; fi
+  done >"$OUT/tier/keep"
+  say "tier-select: $(grep -c . "$OUT/tier/keep" | tr -d ' ')/$n tiers compile a changed path, $(fmt_secs $((SECONDS - t0)))"
   ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
   return 0
 }
@@ -391,10 +401,14 @@ CASES
   got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
   want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
-  if tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'b\t1\t2\t0\t9')"; then printf 'FAIL tier differ: name only\n'; bad=1; fi
-  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t9\t2\t0\t9')"; then printf 'FAIL tier differ: c digest\n'; bad=1; fi
-  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t9\t0\t9')"; then printf 'FAIL tier differ: js digest\n'; bad=1; fi
-  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t2\t1\t9')"; then printf 'FAIL tier differ: rc\n'; bad=1; fi
+  if ! printf 'src/checker/a.ms\n' | compiler_changed; then printf 'FAIL compiler changed: checker\n'; bad=1; fi
+  if printf 'src/test/c/x.ms\ndocs/a.md\n' | compiler_changed; then printf 'FAIL compiler changed: tests only\n'; bad=1; fi
+  local depsf; depsf=$(mktemp)
+  printf 'C:/w/src/test/c/index.ms\nC:/w/src/test/helpers.ms\n' >"$depsf"
+  if ! printf 'src/test/helpers.ms\n' | tier_touched "$depsf" C:/w; then printf 'FAIL tier touched: its helper\n'; bad=1; fi
+  if printf 'src/test/lang/x.ms\n' | tier_touched "$depsf" C:/w; then printf 'FAIL tier touched: another tier\n'; bad=1; fi
+  if printf 'test/helpers.ms\n' | tier_touched "$depsf" C:/w; then printf 'FAIL tier touched: partial segment\n'; bad=1; fi
+  rm -f "$depsf"
   local keep_select=${select:-0} keep_emit=${EMIT:-} raiser_on=0 only_csv="" narrow="" lanes_csv=""
   select=1 EMIT=$(mktemp -d)
   narrow_for tests
