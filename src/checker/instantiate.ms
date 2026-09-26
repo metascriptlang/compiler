@@ -9,6 +9,7 @@ import { forEachChild } from "../ast/visitor";
 import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
+import { createContext } from "./context";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
@@ -510,7 +511,10 @@ export function instantiateTimings(): float64[] {
 }
 
 export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol {
-	if (ctx.genericInstDepth > 50) return null as unknown as Symbol;
+	if (ctx.genericInstDepth > 50) {
+		addError(ctx, "generic instantiation too nested: instantiating '" + sym.name + "' goes deeper than 50 nested instantiations", callLoc.line, callLoc.column);
+		return null as unknown as Symbol;
+	}
 	_igfCalls = _igfCalls + 1;
 
 	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
@@ -822,3 +826,23 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 
 // Register callback at module load time
 registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx, callLoc); });
+
+test "an instantiation past the depth limit is an error naming the generic" {
+	const ctx = createContext();
+	ctx.genericInstDepth = 51;
+	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
+	const inst = instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	assert inst == null;
+	assert ctx.errors.length == 1;
+	assert ctx.errors[0].message.indexOf("generic instantiation too nested: instantiating 'nest'") >= 0;
+	assert ctx.errors[0].line == 4;
+}
+
+test "an instantiation at the depth limit is still attempted" {
+	const ctx = createContext();
+	ctx.genericInstDepth = 50;
+	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
+	instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	assert ctx.errors.length == 0;
+	assert ctx.genericInstDepth == 50;
+}
