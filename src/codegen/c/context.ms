@@ -771,6 +771,14 @@ function emitOneInclude(g: CGen, header: string): void {
 	addLine(sec(g, CSection.Headers), `#include "${header}"`);
 }
 
+const PLATFORM_MACROS = ["LANGUAGE_C", "MIPSEB", "MIPSEL", "PPC", "R3000", "R4000", "i386", "linux", "mips", "near", "far", "powerpc", "unix"];
+
+// windows.h defines `near` and `far` empty and GNU-mode compilers predefine `linux`, `unix`
+// and `i386`: undefine them after the module's last #include, never before it.
+export function undefPlatformMacros(g: CGen): void {
+	for (const name of PLATFORM_MACROS) addLine(sec(g, CSection.Headers), `#undef ${name}`);
+}
+
 // ===== Tests =====
 test "add and extract" {
 	const b = createBuilder();
