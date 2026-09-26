@@ -79,6 +79,27 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 	return copy;
 }
 
+export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
+	if (expr.kind == NodeKind.NumberLiteral) return !(expr.data as NumberLiteralData).isFloat;
+	if (expr.kind == NodeKind.Identifier) {
+		const initializer = moduleConstInitializer(expr);
+		if (initializer == null || (expr.resolvedSym.declNode.data as VariableDeclData).declType != "") return false;
+		return isUntypedIntegerConstant(initializer, depth + 1);
+	}
+	if (expr.kind == NodeKind.MemberExpr) {
+		const initializer = readonlyStaticInitializer(expr);
+		if (initializer == null || (expr.resolvedSym.declNode.data as PropertyDeclData).propType != "") return false;
+		return isUntypedIntegerConstant(initializer, depth + 1);
+	}
+	if (expr.kind == NodeKind.BinaryExpr) {
+		const d = expr.data as BinaryExprData;
+		return isUntypedIntegerConstant(d.left, depth + 1) && isUntypedIntegerConstant(d.right, depth + 1);
+	}
+	if (expr.kind == NodeKind.UnaryExpr) return isUntypedIntegerConstant((expr.data as UnaryExprData).operand, depth + 1);
+	return false;
+}
+
 function foldedOperand(expr: Node, depth: int32): Node {
 	if (expr != null && (expr.kind == NodeKind.NumberLiteral || expr.kind == NodeKind.BooleanLiteral)) return expr;
 	return constantLiteralOf(expr, depth);

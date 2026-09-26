@@ -11,7 +11,7 @@ import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPoin
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf } from "./constFold";
+import { constantLiteralOf, isUntypedIntegerConstant } from "./constFold";
 
 // ===== Operator Inference =====
 
@@ -647,6 +647,7 @@ export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 		const u = expr.data as UnaryExprData;
 		if (u.unaryOp == "-" && isNodeIntLit(u.operand)) return literalFitsInType(u.operand, target, true);
 	}
+	if (!isUntypedIntegerConstant(expr, 0)) return false;
 	const folded = constantLiteralOf(expr, 0);
 	if (folded == null || !isNodeIntLit(folded)) return false;
 	const value = (folded.data as NumberLiteralData).intVal;
