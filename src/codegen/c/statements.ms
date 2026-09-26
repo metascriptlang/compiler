@@ -797,12 +797,14 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, catchLabel + ": {");
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName != "") {
+			const catchVar = fillLocalName(p, safeName(d.catchName), false);
+			if (node.resolvedSym != null) setLocalSymName(p, node.resolvedSym, catchVar);
 			const ct = node.nodeType;
 			if (ct != null && !isUnresolvedType(ct) && ct.kind != TypeKind.Error) {
 				const cty = getTypeDesc(g, ct);
-				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
+				emitStmtsLine(p, `${cty} ${catchVar} = (${cty})msCurrException;`);
 			} else {
-				emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
+				emitStmtsLine(p, `msException* ${catchVar} = msCurrException;`);
 			}
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
