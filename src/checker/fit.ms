@@ -255,7 +255,8 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.kind != TypeKind.Function || exprType.kind != TypeKind.Function
 		|| formal.callConv != CallingConvention.CcClosure
-		|| exprType.callConv == CallingConvention.CcClosure) {
+		|| exprType.callConv == CallingConvention.CcClosure
+		|| !isAssignable(exprType, formal)) {
 		return null as unknown as Node;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
