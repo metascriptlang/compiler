@@ -104,6 +104,7 @@ void msTestErrorFlag(void) {
 	fputs("Error: unhandled exception: ", stderr);
 	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
 	fputc('\n', stderr);
+	msDecref((void*)msCurrException);
 	msCurrException = NULL;
 	exit(1);
 }
