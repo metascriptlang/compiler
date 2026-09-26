@@ -11,6 +11,7 @@ function inFor(): string {
 					_ => {}
 				}
 				out = out + "after";
+				break;
 			default:
 				out = out + names[i];
 		}
@@ -32,6 +33,7 @@ function inWhile(): string {
 					_ => {}
 				}
 				out = out + "after";
+				break;
 			default:
 				out = out + names[i];
 		}
@@ -49,6 +51,7 @@ function bare(k: string): string {
 				_ => {}
 			}
 			out = out + "after";
+			break;
 		default:
 			out = out + "x";
 	}
