@@ -29,6 +29,7 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -1370,6 +1371,10 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
+		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
+			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
+		}
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
@@ -3321,6 +3326,10 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const modPath = unitPaths[ui];
 		const ctx = unitCtxs[ui];
 		const mod = findModule(graph, modPath);
+		if (!(stdRoot != "" && modPath.startsWith(stdRoot))) {
+			refuseSyncAwaitOnJs(ctx, unitPrograms[ui]);
+			exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
+		}
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
