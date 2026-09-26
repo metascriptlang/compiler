@@ -4971,3 +4971,25 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 		env.delete("MSC_NO_PRELUDE_PACK");
 	}
 }
+
+function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
+	const pr = parseSource(src);
+	if (!pr.ok) return -1;
+	const mark = pendingInstanceMark();
+	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
+	const n = hasErrors(ctx) ? -1 : pendingInstanceMark() - mark;
+	discardPendingInstancesFrom(mark);
+	return n;
+}
+
+test "an instance requested from inside a prelude generic body stays with the requesting module, so a second check against the same prelude queues it again" {
+	const prelude = buildPreludeContext(join(resolveRuntimeDir(), "std"));
+	const scopeSize = prelude.table.current.symbols.size;
+	for (const src of ["const m = new Map<string, int32>();\nm.set(\"k\", 1);\n", "const s = new HashSet<string>([\"a\"]);\nconsole.log(s.size);\n"]) {
+		const first = pendingCountOfCheck(prelude, src);
+		const second = pendingCountOfCheck(prelude, src);
+		assert first > 0;
+		assert second == first;
+	}
+	assert prelude.table.current.symbols.size == scopeSize;
+}
