@@ -240,3 +240,4 @@ import "./bug217MethodCallReceiverRefused";
 import "./bug218GenericReadonlyViewSubstitution";
 import "./bug219GenericCtorThisIsItsInstance";
 import "./bug220GenericCtorThisBindsTypeParams";
+import "./bug221ThrowNonError";
