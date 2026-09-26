@@ -1971,6 +1971,13 @@ export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
 // GenericInstance body. Uses explicit param names from the parser's generic declaration
 // store. Produces a fully concrete body
 // stored in typeReturn for direct field access — no lazy substitution at access time.
+function argsAreTheParams(names: string[], args: Type[]): boolean {
+	for (let i = 0; i < names.length; i += 1) {
+		if (args[i] == null || args[i].kind != TypeKind.GenericParam || args[i].typeName != names[i]) return false;
+	}
+	return true;
+}
+
 export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	if (gi.kind != TypeKind.GenericInstance) return;
 	if (gi.typeReturn != null) return;
@@ -1993,6 +2000,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 		pi = pi + 1;
 	}
 	const body = substituteAllParams(innerBase, names, args);
+	if (body == innerBase && !argsAreTheParams(names, args)) return;
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 	_instantiatedBodies = _instantiatedBodies + 1;

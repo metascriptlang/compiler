@@ -1202,7 +1202,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
-				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
+				&& node.resolvedSym.declNode != null && (node.resolvedSym.declNode.kind == NodeKind.FunctionDecl || isGenericInstanceMethod(node.resolvedSym))) {
 			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
 			if (extInst != null) {
 				calleeType = stripReceiverParam(extInst);
@@ -1903,6 +1903,13 @@ function getGenericDeclFlags(declNode: Node): string {
 	return "";
 }
 
+function isGenericInstanceMethod(sym: Symbol): boolean {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.MethodDecl) return false;
+	const md = decl.data as MethodDeclData;
+	return !md.methodIsStatic && isGenericFn(md.methodFlags);
+}
+
 function bindingConflictSkipArg(arg: Node): boolean {
 	if (arg == null) return true;
 	if (arg.kind == NodeKind.ArrowFunction || arg.kind == NodeKind.FunctionExpr) return true;
@@ -1997,6 +2004,21 @@ function genericParamConstraint(t: Type | null, name: string, depth: int32): Typ
 		}
 	}
 	return genericParamConstraint(t.typeReturn, name, depth + 1);
+}
+
+function inDeclaredOrder(eb: UnifyBindings, receiverBindings: UnifyBindings | null, genericNames: string[]): UnifyBindings {
+	const order: string[] = [];
+	if (receiverBindings != null) for (const n of receiverBindings.names) if (!order.includes(n)) order.push(n);
+	for (const n of genericNames) if (!order.includes(n)) order.push(n);
+	for (const n of eb.names) if (!order.includes(n)) order.push(n);
+	const out = createUnifyBindings();
+	for (const n of order) {
+		const bi = findBindingIndex(eb, n);
+		if (bi < 0) continue;
+		out.names.push(n);
+		out.types.push(eb.types[bi]);
+	}
+	return out;
 }
 
 function bindingsMeetConstraints(ctx: CheckerContext, node: Node, calleeType: Type, eb: UnifyBindings): boolean {
@@ -2228,7 +2250,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
-	const instSym = callInstantiateGeneric(sym, eb.names, eb.types, ctx, node.location);
+	const declared = inDeclaredOrder(eb, receiverBindings, genericNames);
+	const instSym = callInstantiateGeneric(sym, declared.names, declared.types, ctx, node.location);
 	if (instSym == null) return null as unknown as Type;
 
 	node.resolvedSym = instSym;
@@ -3605,7 +3628,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// Generic class instance method: monomorphize the method body with the
 				// discovered bindings and point the call at the mono'd symbol (mirrors the
 				// extension-method instantiation path below).
-				if (eb.names.length > 0 && classMethSym.builtinKind == "" && classMethSym.declNode != null) {
+				if (eb.names.length > 0 && classMethSym.builtinKind == "" && classMethSym.declNode != null && !isGenericInstanceMethod(classMethSym)) {
 					const instSym = callInstantiateGeneric(classMethSym, eb.names, eb.types, ctx, node.location);
 					if (instSym != null) {
 						ensureShaped(instSym, ctx);
