@@ -350,7 +350,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d);
+		genStaticFieldGlobals(g, d, node.resolvedSym);
 		return;
 	}
 
@@ -372,7 +372,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// The struct body emission below is separately guarded by typeAlreadyDeclared
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
-	genStaticFieldGlobals(g, d);
+	genStaticFieldGlobals(g, d, node.resolvedSym);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -424,13 +424,22 @@ function initializerLiteralType(literal: Readonly<Node>, declType: Type | null):
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
+function staticFieldSymOf(owner: Symbol | null, qualifiedName: string): Symbol | null {
+	if (owner == null) return null;
+	for (const sf of owner.staticFields) {
+		if (sf.name == qualifiedName) return sf;
+	}
+	return null;
+}
+
+function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbol | null): void {
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
 		const cType = member.nodeType != null ? getTypeDesc(g, member.nodeType) : "double";
-		const globalName = staticFieldCName(d.className + "." + pd.propName);
+		const qualifiedName = d.className + "." + pd.propName;
+		const globalName = staticFieldCName(staticFieldSymOf(owner, qualifiedName), qualifiedName);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {

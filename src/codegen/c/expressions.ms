@@ -23,6 +23,7 @@ import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
 import { lookupCtorDefaults } from "../../checker/instantiate";
+import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
@@ -1044,7 +1045,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const bareNew = bareTypeName(g, cName);
 			const initName = classInitCName(cName);
-			const ctorEntry = lookupCtorDefaults(bareNew + "_new");
+			const ctorEntry = lookupCtorDefaults(monoBaseName(bareNew, d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "") + "_new");
 			let ctorChildren: Type[] = null as unknown as Type[];
 			if (ctorEntry != null && ctorEntry.fnType != null) {
 				ctorChildren = ctorEntry.fnType.typeChildren;
@@ -1180,7 +1181,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		if (parentName != "") {
 			const parentBare = bareTypeName(g, parentName);
 			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(parentBare + "_new");
+			const parentEntry = lookupCtorDefaults(monoBaseName(parentBare, parentSym.modulePath) + "_new");
 			let parentChildren: Type[] = null as unknown as Type[];
 			if (parentEntry != null && parentEntry.fnType != null) {
 				parentChildren = parentEntry.fnType.typeChildren;
@@ -1459,7 +1460,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			const staticCName = staticFieldCName(node.resolvedSym.name);
+			const staticCName = staticFieldCName(node.resolvedSym, node.resolvedSym.name);
 			// Declared in every module that reads it. The owning module also defines
 			// it, and an extern next to the definition is legal C — so this needs no
 			// knowledge of which module we are in, which a prelude symbol cannot give.
