@@ -667,6 +667,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _tx0 = performance.now();
 	const transformed = transformProgram(comptimeResolved, ctx, false);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
+	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	const _tr0 = performance.now();
@@ -677,6 +678,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 	const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, job.hcrModules[hcrSlot], job.hcrModules) : hcrLifted;
+	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 		else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -2988,8 +2990,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
