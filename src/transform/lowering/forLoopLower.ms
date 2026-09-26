@@ -7,22 +7,26 @@
 //
 // Handles continue by inserting update before each continue statement.
 
-import { Node, NodeKind, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { TransformContext } from "../context";
-import { walkNode } from "../walker";
-import { makeBool, makeBlock, makeWhile, makeExprStmt, extractBodyStmts } from "../util";
+import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, MatchStmtData, MatchCaseData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
+import { TransformContext, freshOwnedSym } from "../context";
+import { walkNode, isFuncBoundary } from "../walker";
+import { makeBool, makeBlock, makeWhile, makeExprStmt, makeVarDecl, makeIdentResolved, makeAssign, makeIf, makeUnary, makeBreak, syntheticToken, extractBodyStmts } from "../util";
+import { booleanType } from "../../checker/types";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
 
 export function lowerForLoop(program: Node, ctx: TransformContext): Node {
-	walkNode(program, lowerForNode);
+	walkNode(program, (node: Node): Node => lowerForNode(node, ctx));
 	return program;
 }
 
-function lowerForNode(node: Node): Node {
+function lowerForNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.ForStmt) return node;
 	const d = node.data as ForStmtData;
+	const captured = capturedLetBinding(d);
+	if (captured != null) return lowerPerIteration(d, captured, ctx, node.location);
 	const loc = node.location;
 	const outerStmts: Node[] = [];
 
@@ -113,6 +117,140 @@ function cloneStmt(node: Node): Node {
 		flags: node.flags,
 		resolvedSym: node.resolvedSym,
 	};
+}
+
+function capturedLetBinding(d: ForStmtData): Symbol | null {
+	if (d.forInit == null || d.forInit.kind != NodeKind.VariableDecl) return null;
+	if ((d.forInit.data as VariableDeclData).declKind != DeclKind.Let) return null;
+	const sym = d.forInit.resolvedSym;
+	if (sym == null) return null;
+	if (capturedInClosure(d.forBody, sym, false) || headerCaptures(d, sym)) return sym;
+	return null;
+}
+
+function headerCaptures(d: ForStmtData, sym: Symbol): boolean {
+	return capturedInClosure((d.forInit.data as VariableDeclData).initializer, sym, false)
+		|| capturedInClosure(d.forCondition, sym, false)
+		|| capturedInClosure(d.forUpdate, sym, false);
+}
+
+function capturedInClosure(n: Node | null, sym: Symbol, nested: boolean): boolean {
+	if (n == null) return false;
+	if (nested && n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
+	const inner = nested || isFuncBoundary(n);
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && capturedInClosure(c, sym, inner)) found = true;
+	});
+	return found;
+}
+
+function renameBinding(n: Node | null, from: Symbol, to: Symbol): void {
+	if (n == null) return;
+	walkNode(n, (m: Node): Node => {
+		if (m.kind == NodeKind.Identifier && m.resolvedSym == from) {
+			(m.data as IdentifierData).name = to.name;
+			m.resolvedSym = to;
+		}
+		return m;
+	});
+}
+
+function isLoopNode(n: Node): boolean {
+	return n.kind == NodeKind.WhileStmt || n.kind == NodeKind.DoWhileStmt || n.kind == NodeKind.ForStmt
+		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
+}
+
+function hasOwnContinue(n: Node | null): boolean {
+	if (n == null) return false;
+	if (n.kind == NodeKind.ContinueStmt) return (n.data as ContinueStmtData).continueLabel == "";
+	if (isFuncBoundary(n) || isLoopNode(n)) return false;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && hasOwnContinue(c)) found = true;
+	});
+	return found;
+}
+
+function labelOwnBreaks(n: Node | null, label: string): boolean {
+	if (n == null) return false;
+	if (n.kind == NodeKind.BreakStmt) {
+		const bd = n.data as BreakStmtData;
+		if (bd.breakLabel != "") return false;
+		bd.breakLabel = label;
+		return true;
+	}
+	if (isFuncBoundary(n) || isLoopNode(n) || n.kind == NodeKind.SwitchStmt) return false;
+	let labelled = false;
+	forEachChild(n, (c: Node): void => {
+		if (labelOwnBreaks(c, label)) labelled = true;
+	});
+	return labelled;
+}
+
+function letOf(sym: Symbol, init: Node, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	return decl;
+}
+
+function assignOf(sym: Symbol, value: Node, loc: SourceLocation): Node {
+	return makeExprStmt(makeAssign(makeIdentResolved(sym, loc), value, loc), loc);
+}
+
+function iterationBody(body: Node, ctx: TransformContext, loc: SourceLocation): { stmts: Node[], label: string } {
+	const stmts = extractBodyStmts(body);
+	if (!hasOwnContinue(body)) return { stmts, label: "" };
+	ctx.tempCounter += 1;
+	const label = `__lp${ctx.tempCounter}`;
+	let labelled = false;
+	for (const s of stmts) {
+		if (labelOwnBreaks(s, label)) labelled = true;
+	}
+	const wrapper = createNode(NodeKind.DoWhileStmt, { doBody: makeBlock(stmts, loc), doCondition: makeBool(false, loc), dwLabel: "", dwSwitchWrapper: false }, syntheticToken(loc));
+	return { stmts: [wrapper], label: labelled ? label : "" };
+}
+
+function lowerPerIteration(d: ForStmtData, sym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
+	const iter = freshOwnedSym(ctx, "fi", sym.symbolType);
+	renameBinding(d.forBody, sym, iter);
+	const inHeader = headerCaptures(d, sym);
+	const outer: Node[] = [d.forInit];
+	const loopStmts: Node[] = [];
+	let carrier = sym;
+	let cond = d.forCondition != null ? d.forCondition : makeBool(true, loc);
+	if (inHeader) {
+		carrier = freshOwnedSym(ctx, "fc", sym.symbolType);
+		outer.push(letOf(carrier, makeIdentResolved(sym, loc), loc));
+		renameBinding(d.forCondition, sym, iter);
+		renameBinding(d.forUpdate, sym, iter);
+	}
+	loopStmts.push(letOf(iter, makeIdentResolved(carrier, loc), loc));
+	if (inHeader) {
+		if (d.forUpdate != null) {
+			const first = freshOwnedSym(ctx, "ff", booleanType());
+			outer.push(letOf(first, makeBool(true, loc), loc));
+			loopStmts.push(makeIf(
+				makeIdentResolved(first, loc),
+				makeBlock([assignOf(first, makeBool(false, loc), loc)], loc),
+				makeBlock([makeExprStmt(d.forUpdate, loc)], loc),
+				loc,
+			));
+		}
+		if (d.forCondition != null) {
+			loopStmts.push(makeIf(makeUnary("!", d.forCondition, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+		}
+		cond = makeBool(true, loc);
+	}
+	const body = iterationBody(d.forBody, ctx, loc);
+	for (const s of body.stmts) loopStmts.push(s);
+	loopStmts.push(assignOf(carrier, makeIdentResolved(iter, loc), loc));
+	if (!inHeader && d.forUpdate != null) loopStmts.push(makeExprStmt(d.forUpdate, loc));
+	const loop = makeWhile(cond, makeBlock(loopStmts, loc), loc);
+	(loop.data as WhileStmtData).whileLabel = body.label;
+	outer.push(loop);
+	return makeBlock(outer, loc);
 }
 
 // ===== Test helpers =====
