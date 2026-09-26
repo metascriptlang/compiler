@@ -159,12 +159,12 @@ const cloneXform: FieldXform = {
 	node: (n: Node | null): Node | null => { return n != null ? cloneNodeImpl(n) : null; },
 	nodes: (a: Node[] | null): Node[] => {
 		const out: Node[] = [];
-		if (a != null) { for (const x of a) { out.push(x != null ? cloneNodeImpl(x) : null); } }
+		if (a != null) { for (const x of a) { out.push(x != null ? cloneNodeImpl(x) : null as unknown as Node); } }
 		return out;
 	},
 	nodesNested: (a: Node[][] | null): Node[][] => {
 		const out: Node[][] = [];
-		if (a != null) { for (const row of a) { const r: Node[] = []; if (row != null) { for (const x of row) { r.push(x != null ? cloneNodeImpl(x) : null); } } out.push(r); } }
+		if (a != null) { for (const row of a) { const r: Node[] = []; if (row != null) { for (const x of row) { r.push(x != null ? cloneNodeImpl(x) : null as unknown as Node); } } out.push(r); } }
 		return out;
 	},
 	typ: (t: Type | null): Type | null => { return t; },

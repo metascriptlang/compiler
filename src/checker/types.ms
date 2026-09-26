@@ -325,7 +325,7 @@ export function createPromise(innerType: Type | null): Type {
 	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Affine, scope-bound `Promise<T>` produced by `spawn(...)`. Surface type is
@@ -345,7 +345,7 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
 	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
@@ -1058,6 +1058,7 @@ export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: st
 export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: string): boolean {
 	if (unionType == null || unionType.typeChildren == null) return false;
 	if (unwrapRefNullUnion(unionType) != null) return false;
+	if (duSharedFieldSlotDiffers(unionType, fieldName)) return true;
 	let firstSig = "";
 	let found = 0;
 	let variants = 0;
@@ -1082,6 +1083,32 @@ export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: stri
 	}
 	if (found == 0) return false;
 	return found < variants;
+}
+
+export function literalTagDiscriminant(unionType: Type | null): string {
+	if (unionType == null || unionType.typeChildren == null) return "";
+	if (isDiscriminatedUnion(unionType)) {
+		const dt = unionType.typeExtra;
+		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String) ? getDiscriminantName(unionType) : "";
+	}
+	const strDisc = findSharedStringDiscriminant(unionType);
+	return strDisc != "" ? strDisc : findSharedBooleanDiscriminant(unionType);
+}
+
+export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: string): boolean {
+	if (unionType == null || unionType.typeChildren == null) return false;
+	let firstInline = -1;
+	for (const member of unionType.typeChildren) {
+		const variant = peelToStruct(member);
+		if (variant == null || variant.typeNames == null || !variant.typeNames.includes(fieldName)) continue;
+		const inline = inlineVariantStruct(member) != null ? 1 : 0;
+		if (firstInline < 0) {
+			firstInline = inline;
+		} else if (inline != firstInline) {
+			return literalTagDiscriminant(unionType) != fieldName;
+		}
+	}
+	return false;
 }
 
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
@@ -1474,7 +1501,7 @@ export function lockedCellName(payload: Type | null): string {
 export function createLockedCell(payload: Type | null): Type {
 	return createStruct(lockedCellName(payload),
 		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload], true);
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true);
 }
 
 export function createLocked(payload: Type | null): Type {
@@ -1891,8 +1918,14 @@ export function genericParamsOf(t: Type | null): string {
 		const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
 		owner = base != null ? base.sym : null;
 	}
-	if (owner != null && owner.declNode != null) return declGenericParams(owner.declNode);
+	if (owner != null && owner.declNode != null) return genericParamNamesOf(declGenericParams(owner.declNode));
 	return builtinGenericParams(cur.typeName);
+}
+
+export function genericParamNamesOf(params: string): string {
+	const names: string[] = [];
+	for (const param of splitTopLevel(params, ",")) names.push(splitTopLevel(param, ":")[0].trim());
+	return names.join(",");
 }
 
 export function declFieldNamesJoined(decl: Node | null): string {
@@ -1938,6 +1971,14 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 let _instantiatedBodies: int32 = 0;
 export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
 
+function bodyWouldShareTheDeclaration(base: Type, names: string[], args: Type[]): boolean {
+	if (!isDeclaredStruct(base) || symGenericParams(base.sym) == "") return false;
+	for (let i = 0; i < names.length; i += 1) {
+		if (args[i] == null || args[i].kind != TypeKind.GenericParam || args[i].typeName != names[i]) return true;
+	}
+	return false;
+}
+
 // Reference parity (handleGenericInvocation): eagerly instantiate
 // GenericInstance body. Uses explicit param names from the parser's generic declaration
 // store. Produces a fully concrete body
@@ -1964,6 +2005,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 		pi = pi + 1;
 	}
 	const body = substituteAllParams(innerBase, names, args);
+	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 	_instantiatedBodies = _instantiatedBodies + 1;

@@ -15,7 +15,7 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
@@ -85,7 +85,7 @@ function collectRefs(node: Node, refs: HashSet<Symbol>): void {
 
 function enumOwnerOf(sym: Symbol): Symbol | null {
 	if (sym.symbolKind != SymbolKind.EnumMember) return null;
-	let t = sym.symbolType;
+	let t: Type | null = sym.symbolType;
 	if (t != null && t.kind == TypeKind.EnumLiteral) t = t.typeReturn;
 	return t != null && t.kind == TypeKind.Enum ? t.sym : null;
 }

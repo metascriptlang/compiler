@@ -96,7 +96,7 @@ export function setGraphCheckTiming(on: boolean): void {
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictDefs: boolean = false, strictNullChecks: boolean = false): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
@@ -105,6 +105,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
 	baseCtx.gcMode = gcMode;
+	baseCtx.strictDefs = strictDefs;
+	baseCtx.strictNullChecks = strictNullChecks;
 	lastPreludeCtx = baseCtx;
 
 	const _tf0 = performance.now();

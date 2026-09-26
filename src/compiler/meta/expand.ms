@@ -146,7 +146,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	const kindNum = node.kind as number;
 
 	keys.push("kind");
-	values.push(mkNumber(kindNum, loc));
+	values.push(enumOrdinalAs("NodeKind", kindNum, loc));
 	keys.push("line");
 	values.push(mkNumber(node.location.line, loc));
 	keys.push("column");
@@ -225,6 +225,12 @@ function addNumField(keys: string[], values: Node[], name: string, val: number, 
 	guardChildFieldName(name);
 	keys.push(name);
 	values.push(mkNumber(val, loc));
+}
+
+function addEnumField(keys: string[], values: Node[], name: string, enumName: string, ord: number, loc: SourceLocation): void {
+	guardChildFieldName(name);
+	keys.push(name);
+	values.push(enumOrdinalAs(enumName, ord, loc));
 }
 
 function addBoolField(keys: string[], values: Node[], name: string, val: boolean, loc: SourceLocation): void {
@@ -373,7 +379,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "declName", d.declName, loc);
 		addStrField(keys, values, "declType", d.declType, loc);
 		addNodeField(keys, values, "initializer", d.initializer, loc);
-		addNumField(keys, values, "declKind", d.declKind as number, loc);
+		addEnumField(keys, values, "declKind", "DeclKind", d.declKind as number, loc);
 		return;
 	}
 	if (k == NodeKind.UnaryExpr) {
@@ -790,7 +796,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	}
 	if (k == NodeKind.ExternDecl) {
 		const d = node.data as ExternDeclData;
-		addNumField(keys, values, "externKind", d.externKind as number, loc);
+		addEnumField(keys, values, "externKind", "ExternKind", d.externKind as number, loc);
 		addStrField(keys, values, "externName", d.externName, loc);
 		addStrField(keys, values, "nativeName", d.nativeName, loc);
 		addStrField(keys, values, "externType", d.externType, loc);
@@ -1483,7 +1489,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 			const bloc = node.location;
 			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
 			const bvalues: Node[] = [
-				mkNumber(NodeKind.Identifier as number, bloc),
+				enumOrdinalAs("NodeKind", NodeKind.Identifier as number, bloc),
 				mkNumber(bloc.line, bloc),
 				mkNumber(bloc.column, bloc),
 				mkString(symName, bloc),

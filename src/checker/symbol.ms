@@ -304,7 +304,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.name = name;
 	sym.nameId = 0;
 	sym.symbolKind = kind;
-	sym.symbolType = symType;
+	sym.symbolType = symType!;
 	sym.state = state;
 	sym.location = makeLoc(0, 0);
 	sym.declNode = null as unknown as Node;

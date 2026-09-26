@@ -136,7 +136,7 @@ export function hookPrototype(name: string, fnType: Type | null): Symbol {
 
 export function hookComplete(name: string, fnType: Type | null): Symbol {
 	const sym = hookPrototype(name, fnType);
-	sym.symbolType = fnType;
+	sym.symbolType = fnType!;
 	return sym;
 }
 export function genHasDestroyHook(typeName: string): boolean {

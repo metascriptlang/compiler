@@ -444,6 +444,7 @@ function bindSwitchStmt(state: BinderState, node: Node): void {
 			bindStatement(state, caseData.caseStmts[si]);
 			si = si + 1;
 		}
+		caseNode.flowNode = state.currentFlow;
 		addAntecedent(postLabel, state.currentFlow);
 		if (caseData.isDefault) hasDefault = true;
 		i = i + 1;

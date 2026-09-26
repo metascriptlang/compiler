@@ -638,6 +638,8 @@ function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): S
 	return null;
 }
 
+import { genericParamNamesOf } from "./types";
+
 function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
 	let builtinKind = "";
@@ -664,14 +666,14 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 		addError(ctx, "static method '" + className + "." + md.methodName + "' has no receiver — remove the 'this' parameter", thisLoc.line, thisLoc.column);
 	}
 	if (!md.methodIsStatic && writesThis) {
-		const receiverType = classGenerics != "" ? className + "<" + classGenerics + ">" : className;
+		const receiverType = classGenerics != "" ? className + "<" + genericParamNamesOf(classGenerics) + ">" : className;
 		const written = md.methodParamTypes[0];
 		if (written == "") md.methodParamTypes[0] = receiverType;
 		else if (receiverBaseName(written) != className) {
 			addError(ctx, "the receiver of '" + className + "." + md.methodName + "' is typed '" + written + "' — a method's 'this' must be " + className + " or Readonly<" + className + ">", thisLoc.line, thisLoc.column);
 		}
 	} else if (!md.methodIsStatic) {
-		const receiverType = classGenerics != "" ? className + "<" + classGenerics + ">" : className;
+		const receiverType = classGenerics != "" ? className + "<" + genericParamNamesOf(classGenerics) + ">" : className;
 		const newParams: string[] = ["this"];
 		const newTypes: string[] = [receiverType];
 		for (let pi = 0; pi < md.methodParams.length; pi += 1) {

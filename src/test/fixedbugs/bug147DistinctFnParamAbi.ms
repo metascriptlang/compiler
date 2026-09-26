@@ -29,7 +29,7 @@ test "a callback with a plain closure parameter runs through a distinct-typed sl
 }
 
 test "a function declared with the distinct parameter takes the same closure by value" {
-	const viaBase: (a: () => number) => number = readThrough;
-	assert viaBase(() => 9) == 10;
+	const viaSlot: (a: Acc147<number>) => number = readThrough;
+	assert viaSlot(acc147(() => 9)) == 10;
 	assert readThrough(acc147(() => 1)) == 2;
 }

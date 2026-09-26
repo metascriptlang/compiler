@@ -2,14 +2,14 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
-import { callCheckExpr } from "./checkerCallbacks";
+import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 
 // ===== Operator Inference =====
@@ -247,6 +247,31 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 	conv.nodeType = cstr;
 	conv.flags = conv.flags.incl(NodeFlag.Sem);
 	return conv;
+}
+
+export function instantiateGenericFnValue(ctx: CheckerContext, expr: Node, formal: Type): boolean {
+	const sym = expr.kind == NodeKind.Identifier ? expr.resolvedSym : null;
+	if (sym == null || sym.declNode == null || sym.declNode.kind != NodeKind.FunctionDecl || sym.symbolType == null) return false;
+	if (!isGenericFn((sym.declNode.data as FunctionDeclData).fnFlags)) return false;
+	const target = skipModifier(formal) ?? formal;
+	const fnType = sym.symbolType;
+	if (target.kind != TypeKind.Function || hasGenericParams(target) || fnType.kind != TypeKind.Function) return false;
+	const raw = createUnifyBindings();
+	for (let i = 0; i < fnType.typeChildren.length && i < target.typeChildren.length; i += 1) unifyType(fnType.typeChildren[i], target.typeChildren[i], raw);
+	unifyType(fnType.typeReturn, target.typeReturn, raw);
+	const names: string[] = [];
+	const types: Type[] = [];
+	for (let bi = 0; bi < raw.names.length; bi += 1) {
+		if (hasGenericParams(raw.types[bi])) continue;
+		names.push(raw.names[bi]);
+		types.push(raw.types[bi]);
+	}
+	if (names.length == 0) return false;
+	const inst = callInstantiateGeneric(sym, names, types, ctx, expr.location);
+	if (inst == null || inst.symbolType == null) return false;
+	expr.resolvedSym = inst;
+	expr.nodeType = inst.symbolType;
+	return true;
 }
 
 // Direct function → closure auto-wrap: a named function (CcDefault) flowing into a
@@ -1147,6 +1172,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
+	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);
 	if (thunk != null as unknown as Node) return thunk;
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
@@ -1244,22 +1270,9 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	return expr;
 }
 
-function refusedOnlyForNull(exprType: Type, formal: Type): boolean {
-	if (exprType.kind == TypeKind.Null) return true;
-	if (isMaybeType(exprType) && exprType.typeReturn != null) return isAssignable(exprType.typeReturn, formal);
-	if (exprType.kind != TypeKind.Union) return false;
-	let carriesNull = false;
-	for (const member of exprType.typeChildren) {
-		if (member == null) continue;
-		if (member.kind == TypeKind.Null) carriesNull = true;
-		else if (!isAssignable(member, formal)) return false;
-	}
-	return carriesNull;
-}
-
 export function slotRefuses(exprType: Type, formal: Type): boolean {
 	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
-	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal) && !refusedOnlyForNull(exprType, formal);
+	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal);
 }
 
 export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, formal: Type | null): boolean {

@@ -378,8 +378,8 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
-	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
+function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
+	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
 	// Load preludes FIRST so they end up at the start of graph.loadOrder.
@@ -409,12 +409,12 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	if (graph.errors.length > 0) stopBuild();
 	exitOnModuleErrors(graph, "error");
 
-	if (verbose) verboseLog("cross-module type check");
+	if (opts.verbose) verboseLog("cross-module type check");
 	// Pass targetOs through so @platform("...") directives are filtered against
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, targetInfo, gcMode, config, session);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictDefs, opts.strictNullChecks);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -1259,7 +1259,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo);
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
@@ -1308,8 +1308,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
@@ -1493,7 +1491,7 @@ export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: R
 	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
 }
 
@@ -2145,7 +2143,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
 
@@ -2302,8 +2300,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		if (reusedProgram != null && reusedCtx != null) {
 			setOuterProgramForComptime(reusedProgram);
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			reusedCtx.strictDefs = opts.strictDefs;
-			reusedCtx.strictNullChecks = opts.strictNullChecks;
 			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
 			if (hasErrors(reusedCtx)) {
 				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
@@ -2318,8 +2314,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		const _tc0 = performance.now();
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		tCheck = tCheck + (performance.now() - _tc0);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		// Errors and warnings were already rendered in the graph-checker phase
 		// (loadAndCheckGraph → reportModuleErrors). Re-checking here re-populates
@@ -2905,7 +2899,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -2942,8 +2936,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		if (reusedProgram != null && reusedCtx != null) {
 			setOuterProgramForComptime(reusedProgram);
 			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			reusedCtx.strictDefs = opts.strictDefs;
-			reusedCtx.strictNullChecks = opts.strictNullChecks;
 			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
 			reusedCtx.errors = [];
 			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
@@ -2952,8 +2944,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		}
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		ctx.strictDefs = opts.strictDefs;
-		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 		ctx.errors = [];
 		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
@@ -3229,7 +3219,7 @@ export interface JsTreeResult {
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
 	// mirror the source tree, std/runtime modules land under _std/, anything
@@ -3539,7 +3529,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
