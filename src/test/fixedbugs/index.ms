@@ -254,3 +254,4 @@ import "./bug225GenericTypeParamStaticCall";
 import "./bug226EnumTypeStaticExtension";
 import "./bug226EnumNameDiagnostics";
 import "./bug227StaticExtensionSameNameAcrossModules";
+import "./bug242GenericInstanceChecksInItsModule";
