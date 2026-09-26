@@ -24,13 +24,17 @@
 //     (per-iteration re-eval like while; a `continue` of B leaves a labelled
 //     block around B, so it still reaches the test)
 //
+// Codegen checks msErr only after a statement's top-level call, so a call that
+// can raise in a condition or a literal element becomes its own statement here.
+//
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, DeclKind, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, SpreadExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { walkExpandBlocks, mapExprChildren, mapChildren, hasEffect } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
@@ -67,7 +71,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 	}
 	if (expr.kind == NodeKind.ConditionalExpr) {
 		const cd = expr.data as ConditionalExprData;
-		cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, hoisted, ctx);
+		cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, hoisted, ctx);
 		const loc = expr.location;
 		const t = freshTempSym(ctx, "tern", expr.nodeType);
 		const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
@@ -85,7 +89,26 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		if (expr.kind == NodeKind.SpreadExpr) return hoistSpreadOperand(expr, hoisted, ctx);
 	}
 	hoistChildrenInOrder(expr, hoisted, ctx);
+	if (callsToStatements > 0 && callCanRaise(expr)) return bindToStatement(expr, "call", hoisted, ctx);
 	return expr;
+}
+
+let callsToStatements = 0;
+
+function hoistRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	callsToStatements += 1;
+	const lowered = hoistTernaries(expr, hoisted, ctx);
+	callsToStatements -= 1;
+	return lowered;
+}
+
+function callCanRaise(n: Node): boolean {
+	if (n.nodeType != null && (n.nodeType.kind == TypeKind.Void || n.nodeType.kind == TypeKind.Never)) return false;
+	if (n.kind == NodeKind.NewExpr) return true;
+	if (n.kind != NodeKind.CallExpr) return false;
+	const sym = (n.data as CallExprData).callee.resolvedSym;
+	if (sym == null) return true;
+	return hasFlag(sym, SymbolFlag.Throws) || !hasFlag(sym, SymbolFlag.ImportC);
 }
 
 function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
@@ -115,7 +138,9 @@ function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: Trans
 }
 
 function hoistLiteral(lit: Node, hoisted: Node[], ctx: TransformContext): Node {
+	callsToStatements += 1;
 	hoistChildrenInOrder(lit, hoisted, ctx);
+	callsToStatements -= 1;
 	if (isLowerableSpreadLiteral(lit)) {
 		expandSpreadLiteral(lit, ctx, hoisted);
 		return lit;
@@ -317,7 +342,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.expr.kind == NodeKind.ConditionalExpr) {
 				const cd = d.expr.data as ConditionalExprData;
 				const pre: Node[] = [];
-				cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, pre, ctx);
+				cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, pre, ctx);
 				const thenStmt = makeExprStmt(cd.ternaryConsequent, loc);
 				const elseStmt = makeExprStmt(cd.ternaryAlternate, loc);
 				pre.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
@@ -338,6 +363,8 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.WhileStmt => { return expandWhileCond(stmt, ctx); },
 		NodeKind.DoWhileStmt => { return expandDoWhileCond(stmt, ctx); },
+		NodeKind.IfStmt => { return expandIfCond(stmt, ctx); },
+		NodeKind.SwitchStmt => { return expandSwitchDisc(stmt, ctx); },
 		_ => {},
 	};
 	const hoisted: Node[] = [];
@@ -355,7 +382,7 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const cd = vd.initializer.data as ConditionalExprData;
 	const loc = stmt.location;
 	const result: Node[] = [];
-	cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, result, ctx);
+	cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, result, ctx);
 	const letDecl = makeVarDecl(vd.declName, makeNull(loc), DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
 	if (stmt.nodeType != null) { letDecl.nodeType = stmt.nodeType; }
@@ -376,7 +403,7 @@ export function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] 
 	const cd = rd.argument.data as ConditionalExprData;
 	const loc = stmt.location;
 	const result: Node[] = [];
-	cd.ternaryCondition = hoistTernaries(cd.ternaryCondition, result, ctx);
+	cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, result, ctx);
 	const thenStmt = (cd.ternaryConsequent.nodeType != null && cd.ternaryConsequent.nodeType.kind == TypeKind.Never)
 		? makeExprStmt(cd.ternaryConsequent, loc)
 		: makeReturn(cd.ternaryConsequent, loc);
@@ -393,7 +420,7 @@ export function lowerTernaryInReturn(stmt: Node, ctx: TransformContext): Node[] 
 function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
 	const pre: Node[] = [];
-	const cond = hoistTernaries(wd.whileCondition, pre, ctx);
+	const cond = hoistRaisingCalls(wd.whileCondition, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	const loc = stmt.location;
 	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
@@ -478,10 +505,46 @@ function expandDoWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as DoWhileStmtData;
 	if (wd.dwSwitchWrapper) return [stmt];
 	const pre: Node[] = [];
-	const cond = hoistTernaries(wd.doCondition, pre, ctx);
+	const cond = hoistRaisingCalls(wd.doCondition, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	moveDoWhileTestIntoBody(stmt, pre, cond, ctx);
 	return [stmt];
+}
+
+function expandIfCond(stmt: Node, ctx: TransformContext): Node[] {
+	const d = stmt.data as IfStmtData;
+	if (d.alternate != null && d.alternate.kind == NodeKind.IfStmt && condLowersToStatements((d.alternate.data as IfStmtData).condition)) {
+		d.alternate = makeBlock([d.alternate], d.alternate.location);
+	}
+	const pre: Node[] = [];
+	d.condition = hoistRaisingCalls(d.condition, pre, ctx);
+	if (pre.length == 0) return [stmt];
+	pre.push(stmt);
+	return pre;
+}
+
+function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
+	const d = stmt.data as SwitchStmtData;
+	const pre: Node[] = [];
+	d.switchDisc = hoistRaisingCalls(d.switchDisc, pre, ctx);
+	if (pre.length == 0) return [stmt];
+	pre.push(stmt);
+	return pre;
+}
+
+function condLowersToStatements(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
+		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return true;
+	if (n.kind == NodeKind.BinaryExpr) {
+		const op = (n.data as BinaryExprData).operator;
+		if (op == "&&" || op == "||") return true;
+	}
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && condLowersToStatements(c)) { found = true; }
+	});
+	return found;
 }
 
 // ===== Entry Point =====
