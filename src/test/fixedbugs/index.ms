@@ -246,3 +246,5 @@ import "./bug229AsyncUninitializedLocal";
 import "./bug230SpawnRulesOnJs";
 import "./bug231SyncAwaitOnJs";
 import "./bug241MatchBlockArmContext";
+import "./bug221ExplicitDeref";
+import "./bug222ExplicitDerefRefused";
