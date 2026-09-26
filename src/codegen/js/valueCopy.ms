@@ -8,8 +8,10 @@
 
 import { Node, NodeKind, NodeFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
 import {
-	BinaryExprData, ConditionalExprData, TypeAssertionData,
+	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
+import { Symbol, SymbolKind } from "../../ast/node";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
 let ownerGen: JSGenerator | null = null;
@@ -245,18 +247,143 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 		+ "if (d === null || d === undefined) return " + copy + "(v); " + body + "return d; }\n";
 }
 
-// Emits `x[] = v` — a whole-pointee assignment through a Ptr<T> or Ref<T> —
-// or returns false for any other left side (the caller emits a plain
-// assignment). Other places keep rebinding until JS value semantics copy at
-// every store (NIM-REF CG-40).
+function isSimpleLvalue(n: Node): boolean {
+	match (n.kind) {
+		NodeKind.Identifier => { return true; },
+		NodeKind.NumberLiteral => { return true; },
+		NodeKind.StringLiteral => { return true; },
+		NodeKind.MemberExpr => {
+			const d = n.data as MemberExprData;
+			return !d.isOptional && isSimpleLvalue(d.object);
+		},
+		NodeKind.ArrayAccess => {
+			const d = n.data as ArrayAccessData;
+			return isSimpleLvalue(d.array) && isSimpleLvalue(d.index);
+		},
+		NodeKind.HiddenDeref => { return isSimpleLvalue((n.data as HiddenDerefData).expr); },
+		_ => { return false; },
+	};
+}
+
+// A value parameter or a for-of binding is a view of the caller's value: an
+// assignment to it rebinds to its own copy (C gives it an owned shadow,
+// CK-18/CK-30), it never writes through into the value it views.
+function isViewBinding(sym: Symbol | null): boolean {
+	if (sym == null) return false;
+	return sym.symbolKind == SymbolKind.Parameter || hasFlag(sym, SymbolFlag.ForVar);
+}
+
+function storeFnName(gen: JSGenerator, t: Type): string {
+	registryFor(gen);
+	const key = "store:" + typeKey(t);
+	let i = 0;
+	while (i < assignKeys.length) {
+		if (assignKeys[i] == key) return assignNames[i];
+		i += 1;
+	}
+	const name = "msValStore_" + identFromKey(typeKey(t));
+	assignKeys.push(key);
+	assignNames.push(name);
+	gen.staticSlots.push("function " + name + "(o, k, v) { return o[k] = " + assignFnName(gen, t) + "(o[k], v); }\n");
+	return name;
+}
+
+// Assignment of a value struct into a location that already holds one writes
+// into that location's object, as Nim's jsgen emits `x = nimCopy(x, y)`
+// (jssys.nim nimCopy reuses dest): every Ptr to the location keeps seeing it,
+// as on C. `x[] = v` writes through the pointer. A view binding rebinds (the
+// caller emits `x = copy(v)`); so does a location that cannot be named twice
+// without evaluating its parts twice, through `msValStore_` (object, key).
 export function emitValueAssign(gen: JSGenerator, left: Node, right: Node): boolean {
-	if (left.kind != NodeKind.HiddenDeref || !left.flags.has(NodeFlag.ExplicitDeref)) return false;
 	const t = jsValueRepr(left.nodeType);
 	if (!needsValueCopy(t)) return false;
-	emit(gen, assignFnName(gen, t as Type) + "(");
-	emitNode(gen, left);
-	emit(gen, ", ");
-	emitNode(gen, right);
-	emit(gen, ")");
-	return true;
+	if (left.kind == NodeKind.HiddenDeref && left.flags.has(NodeFlag.ExplicitDeref)) {
+		emit(gen, assignFnName(gen, t as Type) + "(");
+		emitNode(gen, left);
+		emit(gen, ", ");
+		emitNode(gen, right);
+		emit(gen, ")");
+		return true;
+	}
+	if (left.kind == NodeKind.Identifier && isViewBinding(left.resolvedSym)) return false;
+	const assign = assignFnName(gen, t as Type);
+	if (isSimpleLvalue(left)) {
+		emitNode(gen, left);
+		emit(gen, " = " + assign + "(");
+		emitNode(gen, left);
+		emit(gen, ", ");
+		emitNode(gen, right);
+		emit(gen, ")");
+		return true;
+	}
+	if (left.kind == NodeKind.ArrayAccess) {
+		const d = left.data as ArrayAccessData;
+		emit(gen, storeFnName(gen, t as Type) + "(");
+		emitNode(gen, d.array);
+		emit(gen, ", ");
+		emitNode(gen, d.index);
+		emit(gen, ", ");
+		emitNode(gen, right);
+		emit(gen, ")");
+		return true;
+	}
+	if (left.kind == NodeKind.MemberExpr && !(left.data as MemberExprData).isOptional) {
+		const d = left.data as MemberExprData;
+		emit(gen, storeFnName(gen, t as Type) + "(");
+		emitNode(gen, d.object);
+		emit(gen, ", \"" + d.property + "\", ");
+		emitNode(gen, right);
+		emit(gen, ")");
+		return true;
+	}
+	return false;
+}
+
+// The element type an array value of static type `t` holds, through a
+// `T[]` (Ref<Array>) envelope; null when `t` is not an array.
+function arrayOf(t: Type | null): Type | null {
+	t = jsValueRepr(t);
+	if (t != null && t.kind == TypeKind.Ref && t.typeReturn != null) t = t.typeReturn;
+	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) return t;
+	return null;
+}
+
+// Native code knows no value semantics. A value that crosses into it through a
+// `sink` parameter is stored there, so it is copied in (Nim's store magics copy,
+// jsgen.nim mAppendSeqElem `nimCopy(null, v)`); a value that comes back out
+// shares the native store's object, so it is copied out — for an array result
+// of value structs, element by element.
+export function emitNativeArg(gen: JSGenerator, arg: Node, formal: Type | null): void {
+	if (formal != null && formal.kind == TypeKind.Sink) {
+		emitCopyOnRead(gen, arg);
+		return;
+	}
+	emitNode(gen, arg);
+}
+
+export function nativeResultCopy(gen: JSGenerator, t: Type | null): string {
+	const r = jsValueRepr(t);
+	if (needsValueCopy(r)) return copyFnName(gen, r as Type);
+	const arr = arrayOf(t);
+	if (arr != null && needsValueCopy(arr.typeReturn)) return copyFnName(gen, arr);
+	return "";
+}
+
+// `[...xs]`: a spread copies each value-struct element, as an array literal
+// copies each listed element.
+export function emitArrayElement(gen: JSGenerator, el: Node): void {
+	if (el.kind != NodeKind.SpreadExpr) {
+		emitCopyOnRead(gen, el);
+		return;
+	}
+	const arg = (el.data as SpreadExprData).spreadArg;
+	const arr = arrayOf(arg.nodeType);
+	emit(gen, "...");
+	if (arr != null && needsValueCopy(arr.typeReturn) && !isFreshRvalue(arg)) {
+		emit(gen, copyFnName(gen, arr) + "(");
+		emitNode(gen, arg);
+		emit(gen, ")");
+		return;
+	}
+	emitNode(gen, arg);
 }

@@ -1,7 +1,7 @@
 // JavaScript Codegen — Expression Emitters
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, Symbol, SymbolKind,
+	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
-import { emitCopyOnRead, emitValueAssign } from "./valueCopy";
+import { emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { int64ToDecimal } from "../../utils/string";
@@ -357,16 +357,28 @@ function emittedNode(node: Node): Node {
 	};
 }
 
-function emitPostfixBase(gen: JSGenerator, node: Node): void {
+function emitPostfixBase(gen: JSGenerator, node: Node, formal: Type | null = null): void {
 	const k = emittedNode(node).kind;
 	const wrap = k == NodeKind.NumberLiteral || k == NodeKind.AwaitExpr || k == NodeKind.YieldExpr
 		|| k == NodeKind.UnaryExpr || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr;
 	if (wrap) emit(gen, "(");
-	emitNode(gen, node);
+	emitNativeArg(gen, node, formal);
 	if (wrap) emit(gen, ")");
 }
 
-function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string): void {
+function nativeFormals(sym: Symbol | null): Type[] | null {
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return null;
+	return sym.symbolType.typeChildren;
+}
+
+function nativeFormal(formals: Type[] | null, idx: int32): Type | null {
+	if (formals == null || idx >= formals.length) return null;
+	return formals[idx];
+}
+
+function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string, formals: Type[] | null = null, resultType: Type | null = null): void {
+	const outCopy = nativeResultCopy(gen, resultType);
+	if (outCopy != "") emit(gen, outCopy + "(");
 	let argIdx = 0;
 	let i = 0;
 	while (i < pattern.length) {
@@ -375,9 +387,9 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 			if (argIdx < args.length) {
 				const next = i + 1 < pattern.length ? pattern.charAt(i + 1) : "";
 				if (next == "." || next == "[" || next == "(") {
-					emitPostfixBase(gen, args[argIdx]);
+					emitPostfixBase(gen, args[argIdx], nativeFormal(formals, argIdx));
 				} else {
-					emitNode(gen, args[argIdx]);
+					emitNativeArg(gen, args[argIdx], nativeFormal(formals, argIdx));
 				}
 				argIdx = argIdx + 1;
 			}
@@ -386,7 +398,7 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 			let first = true;
 			while (argIdx < args.length) {
 				if (!first) emit(gen, ", ");
-				emitNode(gen, args[argIdx]);
+				emitNativeArg(gen, args[argIdx], nativeFormal(formals, argIdx));
 				argIdx = argIdx + 1;
 				first = false;
 			}
@@ -399,6 +411,7 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 			i = i + 1;
 		}
 	}
+	if (outCopy != "") emit(gen, ")");
 }
 
 // A MemberExpr's own location is its dot; the callee's first token lives on
@@ -438,7 +451,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			for (const a of d.arguments) patternArgs.push(a);
 		}
 		markNamed(gen, calleeOriginNode(d.callee), sym.name);
-		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name);
+		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name, nativeFormals(sym), node.nodeType);
 		return;
 	}
 
@@ -460,7 +473,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		const ws = w.winnerSym;
 		if (ws != null && ws.nativeName != "" && hasNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
-			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name);
+			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name, nativeFormals(ws), node.nodeType);
 			return;
 		}
 		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);
@@ -566,7 +579,7 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	emit(gen, "[");
 	for (let i = 0; i < d.elements.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
-		emitCopyOnRead(gen, d.elements[i]);
+		emitArrayElement(gen, d.elements[i]);
 	}
 	emit(gen, "]");
 	if (typedName != "") emit(gen, ")");
