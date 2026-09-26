@@ -1,7 +1,7 @@
 // @stdout: loop total=3 0/1 1/11 2/21
 // @stdout: shared 7 8
 // @stdout: header c5 u1 u2 u3 j1 j3 j4 j5
-// note: a closure made in a loop shares the function's variables and owns the bindings its iteration declares, one env per iteration shared by every closure of that iteration (JS per-iteration binding). A `let` of a for header is copied per iteration: a closure in the condition sees the running iteration, one in the update sees the next. Before the fix C gave every closure a private copy of every capture: total stayed 0, j lost its later write, and sibling closures of one iteration did not share it.
+// note: a closure made in a loop shares the function's variables and owns the bindings its iteration declares, one env per iteration shared by every closure of that iteration (JS per-iteration binding). A `let` of a for header is copied per iteration: a closure in the condition sees the running iteration, one in the update sees the next. Before the fix C gave every closure a private copy of every capture: total stayed 0, a later write to the function's variable was not seen, sibling closures of one iteration did not share their binding, and a header closure saw the wrong iteration.
 
 type Thunk = () => string;
 type Get = () => int32;

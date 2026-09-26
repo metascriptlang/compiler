@@ -1,11 +1,11 @@
 // bug463 — a closure made in a loop copied every variable it captured
 //
 // Symptom:    on C, closures made in a loop body worked on private copies:
-//             three `() => { total += i; }` left total at 0 (JS: 3), a write
-//             to the loop's binding after the closure was made was lost
-//             (j printed 0/10/20, JS 1/11/21), the two closures of one
-//             iteration did not share its binding, and a closure in a for
-//             header saw the loop variable of the wrong iteration.
+//             three `() => { total += i; }` left total at 0 (JS: 3), a later
+//             write to the function's `total` was not seen by them (0 0, JS
+//             99 99), the two closures of one iteration did not share its
+//             binding (0 100, JS 7 8), and a closure in a for header saw the
+//             loop variable of the wrong iteration (u0 u1 u2, JS u1 u2 u3).
 // Root cause: src/transform/lowering/lambdaLifting.ms gave every closure made
 //             inside a loop its own env holding a copy of every capture, and
 //             src/transform/lowering/forLoopLower.ms kept one binding for a
