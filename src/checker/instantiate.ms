@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType } from "./types";
+import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type } from "./types";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -956,4 +956,35 @@ test "an instantiation at the depth limit is still attempted" {
 	instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
 	assert ctx.errors.length == 0;
 	assert ctx.genericInstDepth == 50;
+}
+
+function callerDeclaring(name: string, t: Type): CheckerContext {
+	const ctx = createContext();
+	const sym = makeSymbol(name, SymbolKind.Enum, t, false);
+	sym.nameId = getIdentId(ctx.table.identCache, name);
+	addSymbolToScope(ctx.table.current, sym);
+	return ctx;
+}
+
+test "a struct type argument makes its enum field type visible in the instance body" {
+	const color = createEnum("Color", ["Red", "Blue"], [0, 1]);
+	const caller = callerDeclaring("Color", color);
+	const body = createContext();
+	assert lookupSymbol(body.table, "Color") == null;
+	const injected: Symbol[] = [];
+	injectConcreteTypeSyms(createStruct("Pixel", ["c", "x"], [color, int32Type()], true), body, caller, injected);
+	assert lookupSymbol(body.table, "Color") != null;
+	removeInjectedSyms(body, injected);
+	assert lookupSymbol(body.table, "Color") == null;
+}
+
+test "a class type argument makes the enum of a member type one struct deeper visible" {
+	const kind = createEnum("EvKind", ["Click", "Key"], [0, 1]);
+	const caller = callerDeclaring("EvKind", kind);
+	const body = createContext();
+	const click = createStruct("ClickEv", ["kind", "x"], [createEnumLiteral(kind, "Click"), int32Type()], true);
+	const injected: Symbol[] = [];
+	injectConcreteTypeSyms(createRef(createStruct("Holder", ["ev"], [click], false)), body, caller, injected);
+	assert lookupSymbol(body.table, "EvKind") != null;
+	assert lookupSymbol(body.table, "ClickEv") != null;
 }
