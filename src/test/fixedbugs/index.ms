@@ -245,3 +245,4 @@ import "./bug228AwaitInExpression";
 import "./bug229AsyncUninitializedLocal";
 import "./bug230SpawnRulesOnJs";
 import "./bug231SyncAwaitOnJs";
+import "./bug241MatchBlockArmContext";
