@@ -251,4 +251,5 @@ import "./bug530ReadBeforeAssignNoDefault";
 import "./bug212Float32ConstFold";
 import "./bug213ExternScalarTakesAddress";
 import "./bug543ForInIsRefused";
+import "./bug544MatchCoversEveryValue";
 import "./bug548NullableIntoNonNullSlot";

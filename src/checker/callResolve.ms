@@ -21,7 +21,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant } from "./types";
+import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -4080,6 +4080,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				if (patternKind == NodeKind.MemberExpr && !hasGuard) { coveredName = (p.data as MemberExprData).property; covers = true; }
 				// Tier 2: collect string literal patterns for exhaustiveness
 				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
+				if (patternKind == NodeKind.BooleanLiteral && !hasGuard) { coveredName = (p.data as BooleanLiteralData).boolValue ? "true" : "false"; covers = true; }
 				callCheckExpr(ctx, p, discType);
 				const errorsBeforePattern = ctx.errors.length;
 				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
@@ -4175,10 +4176,15 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 			if (allCovered) isExhaustive = true;
 		}
 	}
+	if (!isExhaustive && coversEveryLiteral(discType, coveredMembers)) isExhaustive = true;
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind == TypeKind.Enum && !hasWildcard) {
 		const discEnd = estimateExprEndCol(d.matchDisc) + 1;
 		checkEnumExhaustiveness(ctx, discType!, coveredMembers, node.location.line, node.location.column, discEnd);
+	}
+	if (!isExhaustive && discType.kind != TypeKind.Enum && !(narrowIsStringDU && narrowUnion != null) && !isUnresolvedType(discType)
+			&& mustCoverEveryValue(discType)) {
+		reportUncoveredMatch(ctx, discType, node, d.matchDisc);
 	}
 	// Tier 2: report missing string DU variants
 	if (narrowIsStringDU && narrowUnion != null && !hasWildcard) {
@@ -4208,6 +4214,36 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 			addErrorRange(ctx, `Non-exhaustive match: missing '${enumType.typeName}.${member}'`, matchLine, matchCol, discEndCol);
 		}
 	}
+}
+
+function coversEveryLiteral(discType: Type | null, covered: string[]): boolean {
+	if (discType == null) return false;
+	const t = peelThrough(discType, PEEL_ALL) ?? discType;
+	if (t.kind == TypeKind.Boolean) return covered.includes("true") && covered.includes("false");
+	if (t.kind == TypeKind.BooleanLiteral || t.kind == TypeKind.StringLiteral) return covered.includes(t.typeName);
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) {
+		if (m.kind != TypeKind.StringLiteral && m.kind != TypeKind.BooleanLiteral) return false;
+		if (!covered.includes(m.typeName)) return false;
+	}
+	return true;
+}
+
+function mustCoverEveryValue(discType: Type | null): boolean {
+	if (discType == null) return false;
+	const t = peelThrough(discType, PEEL_ALL) ?? discType;
+	if (isIntegerType(t) || t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral
+			|| t.kind == TypeKind.Char || t.kind == TypeKind.Enum || t.kind == TypeKind.StringLiteral) return true;
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) {
+		if (m.kind != TypeKind.StringLiteral && m.kind != TypeKind.BooleanLiteral) return false;
+	}
+	return true;
+}
+
+function reportUncoveredMatch(ctx: CheckerContext, discType: Type | null, node: Node, disc: Node): void {
+	addErrorRange(ctx, `Non-exhaustive match: not every '${typeDisplayName(discType)}' value has an arm — add a '_' arm`,
+		node.location.line, node.location.column, estimateExprEndCol(disc) + 1);
 }
 
 // Estimate end column of an expression node (for diagnostic ranges)
