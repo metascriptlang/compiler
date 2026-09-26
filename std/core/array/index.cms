@@ -379,4 +379,4 @@ export function concat<T>(this arr: T[], other: T[]): T[] {
 
 /** Returns the byte array as a string (zero-copy). */
 @builtin("AsString")
-export extern function asString(this arr: uint8[]): string from "msAsString";
+export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";

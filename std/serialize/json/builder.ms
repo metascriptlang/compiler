@@ -1,6 +1,6 @@
 // MetaScript JSON — Constructors
 
-import { JsonKind, JsonValue } from "./types";
+import { JsonKind, JsonValue, asString } from "./types";
 
 export function jsonNull(): JsonValue {
 	return { kind: JsonKind.Null };
@@ -28,6 +28,21 @@ export function jsonObject(keys: string[], values: JsonValue[]): JsonValue {
 
 export function jsonInt(n: int64): JsonValue {
 	return { kind: JsonKind.Int, intVal: n };
+}
+
+export function _jsonEnumName(ord: int32, ords: int32[], names: string[]): JsonValue {
+	for (let i = 0; i < ords.length; i++) {
+		if (ords[i] == ord) return jsonString(names[i]);
+	}
+	return jsonString("");
+}
+
+test "_jsonEnumName — a member's value writes the member's name" {
+	assert _jsonEnumName(5, [0, 5, 2], ["Red", "Blue", "Green"]).asString("?") == "Blue";
+}
+
+test "_jsonEnumName — a value no member holds writes the empty name, as Nim's enum $ does" {
+	assert _jsonEnumName(7, [0, 5, 2], ["Red", "Blue", "Green"]).asString("?") == "";
 }
 
 // ===== Array-from-typed helpers =====

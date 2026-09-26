@@ -71,6 +71,23 @@ export function untag(this v: CborValue): CborValue {
 	return cborNull();
 }
 
+export function _cborEnumOrd(v: CborValue, ords: int32[], names: string[]): int32 {
+	if (v != null && v.kind == CborKind.Text) {
+		for (let i = 0; i < names.length; i++) {
+			if (names[i] == v.textVal) return ords[i];
+		}
+	}
+	return ords[0];
+}
+
+test "_cborEnumOrd — a member name reads as that member's value" {
+	assert _cborEnumOrd(cborText("Blue"), [0, 5, 2], ["Red", "Blue", "Green"]) == 5;
+}
+
+test "_cborEnumOrd — a number where an enum is expected does not read as that ordinal" {
+	assert _cborEnumOrd(cborInt(2), [0, 5, 2], ["Red", "Blue", "Green"]) == 0;
+}
+
 // ===== Array-extraction helpers =====
 // Used by typed decode macro (cborValueToStruct) for array fields.
 

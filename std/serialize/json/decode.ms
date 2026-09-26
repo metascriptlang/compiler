@@ -119,6 +119,29 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				const ftype: Node = v.typExprFieldTypes[fi];
 				if (fname == discField) continue;
 
+				if (ftype.kind == NodeKind.EnumDecl) {
+					const ords: Node[] = [];
+					const names: Node[] = [];
+					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
+						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
+						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
+					}
+					vKeyNodes.push(fname);
+					vValueNodes.push({
+						kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: ftype.enumName,
+						asExpr: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrd" },
+							arguments: [
+								{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+							],
+						},
+					});
+					continue;
+				}
 				if (ftype.kind != NodeKind.Identifier) {
 					error("jsonValueToStruct: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
 				}
@@ -301,7 +324,6 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 
 		// Array field — V2: builtin atomic + enum/alias + struct/interface elements.
 		// Builtin → per-type fast helper (jsonToXArray).
-		// Non-builtin Identifier (enum / type alias) → `_jsonToIntArray<T>` generic.
 		// Struct/interface → `_jsonToStructArray<T>` generic.
 		// Generic-helper paths emit a bare `null` witness — T binds via Pass 3
 		// contextual return-type binding (Nim parity inheritBindings,
@@ -310,6 +332,28 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			const elemType: Node = ftype.typExprElement;
 			let en: string = "";
 			let elemIsStruct: boolean = false;
+			if (elemType.kind == NodeKind.EnumDecl) {
+				const ords: Node[] = [];
+				const names: Node[] = [];
+				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
+					const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: elemType.enumMembers[mi] });
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToEnumArray" },
+					arguments: [
+						{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+					],
+				});
+				i = i + 1;
+				continue;
+			}
 			if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
 			} else if (elemType.kind == NodeKind.TypeObject) {
@@ -358,7 +402,6 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				],
 			};
 
-			// Generic-helper path: enum/alias → _jsonToIntArray<T>;
 			// struct/interface → _jsonToStructArray<T>. Witness is bare
 			// `null` — T binds via Pass 3 contextual return-type binding
 			// (Nim parity inheritBindings, semcall.nim:777-859). The
@@ -444,6 +487,36 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		if (ftype.kind == NodeKind.BooleanLiteral) {
 			keyNodes.push(fname);
 			valueNodes.push({ kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: ftype.boolValue });
+			i = i + 1;
+			continue;
+		}
+		if (ftype.kind == NodeKind.MemberExpr) {
+			keyNodes.push(fname);
+			valueNodes.push(ftype);
+			i = i + 1;
+			continue;
+		}
+		if (ftype.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
+				const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
+			}
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: ftype.enumName,
+				asExpr: {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrd" },
+					arguments: [
+						{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+					],
+				},
+			});
 			i = i + 1;
 			continue;
 		}
@@ -624,6 +697,32 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				const ftype: Node = v.typExprFieldTypes[fi];
 				if (fname == discField) continue;
 
+				if (ftype.kind == NodeKind.EnumDecl) {
+					const ords: Node[] = [];
+					const names: Node[] = [];
+					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
+						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
+						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
+					}
+					vKeyNodes.push(fname);
+					vValueNodes.push({
+						kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: ftype.enumName,
+						asExpr: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrdE" },
+							arguments: [
+								{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumName },
+								errs, pfx,
+								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname },
+							],
+						},
+					});
+					continue;
+				}
 				if (ftype.kind != NodeKind.Identifier) {
 					error("jsonValueToStructE: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
 				}
@@ -760,6 +859,41 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				i = i + 1;
 				continue;
 			}
+			if (optSawNull && optCount == 1 && optMember != null && optMember.kind == NodeKind.EnumDecl) {
+				const ords: Node[] = [];
+				const names: Node[] = [];
+				for (let mi = 0; mi < optMember.enumMembers.length; mi = mi + 1) {
+					const ov: number = optMember.enumValues.length == optMember.enumMembers.length ? optMember.enumValues[mi] : mi;
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: optMember.enumMembers[mi] });
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, fnameLit] }],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: {
+						kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: optMember.enumName,
+						asExpr: {
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrdE" },
+							arguments: [
+								{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, fnameLit] },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: optMember.enumName },
+								errs, pfx, fnameLit,
+							],
+						},
+					},
+				});
+				i = i + 1;
+				continue;
+			}
 			error("jsonValueToStructE: nullable field '" + fname + "' — only atomic `X | null` is supported (nullable struct/array deferred)", witness);
 		}
 
@@ -793,7 +927,10 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			}
 			let en: string = "";
 			let elemIsStruct: boolean = false;
-			if (ec.kind == NodeKind.Identifier) {
+			let elemIsEnum: boolean = false;
+			if (ec.kind == NodeKind.EnumDecl) {
+				elemIsEnum = true;
+			} else if (ec.kind == NodeKind.Identifier) {
 				en = ec.name;
 			} else if (ec.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
@@ -819,6 +956,31 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				arguments: [pfx, fnameLit, errs],
 			};
 
+			if (elemIsEnum) {
+				const ords: Node[] = [];
+				const names: Node[] = [];
+				for (let mi = 0; mi < ec.enumMembers.length; mi = mi + 1) {
+					const ov: number = ec.enumValues.length == ec.enumMembers.length ? ec.enumValues[mi] : mi;
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ec.enumMembers[mi] });
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToEnumArrayE" },
+					arguments: [
+						reqArrayCall,
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+						{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ec.enumName },
+						errs,
+						{ kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: fnameLit },
+					],
+				});
+				i = i + 1;
+				continue;
+			}
 			if (elemIsStruct) {
 				// Element decode needs a runtime loop, so it goes through the
 				// array-of-structs helper, which re-enters this macro per
@@ -937,7 +1099,39 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			i = i + 1;
 			continue;
 		}
+		if (fcore.kind == NodeKind.MemberExpr) {
+			keyNodes.push(fname);
+			valueNodes.push(fcore);
+			i = i + 1;
+			continue;
+		}
 
+		if (fcore.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < fcore.enumMembers.length; mi = mi + 1) {
+				const ov: number = fcore.enumValues.length == fcore.enumMembers.length ? fcore.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fcore.enumMembers[mi] });
+			}
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: fcore.enumName,
+				asExpr: {
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrdE" },
+					arguments: [
+						{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, fnameLit] },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
+						{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fcore.enumName },
+						errs, pfx, fnameLit,
+					],
+				},
+			});
+			i = i + 1;
+			continue;
+		}
 		if (fcore.kind != NodeKind.Identifier) {
 			let extra: string = "";
 			if (fcore.kind == NodeKind.TypeGeneric) {

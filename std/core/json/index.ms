@@ -5,7 +5,7 @@
 
 export { JsonKind, JsonValue, JsonValueData, jsonToString, jsonToNumber, jsonToBoolean, jsonToInt32, jsonToInt64 } from "std/serialize/json/types";
 export {
-	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt,
+	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt, _jsonEnumName,
 	jsonArrayOfStrings, jsonArrayOfBooleans, jsonArrayOfNumbers, jsonArrayOfFloat32,
 	jsonArrayOfInt8, jsonArrayOfInt16, jsonArrayOfInt32, jsonArrayOfInt64,
 	jsonArrayOfUint8, jsonArrayOfUint16, jsonArrayOfUint32,
@@ -21,7 +21,7 @@ export {
 	jsonToInt8ArrayE, jsonToInt16ArrayE, jsonToInt32ArrayE, jsonToInt64ArrayE,
 	jsonToUint8ArrayE, jsonToUint16ArrayE, jsonToUint32ArrayE,
 	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
-	_jsonCheckDiscStr, _jsonIsNull,
+	_jsonCheckDiscStr, _jsonIsNull, _jsonEnumOrd, _jsonEnumOrdE,
 } from "std/serialize/json/accessors";
 
 // Macro system constraint: when macro X's expansion result contains a call
@@ -56,11 +56,6 @@ function _jsonParseTyped<T>(input: string): Result<T, string> {
 
 // ===== V2 — generic helpers for non-atomic-builtin element arrays =====
 //
-// `_jsonArrayOfInts<T>` covers enum + type-alias element arrays (T must be
-// castable to int64). `_jsonArrayOfStructs<T>` covers struct/interface
-// element arrays — body calls `jsonValueOf(arr[i])` recursively, which
-// re-expands at monomorphization time when T is concrete.
-//
 // While-loop deliberate: for..of in macro-target prelude helpers triggers a
 // DCE bug (helpers get pruned from link). See memory
 // project_serialize_v15_array_support.
@@ -88,6 +83,38 @@ export function _jsonArrayOfStructs<T>(arr: Span<T>): JsonValue {
 	return jsonArray(items);
 }
 
+export function _jsonArrayOfEnums<T>(arr: Span<T>, ords: int32[], names: string[]): JsonValue {
+	const items: JsonValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(_jsonEnumName(arr[i] as int32, ords, names));
+		i = i + 1;
+	}
+	return jsonArray(items);
+}
+
+export function _jsonToEnumArray<T>(jv: JsonValue, witness: T | null, ords: int32[], names: string[]): T[] {
+	const out: T[] = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(_jsonEnumOrd(jv.items[i], ords, names) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToEnumArrayE<T>(jv: JsonValue, witness: T | null, ords: int32[], names: string[], enumName: string, errs: string[], arrPath: string): T[] {
+	const out: T[] = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(_jsonEnumOrdE(jv.items[i], ords, names, enumName, errs, arrPath + "[" + i.toString() + "]", "") as T);
+		i = i + 1;
+	}
+	return out;
+}
+
 export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
 	const out: T[] = [];
 	if (jv == null || jv.kind != JsonKind.Array) return out;
@@ -99,8 +126,6 @@ export function _jsonToIntArray<T>(jv: JsonValue, witness: T | null): T[] {
 	return out;
 }
 
-// Strict mirror for enum / primitive-alias element arrays: the element must
-// carry the Int variant, exactly as a declared int64 field must.
 export function _jsonToIntArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
 	const out: T[] = [];
 	if (jv == null || jv.kind != JsonKind.Array) return out;

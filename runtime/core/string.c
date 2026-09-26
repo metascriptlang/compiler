@@ -129,6 +129,82 @@ msString msStringFromCStr(const char* cstr) {
 	return msStringNew(cstr, len);
 }
 
+static int64_t msUtf8WellFormedStep(const unsigned char* s, int64_t i, int64_t n) {
+	unsigned char b = s[i];
+	if (b < 0x80) return 1;
+	int need;
+	unsigned char lo = 0x80, hi = 0xBF;
+	if (b >= 0xC2 && b <= 0xDF) need = 1;
+	else if (b >= 0xE0 && b <= 0xEF) { need = 2; if (b == 0xE0) lo = 0xA0; else if (b == 0xED) hi = 0x9F; }
+	else if (b >= 0xF0 && b <= 0xF4) { need = 3; if (b == 0xF0) lo = 0x90; else if (b == 0xF4) hi = 0x8F; }
+	else return -1;
+	int64_t j = i + 1;
+	for (int k = 0; k < need; k++, j++) {
+		if (j >= n || s[j] < lo || s[j] > hi) return -(j - i);
+		lo = 0x80;
+		hi = 0xBF;
+	}
+	return j - i;
+}
+
+msString msStringFromUtf8Lossy(const char* data, int64_t n) {
+	if (n <= 0) return MS_EMPTY_STRING;
+	const unsigned char* s = (const unsigned char*)data;
+	bool ascii = true;
+	int64_t i = 0;
+	while (i < n) {
+		if (s[i] < 0x80) { i++; continue; }
+		ascii = false;
+		int64_t k = msUtf8WellFormedStep(s, i, n);
+		if (k < 0) break;
+		i += k;
+	}
+	if (i == n) {
+		msString whole = msStringNew(data, n);
+		if (ascii) msStrMarkAscii(whole.p); else msStrMarkNonAscii(whole.p);
+		return whole;
+	}
+	msStrPayload* p = allocPayload(n * 3);
+	memcpy(p->data, s, (size_t)i);
+	int64_t o = i;
+	while (i < n) {
+		int64_t k = msUtf8WellFormedStep(s, i, n);
+		if (k > 0) {
+			memcpy(p->data + o, s + i, (size_t)k);
+			o += k;
+			i += k;
+		} else {
+			p->data[o++] = (char)0xEF;
+			p->data[o++] = (char)0xBF;
+			p->data[o++] = (char)0xBD;
+			i -= k;
+		}
+	}
+	p->data[o] = '\0';
+	msStrMarkNonAscii(p);
+	return (msString){ .len = o, .p = p };
+}
+
+msString msStringFromLatin1(const char* data, int64_t n) {
+	if (n <= 0) return MS_EMPTY_STRING;
+	const unsigned char* s = (const unsigned char*)data;
+	int64_t high = 0;
+	for (int64_t i = 0; i < n; i++) high += s[i] >> 7;
+	msStrPayload* p = allocPayload(n + high);
+	int64_t o = 0;
+	for (int64_t i = 0; i < n; i++) {
+		if (s[i] < 0x80) {
+			p->data[o++] = (char)s[i];
+		} else {
+			p->data[o++] = (char)(0xC0 | (s[i] >> 6));
+			p->data[o++] = (char)(0x80 | (s[i] & 0x3F));
+		}
+	}
+	p->data[o] = '\0';
+	if (high == 0) msStrMarkAscii(p); else msStrMarkNonAscii(p);
+	return (msString){ .len = o, .p = p };
+}
+
 msString msStringNewCap(int64_t cap) {
 	if (cap <= 0) return MS_EMPTY_STRING;
 	msStrPayload* p = allocPayload(cap);

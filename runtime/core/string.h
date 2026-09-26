@@ -126,6 +126,9 @@ msString msStringNew(const char* data, int64_t len);
 /* From null-terminated C string */
 msString msStringFromCStr(const char* cstr);
 
+msString msStringFromUtf8Lossy(const char* data, int64_t n);
+msString msStringFromLatin1(const char* data, int64_t n);
+
 /* Preallocate with capacity */
 msString msStringNewCap(int64_t cap);
 

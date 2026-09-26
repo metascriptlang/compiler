@@ -5,7 +5,7 @@
 // to the discriminated union shape.
 
 import { Buffer } from "std/core/buffer";
-import { CborKind, CborValue } from "./types";
+import { CborKind, CborValue, asString } from "./types";
 
 // --- Major 0 / 1 (collapsed: sign indicates wire major) ---
 
@@ -23,6 +23,21 @@ export function cborBytes(b: Buffer): CborValue {
 
 export function cborText(s: string): CborValue {
 	return { kind: CborKind.Text, textVal: s };
+}
+
+export function _cborEnumName(ord: int32, ords: int32[], names: string[]): CborValue {
+	for (let i = 0; i < ords.length; i++) {
+		if (ords[i] == ord) return cborText(names[i]);
+	}
+	return cborText("");
+}
+
+test "_cborEnumName — a member's value writes the member's name as text" {
+	assert _cborEnumName(2, [0, 5, 2], ["Red", "Blue", "Green"]).asString("?") == "Green";
+}
+
+test "_cborEnumName — a value no member holds writes the empty name, as Nim's enum $ does" {
+	assert _cborEnumName(9, [0, 5, 2], ["Red", "Blue", "Green"]).asString("?") == "";
 }
 
 // --- Major 4 ---

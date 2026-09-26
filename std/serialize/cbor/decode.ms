@@ -19,7 +19,8 @@
 // memory). The macro body stays monolithic; AST construction is inlined.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, pickAtomicAccessor } from "../discDetect";
+import { detectUnionDisc, parseDiscKey, pickAtomicAccessor } from "../discDetect";
+import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64 } from "./accessors";
 
 export macro cborValueToStruct(cv: Node, witness: Node): Node {
 	let tt = witness.nodeType;
@@ -56,27 +57,18 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		if (discField == "" || variants.length == 0) {
 			error("cborValueToStruct: cannot determine discriminator for union type — variants must share a literal-typed disc field", witness);
 		}
-		if (discKind == "enum") {
-			error("cborValueToStruct: enum-discriminated unions not yet supported in decode (encode works); use boolean or string disc", witness);
-		}
-
 		// matchDisc: cv.getDynamicField(discField).asBoolean() | .asString()
-		const discAccessorName: string = discKind == "boolean" ? "asBoolean" : "asString";
 		const matchDisc: Node = {
 			kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-			callee: {
-				kind: NodeKind.MemberExpr, line: cv.line, column: cv.column,
-				object: {
-					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-					callee: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: "getDynamicField" },
-					arguments: [
-						cv,
-						{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: discField },
-					],
-				},
-				property: discAccessorName,
-			},
-			arguments: [],
+			callee: discKind == "boolean" ? bindSym("asBoolean") : bindSym("asString"),
+			arguments: [{
+				kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+				callee: bindSym("getDynamicField"),
+				arguments: [
+					cv,
+					{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: discField },
+				],
+			}],
 		};
 
 		const matchCases: Node[] = [];
@@ -94,6 +86,15 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				const bv: boolean = variantKey == "true";
 				pattern = { kind: NodeKind.BooleanLiteral, line: cv.line, column: cv.column, boolValue: bv };
 				discLiteral = { kind: NodeKind.BooleanLiteral, line: cv.line, column: cv.column, boolValue: bv };
+			} else if (discKind == "enum") {
+				const dp = parseDiscKey(discKind, variantKey);
+				pattern = { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: dp.memberName };
+				discLiteral = {
+					kind: NodeKind.MemberExpr, line: cv.line, column: cv.column,
+					object: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: dp.enumName },
+					property: dp.memberName,
+					isOptional: false,
+				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: variantKey };
 				discLiteral = { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: variantKey };
@@ -107,25 +108,46 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				const ftype: Node = v.typExprFieldTypes[fi];
 				if (fname == discField) continue;
 
+				if (ftype.kind == NodeKind.EnumDecl) {
+					const ords: Node[] = [];
+					const names: Node[] = [];
+					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
+						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
+						ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: ftype.enumMembers[mi] });
+					}
+					vKeyNodes.push(fname);
+					vValueNodes.push({
+						kind: NodeKind.TypeAssertion, line: cv.line, column: cv.column, asType: ftype.enumName,
+						asExpr: {
+							kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+							callee: bindSym("_cborEnumOrd"),
+							arguments: [
+								{ kind: NodeKind.CallExpr, line: cv.line, column: cv.column, callee: bindSym("getDynamicField"), arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }] },
+								{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: ords },
+								{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: names },
+							],
+						},
+					});
+					continue;
+				}
 				if (ftype.kind != NodeKind.Identifier) {
 					error("cborValueToStruct: DU variant payload field '" + fname + "' must be atomic; nested struct + array deferred", witness);
 				}
 				const a = pickAtomicAccessor(ftype.name);
 				const fieldAccess: Node = {
 					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-					callee: {
-						kind: NodeKind.MemberExpr, line: cv.line, column: cv.column,
-						object: {
-							kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-							callee: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: "getDynamicField" },
-							arguments: [
-								cv,
-								{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname },
-							],
-						},
-						property: a.methodName,
-					},
-					arguments: [],
+					callee: a.methodName == "asString" ? bindSym("asString")
+						: (a.methodName == "asBoolean" ? bindSym("asBoolean")
+						: (a.methodName == "asNumber" ? bindSym("asNumber") : bindSym("asInt64"))),
+					arguments: [{
+						kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+						callee: bindSym("getDynamicField"),
+						arguments: [
+							cv,
+							{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname },
+						],
+					}],
 				};
 				const finalAccess: Node = a.needsCast
 					? { kind: NodeKind.TypeAssertion, line: cv.line, column: cv.column, asExpr: fieldAccess, asType: a.castType }
@@ -199,12 +221,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 						kind: NodeKind.CallExpr,
 						line: cv.line,
 						column: cv.column,
-						callee: {
-							kind: NodeKind.Identifier,
-							line: cv.line,
-							column: cv.column,
-							name: "getDynamicField",
-						},
+						callee: bindSym("getDynamicField"),
 						arguments: [
 							cv,
 							{
@@ -237,15 +254,40 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 
 		// Array field — V2: atomic-builtin + enum/alias + struct/interface elements.
 		// Builtin → per-type fast helper (cborToXArray).
-		// Non-builtin Identifier (enum / type alias) → `_cborToIntArray<T>` generic.
 		// Struct/interface → `_cborToStructArray<T>` generic.
 		// Bare `null` witness — T binds via Pass 3 contextual return-type
 		// binding (Nim parity inheritBindings, semcall.nim:777-859). See
 		// bug024 + std/serialize/json/decode.ms array branch for rationale.
-		if (ftype.kind == NodeKind.TypeArray) {
-			const elemType: Node = ftype.typExprElement;
+		let arrCore: Node = ftype;
+		if (arrCore.kind == NodeKind.TypeGeneric && arrCore.typExprArgs.length == 1 && arrCore.typExprArgs[0].kind == NodeKind.TypeArray) {
+			arrCore = arrCore.typExprArgs[0];
+		}
+		if (arrCore.kind == NodeKind.TypeArray) {
+			const elemType: Node = arrCore.typExprElement;
 			let en: string = "";
 			let elemIsStruct: boolean = false;
+			if (elemType.kind == NodeKind.EnumDecl) {
+				const ords: Node[] = [];
+				const names: Node[] = [];
+				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
+					const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
+					ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: elemType.enumMembers[mi] });
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+					callee: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: "_cborToEnumArray" },
+					arguments: [
+						{ kind: NodeKind.CallExpr, line: cv.line, column: cv.column, callee: bindSym("getDynamicField"), arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }] },
+						{ kind: NodeKind.NullLiteral, line: cv.line, column: cv.column, nullPlaceholder: true },
+						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: names },
+					],
+				});
+				i = i + 1;
+				continue;
+			}
 			if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
 			} else if (elemType.kind == NodeKind.TypeObject) {
@@ -273,7 +315,6 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
 				|| en == "uint8" || en == "uint16" || en == "uint32";
 
-			// Generic-helper path: enum/alias → _cborToIntArray<T>;
 			// struct/interface → _cborToStructArray<T>. Witness is bare
 			// `null` — Pass 3 contextual binding + post-mono reconciliation
 			// (bug024) bind T from caller-side `: Color[]` / `: Item[]` ctx.
@@ -282,12 +323,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					kind: NodeKind.CallExpr,
 					line: cv.line,
 					column: cv.column,
-					callee: {
-						kind: NodeKind.Identifier,
-						line: cv.line,
-						column: cv.column,
-						name: "getDynamicField",
-					},
+					callee: bindSym("getDynamicField"),
 					arguments: [
 						cv,
 						{
@@ -356,12 +392,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 						kind: NodeKind.CallExpr,
 						line: cv.line,
 						column: cv.column,
-						callee: {
-							kind: NodeKind.Identifier,
-							line: cv.line,
-							column: cv.column,
-							name: "getDynamicField",
-						},
+						callee: bindSym("getDynamicField"),
 						arguments: [
 							cv,
 							{
@@ -396,29 +427,55 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			i = i + 1;
 			continue;
 		}
+		if (ftype.kind == NodeKind.MemberExpr) {
+			keyNodes.push(fname);
+			valueNodes.push(ftype);
+			i = i + 1;
+			continue;
+		}
+		if (ftype.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
+				const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: ftype.enumMembers[mi] });
+			}
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.TypeAssertion, line: cv.line, column: cv.column, asType: ftype.enumName,
+				asExpr: {
+					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+					callee: bindSym("_cborEnumOrd"),
+					arguments: [
+						{ kind: NodeKind.CallExpr, line: cv.line, column: cv.column, callee: bindSym("getDynamicField"), arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }] },
+						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: ords },
+						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: names },
+					],
+				},
+			});
+			i = i + 1;
+			continue;
+		}
 		// Atomic field — Identifier with `.name` from mapTypeToAst's
 		// atomicTypeName. Anything else is rejected.
 		if (ftype.kind != NodeKind.Identifier) {
 			error("cborValueToStruct: union fields not supported in V1; field '" + fname + "'", witness);
 		}
 		const a = pickAtomicAccessor(ftype.name);
-		// getDynamicField(cv, "fname").<accessor>() — MemberExpr-callee style
-		// so the extension dispatcher resolves the accessor.
 		const fieldAccess: Node = {
 			kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-			callee: {
-				kind: NodeKind.MemberExpr, line: cv.line, column: cv.column,
-				object: {
-					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-					callee: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: "getDynamicField" },
-					arguments: [
-						cv,
-						{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname },
-					],
-				},
-				property: a.methodName,
-			},
-			arguments: [],
+			callee: a.methodName == "asString" ? bindSym("asString")
+				: (a.methodName == "asBoolean" ? bindSym("asBoolean")
+				: (a.methodName == "asNumber" ? bindSym("asNumber") : bindSym("asInt64"))),
+			arguments: [{
+				kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+				callee: bindSym("getDynamicField"),
+				arguments: [
+					cv,
+					{ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname },
+				],
+			}],
 		};
 		const finalAccess: Node = a.needsCast
 			? { kind: NodeKind.TypeAssertion, line: cv.line, column: cv.column, asExpr: fieldAccess, asType: a.castType }

@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser reports the index error in its own words, after adding the length ("array index out of bounds: -1 (length 2)")
 // @exit: 1
 // @stdout: index -3 out of bounds (length 2)
 // @skip-js: node reports the uncaught index error with its own stack trace; exit code matches but the text differs (sibling of 721)

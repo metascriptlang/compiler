@@ -23,7 +23,6 @@ export macro jsonValueOf(t: Node): Node {
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
 	// Builtin elements → per-type fast helpers (jsonArrayOfX).
-	// Non-builtin Identifier (enum / type alias) → `_jsonArrayOfInts<T>` generic.
 	// TypeObject element (struct/interface) → `_jsonArrayOfStructs<T>` generic.
 	// IIFE-closure / function / union element types remain rejected.
 	if (tt.kind == NodeKind.TypeArray) {
@@ -31,10 +30,29 @@ export macro jsonValueOf(t: Node): Node {
 		// Identifier element name — empty if elem is TypeObject (struct).
 		let en: string = "";
 		let elemIsStruct: boolean = false;
+		if (elemType.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
+				const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: elemType.enumMembers[mi] });
+			}
+			return {
+				kind: NodeKind.CallExpr,
+				line: t.line,
+				column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonArrayOfEnums" },
+				arguments: [t,
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names }],
+			};
+		}
+		if (elemType.kind == NodeKind.MemberExpr) {
+			error("jsonValueOf: an array of the enum-literal type " + elemType.object.name + "." + elemType.property + " is unsupported; type the array by its enum", t);
+		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
-		} else if (elemType.kind == NodeKind.EnumDecl) {
-			en = elemType.enumName;
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
@@ -79,7 +97,6 @@ export macro jsonValueOf(t: Node): Node {
 				arguments: [t],
 			};
 		}
-		// Non-builtin Identifier (enum / type alias) → generic int helper.
 		if (!isBuiltin) {
 			return {
 				kind: NodeKind.CallExpr,
@@ -243,6 +260,31 @@ export macro jsonValueOf(t: Node): Node {
 
 	// Non-struct (atomic) types — emit a direct builder call on `t`.
 	if (tt.kind != NodeKind.TypeObject) {
+		if (tt.kind == NodeKind.MemberExpr) {
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonString" },
+				arguments: [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: tt.property }],
+			};
+		}
+		if (tt.kind == NodeKind.EnumDecl) {
+			const ords: Node[] = [];
+			const names: Node[] = [];
+			for (let mi = 0; mi < tt.enumMembers.length; mi = mi + 1) {
+				const ov: number = tt.enumValues.length == tt.enumMembers.length ? tt.enumValues[mi] : mi;
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: tt.enumMembers[mi] });
+			}
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonEnumName" },
+				arguments: [
+					{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int32" },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
+					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names },
+				],
+			};
+		}
 		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
 		// Bridge emits StringLiteral/BooleanLiteral nodes for these — the
 		// runtime field value is just a regular string/bool, so route to
@@ -263,10 +305,10 @@ export macro jsonValueOf(t: Node): Node {
 		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions
 		// land as TypeUnion / TypeFunction kinds (not Identifier) → reject.
-		if (tt.kind != NodeKind.Identifier && tt.kind != NodeKind.EnumDecl) {
+		if (tt.kind != NodeKind.Identifier) {
 			error("jsonValueOf: unsupported field type (kind=" + tt.kind + ")", t);
 		}
-		const tn: string = tt.kind == NodeKind.EnumDecl ? tt.enumName : tt.name;
+		const tn: string = tt.name;
 		// bigint has no JSON representation — silently wrapping through the
 		// jsonInt int64 carrier corrupts values >= 2^63. JSON.stringify(1n)
 		// throws in Node; the macro knows the static type, so refuse here at
@@ -274,18 +316,12 @@ export macro jsonValueOf(t: Node): Node {
 		if (tn == "bigint") {
 			error("jsonValueOf: bigint is not JSON-serializable — convert with .toString() first (JSON.stringify throws on BigInt in Node too)", t);
 		}
-		// Unknown Identifier names fall through to jsonInt — mirrors @builtin's
-		// classifyJsonPrimitive treating Enum as int. Primitive aliases (e.g.,
-		// `type UserId = int32`) encode as int via the alias chain.
 		const builderName: string = match (tn) {
 			"string" => "jsonString",
 			"boolean" => "jsonBool",
 			"number" | "float32" | "float64" => "jsonNumber",
 			_ => "jsonInt",
 		};
-		// jsonInt takes int64 — sized-int / enum / primitive-alias fields
-		// need a widening cast so the call type-checks. jsonString/jsonBool/
-		// jsonNumber accept their input directly.
 		const argNode: Node = builderName == "jsonInt"
 			? {
 				kind: NodeKind.TypeAssertion,
