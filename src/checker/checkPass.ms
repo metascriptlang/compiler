@@ -18,7 +18,7 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
-import { defaultGlobalImports } from "./prelude";
+import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType } from "./types";
@@ -2910,6 +2910,10 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 }
 
 export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext): void {
+	if (isSharedPrelude(preludeCtx)) {
+		addFatalError(ctx, `internal: ${ctx.modulePath} would be promoted into the prelude every build shares`, 0, 0);
+		return;
+	}
 	for (const sym of ctx.table.current.symbols.values()) {
 		if (!isExportedBy(ctx, sym)) continue;
 		addSymbolToScope(preludeCtx.table.current, sym);
@@ -3016,10 +3020,6 @@ function checkProgramCore(
 
 // ===== Public API =====
 
-// A prelude context is read-only once built (checkProgramCore only reads it,
-// injectPrelude copies what it registers), so callers that would otherwise
-// rebuild it per invocation share one instance. NOT for checkModuleGraph — it
-// stamps targetOs onto its base context, which must not outlive one build.
 let _preludeCtxByKey: Map<string, CheckerContext> = new Map<string, CheckerContext>();
 let _graphPreludeFn: (stdPath: string, backendExt: string) => CheckerContext = null as unknown as (stdPath: string, backendExt: string) => CheckerContext;
 
@@ -3028,12 +3028,42 @@ export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string)
 }
 
 export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
-	const key = backendExt + "|" + stdPath;
-	const hit = _preludeCtxByKey.get(key);
-	if (hit != null) return hit;
-	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
-	_preludeCtxByKey.set(key, ctx);
-	return ctx;
+	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|");
+	let shared = _preludeCtxByKey.get(key);
+	if (shared == null) {
+		shared = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+		_preludeCtxByKey.set(key, shared);
+	}
+	return packContentView(shared);
+}
+
+export function isSharedPrelude(ctx: CheckerContext): boolean {
+	for (const shared of _preludeCtxByKey.values()) {
+		if (shared.table == ctx.table) return true;
+	}
+	return false;
+}
+
+function packContentView(shared: CheckerContext): CheckerContext {
+	const view = createContextWithCache(shared.table.identCache);
+	view.table = shared.table;
+	view.extensionRegistry = shared.extensionRegistry;
+	view.compilerFuncs = shared.compilerFuncs;
+	view.includeDirectives = shared.includeDirectives;
+	view.compileDirectives = shared.compileDirectives;
+	view.compilerFlags = shared.compilerFlags;
+	view.macroBodyRegistry = shared.macroBodyRegistry;
+	view.macroParamsRegistry = shared.macroParamsRegistry;
+	view.macroParamTypesRegistry = shared.macroParamTypesRegistry;
+	view.macroDeclModuleRegistry = shared.macroDeclModuleRegistry;
+	view.converterTargetByName = shared.converterTargetByName;
+	view.converterTargetTypes = shared.converterTargetTypes;
+	view.preludeInterf = shared.preludeInterf;
+	view.preludeExports = shared.preludeExports;
+	view.interf = shared.interf;
+	view.interfSet = shared.interfSet;
+	view.importSet = shared.importSet;
+	return view;
 }
 
 // Discover the stdPath from the compiler's install location so prelude
