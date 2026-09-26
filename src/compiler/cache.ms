@@ -878,8 +878,8 @@ function headersCacheDir(): string {
 	return `${getCacheDir()}/headers`;
 }
 
-export function headerInlineKey(source: string, modulePath: string, compact: boolean): string {
-	return hashContent(`${VERSION}:${platform}:${compact ? "C" : "F"}:${resolveRuntimeDir()}:${modulePath}\n${source}\n${toolchainStamp()}`);
+export function headerInlineKey(source: string, modulePath: string, compact: boolean, target: string): string {
+	return hashContent(`${VERSION}:${platform}:${target}:${compact ? "C" : "F"}:${resolveRuntimeDir()}:${modulePath}\n${source}\n${toolchainStamp()}`);
 }
 
 function depUnderStampedTrees(path: string): boolean {
@@ -1120,7 +1120,7 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 	const hpath = "/tmp/mshc/hcx.h";
 	const orig = "extern int hcx(void);\n";
 	writeFile(hpath, orig);
-	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false);
+	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false, "linux-x86_64");
 	storeHeaderInline(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
 	assert lookupHeaderInline(key) == "OUT-1";
 	writeFile(hpath, "extern int hcx2(void);\n");
@@ -1132,7 +1132,7 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 test "header cache: absent dep stays valid until the file appears" {
 	const gone = "/tmp/mshc/gone.h";
 	if (exists(gone)) remove(gone);
-	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false);
+	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false, "linux-x86_64");
 	storeHeaderInline(key, [`${gone}\t-`], "OUT-2");
 	assert lookupHeaderInline(key) == "OUT-2";
 	writeFile(gone, "int x;\n");
@@ -1141,23 +1141,32 @@ test "header cache: absent dep stays valid until the file appears" {
 }
 
 test "header cache: deps under runtime//vendor/ skip disk re-verification" {
-	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false);
+	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false, "linux-x86_64");
 	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
 	storeHeaderInline(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
 	assert lookupHeaderInline(key) == "OUT-3";
 }
 
 test "header cache: malformed dep line is a miss, empty dep list is a hit" {
-	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false);
+	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false, "linux-x86_64");
 	storeHeaderInline(keyA, ["nodep-newline"], "OUT-4");
 	assert lookupHeaderInline(keyA) == "";
-	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false);
+	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false, "linux-x86_64");
 	storeHeaderInline(keyB, [], "OUT-5");
 	assert lookupHeaderInline(keyB) == "OUT-5";
 }
 
+test "header cache: a translation for one build target is not a hit for another" {
+	const src = "import { t } from \"./t.h\";";
+	const linux = headerInlineKey(src, "/tmp/mshc/t.ms", false, "linux-x86_64");
+	const windows = headerInlineKey(src, "/tmp/mshc/t.ms", false, "windows-x86_64");
+	assert linux != windows;
+	storeHeaderInline(linux, [], "OUT-LINUX");
+	assert lookupHeaderInline(windows) == "";
+}
+
 test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
-	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false);
+	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false, "linux-x86_64");
 	storeHeaderInline(key, [], "OUT-6");
 	assert lookupHeaderInline(key) == "OUT-6";
 	env.set("MSC_NO_HEADER_CACHE", "1");

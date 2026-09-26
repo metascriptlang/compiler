@@ -28,6 +28,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { readFile, writeFile, ensureDir, realpath } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
+import { TargetInfo, buildTarget, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
@@ -133,7 +134,7 @@ export function takeInlineHeaderTimings(): InlineHeaderTimings {
 // compile.ms module load, the same cycle-breaker pattern as
 // parser/statements/callbacks.ms.
 
-type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean) => string;
+type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean, target: string) => string;
 type HeaderCacheLookupFn = (key: string) => string;
 type HeaderCacheStoreFn = (key: string, deps: string[], output: string) => void;
 
@@ -161,7 +162,27 @@ function headerCacheEngage(source: string, modulePath: string, provider: SourceP
 	if (provider.taReadFn != null || !provider.useFileSystem) return "";
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	if (source.indexOf(".h") < 0) return "";
-	return _hcKeyFn(source, modulePath, compactReplacement);
+	const t = headerTarget();
+	return _hcKeyFn(source, modulePath, compactReplacement, t != null ? `${t.os}-${t.cpu}` : "");
+}
+
+let _headerOs = "";
+let _headerCpu = "";
+let _headerTarget: TargetInfo = null as unknown as TargetInfo;
+let _headerTargetResolved = false;
+
+export function setHeaderTarget(os: string, cpu: string): void {
+	_headerOs = os;
+	_headerCpu = cpu;
+	_headerTargetResolved = false;
+}
+
+export function headerTarget(): TargetInfo {
+	if (!_headerTargetResolved) {
+		_headerTarget = _headerOs == "" ? hostTarget() : buildTarget(_headerOs, _headerCpu);
+		_headerTargetResolved = true;
+	}
+	return _headerTarget;
 }
 
 export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
@@ -310,8 +331,17 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		const includePaths = compilerRoot != ""
 			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
 			: [builtinInclude, headerDir, headerParentDir];
+		const target = headerTarget();
+		if (target == null) {
+			if (outErrors != null) {
+				const noTargetLine = countLinesBefore(result, importIdx) - insertedLines;
+				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${_headerOs} --cpu=${_headerCpu}`, noTargetLine, 1, ErrorSeverity.Error));
+			}
+			searchPos = importIdx + 7;
+			continue;
+		}
 		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads);
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads, target);
 		if (outErrors != null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
@@ -789,6 +819,47 @@ test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-indepe
 	const src = "import { bareOk } from " + "\"lib/api.h\";\n";
 	const inlined = inlineHeaderImports(src, "/tmp/msbarespec/main.ms", provider);
 	assert inlined.indexOf("extern function bareOk") >= 0;
+}
+
+function inlinePlatHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/mstarget/plat.h", "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n"));
+	const src = "import { platWin, platApple, platOther } from " + "\"./plat.h\";\n";
+	setHeaderTarget(os, cpu);
+	try {
+		return inlineHeaderImports(src, "/tmp/mstarget/main.ms", createMapProvider(entries), false, errs);
+	} finally {
+		setHeaderTarget("", "");
+	}
+}
+
+test "inlineHeaderImports takes the _WIN32 branch for a windows build" {
+	const inlined = inlinePlatHeaderFor("windows", "", []);
+	assert inlined.indexOf("extern function platWin") >= 0;
+	assert inlined.indexOf("extern function platApple") < 0;
+	assert inlined.indexOf("extern function platOther") < 0;
+}
+
+test "inlineHeaderImports takes neither the apple nor the windows branch for a linux build" {
+	const inlined = inlinePlatHeaderFor("linux", "arm64", []);
+	assert inlined.indexOf("extern function platOther") >= 0;
+	assert inlined.indexOf("extern function platApple") < 0;
+	assert inlined.indexOf("extern function platWin") < 0;
+}
+
+test "inlineHeaderImports takes the __APPLE__ branch for a macos build" {
+	const inlined = inlinePlatHeaderFor("macos", "", []);
+	assert inlined.indexOf("extern function platApple") >= 0;
+	assert inlined.indexOf("extern function platOther") < 0;
+}
+
+test "inlineHeaderImports reports a build target with no C model instead of guessing one" {
+	const errs: ModuleError[] = [];
+	const inlined = inlinePlatHeaderFor("linux", "vax", errs);
+	assert inlined.indexOf("extern function") < 0;
+	assert errs.length == 1;
+	assert errs[0].severity == ErrorSeverity.Error;
+	assert errs[0].message.indexOf("--cpu=vax") >= 0;
 }
 
 test "re-export from .h with prefix-colliding names does not double-export" {
