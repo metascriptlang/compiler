@@ -25,7 +25,7 @@ import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { readFile, writeFile, ensureDir, realpath } from "std/fs";
+import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, buildTarget, hostTarget } from "./cparse/target";
@@ -860,6 +860,33 @@ test "inlineHeaderImports reports a build target with no C model instead of gues
 	assert errs.length == 1;
 	assert errs[0].severity == ErrorSeverity.Error;
 	assert errs[0].message.indexOf("--cpu=vax") >= 0;
+}
+
+function collectStdHeaderImports(dir: string, found: string[], scanned: int32[]): void {
+	const fromQuote = "fr" + "om \"";
+	const headerQuote = ".h" + "\"";
+	for (const entry of readDir(dir)) {
+		if (entry.endsWith("/")) {
+			collectStdHeaderImports(dir + "/" + entry.slice(0, entry.length - 1), found, scanned);
+			continue;
+		}
+		if (!(entry.endsWith(".ms") || entry.endsWith(".cms") || entry.endsWith(".jms") || entry.endsWith(".rms") || entry.endsWith(".wms"))) continue;
+		scanned[0] = scanned[0] + 1;
+		const src = try readFile(dir + "/" + entry) catch "";
+		for (const line of src.split("\n")) {
+			if (line.indexOf(fromQuote) >= 0 && line.indexOf(headerQuote) >= 0) found.push(`${dir}/${entry}: ${line}`);
+		}
+	}
+}
+
+test "no std module binds C by importing a header" {
+	const root = resolveRuntimeDir();
+	assert root != "";
+	const found: string[] = [];
+	const scanned: int32[] = [0];
+	collectStdHeaderImports(root + "/std", found, scanned);
+	assert scanned[0] > 100;
+	assert found.length == 0;
 }
 
 test "re-export from .h with prefix-colliding names does not double-export" {
