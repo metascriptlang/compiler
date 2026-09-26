@@ -267,6 +267,7 @@ export enum NodeFlag {
 	ProtocolCall,
 	Parenthesized, // parser: the expression was written inside grouping parentheses
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
+	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
 }
 
 // ===== Node Kind Enum =====
