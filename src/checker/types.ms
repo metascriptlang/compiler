@@ -2926,7 +2926,9 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				// substituteTypeInner (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(gi, names, concretes, active);
-				if (gi.typeReturn != null) {
+				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
+					gi.typeReturn = null as unknown as Type;
+				} else if (gi.typeReturn != null) {
 					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, concretes, active);
 				}
 				return gi;

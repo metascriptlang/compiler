@@ -252,6 +252,7 @@ import "./bug463ClosurePerIterationBinding";
 import "./bug464StateMachineClosureShares";
 import "./bug465SpawnHandleUsedBeyondAwait";
 import "./bug334VecTupleElementHooks";
+import "./bug335GenericInstanceSelfCycle";
 import "./bug212Float32ConstFold";
 import "./bug480UnsignedShiftC";
 import "./bug481ShiftCountMaskC";
