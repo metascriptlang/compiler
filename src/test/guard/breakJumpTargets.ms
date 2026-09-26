@@ -91,6 +91,7 @@ function ordinalSwitchMidCaseBreak(): string {
                 log = log + "a";
                 if (x > 0) { break; }
                 log = log + "b";
+                break;
             default:
                 log = log + ".";
         }

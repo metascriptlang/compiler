@@ -29,7 +29,7 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
-import { getFlowTypeOfReference } from "./flow";
+import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -1810,7 +1810,8 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const branchBreaks: BreakState[] = [];
 	const branchConsumes: string[][] = [];
 	let hasDefault = false;
-	for (const c of d.switchCases) {
+	for (let ci = 0; ci < d.switchCases.length; ci += 1) {
+		const c = d.switchCases[ci];
 		const cd = c.data as SwitchCaseData;
 		if (cd.caseTests.length == 0) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
@@ -1823,6 +1824,9 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		ctx.inSwitch = true;
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
 		ctx.inSwitch = savedInSwitch;
+		if (cd.caseStmts.length > 0 && ci + 1 < d.switchCases.length && isEndOfBodyReachable(c)) {
+			addError(ctx, "switch case falls through into the next case: end it with 'break', 'return', 'continue' or 'throw'", c.location.line, c.location.column);
+		}
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		// Build a block from case stmts to check break state
