@@ -1,3 +1,4 @@
+// @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: stored acc=80000
 // @maxrss: 16
 // @serial
