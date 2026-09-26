@@ -6,16 +6,16 @@
 
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type } from "./types";
-import { resolveAnnotation, ensureShaped } from "./resolvePass";
+import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody } from "./types";
+import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
 import { createContext } from "./context";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
-import { mangleMonoName, monoBaseName } from "../monomorphize/registry";
+import { mangleMonoName, monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
@@ -121,6 +121,8 @@ export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
 }
 
 let _instanceHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _hookScannedInstances: HashSet<string> = new HashSet<string>();
+const USER_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
 	const key = instanceName + "." + methodName;
@@ -129,7 +131,7 @@ export function lookupInstanceHook(instanceName: string, methodName: string): Sy
 }
 
 function isUserHookName(name: string): boolean {
-	return name == "onDestroy" || name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onClone" || name == "onTrace";
+	return USER_HOOK_NAMES.includes(name);
 }
 
 function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -147,6 +149,60 @@ function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string
 		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
 		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, inst);
 	}
+}
+
+function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, instType: Type, ctx: CheckerContext, loc: SourceLocation): void {
+	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
+	if (registry == null) return;
+	for (const hookName of USER_HOOK_NAMES) {
+		const key = instanceName + "." + hookName;
+		if (_instanceHooks.has(key) || !hasExtensionByName(registry, hookName)) continue;
+		for (const m of findAllExtensionsByName(registry, hookName)) {
+			const hookSym = m.sym;
+			if (m.isStatic || hookSym == null || m.receiverTypeName != genericSym.name || hookSym.modulePath != genericSym.modulePath) continue;
+			if (hookSym.declNode == null || hookSym.declNode.kind != NodeKind.FunctionDecl) continue;
+			ensureShaped(hookSym, ctx);
+			const fnType = hookSym.symbolType;
+			if (fnType == null || fnType.typeChildren.length == 0) continue;
+			let formal = fnType.typeChildren[0];
+			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
+			const bindings = createUnifyBindings();
+			unifyType(formal, instType, bindings);
+			if (bindings.names.length == 0) continue;
+			const inst = instantiateGenericFunction(hookSym, bindings.names, bindings.types, ctx, loc);
+			if (inst != null) _instanceHooks.set(key, inst);
+			break;
+		}
+	}
+}
+
+function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: SourceLocation, depth: int32): void {
+	if (t == null || depth > 8) return;
+	const k = t.kind;
+	if (k == TypeKind.Union || k == TypeKind.Tuple) {
+		for (const c of t.typeChildren) instantiateHooksInType(c, ctx, loc, depth + 1);
+		return;
+	}
+	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Var || k == TypeKind.Sink || k == TypeKind.Array || k == TypeKind.SizedArray) {
+		instantiateHooksInType(t.typeReturn, ctx, loc, depth + 1);
+		return;
+	}
+	if (k != TypeKind.GenericInstance || isAwaitable(t) || isUnresolvedType(t) || hasGenericParams(t)) return;
+	const base = t.typeExtra != null ? unwrapRef(t.typeExtra) : null;
+	const owner = base != null ? base.sym : null;
+	if (owner == null) return;
+	const name = monoInstanceName(t);
+	if (_hookScannedInstances.has(name)) return;
+	_hookScannedInstances.add(name);
+	for (const arg of t.typeChildren) instantiateHooksInType(arg, ctx, loc, depth + 1);
+	instantiateExtensionHooks(owner, name, t, ctx, loc);
+	if (t.typeReturn == null) {
+		const params = genericParamsOf(t);
+		if (params != "") instantiateGenericBody(t, params);
+	}
+	const body = t.typeReturn != null ? unwrapRef(t.typeReturn) : null;
+	if (body == null || body.kind != TypeKind.Struct) return;
+	for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
@@ -724,6 +780,10 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	// Push to global pending list — reliable regardless of context save/restore.
 	addPendingInstance(cloned);
+	if (instType != null && instType.kind == TypeKind.Function) {
+		for (const pt of instType.typeChildren) instantiateHooksInType(pt, ctx, callLoc, 0);
+		instantiateHooksInType(instType.typeReturn, ctx, callLoc, 0);
+	}
 
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	_igfTime = _igfTime + (performance.now() - _ig0);
@@ -837,6 +897,9 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	classNode.resolvedSym = classSym;
 	addPendingInstance(classNode);
 	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
+	const instType = createGenericInstance(structBase, dedup.types);
+	instType.typeName = classSym.name;
+	instantiateHooksInType(instType, ctx, loc, 0);
 }
 
 function unwrapClassStruct(classSym: Symbol): Type {
@@ -942,6 +1005,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 
 // Register callback at module load time
 registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx, callLoc); });
+registerTypeInstanceHooks((instType: Type, ctx: CheckerContext, line: int32, col: int32): void => { instantiateHooksInType(instType, ctx, makeLoc(line, col), 0); });
 
 test "an instantiation past the depth limit is an error naming the generic" {
 	const ctx = createContext();

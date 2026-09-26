@@ -259,6 +259,15 @@ function bitSetElementAllowed(elem: Type): boolean {
 	return isOrdinalEnum(elem);
 }
 
+type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
+
+let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
+};
+
+export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
+	typeInstanceHooksFn = fn;
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -666,6 +675,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
 				gi2.typeName = baseName;
 				instantiateGenericBody(gi2, genericParams);
+				typeInstanceHooksFn(gi2, ctx, line, col);
 				return isRefBase2 ? createRef(gi2) : gi2;
 			}
 			// Symbol not found — emit error + return TypeRef for recovery
