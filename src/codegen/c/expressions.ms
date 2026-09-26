@@ -14,7 +14,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError,
 } from "./context";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
+import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
@@ -47,24 +47,30 @@ function bareTypeName(g: CGen, cName: string): string {
 	return bare != "" ? bare : cName;
 }
 
-function classInit(g: CGen, classSym: Symbol | null, className: string, node: Readonly<Node>): CtorEntry | null {
-	const entry = lookupCtorDefaults(classSym, className);
-	if (entry == null || entry.initSym == null) {
-		addCGenError(g, `internal: class '${className}' has no init routine registered`, node.location.line, node.location.column);
-		return null;
+function crossModuleCtorParamTypes(sym: Symbol): Type[] {
+	if (sym == null) return null as unknown as Type[];
+	let dn = sym.declNode;
+	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
+		dn = sym.symbolType.sym.declNode;
 	}
-	return entry;
+	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
+	const body = (dn.data as ClassDeclData).classBody;
+	for (const member of body) {
+		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
+				&& member.nodeType.kind == TypeKind.Function) {
+			return member.nodeType.typeChildren;
+		}
+	}
+	return null as unknown as Type[];
 }
 
-function initRoutineName(entry: CtorEntry): string {
-	const initSym = entry.initSym!;
-	return mangledFunctionName(initSym, initSym.name, 0);
+function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
+	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
+	return crossModuleCtorParamTypes(classSym!);
 }
 
-function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string, classSym: Symbol | null, node: Readonly<Node>): void {
-	const entry = classInit(g, classSym, bareTypeName(g, cName), node);
-	if (entry == null) return;
-	const initName = initRoutineName(entry);
+function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
+	const initName = classInitCName(cName);
 	const protoKey = "proto:" + initName;
 	if (!nameSetHas(g.declaredProcs, protoKey)) {
 		nameSetAdd(g.declaredProcs, protoKey);
@@ -1015,12 +1021,10 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const ctorEntry = classInit(g, d.newCallee.resolvedSym, bareTypeName(g, cName), node);
-			if (ctorEntry == null) { ctx.results.push("NULL"); return; }
-			const initName = initRoutineName(ctorEntry);
-			const ctorChildren = ctorEntry.fnType.typeChildren;
+			const initName = classInitCName(cName);
+			const ctorChildren = ctorParamTypes(lookupCtorDefaults(d.newCallee.resolvedSym, bareTypeName(g, cName)), d.newCallee.resolvedSym);
 			const ctorProtoKey = "proto:" + initName;
-			if (node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
+			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
 				const initParams: Type[] = [node.nodeType];
 				const initNames: string[] = ["this"];
@@ -1072,7 +1076,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
 					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType)};`);
-					emitClassInitCall(g, p, cType, tmp0, innerType.sym, node);
+					emitClassInitCall(g, p, cType, tmp0);
 					ctx.results.push(tmp0);
 				} else {
 					ctx.results.push(`${genAllocTyped(g, cType)}`);
@@ -1145,12 +1149,18 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName != "") {
-			const parentEntry = classInit(g, parentSym, bareTypeName(g, parentName), node);
-			if (parentEntry == null) { ctx.results.push("0"); return; }
-			const parentInitName = initRoutineName(parentEntry);
-			const parentChildren = parentEntry.fnType.typeChildren;
+			const parentInitName = classInitCName(parentName);
+			const parentEntry = lookupCtorDefaults(parentSym, bareTypeName(g, parentName));
+			const parentChildren = ctorParamTypes(parentEntry, parentSym);
 			const parentProtoKey = "proto:" + parentInitName;
-			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
+			if (parentChildren == null && parentEntry != null && parentEntry.initSym != null) {
+				ensureCrossModuleProto(g, parentInitName, parentEntry.initSym.symbolType, parentEntry.initSym);
+			}
+			const parentIsForeign = parentSym.modulePath != "" && parentSym.modulePath != g.modulePath;
+			if (parentIsForeign && parentChildren == null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
+				addCGenError(g, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
+			}
+			if (parentChildren != null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
 				let parentProtoParams = `${parentName}* this`;
 				for (let ppi = 0; ppi < parentChildren.length; ppi += 1) {
