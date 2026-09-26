@@ -22,7 +22,7 @@ function round(k: int32): string {
 	let xs = mk(3);
 	const ys = xs;
 	xs = mk(2);
-	const h: Holder = { rows: [], k: k };
+	let h: Holder = { rows: [], k: k };
 	h.rows.push([new Tok("h" + k.toString()), 7 as int32]);
 	h.rows = [[new Tok("i" + k.toString()), 8 as int32], [new Tok("j" + k.toString()), 9 as int32]];
 	const named: Vec<[string, int32]> = [];
