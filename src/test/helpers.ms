@@ -14,6 +14,7 @@ import { computeAliveSet } from "../checker/reachability";
 import { hasErrors, CheckerError, CheckerContext, ExportRegistry } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
+import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
@@ -492,6 +493,17 @@ function emitJSTwoPhase(graph: ModuleGraph, registry: ExportRegistry, preludeCtx
 				msg = `${msg} ${err.message}`;
 			}
 			return msg;
+		}
+
+		if (isEntryPath(canonEntries, modPath)) {
+			refuseSyncAwaitOnJs(ctx, expanded);
+			if (hasErrors(ctx)) {
+				let msg = `ERROR: check [${modPath}]:`;
+				for (const err of ctx.errors) {
+					msg = `${msg} ${err.message}`;
+				}
+				return msg;
+			}
 		}
 
 		unitPaths.push(modPath);
