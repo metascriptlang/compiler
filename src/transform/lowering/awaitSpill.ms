@@ -1,379 +1,483 @@
 import {
-	Node, NodeKind, DeclKind, TypeKind, Type, SourceLocation,
-	VariableDeclData, ExprStmtData, ReturnStmtData, ThrowStmtData, AssertStmtData, ExportDeclData,
-	IfStmtData, WhileStmtData, DoWhileStmtData,
-	AwaitExprData, BinaryExprData, ConditionalExprData, CallExprData, NewExprData, MemberExprData,
-	ArrayAccessData, UnaryExprData, ArrayLiteralData, ObjectLiteralData, SpreadExprData,
-	TypeAssertionData, HiddenDerefData, HiddenStdConvData,
+	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
+	BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
+	TryCatchStmtData, ExprStmtData, ReturnStmtData, ThrowStmtData, AssertStmtData, ExportDeclData, ArrowFunctionData,
+	FunctionDeclData, CallExprData, BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData,
+	ArrayLiteralData, ObjectLiteralData, ConditionalExprData, NewExprData, TypeAssertionData,
+	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
+	AwaitExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { TransformContext, freshOwnedSym } from "../context";
-import { walkExpandBlocks, containsExprKind, mapExprChildren, isFuncBoundary } from "../walker";
-import { makeVarDecl, makeIdentResolved, makeExprStmt, makeAssign, makeIf, makeBlock, makeUnary, makeBreak, makeBool, extractBodyStmts } from "../util";
-import { hoistAssignTargetEffects, isAssignOperator, bodyHasLoopContinue } from "./conditionalExprLower";
-import { blockifyAwaitingArrows } from "./awaitLower";
-import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
+import { makeSymbol } from "../../checker/symbol";
+import { booleanType, isStructType } from "../../checker/types";
+import { TransformContext } from "../context";
+import {
+	makeVarDecl, makeReturn, makeTypedIdentResolved, makeExprStmt, makeAssign,
+	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
+	makeBinary, isValueLayoutType,
+} from "../util";
+import { cloneIfPure } from "../coercion/intArithJS";
+import { walkExpandBlocks, walkNode, containsExprKind, isFuncBoundary } from "../walker";
+import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, parseInput, makeCtx, getStmts } from "../testUtil";
+
+let _spillCtx: TransformContext = null as unknown as TransformContext;
+
+function isRoutine(node: Node): boolean {
+	return isFuncBoundary(node) || node.kind == NodeKind.MethodDecl
+		|| node.kind == NodeKind.ConstructorDecl || node.kind == NodeKind.ClassDecl;
+}
 
 function hasAwait(node: Node | null): boolean {
-	return node != null && containsExprKind(node, NodeKind.AwaitExpr);
-}
-
-function subtreeHasAwait(node: Node | null): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.AwaitExpr) return true;
-	if (isFuncBoundary(node)) return false;
+	if (isRoutine(node)) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
-		if (!found && subtreeHasAwait(child)) { found = true; }
+		if (!found && hasAwait(child)) found = true;
 	});
 	return found;
 }
 
-function hasEffect(node: Node): boolean {
-	if (node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr || node.kind == NodeKind.UpdateExpr) return true;
-	if (node.kind == NodeKind.BinaryExpr && isAssignOperator((node.data as BinaryExprData).operator)) return true;
-	let found = false;
-	mapExprChildren(node, (child: Node): Node => {
-		if (!found && hasEffect(child)) { found = true; }
-		return child;
-	});
-	return found;
+function isVoidType(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Void;
 }
 
-function bindTemp(ctx: TransformContext, prefix: string, t: Type | null, init: Node | null, declKind: DeclKind, pre: Node[], loc: SourceLocation): Node {
-	const sym = freshOwnedSym(ctx, prefix, t);
-	const decl = makeVarDecl(sym.name, init as Node, declKind, loc);
+function isAssignOp(op: string): boolean {
+	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
+	return op.endsWith("=");
+}
+
+function isCallKind(e: Node): boolean {
+	if (e.kind == NodeKind.CallExpr || e.kind == NodeKind.NewExpr
+		|| e.kind == NodeKind.UnaryExpr || e.kind == NodeKind.UpdateExpr) return true;
+	return e.kind == NodeKind.BinaryExpr && !isAssignOp((e.data as BinaryExprData).operator);
+}
+
+function isInert(e: Node): boolean {
+	return e.kind == NodeKind.Identifier || e.kind == NodeKind.NumberLiteral
+		|| e.kind == NodeKind.StringLiteral || e.kind == NodeKind.BooleanLiteral || e.kind == NodeKind.NullLiteral;
+}
+
+function bindTemp(init: Node, declKind: DeclKind, t: Type | null, pre: Node[], loc: SourceLocation): Symbol {
+	const name = "__aw_" + _spillCtx.tempCounter.toString();
+	_spillCtx.tempCounter += 1;
+	const sym = makeSymbol(name, SymbolKind.Variable, t, declKind != DeclKind.Const);
+	const decl = makeVarDecl(name, init, declKind, loc);
+	decl.nodeType = t;
 	decl.resolvedSym = sym;
-	decl.nodeType = sym.symbolType;
 	pre.push(decl);
-	return makeIdentResolved(sym, loc);
+	return sym;
 }
 
-function tempEffects(node: Node, pre: Node[], ctx: TransformContext): Node {
-	match (node.kind) {
-		NodeKind.TypeAssertion => {
-			const d = node.data as TypeAssertionData;
-			d.asExpr = tempEffects(d.asExpr, pre, ctx);
-			return node;
-		},
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			const d = node.data as HiddenStdConvData;
-			d.convExpr = tempEffects(d.convExpr, pre, ctx);
-			return node;
-		},
-		_ => {},
-	};
-	return bindTemp(ctx, "sp", node.nodeType, node, DeclKind.Const, pre, node.location);
+function tempRef(sym: Symbol, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(sym, sym.symbolType, loc);
 }
 
-function spillOperands(ops: Node[], pre: Node[], ctx: TransformContext): void {
+// A value aggregate stays in place: a temp copy would take the writes a call
+// or a store makes through it. JS reads before an await: NIM-REF TR-24.
+function snapshotsLikeJs(t: Type | null): boolean {
+	if (t == null) return false;
+	const k = t.kind;
+	if (k == TypeKind.Void || k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span
+		|| k == TypeKind.Tuple || k == TypeKind.Var || k == TypeKind.Lent || k == TypeKind.Sink
+		|| k == TypeKind.Borrow || k == TypeKind.Ptr || k == TypeKind.Varargs || k == TypeKind.CString
+		|| k == TypeKind.Null || k == TypeKind.Unknown || k == TypeKind.None || k == TypeKind.Pending) return false;
+	return !isStructType(t) && !isValueLayoutType(t);
+}
+
+function isStorageRead(e: Node): boolean {
+	if (e.kind == NodeKind.Identifier) {
+		const s = e.resolvedSym;
+		if (s == null || !s.symFlags.has(SymbolFlag.Mutable)) return false;
+		return s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Parameter;
+	}
+	if (e.kind == NodeKind.MemberExpr) {
+		const s = e.resolvedSym;
+		return s == null || s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Property;
+	}
+	return e.kind == NodeKind.ArrayAccess;
+}
+
+function readsBeforeAwait(e: Node): boolean {
+	return isStorageRead(e) && snapshotsLikeJs(e.nodeType);
+}
+
+function bindIfEarly(e: Node, pre: Node[]): Node {
+	if (!readsBeforeAwait(e) && !(isCallKind(e) && !isVoidType(e.nodeType))) return e;
+	return tempRef(bindTemp(e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
+}
+
+function lowerOperands(ops: Node[], pre: Node[], receivers: int32): void {
 	let last = -1;
 	for (let i = 0; i < ops.length; i += 1) {
-		if (hasAwait(ops[i])) { last = i; }
+		if (hasAwait(ops[i])) last = i;
 	}
+	if (last < 0) return;
 	for (let i = 0; i < ops.length; i += 1) {
-		if (hasAwait(ops[i])) {
-			ops[i] = spillExpr(ops[i], pre, ctx);
-		} else if (i < last && hasEffect(ops[i])) {
-			ops[i] = tempEffects(ops[i], pre, ctx);
+		if (ops[i] == null) continue;
+		ops[i] = lowerAwaitExpr(ops[i], pre);
+		if (i < last && i >= receivers && readsBeforeAwait(ops[i])) {
+			ops[i] = tempRef(bindTemp(ops[i], DeclKind.Const, ops[i].nodeType, pre, ops[i].location), ops[i].location);
+		} else if (isCallKind(ops[i]) && !isVoidType(ops[i].nodeType)) {
+			ops[i] = tempRef(bindTemp(ops[i], DeclKind.Const, ops[i].nodeType, pre, ops[i].location), ops[i].location);
 		}
 	}
 }
 
-function spillValue(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	return hasAwait(expr) ? spillExpr(expr, pre, ctx) : expr;
-}
-
-function spillDirect(expr: Node | null, pre: Node[], ctx: TransformContext): Node {
-	if (expr == null || !hasAwait(expr)) return expr as Node;
-	if (expr.kind == NodeKind.AwaitExpr) {
-		const d = expr.data as AwaitExprData;
-		d.awaitArg = spillValue(d.awaitArg, pre, ctx);
-		return expr;
+function settleTarget(e: Node, pre: Node[]): Node {
+	if (e.kind == NodeKind.ArrayAccess) {
+		const d = e.data as ArrayAccessData;
+		d.array = settleTarget(d.array, pre);
+		d.index = bindIfEarly(lowerAwaitExpr(d.index, pre), pre);
+	} else if (e.kind == NodeKind.MemberExpr) {
+		const d = e.data as MemberExprData;
+		d.object = settleObject(lowerAwaitExpr(d.object, pre), pre);
 	}
-	return spillExpr(expr, pre, ctx);
+	return e;
 }
 
-function armStmt(target: Node, arm: Node, loc: SourceLocation): Node {
-	if (arm.nodeType != null && arm.nodeType.kind == TypeKind.Never) {
-		return makeExprStmt(arm, loc);
+function settleObject(obj: Node, pre: Node[]): Node {
+	if (obj.kind == NodeKind.HiddenDeref) {
+		const hd = obj.data as HiddenDerefData;
+		hd.expr = settleObject(hd.expr, pre);
+		return obj;
 	}
-	return makeExprStmt(makeAssign(target, arm, loc), loc);
+	const bound = bindIfEarly(obj, pre);
+	return bound == obj ? settleTarget(obj, pre) : bound;
 }
 
-function spillShortCircuit(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	const d = expr.data as BinaryExprData;
-	d.left = spillValue(d.left, pre, ctx);
-	if (!hasAwait(d.right)) return expr;
-	const loc = expr.location;
-	const lhs = bindTemp(ctx, "sclhs", d.left.nodeType, d.left, DeclKind.Const, pre, loc);
-	const res = bindTemp(ctx, "scres", expr.nodeType, null, DeclKind.Let, pre, loc);
-	const rhsStmts: Node[] = [];
-	const rhs = spillExpr(d.right, rhsStmts, ctx);
-	rhsStmts.push(makeExprStmt(makeAssign(makeIdentResolved(res.resolvedSym!, loc), rhs, loc), loc));
-	const keepLhs = makeBlock([makeExprStmt(makeAssign(makeIdentResolved(res.resolvedSym!, loc), makeIdentResolved(lhs.resolvedSym!, loc), loc), loc)], loc);
-	const isAnd = d.operator == "&&";
-	pre.push(makeIf(lhs, isAnd ? makeBlock(rhsStmts, loc) : keepLhs, isAnd ? keepLhs : makeBlock(rhsStmts, loc), loc));
-	return res;
+function lowerAssign(e: Node, pre: Node[]): Node {
+	const d = e.data as BinaryExprData;
+	if (!hasAwait(d.right)) {
+		d.left = lowerAwaitExpr(d.left, pre);
+		return e;
+	}
+	d.left = settleTarget(d.left, pre);
+	const readBack = d.operator == "=" ? null : cloneIfPure(d.left);
+	if (readBack == null) {
+		d.right = bindIfEarly(lowerAwaitExpr(d.right, pre), pre);
+		return e;
+	}
+	const before = tempRef(bindTemp(readBack, DeclKind.Const, d.left.nodeType, pre, e.location), e.location);
+	const value = lowerAwaitExpr(d.right, pre);
+	d.right = makeBinary(before, d.operator.slice(0, d.operator.length - 1), value, e.location);
+	d.operator = "=";
+	return e;
 }
 
-function spillConditional(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	const d = expr.data as ConditionalExprData;
-	d.ternaryCondition = spillValue(d.ternaryCondition, pre, ctx);
-	if (!hasAwait(d.ternaryConsequent) && !hasAwait(d.ternaryAlternate)) return expr;
-	const loc = expr.location;
-	const res = bindTemp(ctx, "tern", expr.nodeType, null, DeclKind.Let, pre, loc);
+function lowerShortCircuit(e: Node, pre: Node[]): Node {
+	const d = e.data as BinaryExprData;
+	const loc = e.location;
+	const t = e.nodeType != null ? e.nodeType : booleanType();
+	const tmp = bindTemp(lowerAwaitExpr(d.left, pre), DeclKind.Let, t, pre, loc);
+	const inner: Node[] = [];
+	const right = lowerAwaitExpr(d.right, inner);
+	inner.push(makeExprStmt(makeAssign(tempRef(tmp, loc), right, loc), loc));
+	const test = d.operator == "&&" ? tempRef(tmp, loc) : makeUnary("!", tempRef(tmp, loc), loc);
+	pre.push(makeIf(test, makeBlock(inner, loc), null, loc));
+	return tempRef(tmp, loc);
+}
+
+function lowerConditional(e: Node, pre: Node[]): Node {
+	const d = e.data as ConditionalExprData;
+	const loc = e.location;
+	const cond = lowerAwaitExpr(d.ternaryCondition, pre);
+	const tmp = bindTemp(makeDefaultValue(e.nodeType, loc), DeclKind.Let, e.nodeType, pre, loc);
 	const thenStmts: Node[] = [];
-	const thenValue = spillValue(d.ternaryConsequent, thenStmts, ctx);
-	thenStmts.push(armStmt(makeIdentResolved(res.resolvedSym!, loc), thenValue, loc));
+	const thenVal = lowerAwaitExpr(d.ternaryConsequent, thenStmts);
+	thenStmts.push(makeExprStmt(makeAssign(tempRef(tmp, loc), thenVal, loc), loc));
 	const elseStmts: Node[] = [];
-	const elseValue = spillValue(d.ternaryAlternate, elseStmts, ctx);
-	elseStmts.push(armStmt(makeIdentResolved(res.resolvedSym!, loc), elseValue, loc));
-	pre.push(makeIf(d.ternaryCondition, makeBlock(thenStmts, loc), makeBlock(elseStmts, loc), loc));
-	return res;
+	const elseVal = lowerAwaitExpr(d.ternaryAlternate, elseStmts);
+	elseStmts.push(makeExprStmt(makeAssign(tempRef(tmp, loc), elseVal, loc), loc));
+	pre.push(makeIf(cond, makeBlock(thenStmts, loc), makeBlock(elseStmts, loc), loc));
+	return tempRef(tmp, loc);
 }
 
-function spillTarget(target: Node, pre: Node[], ctx: TransformContext): Node {
-	match (target.kind) {
-		NodeKind.MemberExpr => {
-			const d = target.data as MemberExprData;
-			d.object = spillTarget(d.object, pre, ctx);
-			return target;
-		},
-		NodeKind.ArrayAccess => {
-			const d = target.data as ArrayAccessData;
-			if (hasAwait(d.index)) {
-				d.array = hasAwait(d.array) ? spillTarget(d.array, pre, ctx) : hoistAssignTargetEffects(d.array, pre, ctx, []);
-				d.index = spillExpr(d.index, pre, ctx);
-			} else {
-				d.array = spillTarget(d.array, pre, ctx);
-			}
-			return target;
-		},
-		_ => {},
-	};
-	return spillValue(target, pre, ctx);
-}
-
-function spillAssign(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	const d = expr.data as BinaryExprData;
-	if (hasAwait(d.left)) { d.left = spillTarget(d.left, pre, ctx); }
-	if (hasAwait(d.right)) {
-		d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
-		d.right = spillExpr(d.right, pre, ctx);
+function lowerAwaitExpr(e: Node, pre: Node[]): Node {
+	if (e == null || !hasAwait(e)) return e;
+	const k = e.kind;
+	if (k == NodeKind.AwaitExpr) {
+		const d = e.data as AwaitExprData;
+		d.awaitArg = lowerAwaitExpr(d.awaitArg, pre);
+		if (isVoidType(e.nodeType)) return e;
+		return tempRef(bindTemp(e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 	}
-	return expr;
-}
-
-function spillCall(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	const d = expr.data as CallExprData;
-	let argAwaits = false;
-	for (const a of d.arguments) {
-		if (hasAwait(a)) { argAwaits = true; }
-	}
-	if (d.callee.kind == NodeKind.MemberExpr) {
-		const md = d.callee.data as MemberExprData;
-		if (hasAwait(md.object)) { md.object = spillTarget(md.object, pre, ctx); }
-		if (argAwaits) { md.object = hoistAssignTargetEffects(md.object, pre, ctx, []); }
+	if (k == NodeKind.BinaryExpr) {
+		const d = e.data as BinaryExprData;
+		if (d.operator == "&&" || d.operator == "||") return lowerShortCircuit(e, pre);
+		if (d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") return e;
+		if (isAssignOp(d.operator)) return lowerAssign(e, pre);
+		const ops = [d.left, d.right];
+		lowerOperands(ops, pre, 0);
+		d.left = ops[0];
+		d.right = ops[1];
+	} else if (k == NodeKind.ConditionalExpr) {
+		if (isVoidType(e.nodeType)) return e;
+		return lowerConditional(e, pre);
+	} else if (k == NodeKind.CallExpr) {
+		const d = e.data as CallExprData;
+		const viaMember = d.callee.kind == NodeKind.MemberExpr;
+		const ops: Node[] = [viaMember ? (d.callee.data as MemberExprData).object : d.callee];
+		for (const a of d.arguments) ops.push(a);
+		lowerOperands(ops, pre, 1);
+		if (viaMember) (d.callee.data as MemberExprData).object = ops[0];
+		else d.callee = ops[0];
+		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = ops[i + 1];
+	} else if (k == NodeKind.NewExpr) {
+		lowerOperands((e.data as NewExprData).newArguments, pre, 0);
+	} else if (k == NodeKind.ArrayAccess) {
+		const d = e.data as ArrayAccessData;
+		const ops = [d.array, d.index];
+		lowerOperands(ops, pre, 0);
+		d.array = ops[0];
+		d.index = ops[1];
+	} else if (k == NodeKind.ArrayLiteral) {
+		lowerOperands((e.data as ArrayLiteralData).elements, pre, 0);
+	} else if (k == NodeKind.ObjectLiteral) {
+		lowerOperands((e.data as ObjectLiteralData).properties, pre, 0);
+	} else if (k == NodeKind.UnaryExpr) {
+		const d = e.data as UnaryExprData;
+		d.operand = lowerAwaitExpr(d.operand, pre);
+	} else if (k == NodeKind.UpdateExpr) {
+		const d = e.data as UpdateExprData;
+		d.updateArg = lowerAwaitExpr(d.updateArg, pre);
+	} else if (k == NodeKind.MemberExpr) {
+		const d = e.data as MemberExprData;
+		d.object = lowerAwaitExpr(d.object, pre);
+	} else if (k == NodeKind.TypeAssertion) {
+		const d = e.data as TypeAssertionData;
+		d.asExpr = lowerAwaitExpr(d.asExpr, pre);
+	} else if (k == NodeKind.SpreadExpr) {
+		const d = e.data as SpreadExprData;
+		d.spreadArg = lowerAwaitExpr(d.spreadArg, pre);
+	} else if (k == NodeKind.MoveExpr) {
+		const d = e.data as MoveExprData;
+		d.moveArg = lowerAwaitExpr(d.moveArg, pre);
+	} else if (k == NodeKind.OutExpr) {
+		const d = e.data as OutExprData;
+		d.outArg = lowerAwaitExpr(d.outArg, pre);
+	} else if (k == NodeKind.HiddenStdConv || k == NodeKind.HiddenSubConv) {
+		const d = e.data as HiddenStdConvData;
+		d.convExpr = lowerAwaitExpr(d.convExpr, pre);
+	} else if (k == NodeKind.HiddenDeref || k == NodeKind.HiddenAddr) {
+		const d = e.data as HiddenDerefData;
+		d.expr = lowerAwaitExpr(d.expr, pre);
 	} else {
-		d.callee = spillValue(d.callee, pre, ctx);
-		if (argAwaits && hasEffect(d.callee)) { d.callee = tempEffects(d.callee, pre, ctx); }
+		_spillCtx.errors.push(`await inside a ${k.toString()} expression is not supported on the C backend yet`);
 	}
-	spillOperands(d.arguments, pre, ctx);
-	return expr;
+	return e;
 }
 
-function spillExpr(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	match (expr.kind) {
-		NodeKind.AwaitExpr => {
-			const d = expr.data as AwaitExprData;
-			d.awaitArg = spillValue(d.awaitArg, pre, ctx);
-			return bindTemp(ctx, "aw", expr.nodeType, expr, DeclKind.Const, pre, expr.location);
-		},
-		NodeKind.BinaryExpr => {
-			const d = expr.data as BinaryExprData;
-			if (d.operator == "&&" || d.operator == "||") return spillShortCircuit(expr, pre, ctx);
-			if (isAssignOperator(d.operator)) return spillAssign(expr, pre, ctx);
-			const ops = [d.left, d.right];
-			spillOperands(ops, pre, ctx);
-			d.left = ops[0];
-			d.right = ops[1];
-			return expr;
-		},
-		NodeKind.ConditionalExpr => { return spillConditional(expr, pre, ctx); },
-		NodeKind.CallExpr => { return spillCall(expr, pre, ctx); },
-		NodeKind.NewExpr => {
-			spillOperands((expr.data as NewExprData).newArguments, pre, ctx);
-			return expr;
-		},
-		NodeKind.ArrayLiteral => {
-			spillOperands((expr.data as ArrayLiteralData).elements, pre, ctx);
-			return expr;
-		},
-		NodeKind.ObjectLiteral => {
-			spillOperands((expr.data as ObjectLiteralData).properties, pre, ctx);
-			return expr;
-		},
-		NodeKind.ArrayAccess => {
-			const d = expr.data as ArrayAccessData;
-			const ops = [d.array, d.index];
-			spillOperands(ops, pre, ctx);
-			d.array = ops[0];
-			d.index = ops[1];
-			return expr;
-		},
-		NodeKind.MemberExpr => {
-			const d = expr.data as MemberExprData;
-			d.object = spillExpr(d.object, pre, ctx);
-			return expr;
-		},
-		NodeKind.UnaryExpr => {
-			const d = expr.data as UnaryExprData;
-			d.operand = spillExpr(d.operand, pre, ctx);
-			return expr;
-		},
-		NodeKind.SpreadExpr => {
-			const d = expr.data as SpreadExprData;
-			d.spreadArg = spillExpr(d.spreadArg, pre, ctx);
-			return expr;
-		},
-		NodeKind.TypeAssertion => {
-			const d = expr.data as TypeAssertionData;
-			d.asExpr = spillExpr(d.asExpr, pre, ctx);
-			return expr;
-		},
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
-			const d = expr.data as HiddenDerefData;
-			d.expr = spillExpr(d.expr, pre, ctx);
-			return expr;
-		},
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			const d = expr.data as HiddenStdConvData;
-			d.convExpr = spillExpr(d.convExpr, pre, ctx);
-			return expr;
-		},
-		_ => {},
-	};
-	ctx.errors.push(`await inside a ${expr.kind.toString()} expression is not supported on the C backend yet`);
-	return expr;
-}
-
-function blockifyAwaiting(stmt: Node | null): Node {
-	if (stmt == null || stmt.kind == NodeKind.BlockStmt || !subtreeHasAwait(stmt)) return stmt as Node;
-	return makeBlock([stmt], stmt.location);
-}
-
-function spillWhileCond(stmt: Node, ctx: TransformContext): Node[] {
-	const wd = stmt.data as WhileStmtData;
-	wd.whileBody = blockifyAwaiting(wd.whileBody);
-	if (!hasAwait(wd.whileCondition)) return [stmt];
-	const loc = stmt.location;
-	const body: Node[] = [];
-	const cond = spillExpr(wd.whileCondition, body, ctx);
-	body.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc));
-	for (const s of extractBodyStmts(wd.whileBody)) { body.push(s); }
-	wd.whileCondition = makeBool(true, loc);
-	wd.whileBody = makeBlock(body, loc);
-	return [stmt];
-}
-
-function spillDoWhileCond(stmt: Node, ctx: TransformContext): Node[] {
-	const wd = stmt.data as DoWhileStmtData;
-	wd.doBody = blockifyAwaiting(wd.doBody);
-	if (!hasAwait(wd.doCondition)) return [stmt];
-	if (bodyHasLoopContinue(wd.doBody)) {
-		ctx.errors.push("do-while: an await in the condition combined with 'continue' in the loop body is not supported on the C backend yet");
-		return [stmt];
+function lowerAwaitStmts(stmts: Node[]): Node[] {
+	const out: Node[] = [];
+	for (const s of stmts) {
+		for (const r of lowerAwaitStmt(s)) out.push(r);
 	}
-	const loc = stmt.location;
-	const body: Node[] = extractBodyStmts(wd.doBody);
-	const cond = spillExpr(wd.doCondition, body, ctx);
-	body.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc));
-	wd.doCondition = makeBool(true, loc);
-	wd.doBody = makeBlock(body, loc);
-	return [stmt];
+	return out;
 }
 
-function expandAwaitStmt(stmt: Node, ctx: TransformContext): Node[] {
+function lowerAwaitSlot(s: Node | null): Node | null {
+	if (s == null) return s;
+	const list = lowerAwaitStmt(s);
+	if (list.length == 1) return list[0];
+	return makeBlock(list, s.location);
+}
+
+function lowerLoopBody(body: Node): Node {
+	return makeBlock(lowerAwaitStmts(extractBodyStmts(body)), body.location);
+}
+
+function lowerAwaitStmt(s: Node): Node[] {
+	if (s == null || !hasAwait(s)) return [s];
+	const loc = s.location;
 	const pre: Node[] = [];
-	match (stmt.kind) {
-		NodeKind.VariableDecl => {
-			const d = stmt.data as VariableDeclData;
-			d.initializer = spillDirect(d.initializer, pre, ctx);
-		},
-		NodeKind.ExportDecl => {
-			const ed = stmt.data as ExportDeclData;
-			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
-				const d = ed.exportedDecl.data as VariableDeclData;
-				d.initializer = spillDirect(d.initializer, pre, ctx);
+	const k = s.kind;
+	if (k == NodeKind.BlockStmt) {
+		const d = s.data as BlockStmtData;
+		d.statements = lowerAwaitStmts(d.statements);
+	} else if (k == NodeKind.ExprStmt) {
+		const d = s.data as ExprStmtData;
+		if (d.expr.kind == NodeKind.AwaitExpr) {
+			const ad = d.expr.data as AwaitExprData;
+			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+		} else if (d.expr.kind == NodeKind.ConditionalExpr) {
+			const cd = d.expr.data as ConditionalExprData;
+			const cond = lowerAwaitExpr(cd.ternaryCondition, pre);
+			const thenBranch = makeBlock(lowerAwaitStmt(makeExprStmt(cd.ternaryConsequent, loc)), loc);
+			const elseBranch = makeBlock(lowerAwaitStmt(makeExprStmt(cd.ternaryAlternate, loc)), loc);
+			pre.push(makeIf(cond, thenBranch, elseBranch, loc));
+			return pre;
+		} else {
+			d.expr = lowerAwaitExpr(d.expr, pre);
+			if (isInert(d.expr)) return pre;
+		}
+	} else if (k == NodeKind.VariableDecl) {
+		const d = s.data as VariableDeclData;
+		if (d.initializer.kind == NodeKind.AwaitExpr) {
+			const ad = d.initializer.data as AwaitExprData;
+			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+		} else {
+			d.initializer = lowerAwaitExpr(d.initializer, pre);
+		}
+	} else if (k == NodeKind.ReturnStmt) {
+		const d = s.data as ReturnStmtData;
+		const arg = d.argument!;
+		if (arg.kind == NodeKind.AwaitExpr && isVoidType(arg.nodeType)) {
+			const ad = arg.data as AwaitExprData;
+			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+			pre.push(makeExprStmt(arg, loc));
+			d.argument = null;
+		} else {
+			d.argument = lowerAwaitExpr(arg, pre);
+		}
+	} else if (k == NodeKind.ThrowStmt) {
+		const d = s.data as ThrowStmtData;
+		d.throwArg = lowerAwaitExpr(d.throwArg, pre);
+	} else if (k == NodeKind.AssertStmt) {
+		const d = s.data as AssertStmtData;
+		d.assertExpr = lowerAwaitExpr(d.assertExpr, pre);
+	} else if (k == NodeKind.ExportDecl) {
+		const ed = s.data as ExportDeclData;
+		if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
+			const d = ed.exportedDecl.data as VariableDeclData;
+			if (d.initializer != null && d.initializer.kind == NodeKind.AwaitExpr) {
+				const ad = d.initializer.data as AwaitExprData;
+				ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+			} else {
+				d.initializer = lowerAwaitExpr(d.initializer, pre);
 			}
-		},
-		NodeKind.ExprStmt => {
-			const d = stmt.data as ExprStmtData;
-			d.expr = spillDirect(d.expr, pre, ctx);
-			if (pre.length > 0 && d.expr.kind == NodeKind.Identifier) return pre;
-		},
-		NodeKind.ReturnStmt => {
-			const d = stmt.data as ReturnStmtData;
-			d.argument = spillDirect(d.argument, pre, ctx);
-		},
-		NodeKind.ThrowStmt => {
-			const d = stmt.data as ThrowStmtData;
-			d.throwArg = spillValue(d.throwArg, pre, ctx);
-		},
-		NodeKind.AssertStmt => {
-			const d = stmt.data as AssertStmtData;
-			d.assertExpr = spillValue(d.assertExpr, pre, ctx);
-		},
-		NodeKind.IfStmt => {
-			const d = stmt.data as IfStmtData;
-			d.condition = spillValue(d.condition, pre, ctx);
-			d.consequent = blockifyAwaiting(d.consequent);
-			d.alternate = blockifyAwaiting(d.alternate);
-		},
-		NodeKind.WhileStmt => { return spillWhileCond(stmt, ctx); },
-		NodeKind.DoWhileStmt => { return spillDoWhileCond(stmt, ctx); },
-		_ => {},
-	};
-	if (pre.length == 0) return [stmt];
-	pre.push(stmt);
+		}
+	} else if (k == NodeKind.IfStmt) {
+		const d = s.data as IfStmtData;
+		d.condition = lowerAwaitExpr(d.condition, pre);
+		d.consequent = lowerAwaitSlot(d.consequent)!;
+		d.alternate = lowerAwaitSlot(d.alternate)!;
+	} else if (k == NodeKind.WhileStmt) {
+		const d = s.data as WhileStmtData;
+		const body = lowerLoopBody(d.whileBody);
+		if (hasAwait(d.whileCondition)) {
+			const head: Node[] = [];
+			const cond = lowerAwaitExpr(d.whileCondition, head);
+			head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+			for (const b of (body.data as BlockStmtData).statements) head.push(b);
+			d.whileCondition = makeBool(true, loc);
+			d.whileBody = makeBlock(head, loc);
+		} else {
+			d.whileBody = body;
+		}
+	} else if (k == NodeKind.DoWhileStmt) {
+		const d = s.data as DoWhileStmtData;
+		const body = lowerLoopBody(d.doBody);
+		if (!hasAwait(d.doCondition)) {
+			d.doBody = body;
+		} else {
+			const entered = bindTemp(makeBool(false, loc), DeclKind.Let, booleanType(), pre, loc);
+			const head: Node[] = [];
+			const cond = lowerAwaitExpr(d.doCondition, head);
+			head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+			const loopStmts: Node[] = [
+				makeIf(tempRef(entered, loc), makeBlock(head, loc), null, loc),
+				makeExprStmt(makeAssign(tempRef(entered, loc), makeBool(true, loc), loc), loc),
+			];
+			for (const b of (body.data as BlockStmtData).statements) loopStmts.push(b);
+			const loop = makeWhile(makeBool(true, loc), makeBlock(loopStmts, loc), loc);
+			(loop.data as WhileStmtData).whileLabel = d.dwLabel;
+			pre.push(loop);
+			return pre;
+		}
+	} else if (k == NodeKind.SwitchStmt) {
+		const d = s.data as SwitchStmtData;
+		d.switchDisc = lowerAwaitExpr(d.switchDisc, pre);
+		for (const c of d.switchCases) {
+			const cd = c.data as SwitchCaseData;
+			cd.caseStmts = lowerAwaitStmts(cd.caseStmts);
+		}
+	} else if (k == NodeKind.TryCatchStmt) {
+		const d = s.data as TryCatchStmtData;
+		d.tryBody = lowerAwaitSlot(d.tryBody)!;
+		d.catchBody = lowerAwaitSlot(d.catchBody)!;
+		d.finallyBody = lowerAwaitSlot(d.finallyBody)!;
+	}
+	pre.push(s);
 	return pre;
 }
 
+
+export function spillAwaitStmt(stmt: Node, ctx: TransformContext): Node[] {
+	_spillCtx = ctx;
+	return lowerAwaitStmt(stmt);
+}
+
+export function blockifyAwaitingArrows(program: Node): void {
+	walkNode(program, (n: Node): Node => {
+		if (n.kind == NodeKind.ArrowFunction) {
+			const d = n.data as ArrowFunctionData;
+			const body = d.arrowBody;
+			if (body != null && body.kind != NodeKind.BlockStmt
+					&& containsExprKind(body, NodeKind.AwaitExpr)) {
+				d.arrowBody = makeBlock([makeReturn(body, body.location)], body.location);
+			}
+		}
+		return n;
+	});
+}
+
 export function lowerAwaitSpill(program: Node, ctx: TransformContext): Node {
+	_spillCtx = ctx;
 	blockifyAwaitingArrows(program);
-	walkExpandBlocks(program, expandAwaitStmt, ctx);
+	walkExpandBlocks(program, spillAwaitStmt, ctx);
 	return program;
 }
 
-test "a whole-initializer await stays one statement" { assert stmtCountAfter("const x = await g();", lowerAwaitSpill) == 1; }
+function bodyAfter(src: string): Node[] {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return [];
+	const fn = getStmts(lowerAwaitSpill(parsed.value, makeCtx()))[0];
+	return ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements;
+}
 
-test "a bare await statement stays one statement" { assert stmtCountAfter("await g();", lowerAwaitSpill) == 1; }
+function bodyKinds(src: string): string {
+	let out = "";
+	for (const s of bodyAfter(src)) out = out + s.kind.toString() + ";";
+	return out;
+}
 
-test "a direct return await stays one statement" { assert fnBodyStmtCount("async function f() { return await g(); }", lowerAwaitSpill) == 1; }
+test "an await in an operand moves into a declaration ahead of its statement" {
+	assert bodyKinds("async function f() { const v = (await p) + 1; }") == "VariableDecl;VariableDecl;";
+}
 
-test "a return operand await spills inside the function" { assert fnBodyStmtCount("async function f() { return await g() + 1; }", lowerAwaitSpill) == 2; }
+test "a call before the await is bound first, so it still runs first" {
+	assert bodyKinds("async function f() { g(h(), await p); }") == "VariableDecl;VariableDecl;ExprStmt;";
+}
 
-test "an await operand spills to its own declaration" { assert stmtCountAfter("const v = await g() + 1;", lowerAwaitSpill) == 2; }
+test "a short-circuit right operand awaits only inside its branch" {
+	assert bodyKinds("async function f() { const v = a && await p; }") == "VariableDecl;IfStmt;VariableDecl;";
+}
 
-test "a call operand ahead of an await spills first" { assert stmtCountAfter("const v = side() + await g();", lowerAwaitSpill) == 3; }
+test "an await in a while condition moves into the loop body" {
+	const body = bodyAfter("async function f() { while (await p) { g(); } }");
+	assert body.length == 1;
+	const inner = ((body[0].data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+	assert inner.length == 3;
+	assert inner[0].kind == NodeKind.VariableDecl;
+}
 
-test "a plain operand ahead of an await stays in place" { assert stmtCountAfter("const v = x + await g();", lowerAwaitSpill) == 2; }
+test "an await in a do-while condition runs after the body on every pass" {
+	assert bodyKinds("async function f() { do { g(); } while (await p); }") == "VariableDecl;WhileStmt;";
+}
 
-test "an await argument spills out of the call" { assert stmtCountAfter("f(await g());", lowerAwaitSpill) == 2; }
+test "a statement-level await stays where it is" {
+	assert bodyKinds("async function f() { await p; const v = await q; return await r; }") == "ExprStmt;VariableDecl;VariableDecl;ReturnStmt;";
+}
 
-test "an await on the right of && runs under a guard" { assert stmtCountAfter("const v = a && await g();", lowerAwaitSpill) == 4; }
+test "a sync body spills the same way" {
+	assert bodyKinds("function f() { const v = (await p) + 1; }") == "VariableDecl;VariableDecl;";
+}
 
-test "an await on the left of && needs no guard" { assert stmtCountAfter("const v = await g() && a;", lowerAwaitSpill) == 2; }
+test "a top-level await operand spills before its statement" { assert stmtCountAfter("const v = (await g()) + 1;", lowerAwaitSpill) == 2; }
 
-test "an await in a ternary arm runs under a guard" { assert stmtCountAfter("const v = c ? await g() : 7;", lowerAwaitSpill) == 3; }
+test "an assert operand await spills before the assert" { assert stmtCountAfter("assert (await g()) == 1;", lowerAwaitSpill) == 2; }
 
-test "an await in a ternary condition needs no guard" { assert stmtCountAfter("const v = (await g()) ? 1 : 2;", lowerAwaitSpill) == 2; }
-
-test "an if condition await spills before the if" { assert firstStmtKindAfter("if (await g()) { f(); }", lowerAwaitSpill) == NodeKind.VariableDecl; }
-
-test "a while condition await moves into the loop body" { assert firstStmtKindAfter("while (await g()) { f(); }", lowerAwaitSpill) == NodeKind.WhileStmt; }
-
-test "an assignment from an await keeps its target" { assert stmtCountAfter("x = await g() + 1;", lowerAwaitSpill) == 2; }
+test "an exported initializer await spills before the export" { assert stmtCountAfter("export const v = (await g()) + 1;", lowerAwaitSpill) == 2; }
 
 test "a statement without await is unchanged" { assert stmtCountAfter("const v = a() + b();", lowerAwaitSpill) == 1; }
