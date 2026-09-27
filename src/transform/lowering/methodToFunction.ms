@@ -72,12 +72,6 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	fnNode.paramSyms = methodNode.paramSyms;
 	fnNode.typeExpr = methodNode.typeExpr;
 	fnNode.typeExprs = methodNode.typeExprs;
-	// Update sym.declNode so anyone resolving the symbol sees the FunctionDecl
-	// rather than the now-orphaned MethodDecl (matters for default-fill, LSP
-	// hover-on-decl, and any later transform that walks `sym.declNode`).
-	if (fnNode.resolvedSym != null) {
-		fnNode.resolvedSym.declNode = fnNode;
-	}
 	return fnNode;
 }
 
