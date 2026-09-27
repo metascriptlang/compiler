@@ -2,6 +2,8 @@
 // @stdout: narrowed
 // @xfail(danger): --danger elides the variant field check, so the read of the other variant is undefined behaviour
 // @xfail(raiser): Raiser has no variant field check; the read yields nil
+// @xfail(js): node reports the uncaught variant defect with its own trace on stderr, where C prints 'Error: field ...'; C also makes the defect fatal where JS lets it be caught
+// @xfail(esm): node reports the uncaught variant defect with its own trace on stderr, where C prints 'Error: field ...'; C also makes the defect fatal where JS lets it be caught
 enum K { Num, Str }
 type D = match (kind: K) {
 	K.Num => { value: float64 },
