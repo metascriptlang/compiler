@@ -139,10 +139,10 @@ function copyLine(ctx: PPContext, tok: CToken): CToken[] {
 }
 
 // Join token texts with spaces.
-function joinTokens(tok: CToken): string {
+function joinLine(tok: CToken): string {
 	let result = "";
 	let first = true;
-	while (tok.kind != CTokenKind.Eof) {
+	while (tok.kind != CTokenKind.Eof && !tok.atBol) {
 		if (!first && tok.hasSpace) result = result + " ";
 		result = result + tok.stringVal;
 		first = false;
@@ -1155,7 +1155,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 		// #error
 		if (dir.stringVal == "error") {
-			const msg = joinTokens(dir.next);
+			const msg = joinLine(dir.next);
 			ctx.diags.push(makeDiag(DiagSeverity.Error, dir.file, dir.line, dir.col, `#error ${msg}`));
 			tok = skipLine(dir.next);
 			continue;
@@ -1471,3 +1471,9 @@ test "preprocess reports a flag that is neither -D nor -U" {
 	assert r.diagnostics[0].message.indexOf("-Iinclude") >= 0;
 }
 
+test "preprocess #error message ends at its line" {
+	const r = preprocessWith("#error stop here\nint after;", "linux", []);
+	assert r.diagnostics.length == 1;
+	assert r.diagnostics[0].message == "#error stop here";
+	assert spelled(r) == "int after ;";
+}
