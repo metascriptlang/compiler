@@ -1,6 +1,7 @@
 import { exit } from "../process";
 import { writeStderr } from "../io";
 import { readDir, removeAll } from "../fs";
+import { HcrReloadKind, HcrReloadResult } from "./types";
 
 @include("runtime/hcrEngine.h");
 
@@ -33,20 +34,6 @@ extern function msHcrRollback(moduleId: cstring): void;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
 extern function msReportOrphanFailures(): int32;
-
-export enum HcrReloadKind {
-	NoChange,
-	Reloaded,
-	Pending,
-	Rejected,
-	RestartRequired,
-}
-
-export struct HcrReloadResult {
-	kind: HcrReloadKind;
-	modules: string[];
-	reason: string;
-}
 
 interface HcrImage {
 	handle: Ptr<void>;
@@ -88,6 +75,7 @@ let generation: int32 = 0;
 let coreIdentity: uint64 = 0;
 let bundleIdentity: uint64 = 0;
 let pending = false;
+let last: HcrReloadResult = { kind: HcrReloadKind.NoChange, modules: [], reason: "" };
 const modules: HcrModule[] = [];
 const discovering: string[] = [];
 
@@ -301,7 +289,16 @@ function changedType(item: HcrCandidate): string {
 	return "";
 }
 
-export function reload(): HcrReloadResult {
+export function engineReload(): HcrReloadKind {
+	last = performReload();
+	return last.kind;
+}
+
+export function engineLastReload(): HcrReloadResult {
+	return last;
+}
+
+function performReload(): HcrReloadResult {
 	if (!started) return result(HcrReloadKind.Rejected, [], "the program was not started by an HCR host");
 	const bundle = msHcrFileIdentity(bundlePath());
 	if (bundle == bundleIdentity && !pending) return result(HcrReloadKind.NoChange, [], "");
@@ -437,14 +434,4 @@ export function reload(): HcrReloadResult {
 	}
 	return result(HcrReloadKind.Rejected, [resumeFailed],
 		`the after-reload handler of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
-}
-
-export function reloadKindName(kind: HcrReloadKind): string {
-	return match (kind) {
-		HcrReloadKind.NoChange => "no change",
-		HcrReloadKind.Reloaded => "reloaded",
-		HcrReloadKind.Pending => "pending",
-		HcrReloadKind.Rejected => "rejected",
-		HcrReloadKind.RestartRequired => "restart required",
-	};
 }
