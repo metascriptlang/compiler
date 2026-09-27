@@ -688,6 +688,22 @@ export function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: T
 	lit.nodeType = target;
 }
 
+export function reportConstIndexBound(ctx: CheckerContext, arrType: Type, index: Node, node: Node): void {
+	if (arrType.kind != TypeKind.SizedArray) return;
+	let lit = index;
+	let negated = false;
+	if (lit.kind == NodeKind.UnaryExpr && (lit.data as UnaryExprData).unaryOp == "-") {
+		lit = (lit.data as UnaryExprData).operand;
+		negated = true;
+	}
+	if (!isNodeIntLit(lit)) return;
+	const mag = (lit.data as NumberLiteralData).value;
+	const v = negated ? 0 - mag : mag;
+	if (v >= 0 && v < arrType.typeValue) return;
+	const spelled = typeDisplayName(arrType.typeReturn) + "[" + arrType.typeValue + "]";
+	addError(ctx, "index " + v + " out of bounds for '" + spelled + "' (0.." + (arrType.typeValue - 1) + ")", node.location.line, node.location.column);
+}
+
 // ===== Runtime Converters =====
 
 function refusedInsideOwnBody(ctx: CheckerContext, routine: Symbol | null, site: Node | null): boolean {

@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1270,6 +1270,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					node.nodeType = errorType(); return;
 				}
 			}
+			reportConstIndexBound(ctx, arrType, d.index, node);
 			const idxType = d.index.nodeType;
 			// Implicit number → int64 cast for array index (C requires integer subscript)
 			if (idxType != null && idxType.kind == TypeKind.Number && d.index.kind != NodeKind.BinaryExpr) {
