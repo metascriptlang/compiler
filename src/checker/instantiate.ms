@@ -396,6 +396,12 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 	return true;
 }
 
+function genericDeclType(instance: Type): Type {
+	const base = instance.typeExtra != null ? unwrapRef(instance.typeExtra) : null;
+	const decl = base != null ? base.sym : null;
+	return decl != null && decl.symbolType != null ? decl.symbolType : instance;
+}
+
 function injectFieldTypeSyms(struct: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
 	if (struct.typeChildren == null) return;
 	for (const field of struct.typeChildren) injectConcreteTypeSyms(field, ctx, callerCtx, injected);
@@ -449,7 +455,7 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		return;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
-		if (t.typeName != "") tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		if (t.typeName != "") tryInjectTypeSym(t.typeName, genericDeclType(t), ctx, callerCtx, injected);
 		if (t.typeChildren != null) {
 			for (const arg of t.typeChildren) injectConcreteTypeSyms(arg, ctx, callerCtx, injected);
 		}
