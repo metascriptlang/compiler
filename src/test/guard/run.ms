@@ -133,15 +133,23 @@ function fieldOf(line: string, key: string): string {
 	return sp < 0 ? rest : rest.slice(0, sp);
 }
 
-// LEDGER <Type> ... alloc=N ... destroy=M, one line per type; the LAST one counts.
+// runtime/drc.c prints one LEDGER line per TypeInfo: same-named types of two modules give two lines.
 function ledgerImbalance(text: string, typeName: string): string {
-	let last = "";
+	let dump: string[] = [];
+	let lastDump: string[] = [];
 	for (const line of lines(text)) {
-		if (line.startsWith(`LEDGER ${typeName} `)) last = line;
+		if (line.startsWith(`LEDGER ${typeName} `)) dump.push(line);
+		if (line.startsWith("LEDGER TOTAL ")) {
+			lastDump = dump;
+			dump = [];
+		}
 	}
-	const a = fieldOf(last, "alloc=");
-	const d = fieldOf(last, "destroy=");
-	if (a == "" || a != d) return `${typeName} alloc=${a == "" ? "?" : a} destroy=${d == "" ? "?" : d}`;
+	if (lastDump.length == 0) return `${typeName} alloc=? destroy=?`;
+	for (const line of lastDump) {
+		const a = fieldOf(line, "alloc=");
+		const d = fieldOf(line, "destroy=");
+		if (a == "" || a != d) return `${typeName} alloc=${a == "" ? "?" : a} destroy=${d == "" ? "?" : d}`;
+	}
 	return "";
 }
 
