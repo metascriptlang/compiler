@@ -497,6 +497,29 @@ test "engine: shift right on uint32 is logical" {
 	assert r.lastResult.intVal == 1;
 }
 
+test "engine: signed sub-int arithmetic wraps at the type width" {
+	const ctx = evalOrcVM("function multiply(left: int16, right: int16): int16 { return left * right; }"
+		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32767; a += 1; let b: int8 = 127; b++;"
+		+ " console.log(`${multiply(300, 300)} ${multiply(-300, 300)} ${negate(-128)} ${a} ${b}`);");
+	assert ctx.error == "";
+	assert ctx.output == "24464 -24464 -128 -32768 -128\n";
+}
+
+test "engine: unsigned arithmetic wraps at the type width" {
+	const ctx = evalOrcVM("function mul(left: uint16, right: uint16): uint16 { return left * right; }"
+		+ " function add(left: uint32, right: uint32): uint32 { return left + right; } let u: uint8 = 0; u -= 1;"
+		+ " console.log(`${mul(300, 300)} ${add(4294967295, 1)} ${u}`);");
+	assert ctx.error == "";
+	assert ctx.output == "24464 0 255\n";
+}
+
+test "engine: a field or element update wraps at its type width" {
+	const ctx = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
+		+ " console.log(`${c.n} ${xs[0]}`);");
+	assert ctx.error == "";
+	assert ctx.output == "-128 1\n";
+}
+
 test "engine: a not-null comparison yields a boolean" {
 	const ctx = evalOrcVM("class Box { n: int32 = 1; } const item: Box | null = new Box(); const none: Box | null = null;"
 		+ " const stored: boolean = item !== null; console.log(`${item !== null} ${none != null} ${stored}`);");

@@ -183,6 +183,18 @@ function convClassOf(t: Type | null): int32 {
 	};
 }
 
+// Signed int32 stays unwrapped: C-debug traps on its overflow and JS keeps the
+// double (docs/JS-NUMERIC.md §5), so there is no wrapped value to match.
+function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
+	const bits = intBandBits(t);
+	if (bits == 0) return;
+	if (isUnsignedBand(t)) {
+		emitInst(s, raiserABC(RaiserOpcode.NarrowU, reg, bits, 0));
+	} else if (bits < 32) {
+		emitInst(s, raiserABC(RaiserOpcode.SignExtend, reg, bits, 0));
+	}
+}
+
 function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32): int32 {
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Conv, dest, srcReg, cls));
@@ -705,6 +717,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, lReg, rReg));
 		} else {
 			emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
+			emitWrapToWidth(s, dest, node.nodeType);
 		}
 		return dest;
 	}
@@ -734,6 +747,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 			emitInst(s, raiserABC(RaiserOpcode.NegF64, dest, srcReg, 0));
 		} else {
 			emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
+			emitWrapToWidth(s, dest, node.nodeType);
 		}
 	} else if (d.unaryOp == "~") {
 		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
@@ -793,6 +807,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 				emitInst(s, raiserABC(RaiserOpcode.ConcatStr, targetReg, targetReg, rhsReg));
 			} else {
 				emitInst(s, raiserABC(compoundBaseOpcode(op), targetReg, targetReg, rhsReg));
+				emitWrapToWidth(s, targetReg, d.left.nodeType);
 			}
 			if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, targetReg, global, 0));
 			return targetReg;
@@ -811,6 +826,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
 		} else {
 			emitInst(s, raiserABC(compoundBaseOpcode(op), tmpReg, tmpReg, rhsReg));
+			emitWrapToWidth(s, tmpReg, d.left.nodeType);
 		}
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, tmpReg));
 		return tmpReg;
@@ -825,6 +841,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, tmpReg, arrReg, idxReg));
 		const rhsReg = compileExpr(s, d.right);
 		emitInst(s, raiserABC(compoundBaseOpcode(op), tmpReg, tmpReg, rhsReg));
+		emitWrapToWidth(s, tmpReg, d.left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, tmpReg));
 		return tmpReg;
 	}
@@ -1074,11 +1091,12 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Update (i++, ++i, i--, --i) ---
 
-function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string): int32 {
+function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, t: Type | null): int32 {
 	const oneReg = allocReg(s);
 	emitLoadConst(s, oneReg, raiserInt(1));
 	const outReg = allocReg(s);
 	emitInst(s, raiserABC(compoundBaseOpcode(updateOp == "++" ? "+=" : "-="), outReg, fromReg, oneReg));
+	emitWrapToWidth(s, outReg, t);
 	return outReg;
 }
 
@@ -1100,6 +1118,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 				} else {
 					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
 				}
+				emitWrapToWidth(s, varReg, d.updateArg.nodeType);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return varReg;
 			} else {
@@ -1111,6 +1130,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 				} else {
 					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
 				}
+				emitWrapToWidth(s, varReg, d.updateArg.nodeType);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return oldReg;
 			}
@@ -1123,7 +1143,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 		const nameIdx = addConst(s, raiserString(md.property));
 		const oldReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadField, oldReg, objReg, nameIdx));
-		const newReg = emitStepped(s, oldReg, d.updateOp);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
@@ -1134,7 +1154,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 		const idxReg = compileExpr(s, ad.index);
 		const oldReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
-		const newReg = emitStepped(s, oldReg, d.updateOp);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
