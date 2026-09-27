@@ -225,6 +225,21 @@ function rhsMode(rhs: Node): DrcMode {
 		? DrcMode.SinkArg : DrcMode.Consumed;
 }
 
+function returnMode(arg: Node, dctx: DrcContext): DrcMode {
+	let n: Node | null = arg;
+	while (n != null) {
+		if (n.kind == NodeKind.TypeAssertion) {
+			if (isReprCast(n, dctx)) return DrcMode.Consumed;
+			n = (n.data as TypeAssertionData).asExpr;
+		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
+			n = (n.data as HiddenStdConvData).convExpr;
+		} else {
+			n = null;
+		}
+	}
+	return rhsMode(arg);
+}
+
 function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cv = node.data as HiddenStdConvData;
 	if (isUnionProjection(node)) {
@@ -2279,7 +2294,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		const origKind = d.argument.kind;
 		const origSym = origKind == NodeKind.Identifier ? d.argument.resolvedSym : noSym;
 
-		d.argument = processNode(d.argument, dctx, rhsMode(d.argument));
+		d.argument = processNode(d.argument, dctx, returnMode(d.argument, dctx));
 
 		// Borrowed RC pointer return: wrap in temp + incref to prevent use-after-free
 		if (needsReturnIncref(d.argument, dctx)) {
